@@ -3,7 +3,7 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
@@ -34,6 +34,7 @@ model School {
   teachers       Teacher[]
   auditLogs      AuditLog[]
   announcements  Announcement[]
+  feeTemplates   FeeTemplate[]
 
   @@map("schools")
 }
@@ -50,6 +51,8 @@ model AcademicYear {
   school    School     @relation(fields: [schoolId], references: [id])
   semesters Semester[]
   classes   Class[]
+  feeTemplates FeeTemplate[]
+  studentBills StudentBill[]
 
   @@map("academic_years")
 }
@@ -164,6 +167,8 @@ model Student {
   parents     StudentParent[]
   economic    StudentEconomic?
   attendances Attendance[]
+  bills       StudentBill[]
+  payments    PaymentTransaction[]
 
   @@unique([schoolId, nisn])
   @@map("students")
@@ -307,4 +312,61 @@ model Announcement {
   school School @relation(fields: [schoolId], references: [id])
 
   @@map("announcements")
+}
+
+// ==========================================
+// FINANCE (NEW)
+// ==========================================
+
+model FeeTemplate {
+  id             String   @id @default(uuid())
+  schoolId       String
+  academicYearId String
+  gradeLevel     Int      // 1 to 6
+  name           String   // e.g., "Kegiatan Ekstrakurikuler", "Map Raport", "LKS Lantip"
+  category       String   // "TAHUNAN", "BUKU"
+  amount         Float
+  description    String?
+  createdAt      DateTime @default(now())
+
+  school       School       @relation(fields: [schoolId], references: [id])
+  academicYear AcademicYear @relation(fields: [academicYearId], references: [id])
+
+  @@map("fee_templates")
+}
+
+model StudentBill {
+  id           String   @id @default(uuid())
+  studentId    String
+  title        String
+  totalAmount  Float
+  paidAmount   Float    @default(0)
+  status       String   @default("BELUM_BAYAR") // BELUM_BAYAR, SEBAGIAN, LUNAS
+  dueDate      DateTime?
+  academicYearId String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  student      Student        @relation(fields: [studentId], references: [id])
+  academicYear AcademicYear   @relation(fields: [academicYearId], references: [id])
+  transactions PaymentTransaction[]
+
+  @@map("student_bills")
+}
+
+model PaymentTransaction {
+  id            String   @id @default(uuid())
+  billId        String
+  studentId     String
+  amount        Float
+  paymentMethod String   @default("TRANSFER")
+  paymentDate   DateTime @default(now())
+  reference     String?  // e.g., bank transfer reference
+  recordedBy    String?  // user ID who recorded it
+  status        String   @default("BERHASIL") // PENDING, BERHASIL, DIBATALKAN
+
+  bill          StudentBill @relation(fields: [billId], references: [id])
+  student       Student     @relation(fields: [studentId], references: [id])
+
+  @@map("payment_transactions")
 }

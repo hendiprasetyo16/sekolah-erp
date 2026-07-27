@@ -9,6 +9,8 @@ interface EnvConfig {
   enableDebug: boolean;
   isDev: boolean;
   isProd: boolean;
+  supabaseUrl: string;
+  supabaseAnonKey: string;
 }
 
 function getEnvVar(key: string, defaultValue?: string): string {
@@ -33,6 +35,8 @@ export const env: EnvConfig = {
   enableDebug: getBoolEnv('VITE_ENABLE_DEBUG', false),
   isDev: import.meta.env.DEV,
   isProd: import.meta.env.PROD,
+  supabaseUrl: getEnvVar('VITE_SUPABASE_URL', ''),
+  supabaseAnonKey: getEnvVar('VITE_SUPABASE_ANON_KEY', ''),
 };
 
 // Freeze to prevent accidental mutation
