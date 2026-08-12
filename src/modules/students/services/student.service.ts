@@ -1,62 +1,156 @@
-import { apiClient } from '@/services/api.client';
+import { supabase } from '@/lib/supabase';
 import type { ApiResponse, ApiResponsePaginated, PaginatedParams } from '@/services/api.types';
 import type { StudentListItem, StudentDetail, CreateStudentPayload, UpdateStudentPayload } from '../types/student.types';
-import { env } from '@/config/env';
-import { mockStudentList, mockStudentDetail } from '../constants/student.mock';
 
-// Student API service — all endpoints use env.apiBaseUrl via apiClient
+// Student API service using Supabase directly
 export const studentService = {
   async list(params: PaginatedParams & { classId?: string; status?: string }): Promise<ApiResponsePaginated<StudentListItem>> {
-    if (env.enableMock) return mockStudentList(params);
-    const response = await apiClient.get('/students', { params });
-    return response.data;
+    const { page = 1, limit = 10, search, classId, status } = params;
+    
+    let query = supabase
+      .from('students')
+      .select('*, classes(name, gradeLevel)', { count: 'exact' });
+
+    if (search) {
+      query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%`);
+    }
+    if (classId) {
+      query = query.eq('classId', classId);
+    }
+    if (status) {
+      query = query.eq('status', status);
+    }
+
+    const from = (page - 1) * limit;
+    const to = from + limit - 1;
+    
+    const { data, count, error } = await query
+      .order('fullName', { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    // Map to frontend interface
+    const mappedData = data.map((item: any) => ({
+      ...item,
+      className: item.classes?.name || '-',
+      gradeLevel: item.classes?.gradeLevel || 0
+    })) as StudentListItem[];
+
+    return {
+      success: true,
+      data: mappedData,
+      meta: {
+        total: count || 0,
+        page,
+        limit,
+        totalPages: Math.ceil((count || 0) / limit)
+      },
+      message: 'Berhasil mengambil data siswa'
+    };
   },
 
   async getById(id: string): Promise<ApiResponse<StudentDetail>> {
-    if (env.enableMock) return mockStudentDetail(id);
-    const response = await apiClient.get(`/students/${id}`);
-    return response.data;
+    const { data, error } = await supabase
+      .from('students')
+      .select('*, classes(name, gradeLevel)')
+      .eq('id', id)
+      .single();
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    // Fetch parents
+    const { data: parents } = await supabase
+      .from('student_parents')
+      .select('*')
+      .eq('studentId', id);
+
+    const mappedData = {
+      ...data,
+      className: data.classes?.name || '-',
+      gradeLevel: data.classes?.gradeLevel || 0,
+      parents: parents || []
+    } as StudentDetail;
+
+    return {
+      success: true,
+      data: mappedData,
+      message: 'Berhasil mengambil detail siswa'
+    };
   },
 
-  async create(data: CreateStudentPayload): Promise<ApiResponse<StudentDetail>> {
-    if (env.enableMock) {
-      return { success: true, data: { ...data, id: Date.now().toString() } as any, message: 'Siswa berhasil ditambahkan' };
+  async create(payload: CreateStudentPayload): Promise<ApiResponse<StudentDetail>> {
+    const { parents, ...studentData } = payload;
+    
+    // Insert student
+    const { data, error } = await supabase
+      .from('students')
+      .insert(studentData)
+      .select()
+      .single();
+
+    if (error) throw new Error(error.message);
+
+    // Insert parents if any
+    if (parents && parents.length > 0) {
+      const parentsData = parents.map(p => ({ ...p, studentId: data.id }));
+      const { error: parentError } = await supabase
+        .from('student_parents')
+        .insert(parentsData);
+        
+      if (parentError) throw new Error(parentError.message);
     }
-    const response = await apiClient.post('/students', data);
-    return response.data;
+
+    return this.getById(data.id);
   },
 
-  async update(id: string, data: UpdateStudentPayload): Promise<ApiResponse<StudentDetail>> {
-    if (env.enableMock) {
-      return { success: true, data: { ...data, id } as any, message: 'Data siswa berhasil diperbarui' };
+  async update(id: string, payload: UpdateStudentPayload): Promise<ApiResponse<StudentDetail>> {
+    const { parents, ...studentData } = payload;
+    
+    if (Object.keys(studentData).length > 0) {
+      const { error } = await supabase
+        .from('students')
+        .update(studentData)
+        .eq('id', id);
+
+      if (error) throw new Error(error.message);
     }
-    const response = await apiClient.put(`/students/${id}`, data);
-    return response.data;
+
+    // Handle parents update (simplified: delete existing and re-insert)
+    if (parents && parents.length > 0) {
+      await supabase.from('student_parents').delete().eq('studentId', id);
+      const parentsData = parents.map(p => ({ ...p, studentId: id }));
+      await supabase.from('student_parents').insert(parentsData);
+    }
+
+    return this.getById(id);
   },
 
   async delete(id: string): Promise<ApiResponse<void>> {
-    if (env.enableMock) {
-      return { success: true, data: undefined, message: 'Siswa berhasil dihapus' };
-    }
-    const response = await apiClient.delete(`/students/${id}`);
-    return response.data;
+    const { error } = await supabase
+      .from('students')
+      .delete()
+      .eq('id', id);
+
+    if (error) throw new Error(error.message);
+
+    return {
+      success: true,
+      data: undefined,
+      message: 'Siswa berhasil dihapus'
+    };
   },
 
   async importExcel(file: File): Promise<ApiResponse<{ imported: number; skipped: number; errors: string[] }>> {
-    if (env.enableMock) {
-      return { success: true, data: { imported: 50, skipped: 2, errors: [] }, message: 'Import berhasil' };
-    }
-    const formData = new FormData();
-    formData.append('file', file);
-    const response = await apiClient.post('/students/import', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    return response.data;
+    // Requires a server function or edge function to process excel
+    throw new Error('Not implemented for direct Supabase client yet');
   },
 
   async exportData(format: 'excel' | 'pdf', params?: PaginatedParams): Promise<Blob> {
-    if (env.enableMock) return new Blob(['mock'], { type: 'application/octet-stream' });
-    const response = await apiClient.get('/students/export', { params: { format, ...params }, responseType: 'blob' });
-    return response.data;
+    throw new Error('Not implemented for direct Supabase client yet');
   },
 };

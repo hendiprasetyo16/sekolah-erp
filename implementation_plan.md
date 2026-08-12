@@ -1,125 +1,60 @@
-# Rencana Deploy SekolahERP ke Vercel + GitHub
+# Rencana Implementasi: Integrasi Supabase & Modul Keuangan
 
-## Analisis Situasi
+## 🎯 Tujuan Utama
+1. **Migrasi Arsitektur**: Menghubungkan frontend React secara langsung ke **Supabase** (PostgreSQL + Auth), menggantikan backend NestJS agar aplikasi bisa berjalan 100% serverless di Vercel.
+2. **Modul Keuangan**: Membangun sistem pencatatan tagihan dan pembayaran berdasarkan dokumen PDF (Rincian Biaya Tahunan & Buku untuk Kelas 1-6).
 
-Aplikasi saat ini memiliki arsitektur **dual-stack**:
-- **Frontend**: React + Vite (siap build, sudah punya mock data)
-- **Backend**: NestJS + Prisma + SQLite (tidak bisa jalan di Vercel serverless)
+---
 
-Frontend sudah dirancang dengan **mock mode** (`VITE_ENABLE_MOCK=true`) yang memungkinkan semua halaman bekerja tanpa backend. Ini adalah kunci deployment cepat.
+> [!WARNING]
+> **Perombakan Arsitektur (Major Update)**
+> Karena Vercel didesain untuk frontend/serverless, backend NestJS yang ada sebelumnya tidak bisa di-deploy dengan mudah secara gratis. Oleh karena itu, kita akan mengubah aplikasi untuk berkomunikasi **langsung** ke Supabase menggunakan `@supabase/supabase-js`. 
 
-## Strategi Deployment
+## 📝 Desain Database Keuangan (Tambahan)
+
+Untuk mengakomodasi rincian biaya dari PDF, kita perlu menambahkan beberapa tabel ke dalam database:
+
+1. **`FeeTemplate`** (Master Data Biaya per Kelas)
+   - Contoh: "Kegiatan Ekstrakurikuler Kelas 1" (Rp300.000), "LKS Lantip Kelas 1" (Rp170.000)
+2. **`StudentBill`** (Tagihan Siswa)
+   - Tagihan spesifik yang dibebankan ke siswa setiap awal tahun ajaran.
+3. **`Payment`** (Transaksi Pembayaran)
+   - Mencatat cicilan atau pelunasan. Sesuai PDF, pembayaran bisa diangsur hingga Oktober atau via transfer ke BPD DIY.
+
+---
+
+## 🛠️ Langkah-langkah Implementasi
+
+### Fase 1: Setup & Migrasi Supabase
+1. Install `@supabase/supabase-js` di frontend.
+2. Buat `src/services/supabase.client.ts` untuk koneksi.
+3. **Migrasi Database**: Saya akan memandu Anda untuk membuat project di Supabase.com, mendapatkan URL database, dan kita akan mem-push skema Prisma saat ini (ditambah tabel keuangan baru) langsung ke database PostgreSQL Supabase Anda.
+
+### Fase 2: Refactor Frontend (Menghapus Mock Data)
+Mengubah layanan yang saat ini menggunakan data dummy (Mock Data) menjadi query langsung ke Supabase:
+- `auth.service.ts` -> Menggunakan Supabase Auth (Login/Logout).
+- `student.service.ts` -> Menggunakan Supabase Database (Select/Insert).
+- `teacher.service.ts` -> Menggunakan Supabase Database.
+
+### Fase 3: Pembuatan Modul Keuangan (Sesuai PDF)
+1. **Master Data Script**: Membuat script untuk otomatis memasukkan data biaya Kelas 1 s/d Kelas 6 dari PDF ke dalam database.
+2. **UI Keuangan**: 
+   - Membuat halaman `/finance/dashboard` untuk ringkasan pembayaran.
+   - Membuat halaman `/finance/billing` untuk melihat tagihan per siswa.
+   - Membuat form **Penerimaan Pembayaran** (cicilan/lunas).
+
+---
+
+## ❓ Open Questions (Pertanyaan untuk Anda)
 
 > [!IMPORTANT]
-> **Pendekatan yang saya rekomendasikan**: Deploy frontend dulu ke Vercel dengan **mock mode ON**. Semua fitur yang sudah ada (Login, Dashboard, CRUD Siswa, dll) akan berfungsi penuh. Database Supabase akan diintegrasikan di fase berikutnya ketika backend siap.
+> Sebelum kita mulai mengeksekusi rencana besar ini, mohon siapkan dan konfirmasi hal berikut:
+> 
+> 1. **Project Supabase**: Apakah Anda sudah membuat project baru di [Supabase](https://supabase.com)?
+> 2. **Kredensial**: Jika sudah, saya akan membutuhkan **Project URL** dan **anon public key** dari Supabase Anda untuk dihubungkan ke kode kita. Apakah Anda sudah memilikinya? (Bisa ditemukan di menu *Project Settings -> API*).
+> 3. **Sinkronisasi Kelas**: Di PDF terdapat rincian Kelas 1-6 (khas SD), namun di mock data sebelumnya tertulis SMK (Kelas X, XI, XII). Apakah kita akan merubah data sekolah ini menjadi Sekolah Dasar (SD) sepenuhnya?
 
-### Kenapa tidak langsung pakai Supabase sekarang?
-- NestJS **tidak bisa berjalan di Vercel** (terlalu berat untuk serverless)
-- Mengubah seluruh arsitektur backend ke Supabase client langsung membutuhkan refactor besar (~2-3 hari kerja)
-- Dengan mock mode, aplikasi sudah **fully functional** dan bisa di-demo-kan
-
-## Proposed Changes
-
-### 1. Fix Build Errors
-Pastikan `npm run build` berhasil tanpa error.
-
-#### [MODIFY] [vite.config.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/vite.config.ts)
-- Pastikan konfigurasi build production benar
-
-#### [MODIFY] File-file yang mungkin ada TypeScript error
-- Fix import errors dan type issues yang muncul saat build production
-
----
-
-### 2. Setup Environment untuk Production
-
-#### [MODIFY] [.env](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/.env)
-- Set `VITE_ENABLE_MOCK=true` untuk deployment awal (semua data pakai mock)
-- Set `VITE_ENABLE_DEBUG=false`
-
-#### [MODIFY] [.env.example](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/.env.example)
-- Update template dengan variabel Supabase (untuk masa depan)
-
----
-
-### 3. Fix Vercel Configuration
-
-#### [MODIFY] [vercel.json](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/vercel.json)
-- Konfigurasi SPA routing (semua path → `/index.html`)
-- Ignore folder `server/` agar tidak di-build Vercel
-
----
-
-### 4. Update .gitignore
-
-#### [MODIFY] [.gitignore](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/.gitignore)
-- Pastikan `node_modules/`, `.env`, `dist/`, `server/node_modules/`, `*.db` tidak masuk Git
-- Pastikan `server/.env` juga di-exclude
-
----
-
-### 5. Complete Placeholder Modules (Basic Pages)
-
-Modul-modul yang masih placeholder akan diberi halaman dasar agar terlihat lebih lengkap saat online:
-
-#### [MODIFY] Routes — Sambungkan TeacherListPage yang sudah ada
-#### Modul placeholder tetap tampil dengan pesan "Coming Soon" yang profesional
-
----
-
-### 6. Git + GitHub Setup
-
-```bash
-# Initialize git
-git init
-git add .
-git commit -m "feat: SekolahERP Phase 1 MVP"
-
-# Push ke GitHub (user perlu buat repo dulu atau pakai GitHub CLI)
-gh repo create sekolah-erp --public --source=. --push
-# ATAU
-git remote add origin https://github.com/USERNAME/sekolah-erp.git
-git push -u origin main
-```
-
----
-
-### 7. Deploy ke Vercel
-
-```bash
-# Install Vercel CLI
-npm i -g vercel
-
-# Login ke Vercel
-vercel login
-
-# Deploy
-vercel --prod
-```
-
-## Open Questions
-
-> [!IMPORTANT]
-> **Pertanyaan untuk Anda:**
-> 1. **Akun GitHub**: Apakah Anda sudah punya akun GitHub? Apa username-nya? Atau mau saya bantu buat repo via GitHub CLI (`gh`)?
-> 2. **Akun Vercel**: Apakah Anda sudah punya akun Vercel? Sudah pernah login via `vercel login`?
-> 3. **GitHub CLI**: Apakah `gh` (GitHub CLI) sudah terinstall? Jika belum, kita bisa push manual.
-
-## Verification Plan
-
-### Build Test
-```bash
-npm run build
-```
-Harus berhasil tanpa error.
-
-### Local Preview
-```bash
-npm run preview
-```
-Test semua halaman: Login → Dashboard → Students → Teachers → Placeholder pages
-
-### Deployment Check
-- Buka URL Vercel yang diberikan setelah deploy
-- Test login dengan demo account
-- Navigasi ke semua halaman
+## ✅ Rencana Verifikasi
+- Menguji login menggunakan sistem autentikasi asli Supabase.
+- Memasukkan data 1 siswa SD dan menghasilkan tagihan otomatis berdasarkan kelasnya.
+- Melakukan simulasi pembayaran cicilan (misal Rp100.000) dan memastikan sisa tagihan berkurang.

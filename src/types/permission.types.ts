@@ -34,6 +34,18 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'reports', actions: ['read', 'export'] },
     { module: 'settings', actions: ['create', 'read', 'update', 'delete'] },
   ],
+  ADMIN: [
+    { module: 'dashboard', actions: ['read'] },
+    { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
+    { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
+    { module: 'finance', actions: ['create', 'read', 'update', 'export', 'import'] },
+    { module: 'schedules', actions: ['create', 'read', 'update', 'export'] },
+    { module: 'inventory', actions: ['create', 'read', 'update', 'export'] },
+    { module: 'administration', actions: ['create', 'read', 'update', 'export'] },
+    { module: 'scholarships', actions: ['create', 'read', 'update', 'export'] },
+    { module: 'reports', actions: ['read', 'export'] },
+    { module: 'settings', actions: ['read'] },
+  ],
   KEPALA_SEKOLAH: [
     { module: 'dashboard', actions: ['read'] },
     { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },

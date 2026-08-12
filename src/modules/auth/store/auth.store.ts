@@ -1,54 +1,79 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { User, School, AcademicYear } from '../../../types/common.types';
+import { authService } from '../services/auth.service';
 
 interface AuthState {
   user: User | null;
   school: School | null;
   academicYear: AcademicYear | null;
-  token: string | null;
-  refreshToken: string | null;
   isAuthenticated: boolean;
   isLoading: boolean;
 
+  // Actions
   setUser: (user: User) => void;
   setSchool: (school: School) => void;
   setAcademicYear: (year: AcademicYear) => void;
-  setTokens: (token: string, refreshToken: string) => void;
   setLoading: (loading: boolean) => void;
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
 }
 
 export const useAuthStore = create<AuthState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       user: null,
       school: null,
       academicYear: null,
-      token: null,
-      refreshToken: null,
       isAuthenticated: false,
       isLoading: false,
 
       setUser: (user) => set({ user, isAuthenticated: true }),
       setSchool: (school) => set({ school }),
       setAcademicYear: (year) => set({ academicYear: year }),
-      setTokens: (token, refreshToken) => set({ token, refreshToken }),
       setLoading: (loading) => set({ isLoading: loading }),
-      logout: () =>
+
+      login: async (email: string, password: string) => {
+        set({ isLoading: true });
+        try {
+          const response = await authService.login({ email, password });
+
+          if (response.success && response.data) {
+            set({
+              user: response.data.user,
+              school: response.data.school,
+              academicYear: response.data.academicYear,
+              isAuthenticated: true,
+              isLoading: false,
+            });
+            return { success: true, message: response.message };
+          }
+
+          set({ isLoading: false });
+          return { success: false, message: response.message };
+        } catch (err) {
+          console.error('[AuthStore] Login error:', err);
+          set({ isLoading: false });
+          return {
+            success: false,
+            message: 'Terjadi kesalahan. Silakan coba lagi.',
+          };
+        }
+      },
+
+      logout: () => {
+        authService.logout();
         set({
           user: null,
           school: null,
-          token: null,
-          refreshToken: null,
+          academicYear: null,
           isAuthenticated: false,
-        }),
+        });
+      },
     }),
     {
       name: 'sekolah-erp-auth',
       partialize: (state) => ({
-        token: state.token,
-        refreshToken: state.refreshToken,
         user: state.user,
         school: state.school,
         academicYear: state.academicYear,

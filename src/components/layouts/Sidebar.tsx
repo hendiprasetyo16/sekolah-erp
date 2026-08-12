@@ -10,6 +10,7 @@ import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
+import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { Module } from '@/types/permission.types';
 
 interface NavItem {
@@ -101,7 +102,9 @@ export function Sidebar() {
               className="overflow-hidden whitespace-nowrap"
             >
               <h1 className="font-bold text-sm text-foreground">SekolahERP</h1>
-              <p className="text-xs text-muted-foreground">SMK Nusantara</p>
+              <p className="text-xs text-muted-foreground truncate max-w-[150px]">
+                {useAuthStore((state) => state.school?.name) || 'Loading...'}
+              </p>
             </motion.div>
           )}
         </AnimatePresence>

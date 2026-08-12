@@ -5,27 +5,26 @@ import { Eye, EyeOff, School, Lock, Mail, ArrowRight, Sparkles } from 'lucide-re
 import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { authService } from '@/modules/auth/services/auth.service';
 
 export function LoginPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  const { setUser, setSchool, setAcademicYear, setTokens } = useAuthStore();
+  const { login, isLoading: storeLoading } = useAuthStore();
 
   const [email, setEmail] = useState('admin@smknusantara.sch.id');
-  const [password, setPassword] = useState('admin123');
+  const [password, setPassword] = useState('Admin123!');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [selectedRole, setSelectedRole] = useState('admin');
 
   const demoAccounts = [
-    { key: 'admin', label: 'Super Admin', email: 'admin@smknusantara.sch.id' },
-    { key: 'kepsek', label: 'Kepala Sekolah', email: 'kepsek@smknusantara.sch.id' },
-    { key: 'bendahara', label: 'Bendahara', email: 'bendahara@smknusantara.sch.id' },
-    { key: 'operator', label: 'Operator', email: 'operator@smknusantara.sch.id' },
-    { key: 'guru', label: 'Guru', email: 'guru@smknusantara.sch.id' },
-    { key: 'walikelas', label: 'Wali Kelas', email: 'walikelas@smknusantara.sch.id' },
+    { key: 'admin', label: 'Super Admin', email: 'admin@sekolah.sch.id' },
+    { key: 'admin_sekolah', label: 'Admin Sekolah', email: 'admin.sekolah@sekolah.sch.id' },
+    { key: 'kepsek', label: 'Kepala Sekolah', email: 'kepsek@sekolah.sch.id' },
+    { key: 'bendahara', label: 'Bendahara', email: 'bendahara@sekolah.sch.id' },
+    { key: 'guru', label: 'Guru', email: 'guru@sekolah.sch.id' },
+    { key: 'walikelas', label: 'Wali Kelas', email: 'walikelas@sekolah.sch.id' },
   ];
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -34,16 +33,12 @@ export function LoginPage() {
     setError('');
 
     try {
-      const response = await authService.login({ email, password });
+      const result = await login(email, password);
 
-      if (response.success) {
-        setUser(response.data.user);
-        setSchool(response.data.school);
-        setAcademicYear(response.data.academicYear);
-        setTokens(response.data.token, response.data.refreshToken);
+      if (result.success) {
         navigate('/dashboard');
       } else {
-        setError(response.message || t('auth.loginError'));
+        setError(result.message || t('auth.loginError'));
       }
     } catch {
       setError(t('auth.loginError'));
@@ -57,9 +52,11 @@ export function LoginPage() {
     if (account) {
       setSelectedRole(key);
       setEmail(account.email);
-      setPassword('admin123');
+      setPassword('Admin123!');
     }
   };
+
+  const loading = isLoading || storeLoading;
 
   return (
     <div className="min-h-screen flex">
@@ -109,7 +106,7 @@ export function LoginPage() {
                 Sekolah <span className="text-purple-200">Modern</span>
               </h1>
               <p className="text-lg text-white/70 max-w-md leading-relaxed">
-                Platform ERP lengkap untuk mengelola seluruh operasional sekolah Indonesia — dari akademik hingga keuangan.
+                Platform ERP lengkap untuk mengelola seluruh operasional sekolah — dari akademik hingga keuangan, untuk SD, SMP, SMA, dan SMK.
               </p>
             </motion.div>
           </div>
@@ -163,7 +160,7 @@ export function LoginPage() {
           {/* Demo Account Selector */}
           <div className="mb-6">
             <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
-              Demo Account
+              Demo Account — Password: Admin123!
             </label>
             <div className="grid grid-cols-3 gap-2">
               {demoAccounts.map((account) => (
@@ -190,6 +187,7 @@ export function LoginPage() {
               <div className="relative">
                 <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
+                  id="login-email"
                   type="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -211,6 +209,7 @@ export function LoginPage() {
               <div className="relative">
                 <Lock size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -257,8 +256,9 @@ export function LoginPage() {
 
             {/* Submit */}
             <button
+              id="login-submit"
               type="submit"
-              disabled={isLoading}
+              disabled={loading}
               className={cn(
                 'w-full flex items-center justify-center gap-2 py-3 rounded-lg font-medium text-sm transition-all',
                 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white',
@@ -267,7 +267,7 @@ export function LoginPage() {
                 'active:scale-[0.98]'
               )}
             >
-              {isLoading ? (
+              {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
@@ -282,7 +282,7 @@ export function LoginPage() {
           <div className="mt-8 pt-6 border-t border-border/50 text-center">
             <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
               <Sparkles size={14} className="text-primary" />
-              <span>SekolahERP v1.0.0 — Sistem Manajemen Sekolah Indonesia</span>
+              <span>SekolahERP v1.0.0 — Sistem Manajemen Sekolah</span>
             </div>
           </div>
         </motion.div>

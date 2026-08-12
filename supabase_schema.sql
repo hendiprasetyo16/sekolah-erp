@@ -1,5 +1,5 @@
-﻿-- CreateSchema
-CREATE SCHEMA IF NOT EXISTS "public";
+-- Copy and paste this script into the Supabase SQL Editor
+-- This will create all the necessary tables for SekolahERP
 
 -- CreateTable
 CREATE TABLE "schools" (
@@ -374,4 +374,3 @@ ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_billId_f
 
 -- AddForeignKey
 ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-

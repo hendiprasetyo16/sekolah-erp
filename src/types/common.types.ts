@@ -4,6 +4,7 @@ export type Theme = 'light' | 'dark' | 'system';
 
 export type UserRole =
   | 'SUPER_ADMIN'
+  | 'ADMIN'
   | 'KEPALA_SEKOLAH'
   | 'BENDAHARA'
   | 'OPERATOR'
