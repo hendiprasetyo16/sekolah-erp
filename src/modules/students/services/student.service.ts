@@ -21,6 +21,8 @@ const handleDbError = (error: unknown) => {
       message = 'NISN tersebut sudah terdaftar di sistem. Silakan gunakan NISN lain.';
     } else if (message.includes('nis_key')) {
       message = 'NIS tersebut sudah digunakan oleh siswa lain.';
+    } else if (message.includes('nik_key')) {
+      message = 'NIK tersebut sudah digunakan oleh siswa lain.'; // <-- Tambahan untuk NIK
     } else {
       message = 'Data tersebut sudah terdaftar (Duplikat).';
     }
