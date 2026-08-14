@@ -22,7 +22,7 @@ interface NavItem {
 }
 
 interface NavGroup {
-  id: string; // <-- Menambahkan ID unik agar sistem accordion (buka-tutup) stabil
+  id: string;
   title: string;
   items: NavItem[];
 }
@@ -33,7 +33,9 @@ export function Sidebar() {
   const { hasAnyPermission } = usePermission();
   const location = useLocation();
 
-  // Menggunakan ID sebagai memori grup yang terbuka
+  // FIX: Panggil Hook di level teratas komponen, jangan di dalam JSX!
+  const schoolName = useAuthStore((state) => state.school?.name);
+
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management']);
 
   const toggleGroup = (groupId: string) => {
@@ -82,7 +84,6 @@ export function Sidebar() {
     },
   ];
 
-  // Menyaring menu berdasarkan hak akses pengguna
   const filteredGroups = navGroups.map(group => ({
     ...group,
     items: group.items.filter(item => !item.module || hasAnyPermission(item.module)),
@@ -91,7 +92,6 @@ export function Sidebar() {
   return (
     <motion.aside
       initial={false}
-      // Dikembalikan ke 72 agar presisi dengan margin di MainLayout.tsx
       animate={{ width: sidebarCollapsed ? 72 : 280 }}
       transition={{ duration: 0.2, ease: 'easeInOut' }}
       className={cn(
@@ -99,7 +99,6 @@ export function Sidebar() {
         'bg-sidebar/95 backdrop-blur-xl',
       )}
     >
-      {/* Logo Area */}
       <div className={cn("flex items-center h-16 border-b border-border/50 transition-all", sidebarCollapsed ? "justify-center px-0" : "px-4 gap-3")}>
         <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
           <School size={20} className="text-white" />
@@ -115,18 +114,16 @@ export function Sidebar() {
             >
               <h1 className="font-bold text-sm text-foreground">SekolahERP</h1>
               <p className="text-xs text-muted-foreground truncate max-w-[150px]">
-                {useAuthStore((state) => state.school?.name) || 'Loading...'}
+                {schoolName || 'Loading...'}
               </p>
             </motion.div>
           )}
         </AnimatePresence>
       </div>
 
-      {/* Navigation Area */}
       <nav className={cn("flex-1 overflow-y-auto py-4 hide-scrollbar", sidebarCollapsed ? "px-2" : "px-4")}>
         {filteredGroups.map((group) => (
           <div key={group.id} className={cn("mb-4", sidebarCollapsed && "mb-2")}>
-            {/* Header Grup */}
             {group.title && group.title !== 'main' && !sidebarCollapsed && (
               <button
                 onClick={() => toggleGroup(group.id)}
@@ -145,7 +142,6 @@ export function Sidebar() {
               </button>
             )}
 
-            {/* Menu Item */}
             <AnimatePresence initial={false}>
               {(group.title === 'main' || !group.title || sidebarCollapsed || expandedGroups.includes(group.id)) && (
                 <motion.div
@@ -162,11 +158,9 @@ export function Sidebar() {
                       <NavLink
                         key={item.href}
                         to={item.href}
-                        // Tooltip bawaan HTML agar judul muncul saat mouse diarahkan ke ikon
                         title={sidebarCollapsed ? item.label : undefined}
                         className={cn(
                           'flex items-center rounded-lg transition-all duration-200 group relative',
-                          // Perbaikan CSS agar ikon menjadi kotak (w-10 h-10) yang rapi di tengah
                           sidebarCollapsed ? 'justify-center w-10 h-10 mx-auto' : 'px-3 py-2.5 gap-3 w-full',
                           isActive
                             ? 'bg-primary/10 text-primary font-medium'
@@ -193,7 +187,6 @@ export function Sidebar() {
                           )}
                         </AnimatePresence>
 
-                        {/* Lencana (Badge) Angka & Titik */}
                         {!sidebarCollapsed && item.badge && (
                           <span className="flex-shrink-0 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full font-medium">
                             {item.badge}
@@ -212,7 +205,6 @@ export function Sidebar() {
         ))}
       </nav>
 
-      {/* Toggle Button / Tombol Perkecil */}
       <div className="border-t border-border/50 p-3">
         <button
           onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
