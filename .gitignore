@@ -4,3 +4,4 @@ sekolah-erp/.env
 sekolah-erp/server/node_modules
 sekolah-erp/server/dist
 sekolah-erp/server/.env
+node_modules

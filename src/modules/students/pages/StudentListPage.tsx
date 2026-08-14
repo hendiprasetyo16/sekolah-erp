@@ -30,8 +30,8 @@ export function StudentListPage() {
 
   const { data: studentsResponse, isLoading, isError } = useQuery({
     queryKey: ['students', currentPage, pageSize, searchQuery, selectedClass],
-    queryFn: () => studentService.list({ 
-      page: currentPage, 
+    queryFn: () => studentService.list({
+      page: currentPage,
       limit: pageSize,
       search: searchQuery,
       classId: selectedClass === 'all' ? undefined : selectedClass
@@ -165,98 +165,98 @@ export function StudentListPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-border bg-card">
-                {isLoading ? (
-                  <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center">
-                      <div className="flex flex-col items-center justify-center text-muted-foreground">
-                        <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mb-4" />
-                        <p>Memuat data siswa...</p>
-                      </div>
-                    </td>
-                  </tr>
-                ) : isError ? (
-                  <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-red-500">
-                      Gagal memuat data siswa. Silakan coba lagi.
-                    </td>
-                  </tr>
-                ) : students.length === 0 ? (
-                  <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
-                      {t('common.noData')}
-                    </td>
-                  </tr>
-                ) : (
-                  students.map((student, idx) => (
-                <motion.tr
-                  key={student.id}
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: idx * 0.03 }}
-                  className={cn(
-                    'border-b border-border/30 table-row-hover',
-                    selectedRows.includes(student.id) && 'bg-primary/5'
-                  )}
-                >
-                  <td className="p-4">
-                    <input
-                      type="checkbox"
-                      checked={selectedRows.includes(student.id)}
-                      onChange={() => toggleRow(student.id)}
-                      className="w-4 h-4 rounded border-border bg-muted accent-primary"
-                    />
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className="text-sm font-mono text-muted-foreground">{student.nisn}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
-                        {student.fullName.split(' ').map(n => n[0]).join('').slice(0, 2)}
-                      </div>
-                      <div>
-                        <p className="text-sm font-medium text-foreground">{student.fullName}</p>
-                        <p className="text-xs text-muted-foreground">{student.phone}</p>
-                      </div>
+              {isLoading ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center text-muted-foreground">
+                      <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mb-4" />
+                      <p>Memuat data siswa...</p>
                     </div>
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="text-sm text-foreground bg-muted/30 px-2 py-1 rounded">{student.className}</span>
+                </tr>
+              ) : isError ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-12 text-center text-red-500">
+                    Gagal memuat data siswa. Silakan coba lagi.
                   </td>
-                  <td className="px-4 py-3">
-                    <span className={cn(
-                      'text-sm',
-                      student.gender === 'L' ? 'text-blue-400' : 'text-pink-400'
-                    )}>
-                      {student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female')}
-                    </span>
+                </tr>
+              ) : students.length === 0 ? (
+                <tr>
+                  <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
+                    {t('common.noData')}
                   </td>
-                  <td className="px-4 py-3">
-                    <span className="text-sm text-muted-foreground">{formatDate(student.entryDate, 'DD MMM YYYY')}</span>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={cn(
-                      'text-xs font-medium px-2.5 py-1 rounded-full border',
-                      statusConfig[student.status]?.color || 'bg-muted text-muted-foreground'
-                    )}>
-                      {statusConfig[student.status]?.label || student.status}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-right">
-                    <div className="flex items-center justify-end space-x-2">
-                      <Link to={`/students/${student.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-md transition-colors" title={t('common.detail')}>
-                        <Eye className="h-4 w-4" />
-                      </Link>
-                      <Link to={`/students/${student.id}/edit`} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-md transition-colors" title={t('common.edit')}>
-                        <Edit className="h-4 w-4" />
-                      </Link>
-                      <button className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors" title={t('common.delete')}>
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </td>
-                </motion.tr>
-              )))}
+                </tr>
+              ) : (
+                students.map((student, idx) => (
+                  <motion.tr
+                    key={student.id}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: idx * 0.03 }}
+                    className={cn(
+                      'border-b border-border/30 table-row-hover',
+                      selectedRows.includes(student.id) && 'bg-primary/5'
+                    )}
+                  >
+                    <td className="p-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedRows.includes(student.id)}
+                        onChange={() => toggleRow(student.id)}
+                        className="w-4 h-4 rounded border-border bg-muted accent-primary"
+                      />
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm font-mono text-muted-foreground">{student.nisn}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+                          {student.fullName.split(' ').map(n => n[0]).join('').slice(0, 2)}
+                        </div>
+                        <div>
+                          <p className="text-sm font-medium text-foreground">{student.fullName}</p>
+                          <p className="text-xs text-muted-foreground">{student.phone}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-foreground bg-muted/30 px-2 py-1 rounded">{student.className}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={cn(
+                        'text-sm',
+                        student.gender === 'L' ? 'text-blue-400' : 'text-pink-400'
+                      )}>
+                        {student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-sm text-muted-foreground">{formatDate(student.entryDate, 'DD MMM YYYY')}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={cn(
+                        'text-xs font-medium px-2.5 py-1 rounded-full border',
+                        statusConfig[student.status]?.color || 'bg-muted text-muted-foreground'
+                      )}>
+                        {statusConfig[student.status]?.label || student.status}
+                      </span>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-right">
+                      <div className="flex items-center justify-end space-x-2">
+                        <Link to={`/students/${student.id}`} className="p-1.5 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-500/10 rounded-md transition-colors" title={t('common.detail')}>
+                          <Eye className="h-4 w-4" />
+                        </Link>
+                        <Link to={`/students/${student.id}/edit`} className="p-1.5 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-500/10 rounded-md transition-colors" title={t('common.edit')}>
+                          <Edit className="h-4 w-4" />
+                        </Link>
+                        <button className="p-1.5 text-red-600 hover:bg-red-50 dark:hover:bg-red-500/10 rounded-md transition-colors" title={t('common.delete')}>
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                    </td>
+                  </motion.tr>
+                )))}
             </tbody>
           </table>
         </div>

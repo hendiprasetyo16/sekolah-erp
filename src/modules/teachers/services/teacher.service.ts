@@ -1,4 +1,4 @@
-import { supabase } from '@/lib/supabase';
+import { supabase } from '@/services/supabase.client';
 import type { PaginatedResponse, ApiResponse } from '@/types/common.types';
 import type { TeacherDetail, TeacherListItem, TeacherListParams, CreateTeacherPayload, UpdateTeacherPayload } from '../types/teacher.types';
 

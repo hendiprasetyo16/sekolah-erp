@@ -22,12 +22,24 @@ export function Header() {
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
-  // Generate breadcrumb from location
+  // 1. LOGIKA BREADCRUMB YANG DIPERBARUI
   const pathSegments = location.pathname.split('/').filter(Boolean);
-  const breadcrumbs = pathSegments.map((segment, idx) => ({
-    label: segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' '),
-    href: '/' + pathSegments.slice(0, idx + 1).join('/'),
-  }));
+  const breadcrumbs = pathSegments.map((segment, idx) => {
+    // Deteksi apakah segment adalah ID acak (misal: UUID dari Supabase biasanya 36 karakter)
+    const isId = segment.length >= 24 || /^[0-9a-fA-F-]{36}$/.test(segment);
+
+    let label = segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+
+    // Jika itu adalah ID panjang, ubah teksnya agar enak dilihat
+    if (isId) {
+      label = locale === 'id' ? 'Detail' : 'Detail';
+    }
+
+    return {
+      label,
+      href: '/' + pathSegments.slice(0, idx + 1).join('/'),
+    };
+  });
 
   const handleLogout = () => {
     logout();
