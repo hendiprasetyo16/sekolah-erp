@@ -17,11 +17,14 @@ export default function TeacherDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { t } = useTranslation();
 
-  const { data: teacher, isLoading, isError } = useQuery({
+  const { data: response, isLoading, isError } = useQuery({
     queryKey: ['teacher', id],
     queryFn: () => teacherService.getById(id!),
     enabled: !!id,
   });
+
+  // FIX 1: Mengekstrak 'data' dari response API
+  const teacher = response?.data;
 
   if (isLoading) {
     return (
@@ -83,7 +86,7 @@ export default function TeacherDetailPage() {
             </div>
             <h2 className="text-xl font-bold">{teacher.fullName}</h2>
             <p className="text-sm text-muted-foreground mb-4">{teacher.position || 'Teacher'}</p>
-            
+
             <Badge className={cn("mb-6", teacher.status ? statusColorMap[teacher.status] : "")} variant="secondary">
               {teacher.status || 'No Status'}
             </Badge>
@@ -110,7 +113,7 @@ export default function TeacherDetailPage() {
             <TabsTrigger value="personal">Data Pribadi</TabsTrigger>
             <TabsTrigger value="professional">Data Kepegawaian</TabsTrigger>
           </TabsList>
-          
+
           <TabsContent value="personal" className="mt-6 space-y-6">
             <Card>
               <CardHeader>
@@ -230,13 +233,14 @@ export default function TeacherDetailPage() {
                 <div className="sm:col-span-2">
                   <div className="text-sm font-medium text-muted-foreground">Subjects</div>
                   <div className="flex flex-wrap gap-2 mt-1">
+                    {/* FIX 2: Menambahkan tipe 'string' dan 'number' pada parameter .map() */}
                     {teacher.subjects && Array.isArray(teacher.subjects) && teacher.subjects.length > 0 ? (
                       teacher.subjects.map((sub: string, i: number) => (
                         <Badge key={i} variant="outline">{sub}</Badge>
                       ))
                     ) : (
                       typeof teacher.subjects === 'string' && teacher.subjects ? (
-                        teacher.subjects.split(',').map((sub, i) => (
+                        teacher.subjects.split(',').map((sub: string, i: number) => (
                           <Badge key={i} variant="outline">{sub.trim()}</Badge>
                         ))
                       ) : '-'

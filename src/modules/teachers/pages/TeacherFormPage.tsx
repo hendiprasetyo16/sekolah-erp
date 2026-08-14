@@ -36,6 +36,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { teacherService } from '../services/teacher.service';
 import { useTranslation } from '@/hooks/useTranslation';
 
+// FIX 3: Merapikan skema Zod agar tidak bentrok dengan React Hook Form
 const teacherSchema = z.object({
   fullName: z.string().min(1, 'Full name is required'),
   gender: z.string().min(1, 'Gender is required'),
@@ -52,12 +53,12 @@ const teacherSchema = z.object({
   university: z.string().optional(),
   status: z.string().optional(),
   position: z.string().optional(),
-  isCertified: z.boolean().default(false),
+  isCertified: z.boolean(),
   certificationNumber: z.string().optional(),
   joinDate: z.string().optional(),
   baseSalary: z.coerce.number().optional(),
   subjects: z.string().optional(),
-  maxHoursPerWeek: z.coerce.number().default(24),
+  maxHoursPerWeek: z.coerce.number(),
 });
 
 type TeacherFormValues = z.infer<typeof teacherSchema>;
@@ -95,11 +96,13 @@ export default function TeacherFormPage() {
     },
   });
 
-  const { data: teacher, isLoading } = useQuery({
+  const { data: response, isLoading } = useQuery({
     queryKey: ['teacher', id],
     queryFn: () => teacherService.getById(id!),
     enabled: isEdit,
   });
+
+  const teacher = response?.data;
 
   useEffect(() => {
     if (teacher) {
@@ -123,7 +126,7 @@ export default function TeacherFormPage() {
         certificationNumber: teacher.certificationNumber || '',
         joinDate: teacher.joinDate ? String(teacher.joinDate).split('T')[0] : '',
         baseSalary: teacher.baseSalary || 0,
-        subjects: typeof teacher.subjects === 'string' ? teacher.subjects : (teacher.subjects?.join(', ') || ''),
+        subjects: teacher.subjects || '',
         maxHoursPerWeek: teacher.maxHoursPerWeek || 24,
       });
     }
@@ -133,7 +136,10 @@ export default function TeacherFormPage() {
     mutationFn: (values: TeacherFormValues) => {
       const payload = {
         ...values,
-        subjects: values.subjects ? values.subjects.split(',').map(s => s.trim()) : [],
+        gender: values.gender as 'L' | 'P',
+        status: values.status || '',       // <-- Tambahkan fallback string kosong
+        position: values.position || '',   // <-- Tambahkan fallback string kosong
+        isActive: true,
       };
       return isEdit ? teacherService.update(id!, payload) : teacherService.create(payload);
     },
@@ -186,7 +192,7 @@ export default function TeacherFormPage() {
               <TabsTrigger value="personal">Data Pribadi</TabsTrigger>
               <TabsTrigger value="professional">Kepegawaian & Akademik</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="personal" className="mt-6">
               <Card>
                 <CardHeader>
@@ -209,7 +215,7 @@ export default function TeacherFormPage() {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="gender"
@@ -341,7 +347,7 @@ export default function TeacherFormPage() {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="nuptk"
@@ -455,8 +461,8 @@ export default function TeacherFormPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Certification Status</FormLabel>
-                        <Select 
-                          onValueChange={(val) => field.onChange(val === 'true')} 
+                        <Select
+                          onValueChange={(val) => field.onChange(val === 'true')}
                           defaultValue={field.value ? 'true' : 'false'}
                           value={field.value ? 'true' : 'false'}
                         >
