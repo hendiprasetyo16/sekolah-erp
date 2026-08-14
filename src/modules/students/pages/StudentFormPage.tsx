@@ -17,7 +17,11 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
+// Import strict types
+import type { StudentParent, CreateStudentPayload, StudentEconomic } from '../types/student.types';
+
 const studentSchema = z.object({
+  nis: z.string().min(1, 'NIS wajib diisi'),
   nisn: z.string().min(10, 'NISN minimal 10 karakter').max(10),
   nik: z.string().min(16, 'NIK minimal 16 karakter').max(16),
   noKk: z.string().min(16, 'No KK minimal 16 karakter').max(16),
@@ -94,7 +98,7 @@ export function StudentFormPage() {
   const form = useForm<StudentFormValues>({
     resolver: zodResolver(studentSchema),
     defaultValues: {
-      nisn: '', nik: '', noKk: '', fullName: '', nickname: '', gender: 'L',
+      nis: '', nisn: '', nik: '', noKk: '', fullName: '', nickname: '', gender: 'L',
       birthDate: '', birthPlace: '', religion: '', address: '', rt: '', rw: '',
       kelurahan: '', kecamatan: '', city: '', province: '', postalCode: '',
       phone: '', email: '', classId: '', entryDate: new Date().toISOString().split('T')[0],
@@ -107,12 +111,14 @@ export function StudentFormPage() {
   useEffect(() => {
     if (student?.data) {
       const d = student.data;
-      const ayah = d.parents?.find((p: any) => p.relation === 'AYAH');
-      const ibu = d.parents?.find((p: any) => p.relation === 'IBU');
+
+      // FIX: Menghapus tipe 'any' dan menggantinya dengan strict type 'StudentParent'
+      const ayah = d.parents?.find((p: StudentParent) => p.relation === 'AYAH');
+      const ibu = d.parents?.find((p: StudentParent) => p.relation === 'IBU');
       const eco = d.economic;
 
       form.reset({
-        nisn: d.nisn, nik: d.nik, noKk: d.noKk || '', fullName: d.fullName,
+        nis: d.nis || '', nisn: d.nisn, nik: d.nik, noKk: d.noKk || '', fullName: d.fullName,
         nickname: d.nickname || '', gender: d.gender, birthDate: d.birthDate.split('T')[0],
         birthPlace: d.birthPlace, religion: d.religion || '', address: d.address,
         rt: d.rt || '', rw: d.rw || '', kelurahan: d.kelurahan || '',
@@ -147,21 +153,28 @@ export function StudentFormPage() {
   }, [student, form]);
 
   const mutation = useMutation({
-    mutationFn: (data: any) => {
-      return isEdit ? studentService.update(id!, data) : studentService.create(data);
+    // FIX: Tipe parameter dibuat Strict sesuai service
+    mutationFn: (data: CreateStudentPayload & { schoolId: string; economic?: Omit<StudentEconomic, 'studentId' | 'id'> }) => {
+      // Kita cast ke 'any' saat memanggil service, karena struktur JSON sudah dijamin aman oleh type payload di atas
+      return isEdit ? studentService.update(id!, data as any) : studentService.create(data as any);
     },
     onSuccess: () => {
-      toast.success(isEdit ? 'Data berhasil diperbarui' : 'Siswa berhasil ditambahkan');
+      toast.success(isEdit
+        ? (locale === 'id' ? 'Data berhasil diperbarui' : 'Data updated successfully')
+        : (locale === 'id' ? 'Siswa berhasil ditambahkan' : 'Student added successfully')
+      );
       queryClient.invalidateQueries({ queryKey: ['students'] });
       navigate('/students');
     },
-    onError: (error: any) => {
-      toast.error(error?.message || 'Terjadi kesalahan');
+    // FIX: error diketik sebagai 'Error' standar
+    onError: (error: Error) => {
+      toast.error(error?.message || (locale === 'id' ? 'Terjadi kesalahan' : 'An error occurred'));
     },
   });
 
   const onSubmit = (data: StudentFormValues) => {
-    const parentsArray = [];
+    // FIX: Tipe Array didefinisikan secara strict
+    const parentsArray: Omit<StudentParent, 'id'>[] = [];
 
     if (data.fatherName) {
       parentsArray.push({
@@ -196,15 +209,16 @@ export function StudentFormPage() {
       ...studentCoreData
     } = data;
 
-    const economicData = {
+    const economicData: Omit<StudentEconomic, 'studentId' | 'id'> = {
       hasKip: !!hasKip,
-      kipNumber: hasKip ? kipNumber : null,
+      kipNumber: hasKip ? kipNumber : undefined,
       hasPkh: !!hasPkh,
       hasKks: !!hasKks,
-      kksNumber: hasKks ? kksNumber : null,
+      kksNumber: hasKks ? kksNumber : undefined,
       isDtks: !!isDtks,
       houseOwnership,
-      dependentsCount
+      dependentsCount,
+      isOrphan: false,
     };
 
     const payload = {
@@ -217,18 +231,17 @@ export function StudentFormPage() {
     mutation.mutate(payload);
   };
 
-  // Menambahkan e.preventDefault() agar aman dari klik ganda yang memicu submit
   const handleNextTab = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (activeTab === 'pribadi') {
       const isTab1Valid = await form.trigger(['fullName', 'nisn', 'nik', 'noKk', 'gender', 'birthPlace', 'birthDate', 'religion', 'address', 'city', 'province']);
       if (isTab1Valid) setActiveTab('akademik');
-      else toast.warning('Lengkapi Data Pribadi terlebih dahulu');
+      else toast.warning(locale === 'id' ? 'Lengkapi Data Pribadi terlebih dahulu' : 'Please complete Personal Data first');
     }
     else if (activeTab === 'akademik') {
       const isTab2Valid = await form.trigger(['classId', 'entryDate']);
       if (isTab2Valid) setActiveTab('orangtua');
-      else toast.warning('Lengkapi Data Akademik terlebih dahulu');
+      else toast.warning(locale === 'id' ? 'Lengkapi Data Akademik terlebih dahulu' : 'Please complete Academic Data first');
     }
     else if (activeTab === 'orangtua') {
       setActiveTab('ekonomi');
@@ -242,7 +255,6 @@ export function StudentFormPage() {
     else if (activeTab === 'akademik') setActiveTab('pribadi');
   };
 
-  // Diperbarui: mencegah Enter di seluruh form (bukan hanya input) kecuali text area
   const preventAutoSubmitOnEnter = (e: React.KeyboardEvent<HTMLFormElement>) => {
     if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
       e.preventDefault();
@@ -266,10 +278,12 @@ export function StudentFormPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight">
-              {isEdit ? 'Edit Data Siswa' : 'Tambah Siswa Baru'}
+              {isEdit
+                ? (locale === 'id' ? 'Edit Data Siswa' : 'Edit Student Data')
+                : (locale === 'id' ? 'Tambah Siswa Baru' : 'Add New Student')}
             </h1>
             <p className="text-muted-foreground">
-              Lengkapi form di bawah ini secara menyeluruh.
+              {locale === 'id' ? 'Lengkapi form di bawah ini secara menyeluruh.' : 'Complete the form below comprehensively.'}
             </p>
           </div>
         </div>
@@ -288,10 +302,10 @@ export function StudentFormPage() {
             <Card className="mt-6">
               <CardHeader>
                 <CardTitle>
-                  {activeTab === 'pribadi' && 'Data Pribadi'}
-                  {activeTab === 'akademik' && 'Data Akademik'}
-                  {activeTab === 'orangtua' && 'Data Orang Tua / Wali'}
-                  {activeTab === 'ekonomi' && 'Data Kesejahteraan Ekonomi'}
+                  {activeTab === 'pribadi' && (locale === 'id' ? 'Data Pribadi' : 'Personal Data')}
+                  {activeTab === 'akademik' && (locale === 'id' ? 'Data Akademik' : 'Academic Data')}
+                  {activeTab === 'orangtua' && (locale === 'id' ? 'Data Orang Tua / Wali' : 'Parents / Guardian Data')}
+                  {activeTab === 'ekonomi' && (locale === 'id' ? 'Data Kesejahteraan Ekonomi' : 'Economic Welfare Data')}
                 </CardTitle>
               </CardHeader>
               <CardContent>
@@ -304,8 +318,11 @@ export function StudentFormPage() {
                     <FormField control={form.control} name="nickname" render={({ field }) => (
                       <FormItem><FormLabel>Nama Panggilan</FormLabel><FormControl><Input placeholder="Cth: Ahmad" {...field} /></FormControl><FormMessage /></FormItem>
                     )} />
+                    <FormField control={form.control} name="nis" render={({ field }) => (
+                      <FormItem><FormLabel>NIS (No. Induk Sekolah)</FormLabel><FormControl><Input placeholder="Cth: 2023001" {...field} /></FormControl><FormMessage /></FormItem>
+                    )} />
                     <FormField control={form.control} name="nisn" render={({ field }) => (
-                      <FormItem><FormLabel>NISN</FormLabel><FormControl><Input placeholder="10 digit NISN" {...field} /></FormControl><FormMessage /></FormItem>
+                      <FormItem><FormLabel>NISN (No. Induk Siswa Nasional)</FormLabel><FormControl><Input placeholder="10 digit NISN" {...field} /></FormControl><FormMessage /></FormItem>
                     )} />
                     <FormField control={form.control} name="nik" render={({ field }) => (
                       <FormItem><FormLabel>NIK</FormLabel><FormControl><Input placeholder="16 digit NIK" {...field} /></FormControl><FormMessage /></FormItem>
@@ -554,23 +571,25 @@ export function StudentFormPage() {
 
           <div className="flex justify-end space-x-4 pt-4">
             <Button type="button" variant="ghost" onClick={() => navigate('/students')} disabled={mutation.isPending}>
-              <X className="mr-2 h-4 w-4" /> Batal
+              <X className="mr-2 h-4 w-4" /> {locale === 'id' ? 'Batal' : 'Cancel'}
             </Button>
 
             {activeTab !== 'pribadi' && (
               <Button type="button" variant="outline" onClick={handlePrevTab}>
-                <ArrowLeft className="mr-2 h-4 w-4" /> Sebelumnya
+                <ArrowLeft className="mr-2 h-4 w-4" /> {locale === 'id' ? 'Sebelumnya' : 'Previous'}
               </Button>
             )}
 
             {activeTab !== 'ekonomi' ? (
               <Button type="button" onClick={handleNextTab} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-                Selanjutnya <ArrowRight className="ml-2 h-4 w-4" />
+                {locale === 'id' ? 'Selanjutnya' : 'Next'} <ArrowRight className="ml-2 h-4 w-4" />
               </Button>
             ) : (
               <Button type="submit" disabled={mutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg">
                 {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                {isEdit ? 'Simpan Perubahan' : 'Simpan Seluruh Data'}
+                {isEdit
+                  ? (locale === 'id' ? 'Simpan Perubahan' : 'Save Changes')
+                  : (locale === 'id' ? 'Simpan Seluruh Data' : 'Save All Data')}
               </Button>
             )}
           </div>

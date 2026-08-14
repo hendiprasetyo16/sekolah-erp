@@ -2,6 +2,7 @@ import type { EconomicCategory, Gender, AttendanceStatus } from '@/types/common.
 
 export interface StudentListItem {
   id: string;
+  nis: string;
   nisn: string;
   nik: string;
   fullName: string;
@@ -70,6 +71,7 @@ export interface StudentEconomic {
 }
 
 export interface CreateStudentPayload {
+  nis: string;
   nisn: string;
   nik: string;
   noKk: string;

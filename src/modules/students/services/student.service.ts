@@ -1,6 +1,13 @@
 import { supabase } from '@/services/supabase.client';
 import type { ApiResponse, ApiResponsePaginated, PaginatedParams } from '@/services/api.types';
-import type { StudentListItem, StudentDetail, CreateStudentPayload, UpdateStudentPayload } from '../types/student.types';
+import type {
+  StudentListItem,
+  StudentDetail,
+  CreateStudentPayload,
+  UpdateStudentPayload,
+  StudentEconomic, // <-- Impor tambahan untuk strict type
+  StudentStatus    // <-- Impor tambahan untuk strict type
+} from '../types/student.types';
 
 export const studentService = {
   async list(params: PaginatedParams & { classId?: string; status?: string }): Promise<ApiResponsePaginated<StudentListItem>> {
@@ -11,7 +18,7 @@ export const studentService = {
       .select('*, classes(name, gradeLevel)', { count: 'exact' });
 
     if (search) {
-      query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%`);
+      query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%,nis.ilike.%${search}%`);
     }
     if (classId) {
       query = query.eq('classId', classId);
@@ -36,6 +43,7 @@ export const studentService = {
       const cls = item.classes as { name?: string; gradeLevel?: number } | null;
       return {
         id: item.id as string,
+        nis: (item.nis as string) || '-',
         nisn: item.nisn as string,
         nik: item.nik as string,
         fullName: item.fullName as string,
@@ -43,7 +51,7 @@ export const studentService = {
         className: cls?.name || '-',
         classId: item.classId as string,
         gradeLevel: cls?.gradeLevel || 0,
-        status: item.status as any,
+        status: item.status as StudentStatus, // <-- FIX: Menggunakan StudentStatus, bukan 'any'
         phone: item.phone as string | undefined,
         entryDate: item.entryDate as string,
       };
@@ -109,7 +117,8 @@ export const studentService = {
     };
   },
 
-  async create(payload: CreateStudentPayload & { schoolId: string; economic?: any }): Promise<ApiResponse<StudentDetail>> {
+  // FIX: Parameter economic menggunakan Omit strict type, bukan 'any'
+  async create(payload: CreateStudentPayload & { schoolId: string; economic?: Omit<StudentEconomic, 'id' | 'studentId'> }): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...studentData } = payload;
 
     // 1. Simpan data utama siswa
@@ -141,7 +150,8 @@ export const studentService = {
     return this.getById(data.id);
   },
 
-  async update(id: string, payload: UpdateStudentPayload & { economic?: any }): Promise<ApiResponse<StudentDetail>> {
+  // FIX: Parameter economic menggunakan Omit strict type, bukan 'any'
+  async update(id: string, payload: UpdateStudentPayload & { economic?: Omit<StudentEconomic, 'id' | 'studentId'> }): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...studentData } = payload;
 
     if (Object.keys(studentData).length > 0) {
