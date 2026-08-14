@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
+import type { FieldErrors } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -17,7 +18,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-// Import strict types
 import type { StudentParent, CreateStudentPayload, StudentEconomic } from '../types/student.types';
 
 const studentSchema = z.object({
@@ -69,6 +69,7 @@ const studentSchema = z.object({
 });
 
 type StudentFormValues = z.infer<typeof studentSchema>;
+type CombinedStudentPayload = CreateStudentPayload & { schoolId: string; economic?: Omit<StudentEconomic, 'studentId' | 'id'> };
 
 export function StudentFormPage() {
   const { id } = useParams<{ id: string }>();
@@ -111,8 +112,6 @@ export function StudentFormPage() {
   useEffect(() => {
     if (student?.data) {
       const d = student.data;
-
-      // FIX: Menghapus tipe 'any' dan menggantinya dengan strict type 'StudentParent'
       const ayah = d.parents?.find((p: StudentParent) => p.relation === 'AYAH');
       const ibu = d.parents?.find((p: StudentParent) => p.relation === 'IBU');
       const eco = d.economic;
@@ -126,37 +125,25 @@ export function StudentFormPage() {
         postalCode: d.postalCode || '', phone: d.phone || '', email: d.email || '',
         classId: d.classId, entryDate: d.entryDate.split('T')[0],
 
-        fatherName: ayah?.fullName || '',
-        fatherNik: ayah?.nik || '',
-        fatherPhone: ayah?.phone || '',
-        fatherEmail: ayah?.email || '',
-        fatherOccupation: ayah?.occupation || '',
-        fatherIncome: ayah?.monthlyIncome || 0,
+        fatherName: ayah?.fullName || '', fatherNik: ayah?.nik || '',
+        fatherPhone: ayah?.phone || '', fatherEmail: ayah?.email || '',
+        fatherOccupation: ayah?.occupation || '', fatherIncome: ayah?.monthlyIncome || 0,
 
-        motherName: ibu?.fullName || '',
-        motherNik: ibu?.nik || '',
-        motherPhone: ibu?.phone || '',
-        motherEmail: ibu?.email || '',
-        motherOccupation: ibu?.occupation || '',
-        motherIncome: ibu?.monthlyIncome || 0,
+        motherName: ibu?.fullName || '', motherNik: ibu?.nik || '',
+        motherPhone: ibu?.phone || '', motherEmail: ibu?.email || '',
+        motherOccupation: ibu?.occupation || '', motherIncome: ibu?.monthlyIncome || 0,
 
-        hasKip: eco?.hasKip || false,
-        kipNumber: eco?.kipNumber || '',
-        hasPkh: eco?.hasPkh || false,
-        hasKks: eco?.hasKks || false,
-        kksNumber: eco?.kksNumber || '',
-        isDtks: eco?.isDtks || false,
-        houseOwnership: eco?.houseOwnership || '',
-        dependentsCount: eco?.dependentsCount || 0
+        hasKip: eco?.hasKip || false, kipNumber: eco?.kipNumber || '',
+        hasPkh: eco?.hasPkh || false, hasKks: eco?.hasKks || false,
+        kksNumber: eco?.kksNumber || '', isDtks: eco?.isDtks || false,
+        houseOwnership: eco?.houseOwnership || '', dependentsCount: eco?.dependentsCount || 0
       });
     }
   }, [student, form]);
 
   const mutation = useMutation({
-    // FIX: Tipe parameter dibuat Strict sesuai service
-    mutationFn: (data: CreateStudentPayload & { schoolId: string; economic?: Omit<StudentEconomic, 'studentId' | 'id'> }) => {
-      // Kita cast ke 'any' saat memanggil service, karena struktur JSON sudah dijamin aman oleh type payload di atas
-      return isEdit ? studentService.update(id!, data as any) : studentService.create(data as any);
+    mutationFn: (data: CombinedStudentPayload) => {
+      return isEdit ? studentService.update(id!, data) : studentService.create(data);
     },
     onSuccess: () => {
       toast.success(isEdit
@@ -166,39 +153,38 @@ export function StudentFormPage() {
       queryClient.invalidateQueries({ queryKey: ['students'] });
       navigate('/students');
     },
-    // FIX: error diketik sebagai 'Error' standar
+    // FIX: Menangani Server-Side Error (Database Duplikat)
     onError: (error: Error) => {
-      toast.error(error?.message || (locale === 'id' ? 'Terjadi kesalahan' : 'An error occurred'));
+      const errorMessage = error?.message || (locale === 'id' ? 'Terjadi kesalahan' : 'An error occurred');
+      toast.error(errorMessage);
+
+      // Deteksi jika pesan error berhubungan dengan NISN atau NIS
+      if (errorMessage.includes('NISN')) {
+        setActiveTab('pribadi'); // Lompat ke tab pribadi
+        form.setError('nisn', { type: 'server', message: errorMessage }); // Beri tanda merah di input NISN
+      } else if (errorMessage.includes('NIS')) {
+        setActiveTab('pribadi'); // Lompat ke tab pribadi
+        form.setError('nis', { type: 'server', message: errorMessage }); // Beri tanda merah di input NIS
+      }
     },
   });
 
   const onSubmit = (data: StudentFormValues) => {
-    // FIX: Tipe Array didefinisikan secara strict
     const parentsArray: Omit<StudentParent, 'id'>[] = [];
 
     if (data.fatherName) {
       parentsArray.push({
-        relation: 'AYAH',
-        fullName: data.fatherName,
-        nik: data.fatherNik,
-        phone: data.fatherPhone,
-        email: data.fatherEmail,
-        occupation: data.fatherOccupation,
-        monthlyIncome: data.fatherIncome,
-        isAlive: true
+        relation: 'AYAH', fullName: data.fatherName, nik: data.fatherNik,
+        phone: data.fatherPhone, email: data.fatherEmail, occupation: data.fatherOccupation,
+        monthlyIncome: data.fatherIncome, isAlive: true
       });
     }
 
     if (data.motherName) {
       parentsArray.push({
-        relation: 'IBU',
-        fullName: data.motherName,
-        nik: data.motherNik,
-        phone: data.motherPhone,
-        email: data.motherEmail,
-        occupation: data.motherOccupation,
-        monthlyIncome: data.motherIncome,
-        isAlive: true
+        relation: 'IBU', fullName: data.motherName, nik: data.motherNik,
+        phone: data.motherPhone, email: data.motherEmail, occupation: data.motherOccupation,
+        monthlyIncome: data.motherIncome, isAlive: true
       });
     }
 
@@ -210,18 +196,12 @@ export function StudentFormPage() {
     } = data;
 
     const economicData: Omit<StudentEconomic, 'studentId' | 'id'> = {
-      hasKip: !!hasKip,
-      kipNumber: hasKip ? kipNumber : undefined,
-      hasPkh: !!hasPkh,
-      hasKks: !!hasKks,
-      kksNumber: hasKks ? kksNumber : undefined,
-      isDtks: !!isDtks,
-      houseOwnership,
-      dependentsCount,
-      isOrphan: false,
+      hasKip: !!hasKip, kipNumber: hasKip ? kipNumber : undefined,
+      hasPkh: !!hasPkh, hasKks: !!hasKks, kksNumber: hasKks ? kksNumber : undefined,
+      isDtks: !!isDtks, houseOwnership, dependentsCount, isOrphan: false,
     };
 
-    const payload = {
+    const payload: CombinedStudentPayload = {
       ...studentCoreData,
       schoolId: school?.id || '',
       parents: parentsArray,
@@ -231,10 +211,35 @@ export function StudentFormPage() {
     mutation.mutate(payload);
   };
 
+  // Menangani Client-Side Error (Input Kosong/Tidak Valid)
+  const onInvalid = (errors: FieldErrors<StudentFormValues>) => {
+    const errorKeys = Object.keys(errors);
+
+    const tabFields = {
+      pribadi: ['fullName', 'nickname', 'nis', 'nisn', 'nik', 'noKk', 'gender', 'birthPlace', 'birthDate', 'religion', 'address', 'rt', 'rw', 'kelurahan', 'kecamatan', 'city', 'province', 'postalCode', 'phone', 'email'],
+      akademik: ['classId', 'entryDate'],
+      orangtua: ['fatherName', 'fatherNik', 'fatherPhone', 'fatherEmail', 'fatherOccupation', 'fatherIncome', 'motherName', 'motherNik', 'motherPhone', 'motherEmail', 'motherOccupation', 'motherIncome'],
+      ekonomi: ['hasKip', 'kipNumber', 'hasPkh', 'hasKks', 'kksNumber', 'isDtks', 'houseOwnership', 'dependentsCount']
+    };
+
+    for (const [tab, fields] of Object.entries(tabFields)) {
+      if (fields.some(field => errorKeys.includes(field))) {
+        setActiveTab(tab);
+        break;
+      }
+    }
+
+    toast.error(
+      locale === 'id'
+        ? 'Gagal menyimpan! Mohon lengkapi isian yang berwarna merah.'
+        : 'Failed to save! Please fix the highlighted fields.'
+    );
+  };
+
   const handleNextTab = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (activeTab === 'pribadi') {
-      const isTab1Valid = await form.trigger(['fullName', 'nisn', 'nik', 'noKk', 'gender', 'birthPlace', 'birthDate', 'religion', 'address', 'city', 'province']);
+      const isTab1Valid = await form.trigger(['nis', 'fullName', 'nisn', 'nik', 'noKk', 'gender', 'birthPlace', 'birthDate', 'religion', 'address', 'city', 'province']);
       if (isTab1Valid) setActiveTab('akademik');
       else toast.warning(locale === 'id' ? 'Lengkapi Data Pribadi terlebih dahulu' : 'Please complete Personal Data first');
     }
@@ -290,7 +295,7 @@ export function StudentFormPage() {
       </div>
 
       <Form {...form}>
-        <form onSubmit={form.handleSubmit(onSubmit)} onKeyDown={preventAutoSubmitOnEnter} className="space-y-6">
+        <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} onKeyDown={preventAutoSubmitOnEnter} className="space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <TabsList className="grid w-full grid-cols-4 lg:w-[600px]">
               <TabsTrigger value="pribadi">{locale === 'id' ? 'Data Pribadi' : 'Personal Data'}</TabsTrigger>

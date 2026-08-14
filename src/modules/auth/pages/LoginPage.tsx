@@ -19,12 +19,15 @@ export function LoginPage() {
   const [selectedRole, setSelectedRole] = useState('admin');
 
   const demoAccounts = [
-    { key: 'admin', label: 'Super Admin', email: 'admin@sekolah.sch.id' },
-    { key: 'admin_sekolah', label: 'Admin Sekolah', email: 'admin.sekolah@sekolah.sch.id' },
-    { key: 'kepsek', label: 'Kepala Sekolah', email: 'kepsek@sekolah.sch.id' },
-    { key: 'bendahara', label: 'Bendahara', email: 'bendahara@sekolah.sch.id' },
-    { key: 'guru', label: 'Guru', email: 'guru@sekolah.sch.id' },
-    { key: 'walikelas', label: 'Wali Kelas', email: 'walikelas@sekolah.sch.id' },
+    { key: 'admin', label: 'Super Admin', email: 'admin@smknusantara.sch.id' },
+    // Menambahkan Admin Sekolah yang baru kita buat di database
+    { key: 'admin_sekolah', label: 'Admin Sekolah', email: 'admin2@smknusantara.sch.id' },
+    { key: 'kepsek', label: 'Kepala Sekolah', email: 'kepsek@smknusantara.sch.id' },
+    { key: 'bendahara', label: 'Bendahara', email: 'bendahara@smknusantara.sch.id' },
+    // Menambahkan kembali Operator yang sempat hilang
+    { key: 'operator', label: 'Operator', email: 'operator@smknusantara.sch.id' },
+    { key: 'guru', label: 'Guru', email: 'guru@smknusantara.sch.id' },
+    { key: 'walikelas', label: 'Wali Kelas', email: 'walikelas@smknusantara.sch.id' },
   ];
 
   const handleLogin = async (e: React.FormEvent) => {

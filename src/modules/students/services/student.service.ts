@@ -1,13 +1,32 @@
 import { supabase } from '@/services/supabase.client';
+import type { PostgrestError } from '@supabase/supabase-js';
 import type { ApiResponse, ApiResponsePaginated, PaginatedParams } from '@/services/api.types';
 import type {
   StudentListItem,
   StudentDetail,
   CreateStudentPayload,
   UpdateStudentPayload,
-  StudentEconomic, // <-- Impor tambahan untuk strict type
-  StudentStatus    // <-- Impor tambahan untuk strict type
+  StudentEconomic,
+  StudentStatus
 } from '../types/student.types';
+
+// FUNGSI BARU: Penerjemah Error Database ke Bahasa Manusia (STRICT TYPE)
+const handleDbError = (error: unknown) => {
+  const pgError = error as PostgrestError;
+  let message = pgError?.message || 'Terjadi kesalahan pada database';
+
+  // Deteksi error duplikat (Kode PostgreSQL 23505)
+  if (pgError?.code === '23505' || message.includes('unique constraint')) {
+    if (message.includes('nisn_key')) {
+      message = 'NISN tersebut sudah terdaftar di sistem. Silakan gunakan NISN lain.';
+    } else if (message.includes('nis_key')) {
+      message = 'NIS tersebut sudah digunakan oleh siswa lain.';
+    } else {
+      message = 'Data tersebut sudah terdaftar (Duplikat).';
+    }
+  }
+  return new Error(message);
+};
 
 export const studentService = {
   async list(params: PaginatedParams & { classId?: string; status?: string }): Promise<ApiResponsePaginated<StudentListItem>> {
@@ -51,7 +70,7 @@ export const studentService = {
         className: cls?.name || '-',
         classId: item.classId as string,
         gradeLevel: cls?.gradeLevel || 0,
-        status: item.status as StudentStatus, // <-- FIX: Menggunakan StudentStatus, bukan 'any'
+        status: item.status as StudentStatus,
         phone: item.phone as string | undefined,
         entryDate: item.entryDate as string,
       };
@@ -117,7 +136,6 @@ export const studentService = {
     };
   },
 
-  // FIX: Parameter economic menggunakan Omit strict type, bukan 'any'
   async create(payload: CreateStudentPayload & { schoolId: string; economic?: Omit<StudentEconomic, 'id' | 'studentId'> }): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...studentData } = payload;
 
@@ -128,7 +146,7 @@ export const studentService = {
       .select()
       .single();
 
-    if (error) throw new Error(error.message);
+    if (error) throw handleDbError(error);
 
     // 2. Simpan data orang tua jika ada
     if (parents && parents.length > 0) {
@@ -137,7 +155,7 @@ export const studentService = {
         .from('student_parents')
         .insert(parentsData);
 
-      if (parentError) throw new Error(parentError.message);
+      if (parentError) throw handleDbError(parentError);
     }
 
     // 3. Simpan data ekonomi/PIP jika ada
@@ -150,7 +168,6 @@ export const studentService = {
     return this.getById(data.id);
   },
 
-  // FIX: Parameter economic menggunakan Omit strict type, bukan 'any'
   async update(id: string, payload: UpdateStudentPayload & { economic?: Omit<StudentEconomic, 'id' | 'studentId'> }): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...studentData } = payload;
 
@@ -160,7 +177,7 @@ export const studentService = {
         .update(studentData)
         .eq('id', id);
 
-      if (error) throw new Error(error.message);
+      if (error) throw handleDbError(error);
     }
 
     // Perbarui data orang tua
