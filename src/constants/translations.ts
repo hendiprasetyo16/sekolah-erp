@@ -80,6 +80,13 @@ export const translations = {
       masterData: 'Data Master',
       academic: 'Akademik',
       management: 'Manajemen',
+      // Tambahan Key Baru
+      academicYears: 'Tahun Ajaran',
+      classes: 'Data Kelas',
+      feeMaster: 'Master Biaya',
+      studentBills: 'Tagihan Siswa',
+      payments: 'Pembayaran',
+      collapse: 'Perkecil',
     },
     dashboard: {
       title: 'Dashboard',
@@ -266,6 +273,13 @@ export const translations = {
       masterData: 'Master Data',
       academic: 'Academic',
       management: 'Management',
+      // Tambahan Key Baru
+      academicYears: 'Academic Years',
+      classes: 'Classes',
+      feeMaster: 'Fee Master',
+      studentBills: 'Student Bills',
+      payments: 'Payments',
+      collapse: 'Collapse',
     },
     dashboard: {
       title: 'Dashboard',
@@ -376,8 +390,8 @@ export const translations = {
 // Generate type from translation keys
 type NestedKeyOf<ObjectType extends object> = {
   [Key in keyof ObjectType & string]: ObjectType[Key] extends object
-    ? `${Key}.${NestedKeyOf<ObjectType[Key]>}`
-    : Key;
+  ? `${Key}.${NestedKeyOf<ObjectType[Key]>}`
+  : Key;
 }[keyof ObjectType & string];
 
 export type TranslationKey = NestedKeyOf<typeof translations.id>;

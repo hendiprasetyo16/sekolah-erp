@@ -225,4 +225,27 @@ export const studentService = {
   async exportData(_format: 'excel' | 'pdf', _params?: PaginatedParams): Promise<Blob> {
     throw new Error('Not implemented for direct Supabase client yet');
   },
+
+  // ... kode fungsi lain (list, create, update, delete) ...
+
+  /**
+   * FUNGSI BARU: Mengirim data massal ke Supabase RPC.
+   * RPC akan menjamin keamanan transaksi (All or Nothing).
+   */
+  async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
+    const { data, error } = await supabase.rpc('bulk_import_students', {
+      batch_data: payload
+    });
+
+    if (error) {
+      // Tangkap error dari PostgreSQL (biasanya kita lempar ke handleDbError)
+      throw new Error(error.message || 'Gagal melakukan import massal');
+    }
+
+    return {
+      success: true,
+      data: { count: data?.count || payload.length },
+      message: `${data?.count || 0} siswa berhasil diimpor`
+    };
+  },
 };

@@ -4,7 +4,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, GraduationCap, Calendar, Wallet,
   Package, FileText, Award, BarChart3, Settings, ChevronLeft,
-  ChevronRight, School, ChevronDown, BookOpen, CreditCard, Receipt
+  ChevronRight, School, ChevronDown, BookOpen, CreditCard, Receipt,
+  Building2, CalendarDays
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
@@ -33,7 +34,6 @@ export function Sidebar() {
   const { hasAnyPermission } = usePermission();
   const location = useLocation();
 
-  // FIX: Panggil Hook di level teratas komponen, jangan di dalam JSX!
   const schoolName = useAuthStore((state) => state.school?.name);
 
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management']);
@@ -56,6 +56,10 @@ export function Sidebar() {
       id: 'academic',
       title: t('sidebar.academic'),
       items: [
+        // --- MENU BARU DITAMBAHKAN DI SINI ---
+        // --- HANYA ADA 1 MENU UNTUK MENGAKSES HALAMAN GABUNGAN ---
+        { label: t('sidebar.masterData'), icon: <Building2 size={20} />, href: '/academic/master-data', module: 'academic' },
+
         { label: t('sidebar.students'), icon: <Users size={20} />, href: '/students', module: 'students' },
         { label: t('sidebar.teachers'), icon: <GraduationCap size={20} />, href: '/teachers', module: 'teachers' },
         { label: t('sidebar.schedules'), icon: <Calendar size={20} />, href: '/schedules', module: 'schedules' },
@@ -66,9 +70,11 @@ export function Sidebar() {
       title: t('sidebar.management'),
       items: [
         { label: t('sidebar.finance'), icon: <Wallet size={20} />, href: '/finance', module: 'finance' },
-        { label: 'Master Biaya', icon: <FileText size={20} />, href: '/finance/fee-templates', module: 'finance' },
-        { label: 'Tagihan Siswa', icon: <CreditCard size={20} />, href: '/finance/bills', module: 'finance', badge: 15 },
-        { label: 'Pembayaran', icon: <Receipt size={20} />, href: '/finance/payments', module: 'finance' },
+        // --- PERBAIKAN DWI-BAHASA DI SINI ---
+        { label: t('sidebar.feeMaster'), icon: <FileText size={20} />, href: '/finance/fee-templates', module: 'finance' },
+        { label: t('sidebar.studentBills'), icon: <CreditCard size={20} />, href: '/finance/bills', module: 'finance', badge: 15 },
+        { label: t('sidebar.payments'), icon: <Receipt size={20} />, href: '/finance/payments', module: 'finance' },
+
         { label: t('sidebar.inventory'), icon: <Package size={20} />, href: '/inventory', module: 'inventory' },
         { label: t('sidebar.administration'), icon: <BookOpen size={20} />, href: '/admin', module: 'administration', badge: 5 },
         { label: t('sidebar.scholarships'), icon: <Award size={20} />, href: '/scholarships', module: 'scholarships' },
@@ -216,7 +222,7 @@ export function Sidebar() {
           {sidebarCollapsed ? <ChevronRight size={18} /> : (
             <>
               <ChevronLeft size={18} />
-              <span className="font-medium">Perkecil</span>
+              <span className="font-medium">{t('sidebar.collapse')}</span> {/* <-- PERBAIKAN DWI-BAHASA DI SINI */}
             </>
           )}
         </button>

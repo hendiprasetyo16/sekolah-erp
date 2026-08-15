@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Upload, Download, Search, Eye, Edit, Trash2,
-  Loader2, AlertCircle
+  Loader2, AlertCircle, CheckCircle2, XCircle, FileSpreadsheet
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -16,8 +16,6 @@ import { supabase } from '@/services/supabase.client';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 
-import type { CreateStudentPayload } from '../types/student.types';
-
 export function StudentListPage() {
   const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
@@ -28,12 +26,17 @@ export function StudentListPage() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
 
-  // States for Actions
+  // States for Modals & Actions
   const [studentToDelete, setStudentToDelete] = useState<{ id: string, name: string } | null>(null);
   const [isExporting, setIsExporting] = useState(false);
-  const [isImporting, setIsImporting] = useState(false);
 
+  // WIZARD IMPORT STATES
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [wizardState, setWizardState] = useState<'idle' | 'parsing' | 'preview' | 'importing'>('idle');
+  const [parsedImportData, setParsedImportData] = useState<any[]>([]);
+  const [importStats, setImportStats] = useState({ total: 0, valid: 0, missingClass: 0, missingMandatory: 0 });
+  const [unmatchedClasses, setUnmatchedClasses] = useState<string[]>([]); // Untuk menampilkan nama kelas yang gagal dicocokkan
+
   const pageSize = 10;
 
   // Fetch Classes
@@ -75,170 +78,223 @@ export function StudentListPage() {
     }
   });
 
+  // Bulk Import Mutation
+  const importMutation = useMutation({
+    mutationFn: (payload: any[]) => studentService.bulkImport(payload),
+    onSuccess: (res) => {
+      toast.success(res.message);
+      queryClient.invalidateQueries({ queryKey: ['students'] });
+      closeImportWizard();
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || (locale === 'id' ? 'Gagal melakukan import' : 'Import failed'));
+      setWizardState('preview');
+    }
+  });
+
   const students = studentsResponse?.data?.data || [];
   const meta = studentsResponse?.data?.meta;
 
-  const toggleRow = (id: string) => {
-    setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
+  const toggleRow = (id: string) => setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
+  const toggleAll = () => setSelectedRows(selectedRows.length === students.length && students.length > 0 ? [] : students.map(s => s.id));
+
+  // --- LOGIKA IMPORT WIZARD (MEMBACA & PREVIEW) ---
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setWizardState('parsing');
+
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rawData = XLSX.utils.sheet_to_json<any[]>(worksheet, { header: 1 });
+
+        if (rawData.length === 0) throw new Error('File kosong');
+
+        // 1. MENCARI BARIS HEADER
+        let headerRowIndex = -1;
+        for (let i = 0; i < Math.min(20, rawData.length); i++) {
+          const rowText = rawData[i]?.map(cell => String(cell).toLowerCase().replace(/\s+/g, '')) || [];
+          if (rowText.some(t => t.includes('nama')) && rowText.some(t => t.includes('nisn') || t.includes('nipd'))) {
+            headerRowIndex = i; break;
+          }
+        }
+
+        if (headerRowIndex === -1) throw new Error('Format kolom tidak dikenali (Tidak ada Nama/NISN)');
+
+        // 2. MEMBERSIHKAN NAMA KOLOM
+        const rawHeaders = rawData[headerRowIndex] as string[];
+        const cleanHeader = (h: any) => String(h || '').trim().replace(/[\r\n]+/g, ' ').toLowerCase();
+        const data = rawData.slice(headerRowIndex + 1).map(rowArray => {
+          const rowObject: Record<string, any> = {};
+          rawHeaders.forEach((header, index) => {
+            if (header) rowObject[cleanHeader(header)] = rowArray[index];
+          });
+          return rowObject;
+        });
+
+        // =========================================================================
+        // FUNGSI BARU: Pencocokan Kelas Cerdas (Fuzzy Matcher)
+        // =========================================================================
+        const normalizeClassName = (name: string) => {
+          if (!name) return '';
+          return String(name)
+            .toLowerCase()
+            .replace(/kelas/g, '')       // Hapus kata "kelas"
+            .replace(/rombel/g, '')      // Hapus kata "rombel"
+            .replace(/saat ini/g, '')    // Hapus frasa "saat ini"
+            .replace(/tingkat/g, '')     // Hapus kata "tingkat"
+            .replace(/-/g, '')           // Hapus tanda strip
+            .replace(/\s+/g, '')         // Hapus semua spasi
+            .trim();
+        };
+
+        // 3. MAPPING DATA & AUTO-DETECT KELAS
+        const validPayloads: any[] = [];
+        let missingClassCount = 0;
+        let missingMandatoryCount = 0;
+        const unfoundClassSet = new Set<string>(); // Menyimpan teks kelas yang gagal dikenali
+
+        for (const row of data) {
+          if (!row['nama'] && !row['nisn'] && !row['nipd']) continue;
+
+          // Validasi Mandatory
+          if (!row['nama'] || (!row['nisn'] && !row['nipd'])) {
+            missingMandatoryCount++;
+            continue;
+          }
+
+          // Pencarian Kolom Rombel Dinamis (Mencari kunci yang mengandung kata rombel atau kelas)
+          const rombelKey = Object.keys(row).find(k => k.includes('rombel') || k.includes('kelas'));
+          const rawExcelRombel = rombelKey ? String(row[rombelKey]) : '';
+          const normalizedExcelRombel = normalizeClassName(rawExcelRombel);
+
+          let matchedClass = null;
+
+          if (classesData && classesData.length > 0) {
+            matchedClass = classesData.find(c => {
+              const normalizedDbClass = normalizeClassName(c.name);
+              const dbGradeLevel = String(c.gradeLevel);
+              // Cocokkan nama bersih ATAU gradeLevel (Contoh: "1" == "1")
+              return normalizedDbClass === normalizedExcelRombel || dbGradeLevel === normalizedExcelRombel;
+            });
+          }
+
+          if (!matchedClass) {
+            missingClassCount++;
+            unfoundClassSet.add(rawExcelRombel || '(Kolom Kelas Kosong)');
+          }
+
+          const toBool = (val: any) => String(val).toLowerCase().trim() === 'ya';
+
+          validPayloads.push({
+            schoolId: school?.id || '',
+            nis: String(row['nipd'] || ''),
+            nisn: String(row['nisn'] || ''),
+            nik: String(row['nik'] || ''),
+            noKk: String(row['no kk'] || row['nokk'] || '-'),
+            fullName: String(row['nama'] || ''),
+            gender: (String(row['jk'] || row['jenis kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P'),
+            birthPlace: String(row['tempat lahir'] || '-'),
+            birthDate: !isNaN(Number(row['tanggal lahir']))
+              ? new Date(Math.round((Number(row['tanggal lahir']) - 25569) * 86400 * 1000)).toISOString()
+              : String(row['tanggal lahir'] || new Date().toISOString()),
+            religion: String(row['agama'] || 'ISLAM').toUpperCase(),
+            address: String(row['alamat'] || '-'),
+            city: String(row['kabupaten/kota'] || row['kota'] || ''),
+            province: String(row['provinsi'] || ''),
+            classId: matchedClass?.id || null, // Jika null, siswa tidak dimasukkan
+            entryDate: new Date().toISOString(),
+            status: 'AKTIF',
+
+            // Relasi Orang Tua
+            parents: [
+              ...(row['nama ayah'] || row['data ayah'] ? [{ relation: 'AYAH', fullName: String(row['nama ayah'] || row['data ayah']), isAlive: true }] : []),
+              ...(row['nama ibu'] || row['data ibu'] ? [{ relation: 'IBU', fullName: String(row['nama ibu'] || row['data ibu']), isAlive: true }] : [])
+            ],
+
+            // Relasi Ekonomi
+            economic: {
+              hasKip: toBool(row['penerima kip']),
+              kipNumber: String(row['nomor kip'] || ''),
+              namaKip: String(row['nama di kip'] || ''),
+              layakPip: toBool(row['layak pip (usulan dari sekolah)'] || row['layak pip']),
+              alasanLayakPip: String(row['alasan layak pip'] || ''),
+            }
+          });
+        }
+
+        setParsedImportData(validPayloads);
+        setUnmatchedClasses(Array.from(unfoundClassSet));
+        setImportStats({
+          total: data.filter(r => r['nama'] || r['nisn'] || r['nipd']).length,
+          valid: validPayloads.length,
+          missingClass: missingClassCount,
+          missingMandatory: missingMandatoryCount
+        });
+        setWizardState('preview');
+
+      } catch (error: any) {
+        toast.error(error.message || 'Gagal membaca file Excel');
+        setWizardState('idle');
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsBinaryString(file);
   };
 
-  const toggleAll = () => {
-    if (selectedRows.length === students.length && students.length > 0) {
-      setSelectedRows([]);
-    } else {
-      setSelectedRows(students.map(s => s.id));
+  const executeImport = () => {
+    // Filter hanya data yang memiliki classId
+    const finalPayload = parsedImportData.filter(d => d.classId !== null);
+    if (finalPayload.length === 0) {
+      toast.error('Tidak ada data valid yang memiliki Kelas yang cocok di sistem.');
+      return;
     }
+    setWizardState('importing');
+    importMutation.mutate(finalPayload);
   };
 
-  // EXPORT EXCEL LOGIC
+  const closeImportWizard = () => {
+    setWizardState('idle');
+    setParsedImportData([]);
+    setUnmatchedClasses([]);
+  };
+
+  const triggerImport = () => fileInputRef.current?.click();
+
+  // --- LOGIKA EXPORT ---
   const handleExport = async () => {
     try {
       setIsExporting(true);
-      toast.info(locale === 'id' ? 'Menyiapkan data export...' : 'Preparing export data...');
-
-      // Ambil seluruh data sesuai filter saat ini tanpa limit halaman
-      const response = await studentService.list({
-        page: 1,
-        limit: 10000, // Angka besar untuk mengambil semua
-        search: searchQuery,
-        classId: selectedClass === 'all' ? undefined : selectedClass
-      });
-
+      toast.info(locale === 'id' ? 'Menyiapkan data...' : 'Preparing data...');
+      const response = await studentService.list({ page: 1, limit: 10000, search: searchQuery, classId: selectedClass === 'all' ? undefined : selectedClass });
       const allData = response.data?.data || [];
+      if (allData.length === 0) return toast.warning('Tidak ada data untuk diexport');
 
-      if (allData.length === 0) {
-        toast.warning(locale === 'id' ? 'Tidak ada data untuk diexport' : 'No data to export');
-        return;
-      }
-
-      // Format data untuk Excel
       const excelData = allData.map((s, index) => ({
-        'No': index + 1,
-        'NIS': s.nis,
-        'NISN': s.nisn,
-        'NIK': s.nik,
-        'Nama Lengkap': s.fullName,
+        'No': index + 1, 'NISN': s.nisn, 'NIK': s.nik, 'Nama Lengkap': s.fullName,
         'Jenis Kelamin': s.gender === 'L' ? 'Laki-laki' : 'Perempuan',
-        'Tempat Lahir': s.birthPlace,
+        'Kelas': s.className, 'Tempat Lahir': s.birthPlace,
         'Tanggal Lahir': s.birthDate ? new Date(s.birthDate).toLocaleDateString('id-ID') : '',
-        'Agama': s.religion,
-        'Kelas': s.className,
-        'Alamat': s.address,
-        'Status': s.status
+        'Alamat': s.address, 'Status': s.status
       }));
 
       const worksheet = XLSX.utils.json_to_sheet(excelData);
       const workbook = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(workbook, worksheet, "Data_Siswa");
-
-      // Mengatur lebar kolom agar rapi
-      const wscols = [
-        { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 20 },
-        { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
-        { wch: 15 }, { wch: 15 }, { wch: 40 }, { wch: 15 }
-      ];
-      worksheet['!cols'] = wscols;
-
+      worksheet['!cols'] = [{ wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 40 }, { wch: 15 }];
       XLSX.writeFile(workbook, `Data_Siswa_${new Date().getTime()}.xlsx`);
-      toast.success(locale === 'id' ? 'Export berhasil!' : 'Export successful!');
+      toast.success('Export berhasil!');
     } catch (error) {
-      console.error('Export error:', error);
-      toast.error(locale === 'id' ? 'Gagal melakukan export data' : 'Failed to export data');
+      toast.error('Gagal melakukan export data');
     } finally {
       setIsExporting(false);
     }
-  };
-
-  // IMPORT EXCEL LOGIC
-  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      setIsImporting(true);
-      toast.info(locale === 'id' ? 'Membaca file Excel...' : 'Reading Excel file...');
-
-      const reader = new FileReader();
-      reader.onload = async (evt) => {
-        try {
-          const bstr = evt.target?.result;
-          const workbook = XLSX.read(bstr, { type: 'binary' });
-          const worksheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[worksheetName];
-          const data = XLSX.utils.sheet_to_json<Record<string, string | number>>(worksheet);
-
-          if (data.length === 0) {
-            toast.warning(locale === 'id' ? 'File Excel kosong' : 'Excel file is empty');
-            return;
-          }
-
-          let successCount = 0;
-          let failCount = 0;
-
-          // Looping import data satu per satu
-          for (const row of data) {
-            try {
-              // Menyesuaikan nama kolom Excel dengan Payload
-              // Pastikan nama kolom di template Excel sesuai dengan yang ada di sini
-              const payload: CreateStudentPayload = {
-                schoolId: school?.id || '',
-                nis: String(row['NIS'] || ''),
-                nisn: String(row['NISN'] || ''),
-                nik: String(row['NIK'] || ''),
-                fullName: String(row['Nama Lengkap'] || ''),
-                gender: (String(row['Jenis Kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P') as 'L' | 'P',
-                birthPlace: String(row['Tempat Lahir'] || ''),
-                birthDate: String(row['Tanggal Lahir'] || new Date().toISOString()),
-                religion: String(row['Agama'] || 'ISLAM'),
-                address: String(row['Alamat'] || ''),
-                city: String(row['Kota'] || ''),
-                province: String(row['Provinsi'] || ''),
-                classId: selectedClass !== 'all' ? selectedClass : '', // Gunakan filter kelas aktif jika ada
-                entryDate: new Date().toISOString(),
-                status: 'AKTIF'
-              };
-
-              // Bypass record yang kosong namanya
-              if (!payload.fullName || !payload.nis) {
-                failCount++;
-                continue;
-              }
-
-              await studentService.create(payload);
-              successCount++;
-            } catch (err) {
-              console.error('Row import error:', err);
-              failCount++;
-            }
-          }
-
-          queryClient.invalidateQueries({ queryKey: ['students'] });
-          toast.success(
-            locale === 'id'
-              ? `Import selesai. Sukses: ${successCount}, Gagal/Dilewati: ${failCount}`
-              : `Import finished. Success: ${successCount}, Failed/Skipped: ${failCount}`
-          );
-
-        } catch (error) {
-          console.error('Import parse error:', error);
-          toast.error(locale === 'id' ? 'Format file tidak dikenali' : 'Unrecognized file format');
-        } finally {
-          setIsImporting(false);
-          if (fileInputRef.current) fileInputRef.current.value = '';
-        }
-      };
-
-      reader.readAsBinaryString(file);
-    } catch (error) {
-      console.error('File reading error:', error);
-      toast.error(locale === 'id' ? 'Gagal membaca file' : 'Failed to read file');
-      setIsImporting(false);
-      if (fileInputRef.current) fileInputRef.current.value = '';
-    }
-  };
-
-  const triggerImport = () => {
-    fileInputRef.current?.click();
   };
 
   const getStatusConfig = (status: string) => {
@@ -255,49 +311,132 @@ export function StudentListPage() {
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
 
-      {/* Hidden File Input for Excel Import */}
-      <input
-        type="file"
-        ref={fileInputRef}
-        onChange={handleImport}
-        accept=".xlsx, .xls, .csv"
-        className="hidden"
-      />
+      <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls, .csv" className="hidden" />
 
-      {/* --- MODAL KONFIRMASI HAPUS (MODERN) --- */}
+      {/* --- IMPORT WIZARD MODAL --- */}
+      <AnimatePresence>
+        {wizardState !== 'idle' && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-background rounded-2xl shadow-2xl border border-border w-full max-w-lg overflow-hidden flex flex-col">
+
+              <div className="p-6 border-b border-border bg-muted/20">
+                <div className="flex items-center gap-3">
+                  <div className="p-2 bg-blue-500/10 text-blue-600 rounded-lg"><FileSpreadsheet size={24} /></div>
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">Import Wizard Dapodik</h3>
+                    <p className="text-sm text-muted-foreground">Validasi dan pencocokan data otomatis</p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 flex-1 bg-card">
+                {wizardState === 'parsing' && (
+                  <div className="flex flex-col items-center justify-center py-8 text-center">
+                    <Loader2 className="w-10 h-10 animate-spin text-blue-600 mb-4" />
+                    <p className="font-medium text-foreground">Sedang membaca struktur Excel...</p>
+                    <p className="text-sm text-muted-foreground">Ini membutuhkan waktu beberapa detik.</p>
+                  </div>
+                )}
+
+                {wizardState === 'importing' && (
+                  <div className="flex flex-col items-center justify-center py-8 text-center">
+                    <Loader2 className="w-10 h-10 animate-spin text-emerald-600 mb-4" />
+                    <p className="font-medium text-foreground">Sedang menyimpan data ke Database...</p>
+                    <p className="text-sm text-muted-foreground">Tolong jangan tutup halaman ini.</p>
+                  </div>
+                )}
+
+                {wizardState === 'preview' && (
+                  <div className="space-y-4">
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="bg-muted/30 border border-border p-4 rounded-xl flex flex-col items-center justify-center text-center">
+                        <span className="text-3xl font-black text-foreground">{importStats.total}</span>
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-1">Total Baris</span>
+                      </div>
+                      <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl flex flex-col items-center justify-center text-center">
+                        <span className="text-3xl font-black text-emerald-600">{importStats.valid - importStats.missingClass}</span>
+                        <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400 uppercase tracking-wider mt-1">Siap Import</span>
+                      </div>
+                    </div>
+
+                    <div className="space-y-3 mt-6">
+                      <h4 className="text-sm font-semibold text-foreground">Hasil Validasi:</h4>
+
+                      {importStats.missingMandatory > 0 && (
+                        <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-700 dark:text-red-400">
+                          <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                          <div>
+                            <p className="text-sm font-semibold">Data Tidak Lengkap ({importStats.missingMandatory} Siswa)</p>
+                            <p className="text-xs mt-1">Siswa ini tidak memiliki Nama atau NISN sehingga akan dilewati.</p>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* INDIKATOR ERROR BARU YANG SANGAT MEMBANTU */}
+                      {importStats.missingClass > 0 && (
+                        <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400">
+                          <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                          <div className="w-full">
+                            <p className="text-sm font-semibold">Kelas Tidak Ditemukan ({importStats.missingClass} Siswa)</p>
+                            <p className="text-xs mt-1 mb-2">Teks dari Excel di bawah ini tidak ada yang cocok dengan data Kelas di database Anda:</p>
+
+                            <div className="flex flex-wrap gap-1.5 mb-2">
+                              {unmatchedClasses.map((className, idx) => (
+                                <span key={idx} className="bg-amber-500/20 px-2 py-1 rounded text-xs font-bold font-mono">
+                                  {className}
+                                </span>
+                              ))}
+                            </div>
+
+                            <p className="text-xs italic text-amber-700/80 dark:text-amber-400/80">
+                              *Solusi: Tutup ini, lalu buat kelas dengan nama di atas pada menu Pengaturan Kelas, kemudian ulangi Import.
+                            </p>
+                          </div>
+                        </div>
+                      )}
+
+                      {(importStats.missingMandatory === 0 && importStats.missingClass === 0) && (
+                        <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400">
+                          <CheckCircle2 className="w-5 h-5" />
+                          <p className="text-sm font-medium">Semua data valid dan Kelas berhasil dicocokkan otomatis!</p>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {wizardState === 'preview' && (
+                <div className="p-4 border-t border-border bg-muted/20 flex justify-end gap-3">
+                  <Button variant="outline" onClick={closeImportWizard} disabled={importMutation.isPending}>Batal</Button>
+                  <Button
+                    onClick={executeImport}
+                    disabled={importMutation.isPending || (importStats.valid - importStats.missingClass) === 0}
+                    className="bg-blue-600 hover:bg-blue-700 text-white"
+                  >
+                    Mulai Import Data
+                  </Button>
+                </div>
+              )}
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* --- MODAL KONFIRMASI HAPUS --- */}
       <AnimatePresence>
         {studentToDelete && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 20 }}
-              className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden"
-            >
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden">
               <div className="p-6">
-                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4">
-                  <AlertCircle className="w-6 h-6 text-red-600" />
-                </div>
-                <h3 className="text-xl font-bold text-foreground mb-2">
-                  {locale === 'id' ? 'Hapus Data Siswa?' : 'Delete Student Data?'}
-                </h3>
-                <p className="text-muted-foreground text-sm">
-                  {locale === 'id'
-                    ? `Apakah Anda yakin ingin menghapus siswa bernama `
-                    : `Are you sure you want to delete `}
-                  <span className="font-semibold text-foreground">"{studentToDelete.name}"</span>?
-                  {locale === 'id'
-                    ? ' Data yang sudah dihapus tidak dapat dikembalikan.'
-                    : ' This action cannot be undone.'}
-                </p>
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
+                <h3 className="text-xl font-bold text-foreground mb-2">Hapus Data Siswa?</h3>
+                <p className="text-muted-foreground text-sm">Apakah Anda yakin ingin menghapus siswa bernama <span className="font-semibold text-foreground">"{studentToDelete.name}"</span>?</p>
               </div>
               <div className="bg-muted/50 p-4 flex justify-end gap-3 border-t border-border/50">
-                <Button variant="outline" onClick={() => setStudentToDelete(null)} disabled={deleteMutation.isPending}>
-                  {locale === 'id' ? 'Batal' : 'Cancel'}
-                </Button>
+                <Button variant="outline" onClick={() => setStudentToDelete(null)} disabled={deleteMutation.isPending}>Batal</Button>
                 <Button variant="destructive" onClick={() => deleteMutation.mutate(studentToDelete.id)} disabled={deleteMutation.isPending}>
-                  {deleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-                  {locale === 'id' ? 'Ya, Hapus' : 'Yes, Delete'}
+                  {deleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} Ya, Hapus
                 </Button>
               </div>
             </motion.div>
@@ -309,35 +448,17 @@ export function StudentListPage() {
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t('students.title')}</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            {locale === 'id' ? `Total ${meta?.total || 0} siswa terdaftar` : `${meta?.total || 0} students registered`}
-          </p>
+          <p className="text-sm text-muted-foreground mt-1">{locale === 'id' ? `Total ${meta?.total || 0} siswa terdaftar` : `${meta?.total || 0} students registered`}</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          {/* Tombol Import Excel */}
-          <button
-            onClick={triggerImport}
-            disabled={isImporting}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
-          >
-            {isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
-            <span className="hidden sm:inline">{locale === 'id' ? 'Import Excel' : 'Import Excel'}</span>
+          <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
+            <Upload size={16} /> <span className="hidden sm:inline">Import Verval PD</span>
           </button>
-
-          {/* Tombol Export */}
-          <button
-            onClick={handleExport}
-            disabled={isExporting}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
-          >
-            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-            <span className="hidden sm:inline">{locale === 'id' ? 'Export Data' : 'Export Data'}</span>
+          <button onClick={handleExport} disabled={isExporting} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
+            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} <span className="hidden sm:inline">Export Data</span>
           </button>
-
-          {/* Tombol Tambah */}
           <Link to="/students/new" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md">
-            <Plus size={16} />
-            <span>{t('students.addStudent')}</span>
+            <Plus size={16} /> <span>Tambah Siswa</span>
           </Link>
         </div>
       </div>
@@ -347,36 +468,12 @@ export function StudentListPage() {
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input
-              type="text"
-              placeholder={t('students.search')}
-              value={searchQuery}
-              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
-              className="w-full pl-9 pr-4 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
-            />
+            <input type="text" placeholder={t('students.search')} value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all" />
           </div>
-
           <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1 sm:pb-0">
-            <button
-              onClick={() => { setSelectedClass('all'); setCurrentPage(1); }}
-              className={cn(
-                'px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all border',
-                selectedClass === 'all' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : 'bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted/50'
-              )}
-            >
-              {locale === 'id' ? 'Semua Kelas' : 'All Classes'}
-            </button>
+            <button onClick={() => { setSelectedClass('all'); setCurrentPage(1); }} className={cn('px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all border', selectedClass === 'all' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : 'bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted/50')}>Semua Kelas</button>
             {classesData?.map(cls => (
-              <button
-                key={cls.id}
-                onClick={() => { setSelectedClass(cls.id); setCurrentPage(1); }}
-                className={cn(
-                  'px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all border',
-                  selectedClass === cls.id ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : 'bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted/50'
-                )}
-              >
-                {cls.name}
-              </button>
+              <button key={cls.id} onClick={() => { setSelectedClass(cls.id); setCurrentPage(1); }} className={cn('px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all border', selectedClass === cls.id ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : 'bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted/50')}>{cls.name}</button>
             ))}
           </div>
         </div>
@@ -388,72 +485,34 @@ export function StudentListPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-border/50 bg-muted/30">
-                <th className="p-4 w-12">
-                  <input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" />
-                </th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{locale === 'id' ? 'NIS / NISN' : 'NIS / NISN'}</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('students.fullName')}</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('students.class')}</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('students.gender')}</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{t('students.status')}</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">{t('common.actions')}</th>
+                <th className="p-4 w-12"><input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" /></th>
+                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">NISN / NIK</th>
+                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Siswa</th>
+                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Kelas</th>
+                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
+                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">Aksi</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
-                <tr>
-                  <td colSpan={7} className="px-6 py-12 text-center">
-                    <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />
-                    <p className="text-muted-foreground">{t('common.loading')}</p>
-                  </td>
-                </tr>
-              ) : isError ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-destructive">{t('common.error')}</td></tr>
+                <tr><td colSpan={6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">Memuat...</p></td></tr>
               ) : students.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">{t('common.noData')}</td></tr>
+                <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">Tidak ada data.</td></tr>
               ) : (
                 students.map((student, idx) => {
                   const statusConf = getStatusConfig(student.status);
                   return (
                     <motion.tr key={student.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={cn("hover:bg-muted/30 transition-colors", selectedRows.includes(student.id) && "bg-emerald-500/5")}>
-                      <td className="p-4">
-                        <input type="checkbox" checked={selectedRows.includes(student.id)} onChange={() => toggleRow(student.id)} className="w-4 h-4 rounded border-border accent-emerald-600" />
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-foreground">{student.nis}</span>
-                          <span className="text-xs font-mono text-muted-foreground">{student.nisn}</span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-700 dark:text-emerald-400 font-bold text-xs border border-emerald-200 dark:border-emerald-800">
-                            {student.fullName.charAt(0)}
-                          </div>
-                          <div>
-                            <p className="text-sm font-medium text-foreground">{student.fullName}</p>
-                            <p className="text-xs text-muted-foreground">{student.phone || '-'}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3"><span className="text-sm text-foreground">{student.className}</span></td>
-                      <td className="px-4 py-3">
-                        <span className={cn('text-sm font-medium', student.gender === 'L' ? 'text-blue-600 dark:text-blue-400' : 'text-pink-600 dark:text-pink-400')}>
-                          {student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female')}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={cn('text-xs font-medium px-2.5 py-1 rounded-md border', statusConf.color)}>
-                          {locale === 'id' ? statusConf.id : statusConf.en}
-                        </span>
-                      </td>
+                      <td className="p-4"><input type="checkbox" checked={selectedRows.includes(student.id)} onChange={() => toggleRow(student.id)} className="w-4 h-4 rounded border-border accent-emerald-600" /></td>
+                      <td className="px-4 py-3"><div className="flex flex-col"><span className="text-sm font-bold text-foreground">{student.nisn}</span><span className="text-xs font-mono text-muted-foreground">{student.nik}</span></div></td>
+                      <td className="px-4 py-3"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs flex items-center justify-center">{student.fullName.charAt(0)}</div><div><p className="text-sm font-medium">{student.fullName}</p><p className="text-xs text-muted-foreground">{student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</p></div></div></td>
+                      <td className="px-4 py-3"><span className="text-sm">{student.className}</span></td>
+                      <td className="px-4 py-3"><span className={cn('text-xs font-medium px-2.5 py-1 rounded-md border', statusConf.color)}>{statusConf.id}</span></td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
-                          <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded-md transition-colors" title={t('common.detail')}><Eye className="h-4 w-4" /></Link>
-                          <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-md transition-colors" title={t('common.edit')}><Edit className="h-4 w-4" /></Link>
-                          <button onClick={() => setStudentToDelete({ id: student.id, name: student.fullName })} className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-md transition-colors" title={t('common.delete')}>
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"><Eye className="h-4 w-4" /></Link>
+                          <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"><Edit className="h-4 w-4" /></Link>
+                          <button onClick={() => setStudentToDelete({ id: student.id, name: student.fullName })} className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 className="h-4 w-4" /></button>
                         </div>
                       </td>
                     </motion.tr>
