@@ -75,6 +75,12 @@ export const studentService = {
         status: item.status as StudentStatus,
         phone: item.phone as string | undefined,
         entryDate: item.entryDate as string,
+
+        // --- PERBAIKAN BARU: Melengkapi data yang diminta oleh antarmuka (interface) StudentListItem terbaru ---
+        birthPlace: item.birthPlace as string,
+        birthDate: item.birthDate as string,
+        religion: item.religion as string | undefined,
+        address: item.address as string,
       };
     });
 

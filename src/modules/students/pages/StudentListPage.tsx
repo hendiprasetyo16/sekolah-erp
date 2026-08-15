@@ -1,30 +1,39 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Upload, Download, Search, Eye, Edit, Trash2,
-  Loader2, AlertCircle, X
+  Loader2, AlertCircle
 } from 'lucide-react';
 import { toast } from 'sonner';
+import * as XLSX from 'xlsx';
 
 import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
 import { studentService } from '../services/student.service';
 import { supabase } from '@/services/supabase.client';
 import { Button } from '@/components/ui/button';
+import { useAuthStore } from '@/modules/auth/store/auth.store';
+
+import type { CreateStudentPayload } from '../types/student.types';
 
 export function StudentListPage() {
   const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
+  const { school } = useAuthStore();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
 
-  // State untuk Custom Modal Konfirmasi Hapus
+  // States for Actions
   const [studentToDelete, setStudentToDelete] = useState<{ id: string, name: string } | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
 
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const pageSize = 10;
 
   // Fetch Classes
@@ -58,7 +67,7 @@ export function StudentListPage() {
       toast.success(locale === 'id' ? 'Siswa berhasil dihapus' : 'Student deleted successfully');
       queryClient.invalidateQueries({ queryKey: ['students'] });
       setSelectedRows([]);
-      setStudentToDelete(null); // Tutup modal
+      setStudentToDelete(null);
     },
     onError: (error: Error) => {
       toast.error(error.message);
@@ -81,6 +90,157 @@ export function StudentListPage() {
     }
   };
 
+  // EXPORT EXCEL LOGIC
+  const handleExport = async () => {
+    try {
+      setIsExporting(true);
+      toast.info(locale === 'id' ? 'Menyiapkan data export...' : 'Preparing export data...');
+
+      // Ambil seluruh data sesuai filter saat ini tanpa limit halaman
+      const response = await studentService.list({
+        page: 1,
+        limit: 10000, // Angka besar untuk mengambil semua
+        search: searchQuery,
+        classId: selectedClass === 'all' ? undefined : selectedClass
+      });
+
+      const allData = response.data?.data || [];
+
+      if (allData.length === 0) {
+        toast.warning(locale === 'id' ? 'Tidak ada data untuk diexport' : 'No data to export');
+        return;
+      }
+
+      // Format data untuk Excel
+      const excelData = allData.map((s, index) => ({
+        'No': index + 1,
+        'NIS': s.nis,
+        'NISN': s.nisn,
+        'NIK': s.nik,
+        'Nama Lengkap': s.fullName,
+        'Jenis Kelamin': s.gender === 'L' ? 'Laki-laki' : 'Perempuan',
+        'Tempat Lahir': s.birthPlace,
+        'Tanggal Lahir': s.birthDate ? new Date(s.birthDate).toLocaleDateString('id-ID') : '',
+        'Agama': s.religion,
+        'Kelas': s.className,
+        'Alamat': s.address,
+        'Status': s.status
+      }));
+
+      const worksheet = XLSX.utils.json_to_sheet(excelData);
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, worksheet, "Data_Siswa");
+
+      // Mengatur lebar kolom agar rapi
+      const wscols = [
+        { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 20 },
+        { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 15 },
+        { wch: 15 }, { wch: 15 }, { wch: 40 }, { wch: 15 }
+      ];
+      worksheet['!cols'] = wscols;
+
+      XLSX.writeFile(workbook, `Data_Siswa_${new Date().getTime()}.xlsx`);
+      toast.success(locale === 'id' ? 'Export berhasil!' : 'Export successful!');
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error(locale === 'id' ? 'Gagal melakukan export data' : 'Failed to export data');
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  // IMPORT EXCEL LOGIC
+  const handleImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    try {
+      setIsImporting(true);
+      toast.info(locale === 'id' ? 'Membaca file Excel...' : 'Reading Excel file...');
+
+      const reader = new FileReader();
+      reader.onload = async (evt) => {
+        try {
+          const bstr = evt.target?.result;
+          const workbook = XLSX.read(bstr, { type: 'binary' });
+          const worksheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[worksheetName];
+          const data = XLSX.utils.sheet_to_json<Record<string, string | number>>(worksheet);
+
+          if (data.length === 0) {
+            toast.warning(locale === 'id' ? 'File Excel kosong' : 'Excel file is empty');
+            return;
+          }
+
+          let successCount = 0;
+          let failCount = 0;
+
+          // Looping import data satu per satu
+          for (const row of data) {
+            try {
+              // Menyesuaikan nama kolom Excel dengan Payload
+              // Pastikan nama kolom di template Excel sesuai dengan yang ada di sini
+              const payload: CreateStudentPayload = {
+                schoolId: school?.id || '',
+                nis: String(row['NIS'] || ''),
+                nisn: String(row['NISN'] || ''),
+                nik: String(row['NIK'] || ''),
+                fullName: String(row['Nama Lengkap'] || ''),
+                gender: (String(row['Jenis Kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P') as 'L' | 'P',
+                birthPlace: String(row['Tempat Lahir'] || ''),
+                birthDate: String(row['Tanggal Lahir'] || new Date().toISOString()),
+                religion: String(row['Agama'] || 'ISLAM'),
+                address: String(row['Alamat'] || ''),
+                city: String(row['Kota'] || ''),
+                province: String(row['Provinsi'] || ''),
+                classId: selectedClass !== 'all' ? selectedClass : '', // Gunakan filter kelas aktif jika ada
+                entryDate: new Date().toISOString(),
+                status: 'AKTIF'
+              };
+
+              // Bypass record yang kosong namanya
+              if (!payload.fullName || !payload.nis) {
+                failCount++;
+                continue;
+              }
+
+              await studentService.create(payload);
+              successCount++;
+            } catch (err) {
+              console.error('Row import error:', err);
+              failCount++;
+            }
+          }
+
+          queryClient.invalidateQueries({ queryKey: ['students'] });
+          toast.success(
+            locale === 'id'
+              ? `Import selesai. Sukses: ${successCount}, Gagal/Dilewati: ${failCount}`
+              : `Import finished. Success: ${successCount}, Failed/Skipped: ${failCount}`
+          );
+
+        } catch (error) {
+          console.error('Import parse error:', error);
+          toast.error(locale === 'id' ? 'Format file tidak dikenali' : 'Unrecognized file format');
+        } finally {
+          setIsImporting(false);
+          if (fileInputRef.current) fileInputRef.current.value = '';
+        }
+      };
+
+      reader.readAsBinaryString(file);
+    } catch (error) {
+      console.error('File reading error:', error);
+      toast.error(locale === 'id' ? 'Gagal membaca file' : 'Failed to read file');
+      setIsImporting(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const triggerImport = () => {
+    fileInputRef.current?.click();
+  };
+
   const getStatusConfig = (status: string) => {
     const config: Record<string, { id: string; en: string; color: string }> = {
       AKTIF: { id: 'Aktif', en: 'Active', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
@@ -89,11 +249,20 @@ export function StudentListPage() {
       DO: { id: 'DO', en: 'Dropped Out', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
       CUTI: { id: 'Cuti', en: 'On Leave', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
     };
-    return config[status] || { id: status, en: status, color: 'bg-muted text-muted-foreground' };
+    return config[status] || { id: status, en: status, color: 'bg-muted text-muted-foreground border-border' };
   };
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+
+      {/* Hidden File Input for Excel Import */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleImport}
+        accept=".xlsx, .xls, .csv"
+        className="hidden"
+      />
 
       {/* --- MODAL KONFIRMASI HAPUS (MODERN) --- */}
       <AnimatePresence>
@@ -136,7 +305,7 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
-      {/* Header & Buttons (Import/Export Dikembalikan) */}
+      {/* Header & Buttons */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t('students.title')}</h1>
@@ -146,14 +315,22 @@ export function StudentListPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           {/* Tombol Import Excel */}
-          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm">
-            <Upload size={16} />
+          <button
+            onClick={triggerImport}
+            disabled={isImporting}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
+          >
+            {isImporting ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
             <span className="hidden sm:inline">{locale === 'id' ? 'Import Excel' : 'Import Excel'}</span>
           </button>
 
           {/* Tombol Export */}
-          <button className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm">
-            <Download size={16} />
+          <button
+            onClick={handleExport}
+            disabled={isExporting}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
             <span className="hidden sm:inline">{locale === 'id' ? 'Export Data' : 'Export Data'}</span>
           </button>
 
@@ -208,7 +385,7 @@ export function StudentListPage() {
       {/* Table */}
       <div className="bg-card border border-border/50 rounded-xl overflow-hidden shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full text-left">
+          <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-border/50 bg-muted/30">
                 <th className="p-4 w-12">
@@ -231,7 +408,7 @@ export function StudentListPage() {
                   </td>
                 </tr>
               ) : isError ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-red-500">{t('common.error')}</td></tr>
+                <tr><td colSpan={7} className="px-6 py-12 text-center text-destructive">{t('common.error')}</td></tr>
               ) : students.length === 0 ? (
                 <tr><td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">{t('common.noData')}</td></tr>
               ) : (
@@ -250,7 +427,7 @@ export function StudentListPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-bold text-xs">
+                          <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-700 dark:text-emerald-400 font-bold text-xs border border-emerald-200 dark:border-emerald-800">
                             {student.fullName.charAt(0)}
                           </div>
                           <div>
@@ -261,7 +438,7 @@ export function StudentListPage() {
                       </td>
                       <td className="px-4 py-3"><span className="text-sm text-foreground">{student.className}</span></td>
                       <td className="px-4 py-3">
-                        <span className={cn('text-sm', student.gender === 'L' ? 'text-blue-500' : 'text-pink-500')}>
+                        <span className={cn('text-sm font-medium', student.gender === 'L' ? 'text-blue-600 dark:text-blue-400' : 'text-pink-600 dark:text-pink-400')}>
                           {student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female')}
                         </span>
                       </td>
@@ -272,10 +449,9 @@ export function StudentListPage() {
                       </td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
-                          <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors" title={t('common.detail')}><Eye className="h-4 w-4" /></Link>
-                          <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 rounded-md transition-colors" title={t('common.edit')}><Edit className="h-4 w-4" /></Link>
-                          {/* Tombol Hapus memanggil Modal Modern */}
-                          <button onClick={() => setStudentToDelete({ id: student.id, name: student.fullName })} className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors" title={t('common.delete')}>
+                          <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 rounded-md transition-colors" title={t('common.detail')}><Eye className="h-4 w-4" /></Link>
+                          <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950/50 rounded-md transition-colors" title={t('common.edit')}><Edit className="h-4 w-4" /></Link>
+                          <button onClick={() => setStudentToDelete({ id: student.id, name: student.fullName })} className="p-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/50 rounded-md transition-colors" title={t('common.delete')}>
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>

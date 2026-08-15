@@ -2,7 +2,7 @@ import type { EconomicCategory, Gender, AttendanceStatus } from '@/types/common.
 
 export interface StudentListItem {
   id: string;
-  nis: string;
+  nis?: string;
   nisn: string;
   nik: string;
   fullName: string;
@@ -14,21 +14,24 @@ export interface StudentListItem {
   photoUrl?: string;
   phone?: string;
   entryDate: string;
+
+  // Dikembalikan untuk kebutuhan Export Excel & Tabel
+  birthPlace: string;
+  birthDate: string;
+  religion?: string;
+  address: string;
 }
 
 export type StudentStatus = 'AKTIF' | 'MUTASI_KELUAR' | 'LULUS' | 'DO' | 'CUTI';
 
 export interface StudentDetail extends StudentListItem {
-  noKk: string;
+  schoolId: string;
+  noKk?: string;
   nickname?: string;
-  birthDate: string;
-  birthPlace: string;
-  religion: string;
-  address: string;
-  rt: string;
-  rw: string;
-  kelurahan: string;
-  kecamatan: string;
+  rt?: string;
+  rw?: string;
+  kelurahan?: string;
+  kecamatan?: string;
   city: string;
   province: string;
   postalCode?: string;
@@ -36,6 +39,29 @@ export interface StudentDetail extends StudentListItem {
   distanceToSchool?: number;
   transport?: string;
   previousSchool?: string;
+
+  // Dapodik / Fisik / Bank (Sesuai update tabel terbaru)
+  skhun?: string;
+  noPesertaUn?: string;
+  noIjazah?: string;
+  noAktaLahir?: string;
+  anakKe?: number;
+  jmlSaudara?: number;
+  lintang?: string;
+  bujur?: string;
+  beratBadan?: number;
+  tinggiBadan?: number;
+  lingkarKepala?: number;
+  jarakSekolah?: number;
+  jenisTinggal?: string;
+  alatTransportasi?: string;
+  kebutuhanKhusus?: string;
+  sekolahAsal?: string;
+  bank?: string;
+  noRekening?: string;
+  namaRekening?: string;
+
+  // Relasi
   parents: StudentParent[];
   economic?: StudentEconomic;
 }
@@ -68,19 +94,28 @@ export interface StudentEconomic {
   orphanType?: 'YATIM' | 'PIATU' | 'YATIM_PIATU' | 'BUKAN';
   pipScore?: number;
   economicCategory?: EconomicCategory;
+
+  // Update terbaru PIP/KIP
+  scoringDetails?: string;
+  scoredAt?: string;
+  namaKip?: string;
+  layakPip?: boolean;
+  alasanLayakPip?: string;
 }
 
+// Payload untuk menambah data siswa baru secara komprehensif
 export interface CreateStudentPayload {
-  nis: string;
+  schoolId: string;
+  nis?: string;
   nisn: string;
   nik: string;
-  noKk: string;
+  noKk?: string;
   fullName: string;
   nickname?: string;
   gender: Gender;
   birthDate: string;
   birthPlace: string;
-  religion: string;
+  religion?: string;
   address: string;
   rt?: string;
   rw?: string;
@@ -91,9 +126,34 @@ export interface CreateStudentPayload {
   postalCode?: string;
   phone?: string;
   email?: string;
-  classId: string;
+  classId?: string;
   entryDate: string;
+  status?: StudentStatus;
+
+  // Dapodik / Fisik / Bank
+  skhun?: string;
+  noPesertaUn?: string;
+  noIjazah?: string;
+  noAktaLahir?: string;
+  anakKe?: number;
+  jmlSaudara?: number;
+  lintang?: string;
+  bujur?: string;
+  beratBadan?: number;
+  tinggiBadan?: number;
+  lingkarKepala?: number;
+  jarakSekolah?: number;
+  jenisTinggal?: string;
+  alatTransportasi?: string;
+  kebutuhanKhusus?: string;
+  sekolahAsal?: string;
+  bank?: string;
+  noRekening?: string;
+  namaRekening?: string;
+
+  // Relasi Data
   parents?: Omit<StudentParent, 'id'>[];
+  economic?: Omit<StudentEconomic, 'id' | 'studentId'>;
 }
 
 export type UpdateStudentPayload = Partial<CreateStudentPayload>;
