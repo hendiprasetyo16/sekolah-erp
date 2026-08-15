@@ -51,7 +51,6 @@ export function ClassListPage() {
 
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-
             {/* Hapus Modal */}
             <AnimatePresence>
                 {classToDelete && (
@@ -94,7 +93,6 @@ export function ClassListPage() {
                     </SelectTrigger>
                     <SelectContent>
                         <SelectItem value="all">Semua Tahun Ajaran</SelectItem>
-                        {/* PERBAIKAN: Menambahkan optional chaining (?.data?.map) agar tidak crash */}
                         {academicYears?.data?.map((ay) => (
                             <SelectItem key={ay.id} value={ay.id}>
                                 {ay.name} {ay.isActive ? '(Aktif)' : ''}
@@ -110,6 +108,8 @@ export function ClassListPage() {
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-border/50 bg-muted/30">
+                                {/* Penambahan Header No. */}
+                                <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">No.</th>
                                 <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Nama Kelas</th>
                                 <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tingkat</th>
                                 <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Tahun Ajaran</th>
@@ -120,14 +120,16 @@ export function ClassListPage() {
                         </thead>
                         <tbody className="divide-y divide-border/50">
                             {isLoading ? (
-                                <tr><td colSpan={6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">Memuat...</p></td></tr>
+                                <tr><td colSpan={7} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">Memuat...</p></td></tr>
                             ) : isError ? (
-                                <tr><td colSpan={6} className="px-6 py-12 text-center text-destructive">Gagal memuat data</td></tr>
+                                <tr><td colSpan={7} className="px-6 py-12 text-center text-destructive">Gagal memuat data</td></tr>
                             ) : classes.length === 0 ? (
-                                <tr><td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">Tidak ada kelas yang ditemukan.</td></tr>
+                                <tr><td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">Tidak ada kelas yang ditemukan.</td></tr>
                             ) : (
                                 classes.map((cls, idx) => (
                                     <motion.tr key={cls.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className="hover:bg-muted/30 transition-colors">
+                                        {/* Penambahan Data No. */}
+                                        <td className="px-6 py-4 text-sm text-muted-foreground font-medium">{idx + 1}</td>
                                         <td className="px-6 py-4">
                                             <span className="font-bold text-foreground text-base">{cls.name}</span>
                                             {cls.major && <p className="text-xs text-muted-foreground mt-0.5">{cls.major}</p>}

@@ -26,7 +26,7 @@ export const academicService = {
         };
     },
 
-    // FUNGSI BARU: Hapus Tahun Ajaran
+    // --- Hapus Tahun Ajaran ---
     async deleteAcademicYear(id: string): Promise<ApiResponse<void>> {
         // Cek keamanan: Jangan izinkan hapus jika sudah ada kelas di tahun ajaran ini
         const { count } = await supabase
@@ -54,13 +54,15 @@ export const academicService = {
 
     // --- KELAS ---
     async getClasses(schoolId: string, academicYearId?: string): Promise<ApiResponse<ClassItem[]>> {
+        // PERBAIKAN SUPER CEPAT: Tarik data students sekaligus menggunakan Join
         let query = supabase
             .from('classes')
             .select(`
-        *,
-        academic_years (name, isActive),
-        teachers (fullName)
-      `)
+                *,
+                academic_years (name, isActive),
+                teachers (fullName),
+                students (id, status)
+            `)
             .eq('schoolId', schoolId);
 
         if (academicYearId) {
@@ -71,23 +73,22 @@ export const academicService = {
 
         if (error) throw handleDbError(error);
 
-        // Menghitung jumlah siswa per kelas secara paralel (Strict Type)
-        const classes = data as unknown as ClassItem[];
-        const classesWithCount = await Promise.all(
-            classes.map(async (cls) => {
-                const { count } = await supabase
-                    .from('students')
-                    .select('*', { count: 'exact', head: true })
-                    .eq('classId', cls.id)
-                    .eq('status', 'AKTIF');
+        // Kalkulasi di dalam RAM/Memori lokal (Mencegah Lag Database)
+        const classesWithCount = data.map((cls: any) => {
+            const activeStudentsCount = cls.students?.filter((s: any) => s.status === 'AKTIF').length || 0;
 
-                return { ...cls, studentCount: count || 0 };
-            })
-        );
+            // Hapus array students dari payload agar transfer data ke frontend tetap ringan
+            const { students, ...rest } = cls;
+
+            return {
+                ...rest,
+                studentCount: activeStudentsCount
+            };
+        });
 
         return {
             success: true,
-            data: classesWithCount,
+            data: classesWithCount as unknown as ClassItem[],
             message: 'Berhasil mengambil data kelas'
         };
     },
