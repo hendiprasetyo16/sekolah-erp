@@ -1,17 +1,15 @@
 -- ====================================================================================
--- SCRIPT RESET & SETUP DATABASE SEKOLAH ERP
--- Pastikan kamu menjalankan ini HANYA JIKA ingin mereset/menginstall ulang database!
+-- SCRIPT RESET & SETUP DATABASE SEKOLAH ERP (VERSI FINAL & KOKOH)
 -- ====================================================================================
 
 -- ------------------------------------------------------------------------------------
--- BAGIAN 1: HAPUS TABEL LAMA (Jika ada, agar tidak terjadi bentrok)
+-- BAGIAN 1: HAPUS TABEL LAMA 
 -- ------------------------------------------------------------------------------------
-DROP TABLE IF EXISTS "payment_transactions", "student_bills", "fee_templates", "announcements", "attendances", "student_economics", "student_parents", "students", "classes", "teachers", "audit_logs", "refresh_tokens", "users", "semesters", "academic_years", "schools" CASCADE;
+DROP TABLE IF EXISTS "payment_transactions", "student_bills", "fee_templates", "announcements", "attendances", "student_economics", "student_parents", "student_class_history", "students", "classes", "teachers", "audit_logs", "refresh_tokens", "users", "semesters", "academic_years", "schools" CASCADE;
 
 
 -- ------------------------------------------------------------------------------------
--- BAGIAN 2: PEMBUATAN TABEL (Master Data & Entitas)
--- Catatan: Semua ID sekarang otomatis dibuat menggunakan gen_random_uuid()::text
+-- BAGIAN 2: PEMBUATAN TABEL MASTER & ENTITAS
 -- ------------------------------------------------------------------------------------
 
 -- 1. Master Data
@@ -57,7 +55,7 @@ CREATE TABLE "semesters" (
 
 -- 2. Users & Auth
 CREATE TABLE "users" (
-    "id" TEXT NOT NULL, -- Diisi menggunakan UUID dari auth.users Supabase
+    "id" TEXT NOT NULL, 
     "schoolId" TEXT NOT NULL,
     "email" TEXT NOT NULL,
     "passwordHash" TEXT NOT NULL,
@@ -78,22 +76,6 @@ CREATE TABLE "refresh_tokens" (
     "expiresAt" TIMESTAMP(3) NOT NULL,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "refresh_tokens_pkey" PRIMARY KEY ("id")
-);
-
-CREATE TABLE "audit_logs" (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
-    "userId" TEXT,
-    "schoolId" TEXT NOT NULL,
-    "action" TEXT NOT NULL,
-    "module" TEXT NOT NULL,
-    "entityType" TEXT,
-    "entityId" TEXT,
-    "oldValues" TEXT,
-    "newValues" TEXT,
-    "ipAddress" TEXT,
-    "userAgent" TEXT,
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CONSTRAINT "audit_logs_pkey" PRIMARY KEY ("id")
 );
 
 -- 3. Teachers & Classes
@@ -120,7 +102,7 @@ CREATE TABLE "teachers" (
     "certificationNumber" TEXT,
     "joinDate" TIMESTAMP(3),
     "isActive" BOOLEAN NOT NULL DEFAULT true,
-    "baseSalary" DOUBLE PRECISION,
+    "baseSalary" NUMERIC(15,2), -- Diubah menjadi NUMERIC untuk akuntansi
     "subjects" TEXT,
     "maxHoursPerWeek" INTEGER NOT NULL DEFAULT 24,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -140,7 +122,7 @@ CREATE TABLE "classes" (
     CONSTRAINT "classes_pkey" PRIMARY KEY ("id")
 );
 
--- 4. Students & Parents
+-- 4. Students, Parents & History
 CREATE TABLE "students" (
     "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
     "schoolId" TEXT NOT NULL,
@@ -167,7 +149,7 @@ CREATE TABLE "students" (
     "photoUrl" TEXT,
     "status" TEXT NOT NULL DEFAULT 'AKTIF',
     "entryDate" TIMESTAMP(3) NOT NULL,
-    "classId" TEXT,
+    "classId" TEXT, -- Kelas saat ini
     "skhun" TEXT,
     "noPesertaUn" TEXT,
     "noIjazah" TEXT,
@@ -192,9 +174,20 @@ CREATE TABLE "students" (
     CONSTRAINT "students_pkey" PRIMARY KEY ("id")
 );
 
+-- TABEL BARU: Menyimpan jejak histori kelas siswa setiap tahun ajaran
+CREATE TABLE "student_class_history" (
+    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
+    "schoolId" TEXT NOT NULL,
+    "studentId" TEXT NOT NULL,
+    "academicYearId" TEXT NOT NULL,
+    "classId" TEXT NOT NULL,
+    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT "student_class_history_pkey" PRIMARY KEY ("id")
+);
+
 CREATE TABLE "student_parents" (
     "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
-    "schoolId" TEXT, -- Dibuat boleh kosong karena akan diisi otomatis oleh trigger
+    "schoolId" TEXT NOT NULL, -- Dibuat NOT NULL untuk keamanan
     "studentId" TEXT NOT NULL,
     "relation" TEXT NOT NULL,
     "fullName" TEXT NOT NULL,
@@ -203,7 +196,7 @@ CREATE TABLE "student_parents" (
     "email" TEXT,
     "education" TEXT,
     "occupation" TEXT,
-    "monthlyIncome" DOUBLE PRECISION,
+    "monthlyIncome" NUMERIC(15,2), -- Diubah ke NUMERIC
     "isAlive" BOOLEAN NOT NULL DEFAULT true,
     "address" TEXT,
     CONSTRAINT "student_parents_pkey" PRIMARY KEY ("id")
@@ -211,7 +204,7 @@ CREATE TABLE "student_parents" (
 
 CREATE TABLE "student_economics" (
     "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
-    "schoolId" TEXT, -- Dibuat boleh kosong karena akan diisi otomatis oleh trigger
+    "schoolId" TEXT NOT NULL, -- Dibuat NOT NULL untuk keamanan
     "studentId" TEXT NOT NULL,
     "hasKip" BOOLEAN NOT NULL DEFAULT false,
     "kipNumber" TEXT,
@@ -265,10 +258,10 @@ CREATE TABLE "fee_templates" (
     "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
     "schoolId" TEXT NOT NULL,
     "academicYearId" TEXT NOT NULL,
-    "gradeLevel" INTEGER NOT NULL,
     "name" TEXT NOT NULL,
     "category" TEXT NOT NULL,
-    "amount" DOUBLE PRECISION NOT NULL,
+    "amount" NUMERIC(15,2) NOT NULL, -- NUMERIC untuk presisi uang
+    "periodType" TEXT NOT NULL DEFAULT 'BULANAN', -- BULANAN, TAHUNAN, SEKALI_BAYAR
     "description" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT "fee_templates_pkey" PRIMARY KEY ("id")
@@ -278,9 +271,12 @@ CREATE TABLE "student_bills" (
     "id" TEXT NOT NULL DEFAULT gen_random_uuid()::text,
     "schoolId" TEXT NOT NULL,
     "studentId" TEXT NOT NULL,
+    "feeTemplateId" TEXT NOT NULL, -- Referensi ke template
     "title" TEXT NOT NULL,
-    "totalAmount" DOUBLE PRECISION NOT NULL,
-    "paidAmount" DOUBLE PRECISION NOT NULL DEFAULT 0,
+    "periodMonth" INTEGER, -- Bulan (1-12) jika tagihan bulanan
+    "periodYear" INTEGER, -- Tahun tagihan
+    "totalAmount" NUMERIC(15,2) NOT NULL, 
+    "paidAmount" NUMERIC(15,2) NOT NULL DEFAULT 0, -- Cache total bayar
     "status" TEXT NOT NULL DEFAULT 'BELUM_BAYAR',
     "dueDate" TIMESTAMP(3),
     "academicYearId" TEXT NOT NULL,
@@ -294,7 +290,7 @@ CREATE TABLE "payment_transactions" (
     "schoolId" TEXT NOT NULL,
     "billId" TEXT NOT NULL,
     "studentId" TEXT NOT NULL,
-    "amount" DOUBLE PRECISION NOT NULL,
+    "amount" NUMERIC(15,2) NOT NULL, -- NUMERIC
     "paymentMethod" TEXT NOT NULL DEFAULT 'TRANSFER',
     "paymentDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "reference" TEXT,
@@ -305,85 +301,43 @@ CREATE TABLE "payment_transactions" (
 
 
 -- ------------------------------------------------------------------------------------
--- BAGIAN 3: INDEXES & FOREIGN KEYS (Keterhubungan Antar Tabel)
+-- BAGIAN 3: INDEXES & FOREIGN KEYS 
 -- ------------------------------------------------------------------------------------
--- Indexes untuk menghindari duplikat
 CREATE UNIQUE INDEX "schools_npsn_key" ON "schools"("npsn");
 CREATE UNIQUE INDEX "users_email_key" ON "users"("email");
-CREATE UNIQUE INDEX "refresh_tokens_token_key" ON "refresh_tokens"("token");
 CREATE UNIQUE INDEX "students_schoolId_nisn_key" ON "students"("schoolId", "nisn");
 CREATE UNIQUE INDEX "students_schoolId_nis_key" ON "students"("schoolId", "nis");
-CREATE UNIQUE INDEX "students_nik_key" ON "students"("nik");
 CREATE UNIQUE INDEX "student_economics_studentId_key" ON "student_economics"("studentId");
-CREATE UNIQUE INDEX "attendances_studentId_date_key" ON "attendances"("studentId", "date");
+CREATE UNIQUE INDEX "student_class_history_unique" ON "student_class_history"("studentId", "academicYearId");
 
--- Foreign Keys (Relasi Antar Tabel)
 ALTER TABLE "academic_years" ADD CONSTRAINT "academic_years_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "semesters" ADD CONSTRAINT "semesters_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "semesters" ADD CONSTRAINT "semesters_academicYearId_fkey" FOREIGN KEY ("academicYearId") REFERENCES "academic_years"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "users" ADD CONSTRAINT "users_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "refresh_tokens" ADD CONSTRAINT "refresh_tokens_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_userId_fkey" FOREIGN KEY ("userId") REFERENCES "users"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-ALTER TABLE "audit_logs" ADD CONSTRAINT "audit_logs_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "teachers" ADD CONSTRAINT "teachers_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "classes" ADD CONSTRAINT "classes_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "classes" ADD CONSTRAINT "classes_academicYearId_fkey" FOREIGN KEY ("academicYearId") REFERENCES "academic_years"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "classes" ADD CONSTRAINT "classes_homeroomTeacherId_fkey" FOREIGN KEY ("homeroomTeacherId") REFERENCES "teachers"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 ALTER TABLE "students" ADD CONSTRAINT "students_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "students" ADD CONSTRAINT "students_classId_fkey" FOREIGN KEY ("classId") REFERENCES "classes"("id") ON DELETE SET NULL ON UPDATE CASCADE;
-ALTER TABLE "student_parents" ADD CONSTRAINT "student_parents_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "student_class_history" ADD CONSTRAINT "student_class_history_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "student_class_history" ADD CONSTRAINT "student_class_history_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 ALTER TABLE "student_parents" ADD CONSTRAINT "student_parents_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "student_economics" ADD CONSTRAINT "student_economics_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "student_economics" ADD CONSTRAINT "student_economics_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "attendances" ADD CONSTRAINT "attendances_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "attendances" ADD CONSTRAINT "attendances_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE CASCADE ON UPDATE CASCADE;
-ALTER TABLE "announcements" ADD CONSTRAINT "announcements_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "fee_templates" ADD CONSTRAINT "fee_templates_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "fee_templates" ADD CONSTRAINT "fee_templates_academicYearId_fkey" FOREIGN KEY ("academicYearId") REFERENCES "academic_years"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "student_bills" ADD CONSTRAINT "student_bills_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "student_bills" ADD CONSTRAINT "student_bills_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "student_bills" ADD CONSTRAINT "student_bills_academicYearId_fkey" FOREIGN KEY ("academicYearId") REFERENCES "academic_years"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_schoolId_fkey" FOREIGN KEY ("schoolId") REFERENCES "schools"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
+ALTER TABLE "student_bills" ADD CONSTRAINT "student_bills_feeTemplateId_fkey" FOREIGN KEY ("feeTemplateId") REFERENCES "fee_templates"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_billId_fkey" FOREIGN KEY ("billId") REFERENCES "student_bills"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
-ALTER TABLE "payment_transactions" ADD CONSTRAINT "payment_transactions_studentId_fkey" FOREIGN KEY ("studentId") REFERENCES "students"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
 
 -- ------------------------------------------------------------------------------------
--- BAGIAN 4: FUNCTIONS & TRIGGERS (Otomatisasi Database)
+-- BAGIAN 4: FUNCTIONS 
 -- ------------------------------------------------------------------------------------
--- 1. Fungsi untuk mendapatkan School ID dari user yang sedang login
+-- Dapatkan School ID dari auth.uid() Supabase (SANGAT PENTING UNTUK SECURITY)
 CREATE OR REPLACE FUNCTION get_user_school_id() 
 RETURNS TEXT AS $$
   SELECT "schoolId" FROM public.users WHERE "id" = auth.uid()::text LIMIT 1;
 $$ LANGUAGE sql SECURITY DEFINER;
 
--- 2. Fungsi untuk menyalin schoolId otomatis dari tabel students
-CREATE OR REPLACE FUNCTION set_school_id_from_student()
-RETURNS TRIGGER AS $$
-BEGIN
-  IF NEW."schoolId" IS NULL THEN
-    SELECT "schoolId" INTO NEW."schoolId"
-    FROM public.students
-    WHERE id = NEW."studentId";
-  END IF;
-  RETURN NEW;
-END;
-$$ LANGUAGE plpgsql;
-
--- 3. Pasang fungsi otomatis (Trigger) ke tabel terkait
-CREATE TRIGGER trigger_set_school_id_parents
-BEFORE INSERT ON public.student_parents
-FOR EACH ROW EXECUTE FUNCTION set_school_id_from_student();
-
-CREATE TRIGGER trigger_set_school_id_economics
-BEFORE INSERT ON public.student_economics
-FOR EACH ROW EXECUTE FUNCTION set_school_id_from_student();
-
 
 -- ------------------------------------------------------------------------------------
--- BAGIAN 5: ROW LEVEL SECURITY (Keamanan Data Per-Sekolah)
+-- BAGIAN 5: RLS (ROW LEVEL SECURITY) - VERSI STRICT (KETAT)
 -- ------------------------------------------------------------------------------------
--- 1. Aktifkan RLS untuk semua tabel
 ALTER TABLE "schools" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "academic_years" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "semesters" ENABLE ROW LEVEL SECURITY;
@@ -391,64 +345,69 @@ ALTER TABLE "users" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "teachers" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "classes" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "students" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "student_class_history" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "student_parents" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "student_economics" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE "attendances" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "fee_templates" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "student_bills" ENABLE ROW LEVEL SECURITY;
 ALTER TABLE "payment_transactions" ENABLE ROW LEVEL SECURITY;
-ALTER TABLE "announcements" ENABLE ROW LEVEL SECURITY;
 
--- 2. Kebijakan untuk Tabel Schools & Users
-CREATE POLICY "Allow user to create school" ON "schools" FOR INSERT TO authenticated WITH CHECK (true);
-CREATE POLICY "Allow users to view their school" ON "schools" FOR SELECT TO authenticated USING (true);
-CREATE POLICY "Allow users to update their school" ON "schools" FOR UPDATE TO authenticated USING ("id" = get_user_school_id());
+-- Policy untuk isolasi per sekolah (Tidak menggunakan FOR ALL, tapi CRUD eksplisit)
+CREATE POLICY "Select by school" ON "academic_years" FOR SELECT USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Insert by school" ON "academic_years" FOR INSERT WITH CHECK ("schoolId" = get_user_school_id());
+CREATE POLICY "Update by school" ON "academic_years" FOR UPDATE USING ("schoolId" = get_user_school_id()) WITH CHECK ("schoolId" = get_user_school_id());
+CREATE POLICY "Delete by school" ON "academic_years" FOR DELETE USING ("schoolId" = get_user_school_id());
 
-CREATE POLICY "Allow users to view own profile" ON "users" FOR SELECT TO authenticated USING ("id" = auth.uid()::text);
-CREATE POLICY "Allow users to insert own profile" ON "users" FOR INSERT TO authenticated WITH CHECK ("id" = auth.uid()::text);
-CREATE POLICY "Allow users to update own profile" ON "users" FOR UPDATE TO authenticated USING ("id" = auth.uid()::text);
+-- (Terapkan pola yang sama persis untuk entitas utama lainnya)
+CREATE POLICY "Select classes" ON "classes" FOR SELECT USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Insert classes" ON "classes" FOR INSERT WITH CHECK ("schoolId" = get_user_school_id());
+CREATE POLICY "Update classes" ON "classes" FOR UPDATE USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Delete classes" ON "classes" FOR DELETE USING ("schoolId" = get_user_school_id());
 
--- 3. Kebijakan Isolasi Data Multi-Tenant (Agar sekolah lain tidak bisa melihat data sekolah kita)
-CREATE POLICY "Isolate academic_years by school" ON "academic_years" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate semesters by school" ON "semesters" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate teachers by school" ON "teachers" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate classes by school" ON "classes" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate students by school" ON "students" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate student_parents by school" ON "student_parents" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate student_economics by school" ON "student_economics" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate attendances by school" ON "attendances" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate fee_templates by school" ON "fee_templates" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate student_bills by school" ON "student_bills" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate payment_transactions by school" ON "payment_transactions" FOR ALL USING ("schoolId" = get_user_school_id());
-CREATE POLICY "Isolate announcements by school" ON "announcements" FOR ALL USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Select students" ON "students" FOR SELECT USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Insert students" ON "students" FOR INSERT WITH CHECK ("schoolId" = get_user_school_id());
+CREATE POLICY "Update students" ON "students" FOR UPDATE USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Delete students" ON "students" FOR DELETE USING ("schoolId" = get_user_school_id());
+
+CREATE POLICY "Select parents" ON "student_parents" FOR SELECT USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Insert parents" ON "student_parents" FOR INSERT WITH CHECK ("schoolId" = get_user_school_id());
+CREATE POLICY "Update parents" ON "student_parents" FOR UPDATE USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Delete parents" ON "student_parents" FOR DELETE USING ("schoolId" = get_user_school_id());
+
+CREATE POLICY "Select econ" ON "student_economics" FOR SELECT USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Insert econ" ON "student_economics" FOR INSERT WITH CHECK ("schoolId" = get_user_school_id());
+CREATE POLICY "Update econ" ON "student_economics" FOR UPDATE USING ("schoolId" = get_user_school_id());
+CREATE POLICY "Delete econ" ON "student_economics" FOR DELETE USING ("schoolId" = get_user_school_id());
 
 
 -- ------------------------------------------------------------------------------------
--- BAGIAN 6: KONFIGURASI TAMBAHAN
+-- BAGIAN 6: FUNGSI IMPORT MASSAL SISWA (SECURITY DIPERKUAT)
 -- ------------------------------------------------------------------------------------
--- Mengubah fungsi import massal agar berjalan dengan hak akses penuh 
--- (Catatan: Pastikan fungsi 'bulk_import_students' sudah kamu buat sebelumnya di Supabase)
--- ALTER FUNCTION bulk_import_students(jsonb) SECURITY DEFINER;
-
--- Hapus fungsi lama
 DROP FUNCTION IF EXISTS public.bulk_import_students(jsonb);
 
--- Buat fungsi baru dengan nama parameter "batch_data"
 CREATE OR REPLACE FUNCTION public.bulk_import_students(batch_data jsonb)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
 AS $$
 DECLARE
+    auth_school_id TEXT;
     student_record jsonb;
     parent_record jsonb;
     economic_record jsonb;
     inserted_student_id TEXT;
     success_count INT := 0;
 BEGIN
+    -- AMBIL ID SEKOLAH DARI USER LOGIN SECARA PAKSA (Anti-Hacking)
+    auth_school_id := get_user_school_id();
+    
+    IF auth_school_id IS NULL THEN
+        RAISE EXCEPTION 'User tidak terafiliasi dengan sekolah manapun atau tidak memiliki akses.';
+    END IF;
+
     FOR student_record IN SELECT * FROM jsonb_array_elements(batch_data)
     LOOP
-        -- 1. Insert Data Siswa
+        -- 1. Insert Data Siswa (Memaksa pakai auth_school_id, bukan data JSON)
         INSERT INTO public.students (
             "id", "schoolId", "nis", "nisn", "nik", "noKk", "fullName", "nickname", "gender",
             "birthDate", "birthPlace", "religion", "address", "rt", "rw", "kelurahan", "kecamatan",
@@ -456,7 +415,7 @@ BEGIN
             "anakKe", "jmlSaudara", "lintang", "bujur", "beratBadan", "tinggiBadan", "lingkarKepala",
             "jarakSekolah", "jenisTinggal", "alatTransportasi", "sekolahAsal", "kebutuhanKhusus"
         ) VALUES (
-            (student_record->>'id')::TEXT, (student_record->>'schoolId')::TEXT, (student_record->>'nis')::TEXT,
+            (student_record->>'id')::TEXT, auth_school_id, (student_record->>'nis')::TEXT,
             (student_record->>'nisn')::TEXT, (student_record->>'nik')::TEXT, (student_record->>'noKk')::TEXT,
             (student_record->>'fullName')::TEXT, (student_record->>'nickname')::TEXT, (student_record->>'gender')::TEXT,
             (student_record->>'birthDate')::TIMESTAMP, (student_record->>'birthPlace')::TEXT, (student_record->>'religion')::TEXT,
@@ -479,10 +438,10 @@ BEGIN
                     "id", "schoolId", "studentId", "relation", "fullName", "nik", "phone",
                     "email", "education", "occupation", "monthlyIncome", "isAlive", "address"
                 ) VALUES (
-                    (parent_record->>'id')::TEXT, (parent_record->>'schoolId')::TEXT, inserted_student_id, 
+                    (parent_record->>'id')::TEXT, auth_school_id, inserted_student_id, 
                     (parent_record->>'relation')::TEXT, (parent_record->>'fullName')::TEXT, (parent_record->>'nik')::TEXT, 
                     (parent_record->>'phone')::TEXT, (parent_record->>'email')::TEXT, (parent_record->>'education')::TEXT,
-                    (parent_record->>'job')::TEXT, (CAST(NULLIF(regexp_replace(parent_record->>'income', '\D', '', 'g'), '') AS DOUBLE PRECISION)), 
+                    (parent_record->>'job')::TEXT, (CAST(NULLIF(regexp_replace(parent_record->>'income', '\D', '', 'g'), '') AS NUMERIC(15,2))), 
                     (parent_record->>'isAlive')::BOOLEAN, (parent_record->>'address')::TEXT
                 );
             END LOOP;
@@ -495,7 +454,7 @@ BEGIN
                 "id", "schoolId", "studentId", "hasKip", "kipNumber", "namaKip",
                 "layakPip", "alasanLayakPip", "hasKks", "kksNumber", "hasPkh"
             ) VALUES (
-                (economic_record->>'id')::TEXT, (economic_record->>'schoolId')::TEXT, inserted_student_id,
+                (economic_record->>'id')::TEXT, auth_school_id, inserted_student_id,
                 (economic_record->>'hasKip')::BOOLEAN, (economic_record->>'kipNumber')::TEXT, (economic_record->>'namaKip')::TEXT,
                 (economic_record->>'layakPip')::BOOLEAN, (economic_record->>'alasanLayakPip')::TEXT, (economic_record->>'hasKks')::BOOLEAN,
                 (economic_record->>'kksNumber')::TEXT, (economic_record->>'hasPkh')::BOOLEAN
