@@ -7,7 +7,8 @@ import { z } from 'zod';
 import {
     Users, ShieldCheck, UserCog, GraduationCap, Users2,
     Search, Plus, MoreVertical, Edit, KeyRound, Ban, CheckCircle2,
-    Loader2, AlertCircle, X, Eye, EyeOff, ChevronLeft, ChevronRight
+    Loader2, AlertCircle, X, Eye, EyeOff, ChevronLeft, ChevronRight,
+    ChevronsLeft, ChevronsRight // <-- Tambahan Ikon Halaman Awal/Akhir
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -58,18 +59,26 @@ const createUserSchema = z.object({
     email: z.string().email('Format email tidak valid / Invalid email format'),
     password: z.string().min(6, 'Password minimal 6 karakter / Password min 6 chars'),
     role: z.enum([
-        'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
+        'SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
         'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS',
         'ORANG_TUA', 'SISWA'
     ], { required_error: 'Pilih role / Select a role' }),
 });
-
 type CreateUserFormValues = z.infer<typeof createUserSchema>;
+
+const editUserSchema = z.object({
+    fullName: z.string().min(3, 'Nama minimal 3 karakter / Name min 3 chars'),
+    role: z.enum([
+        'SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
+        'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS',
+        'ORANG_TUA', 'SISWA'
+    ], { required_error: 'Pilih role / Select a role' }),
+});
+type EditUserFormValues = z.infer<typeof editUserSchema>;
 
 const resetPasswordSchema = z.object({
     newPassword: z.string().min(6, 'Password minimal 6 karakter / Password min 6 chars'),
 });
-
 type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
 
 // ============================================================================
@@ -90,13 +99,13 @@ export function UserManagementPage() {
     const [currentPage, setCurrentPage] = useState<number>(1);
     const ITEMS_PER_PAGE = 10;
 
-    // Reset halaman ke-1 setiap kali mencari atau pindah tab
     useEffect(() => {
         setCurrentPage(1);
     }, [searchQuery, activeTab]);
 
     // State Modal & Visibilitas Password
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState<boolean>(false);
+    const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
     const [showAddPassword, setShowAddPassword] = useState<boolean>(false);
     const [showResetPassword, setShowResetPassword] = useState<boolean>(false);
@@ -122,16 +131,14 @@ export function UserManagementPage() {
         statusBlocked: locale === 'id' ? 'Diblokir' : 'Blocked',
         empty: locale === 'id' ? 'Tidak ada pengguna yang ditemukan.' : 'No users found.',
 
-        // Pagination Translations
         pageInfo: locale === 'id' ? 'Menampilkan' : 'Showing',
         pageOf: locale === 'id' ? 'dari' : 'of',
         pageUsers: locale === 'id' ? 'pengguna' : 'users',
-        prev: locale === 'id' ? 'Sebelumnya' : 'Previous',
-        next: locale === 'id' ? 'Selanjutnya' : 'Next',
-        page: locale === 'id' ? 'Halaman' : 'Page',
 
         addTitle: locale === 'id' ? 'Tambah Pengguna Baru' : 'Add New User',
         addDesc: locale === 'id' ? 'Buat akun untuk memberi hak akses ke sistem.' : 'Create an account to grant system access.',
+        editTitle: locale === 'id' ? 'Edit Profil Pengguna' : 'Edit User Profile',
+        editDesc: locale === 'id' ? 'Perbarui nama atau role pengguna ini.' : 'Update this user name or role.',
         fName: locale === 'id' ? 'Nama Lengkap' : 'Full Name',
         fEmail: 'Email',
         fRole: locale === 'id' ? 'Peran (Role)' : 'Role',
@@ -142,11 +149,16 @@ export function UserManagementPage() {
         resetTitle: locale === 'id' ? 'Reset Kata Sandi' : 'Reset Password',
         resetDesc: locale === 'id' ? 'Atur ulang kata sandi untuk akun:' : 'Reset password for account:',
         newPass: locale === 'id' ? 'Kata Sandi Baru' : 'New Password',
+
         toastAddSuccess: locale === 'id' ? 'Pengguna berhasil ditambahkan!' : 'User added successfully!',
+        toastEditSuccess: locale === 'id' ? 'Profil berhasil diperbarui!' : 'Profile updated successfully!',
         toastResetSuccess: locale === 'id' ? 'Kata sandi berhasil di-reset!' : 'Password reset successfully!',
         toastBlockSuccess: locale === 'id' ? 'Status akun berhasil diubah!' : 'Account status changed!',
     };
 
+    // ========================================================================
+    // MUTATIONS
+    // ========================================================================
     const addUserMutation = useMutation({
         mutationFn: async (payload: CreateUserFormValues) => {
             return new Promise((resolve) => setTimeout(resolve, 1500));
@@ -161,8 +173,25 @@ export function UserManagementPage() {
         onError: (error: Error) => toast.error(error.message)
     });
 
+    const editUserMutation = useMutation({
+        mutationFn: async (payload: { id: string, data: EditUserFormValues }) => {
+            const { error } = await supabase
+                .from('users')
+                .update({ fullName: payload.data.fullName, role: payload.data.role })
+                .eq('id', payload.id);
+            if (error) throw new Error(error.message);
+        },
+        onSuccess: () => {
+            toast.success(t.toastEditSuccess);
+            setUserToEdit(null);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
     const resetPasswordMutation = useMutation({
         mutationFn: async (payload: { userId: string, newPass: string }) => {
+            // Simulasi API Admin Update Password
             return new Promise((resolve) => setTimeout(resolve, 1000));
         },
         onSuccess: () => {
@@ -190,42 +219,30 @@ export function UserManagementPage() {
     });
 
     // ========================================================================
-    // PERBAIKAN FETCHING DATA AGAR SUPER_ADMIN BISA MELIHAT DATA
+    // FETCHING & FILTERING
     // ========================================================================
     const { data: users, isLoading } = useQuery<AppUser[], Error>({
-        // Gunakan role isSuperAdmin dalam query key agar tercache terpisah
         queryKey: ['users-list', school?.id, isSuperAdmin],
         queryFn: async () => {
-            // Jika bukan Super Admin, cegah fetching jika school.id kosong
-            if (!isSuperAdmin && !school?.id) {
-                console.warn("⚠️ PERINGATAN: school.id kosong, pencarian dibatalkan.");
-                return [];
-            }
+            if (!isSuperAdmin && !school?.id) return [];
 
             let query = supabase
                 .from('users')
                 .select('*')
                 .order('createdAt', { ascending: false });
 
-            // Jika BUKAN Super Admin, filter data khusus untuk sekolahnya saja
             if (!isSuperAdmin && school) {
                 query = query.eq('schoolId', school.id);
             }
 
             const { data, error } = await query;
-
-            if (error) {
-                console.error("❌ ERROR dari Supabase:", error);
-                throw new Error(error.message);
-            }
+            if (error) throw new Error(error.message);
 
             return (data as AppUser[]) || [];
         },
-        // PERBAIKAN: Jalankan query jika dia Super Admin ATAU dia punya school.id
         enabled: isSuperAdmin || !!school?.id,
     });
 
-    // Filtering Data
     const filteredUsers: AppUser[] = (users || []).filter((user: AppUser) => {
         const matchesSearch = user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
             user.email.toLowerCase().includes(searchQuery.toLowerCase());
@@ -246,10 +263,43 @@ export function UserManagementPage() {
         currentPage * ITEMS_PER_PAGE
     );
 
+    // Generator Custom Nomor Halaman (Contoh: 1 2 3 4 5)
+    const getPageNumbers = () => {
+        const pages = [];
+        const maxVisible = 5;
+        let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
+        let end = Math.min(totalPages, start + maxVisible - 1);
+
+        if (end - start + 1 < maxVisible) {
+            start = Math.max(1, end - maxVisible + 1);
+        }
+
+        for (let i = start; i <= end; i++) pages.push(i);
+        return pages;
+    };
+
+    // ========================================================================
+    // FORMS
+    // ========================================================================
     const addUserForm = useForm<CreateUserFormValues>({
         resolver: zodResolver(createUserSchema),
         defaultValues: { fullName: '', email: '', password: '', role: 'GURU' }
     });
+
+    const editUserForm = useForm<EditUserFormValues>({
+        resolver: zodResolver(editUserSchema),
+        defaultValues: { fullName: '', role: 'GURU' }
+    });
+
+    // Sinkronisasi data user yang dipilih ke form edit
+    useEffect(() => {
+        if (userToEdit) {
+            editUserForm.reset({
+                fullName: userToEdit.fullName,
+                role: userToEdit.role,
+            });
+        }
+    }, [userToEdit, editUserForm]);
 
     const resetPassForm = useForm<ResetPasswordFormValues>({
         resolver: zodResolver(resetPasswordSchema),
@@ -297,8 +347,8 @@ export function UserManagementPage() {
                                             <FormLabel>{t.fRole}</FormLabel>
                                             <Select value={field.value} onValueChange={field.onChange}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
-                                                {/* PERBAIKAN: Menambahkan side="bottom" agar dropdown membuka ke bawah */}
                                                 <SelectContent position="popper" side="bottom" className="max-h-[200px] overflow-y-auto z-[9999]">
+                                                    <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
                                                     <SelectItem value="ADMIN">Admin IT</SelectItem>
                                                     <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
                                                     <SelectItem value="OPERATOR">Operator</SelectItem>
@@ -318,19 +368,9 @@ export function UserManagementPage() {
                                         <FormItem>
                                             <FormLabel>{t.fPass}</FormLabel>
                                             <FormControl>
-                                                {/* PERBAIKAN: Input Password dengan Toggle Mata yang solid */}
                                                 <div className="relative flex items-center">
-                                                    <Input
-                                                        type={showAddPassword ? "text" : "password"}
-                                                        placeholder="••••••••"
-                                                        {...field}
-                                                        className="pr-10"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setShowAddPassword(!showAddPassword)}
-                                                        className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none"
-                                                    >
+                                                    <Input type={showAddPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
+                                                    <button type="button" onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none">
                                                         {showAddPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                                                     </button>
                                                 </div>
@@ -343,6 +383,66 @@ export function UserManagementPage() {
                                         <Button type="button" variant="outline" onClick={() => setIsAddUserModalOpen(false)} disabled={addUserMutation.isPending}>{t.btnCancel}</Button>
                                         <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={addUserMutation.isPending}>
                                             {addUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />} {t.btnSave}
+                                        </Button>
+                                    </div>
+                                </form>
+                            </Form>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* =================================================================== */}
+            {/* MODAL: EDIT USER */}
+            {/* =================================================================== */}
+            <AnimatePresence>
+                {userToEdit && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card text-card-foreground rounded-2xl shadow-2xl border border-border max-w-md w-full p-6">
+                            <div className="flex items-center justify-between mb-4">
+                                <div>
+                                    <h3 className="text-xl font-bold">{t.editTitle}</h3>
+                                    <p className="text-muted-foreground text-sm">{t.editDesc}</p>
+                                </div>
+                                <Button variant="ghost" size="icon" onClick={() => setUserToEdit(null)}><X className="w-5 h-5" /></Button>
+                            </div>
+
+                            <Form {...editUserForm}>
+                                <form onSubmit={editUserForm.handleSubmit((data) => editUserMutation.mutate({ id: userToEdit.id, data }))} className="space-y-4">
+                                    <div className="space-y-2">
+                                        <FormLabel>{t.fEmail}</FormLabel>
+                                        <Input type="email" value={userToEdit.email} disabled className="bg-muted text-muted-foreground" />
+                                    </div>
+                                    <FormField control={editUserForm.control} name="fullName" render={({ field }) => (
+                                        <FormItem><FormLabel>{t.fName}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
+                                    )} />
+                                    <FormField control={editUserForm.control} name="role" render={({ field }) => (
+                                        <FormItem>
+                                            <FormLabel>{t.fRole}</FormLabel>
+                                            <Select value={field.value} onValueChange={field.onChange} disabled={!isSuperAdmin}>
+                                                <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
+                                                <SelectContent position="popper" side="bottom" className="max-h-[200px] overflow-y-auto z-[9999]">
+                                                    <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
+                                                    <SelectItem value="ADMIN">Admin IT</SelectItem>
+                                                    <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
+                                                    <SelectItem value="OPERATOR">Operator</SelectItem>
+                                                    <SelectItem value="BENDAHARA">Bendahara</SelectItem>
+                                                    <SelectItem value="WALI_KELAS">Wali Kelas</SelectItem>
+                                                    <SelectItem value="GURU">Guru</SelectItem>
+                                                    <SelectItem value="STAFF_TU">Staff TU</SelectItem>
+                                                    <SelectItem value="STAFF_SARPRAS">Staff Sarpras</SelectItem>
+                                                    <SelectItem value="ORANG_TUA">Orang Tua</SelectItem>
+                                                    <SelectItem value="SISWA">Siswa</SelectItem>
+                                                </SelectContent>
+                                            </Select>
+                                            <FormMessage />
+                                        </FormItem>
+                                    )} />
+
+                                    <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
+                                        <Button type="button" variant="outline" onClick={() => setUserToEdit(null)} disabled={editUserMutation.isPending}>{t.btnCancel}</Button>
+                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={editUserMutation.isPending}>
+                                            {editUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Edit className="w-4 h-4 mr-2" />} {t.btnSave}
                                         </Button>
                                     </div>
                                 </form>
@@ -375,19 +475,9 @@ export function UserManagementPage() {
                                         <FormItem>
                                             <FormLabel>{t.newPass}</FormLabel>
                                             <FormControl>
-                                                {/* PERBAIKAN: Toggle Mata Reset Password */}
                                                 <div className="relative flex items-center">
-                                                    <Input
-                                                        type={showResetPassword ? "text" : "password"}
-                                                        placeholder="••••••••"
-                                                        {...field}
-                                                        className="pr-10"
-                                                    />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => setShowResetPassword(!showResetPassword)}
-                                                        className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none"
-                                                    >
+                                                    <Input type={showResetPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
+                                                    <button type="button" onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none">
                                                         {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                                                     </button>
                                                 </div>
@@ -519,7 +609,9 @@ export function UserManagementPage() {
                                                 </DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground border-border">
                                                     <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Aksi Akun</DropdownMenuLabel>
-                                                    <DropdownMenuItem className="cursor-pointer">
+
+                                                    {/* KLIK EDIT PROFIL TERHUBUNG KE FUNGSI setUserToEdit */}
+                                                    <DropdownMenuItem className="cursor-pointer" onClick={() => setUserToEdit(user)}>
                                                         <Edit className="w-4 h-4 mr-2" /> Edit Profil
                                                     </DropdownMenuItem>
 
@@ -549,7 +641,7 @@ export function UserManagementPage() {
                 </div>
 
                 {/* =================================================================== */}
-                {/* PAGINATION CONTROLS */}
+                {/* PAGINATION CONTROLS (AWAL, AKHIR & NOMOR HALAMAN CUSTOM) */}
                 {/* =================================================================== */}
                 {filteredUsers.length > 0 && (
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
@@ -557,34 +649,42 @@ export function UserManagementPage() {
                             {t.pageInfo} <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, filteredUsers.length)}</span> {t.pageOf} <span className="font-medium text-foreground">{filteredUsers.length}</span> {t.pageUsers}
                         </span>
 
-                        <div className="flex items-center gap-2">
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                disabled={currentPage === 1}
-                                className="h-8"
-                            >
-                                <ChevronLeft className="w-4 h-4 mr-1" /> {t.prev}
+                        <div className="flex items-center gap-1.5">
+                            {/* Tombol Halaman Awal */}
+                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
+                                <ChevronsLeft className="w-4 h-4" />
                             </Button>
 
-                            <div className="text-sm font-medium px-2">
-                                {t.page} {currentPage} {t.pageOf} {totalPages || 1}
-                            </div>
+                            {/* Tombol Sebelumnya */}
+                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
+                                <ChevronLeft className="w-4 h-4" />
+                            </Button>
 
-                            <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                disabled={currentPage === totalPages || totalPages === 0}
-                                className="h-8"
-                            >
-                                {t.next} <ChevronRight className="w-4 h-4 ml-1" />
+                            {/* Custom Nomor Halaman Dinamis */}
+                            {getPageNumbers().map((pageNum) => (
+                                <Button
+                                    key={pageNum}
+                                    variant={currentPage === pageNum ? "default" : "outline"}
+                                    size="icon"
+                                    onClick={() => setCurrentPage(pageNum)}
+                                    className={`h-8 w-8 font-medium ${currentPage === pageNum ? 'bg-primary text-primary-foreground font-bold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+                                >
+                                    {pageNum}
+                                </Button>
+                            ))}
+
+                            {/* Tombol Selanjutnya */}
+                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
+                                <ChevronRight className="w-4 h-4" />
+                            </Button>
+
+                            {/* Tombol Halaman Akhir */}
+                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
+                                <ChevronsRight className="w-4 h-4" />
                             </Button>
                         </div>
                     </div>
                 )}
-
             </div>
         </motion.div>
     );
