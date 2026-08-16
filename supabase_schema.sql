@@ -938,6 +938,9 @@ CREATE UNIQUE INDEX student_bills_unique_period
     ON public.student_bills (
         "studentId","feeTemplateId","academicYearId","periodMonth","periodYear"
     );
+-- 👇👇👇 TAMBAHKAN BARIS INI 👇👇👇
+CREATE UNIQUE INDEX student_bills_school_id_key ON public.student_bills ("schoolId","id");
+-- 👆👆👆 ======================== 👆👆👆
 CREATE INDEX bills_school_idx ON public.student_bills ("schoolId");
 CREATE INDEX bills_student_idx ON public.student_bills ("studentId");
 CREATE INDEX bills_year_idx ON public.student_bills ("academicYearId");
