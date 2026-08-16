@@ -8,8 +8,8 @@ export interface LoginPayload {
 
 export interface LoginResponse {
   user: User;
-  school: School;
-  academicYear: AcademicYear;
+  school: School | null;
+  academicYear: AcademicYear | null;
 }
 
 export interface AuthResult {
@@ -19,49 +19,67 @@ export interface AuthResult {
 }
 
 export const authService = {
-  /**
-   * Login via Supabase RPC function `verify_login`
-   * This calls a server-side PostgreSQL function that:
-   * 1. Finds the user by email
-   * 2. Verifies the password using pgcrypto/bcrypt
-   * 3. Returns user + school + academic year data
-   */
   async login(payload: LoginPayload): Promise<AuthResult> {
     try {
-      const { data, error } = await supabase.rpc('verify_login', {
-        p_email: payload.email,
-        p_password: payload.password,
+      // 1. Verifikasi Email & Password melalui Supabase Auth Asli
+      const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
+        email: payload.email,
+        password: payload.password,
       });
 
-      if (error) {
-        console.error('[AuthService] Supabase RPC error:', error);
+      if (authError || !authData.user) {
+        console.error('[AuthService] Auth error:', authError);
         return {
           success: false,
           data: null as unknown as LoginResponse,
-          message: 'Terjadi kesalahan server. Silakan coba lagi.',
+          message: 'Email atau kata sandi salah.',
         };
       }
 
-      // The RPC returns a JSON object with success, message, user, school, academicYear
-      if (!data || !data.success) {
+      const userId = authData.user.id;
+
+      // 2. Ambil Profil User dari public.users (Bypass RLS dengan auth.uid)
+      const { data: profile, error: profileError } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', userId)
+        .single();
+
+      if (profileError || !profile) {
+        // Jika user ada di Auth tapi profil publiknya terhapus
         return {
           success: false,
           data: null as unknown as LoginResponse,
-          message: data?.message || 'Email atau kata sandi salah',
+          message: 'Profil pengguna tidak ditemukan di sistem.',
         };
+      }
+
+      // 3. Ambil Data Sekolah dan Tahun Ajaran Aktif (Jika Punya)
+      let schoolData = null;
+      let academicYearData = null;
+
+      if (profile.schoolId) {
+        const [schoolRes, ayRes] = await Promise.all([
+          supabase.from('schools').select('*').eq('id', profile.schoolId).single(),
+          supabase.from('academic_years').select('*').eq('schoolId', profile.schoolId).eq('isActive', true).maybeSingle()
+        ]);
+
+        // RLS mungkin membuat ini error/null jika hak akses tidak valid
+        schoolData = schoolRes.data || null;
+        academicYearData = ayRes.data || null;
       }
 
       return {
         success: true,
         data: {
-          user: data.user as User,
-          school: data.school as School,
-          academicYear: data.academicYear as AcademicYear,
+          user: profile as User,
+          school: schoolData as School | null,
+          academicYear: academicYearData as AcademicYear | null,
         },
-        message: data.message || 'Login berhasil',
+        message: 'Login berhasil',
       };
     } catch (err) {
-      console.error('[AuthService] Login error:', err);
+      console.error('[AuthService] Login Exception:', err);
       return {
         success: false,
         data: null as unknown as LoginResponse,
@@ -70,18 +88,15 @@ export const authService = {
     }
   },
 
-  /**
-   * Logout — clear local state only (no server-side session to invalidate)
-   */
   async logout(): Promise<void> {
-    // No server-side session to clear since we use custom auth
-    // State cleanup is handled by the auth store
-    return;
+    // Menghancurkan sesi aktif di server Supabase
+    await supabase.auth.signOut();
+
+    // Membersihkan semua sisa cache di browser
+    localStorage.removeItem('auth-storage');
+    localStorage.clear();
   },
 
-  /**
-   * Get user profile by ID from Supabase
-   */
   async getProfile(userId: string): Promise<{ success: boolean; data: User | null }> {
     try {
       const { data, error } = await supabase
@@ -91,30 +106,16 @@ export const authService = {
         .eq('isActive', true)
         .single();
 
-      if (error || !data) {
-        return { success: false, data: null };
-      }
-
-      return {
-        success: true,
-        data: data as User,
-      };
+      if (error || !data) return { success: false, data: null };
+      return { success: true, data: data as User };
     } catch {
       return { success: false, data: null };
     }
   },
 
-  /**
-   * Get school data by ID
-   */
   async getSchool(schoolId: string): Promise<School | null> {
     try {
-      const { data, error } = await supabase
-        .from('schools')
-        .select('*')
-        .eq('id', schoolId)
-        .single();
-
+      const { data, error } = await supabase.from('schools').select('*').eq('id', schoolId).single();
       if (error || !data) return null;
       return data as School;
     } catch {
@@ -122,9 +123,6 @@ export const authService = {
     }
   },
 
-  /**
-   * Get active academic year for a school
-   */
   async getActiveAcademicYear(schoolId: string): Promise<AcademicYear | null> {
     try {
       const { data, error } = await supabase

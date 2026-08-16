@@ -37,35 +37,83 @@ const schoolSchema = z.object({
 type SchoolFormValues = z.infer<typeof schoolSchema>;
 
 // ============================================================================
-// SUB-KOMPONEN PROFIL SEKOLAH (Dirender hanya setelah schoolData ditarik)
+// SUB-KOMPONEN PROFIL SEKOLAH (Mode Edit & Create)
 // ============================================================================
-function SchoolProfileForm({ schoolData, authSchool, onSuccess }: { schoolData: any, authSchool: any, onSuccess: any }) {
+function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: any, authUser: any, onSuccess: any }) {
     const queryClient = useQueryClient();
+    const isEdit = !!schoolData?.id; // Tentukan apakah sedang edit atau buat baru
 
     const form = useForm<SchoolFormValues>({
         resolver: zodResolver(schoolSchema),
         defaultValues: {
-            name: schoolData.name ?? '',
-            npsn: schoolData.npsn ?? '',
-            level: String(schoolData.level ?? '').trim().toUpperCase(),
-            type: String(schoolData.type ?? '').trim().toUpperCase(),
-            address: schoolData.address ?? '',
-            city: schoolData.city ?? '',
-            province: schoolData.province ?? '',
-            phone: schoolData.phone ?? '',
-            email: schoolData.email ?? '',
+            name: schoolData?.name ?? '',
+            npsn: schoolData?.npsn ?? '',
+            level: String(schoolData?.level ?? '').trim().toUpperCase(),
+            type: String(schoolData?.type ?? '').trim().toUpperCase(),
+            address: schoolData?.address ?? '',
+            city: schoolData?.city ?? '',
+            province: schoolData?.province ?? '',
+            phone: schoolData?.phone ?? '',
+            email: schoolData?.email ?? '',
         }
     });
 
-    const updateSchoolMutation = useMutation({
+    const saveSchoolMutation = useMutation({
         mutationFn: async (payload: SchoolFormValues) => {
-            const { data, error } = await supabase.from('schools').update(payload).eq('id', authSchool?.id || '').select().single();
-            if (error) throw new Error(error.message);
-            return data;
+            if (isEdit) {
+                // MODE UPDATE
+                const { data, error } = await supabase.from('schools').update(payload).eq('id', schoolData.id).select().single();
+                if (error) throw new Error(error.message);
+                return data;
+            } else {
+                // MODE CREATE BARU
+                const newSchoolId = crypto.randomUUID(); // Buat ID unik untuk sekolah
+
+                // 1. Buat Sekolah
+                const { data: newSchool, error: schoolErr } = await supabase
+                    .from('schools')
+                    .insert({ ...payload, id: newSchoolId })
+                    .select()
+                    .single();
+                if (schoolErr) throw new Error('Gagal membuat sekolah: ' + schoolErr.message);
+
+                // 2. Hubungkan User saat ini ke Sekolah baru (PENTING AGAR RLS TERBUKA)
+                // Menggunakan UPSERT berjaga-jaga jika public.users belum ada row untuk user ini
+                if (authUser?.id) {
+                    const { error: userErr } = await supabase.from('users').upsert({
+                        id: authUser.id,
+                        schoolId: newSchoolId,
+                        email: authUser.email || '',
+                        fullName: authUser.user_metadata?.full_name || 'Administrator',
+                        role: 'SUPER_ADMIN',
+                        passwordHash: 'auth-supabase' // Placeholder karena auth dihandle supabase
+                    });
+                    if (userErr) throw new Error('Gagal menghubungkan user: ' + userErr.message);
+                }
+
+                return newSchool;
+            }
         },
-        onSuccess: (data) => {
-            toast.success('Profil sekolah berhasil disimpan');
-            onSuccess(data); // Update authStore
+        onSuccess: async (data) => {
+            toast.success(isEdit ? 'Profil sekolah berhasil disimpan' : 'Sekolah baru berhasil dibuat!');
+
+            // 1. Update data sekolah di Zustand Store
+            onSuccess(data);
+
+            // 2. Perbarui data User di Zustand Store agar tau kalau sekarang dia punya schoolId
+            if (!isEdit && authUser?.id) {
+                const { data: updatedProfile } = await supabase
+                    .from('users')
+                    .select('*')
+                    .eq('id', authUser.id)
+                    .single();
+
+                if (updatedProfile) {
+                    useAuthStore.getState().setUser(updatedProfile);
+                }
+            }
+
+            // 3. Beritahu React Query untuk merender ulang komponen tanpa merefresh halaman
             queryClient.invalidateQueries({ queryKey: ['school-profile'] });
         },
         onError: (error: Error) => toast.error(error.message)
@@ -77,12 +125,19 @@ function SchoolProfileForm({ schoolData, authSchool, onSuccess }: { schoolData: 
             level: data.level.trim().toUpperCase(),
             type: data.type.trim().toUpperCase(),
         };
-        updateSchoolMutation.mutate(payload);
+        saveSchoolMutation.mutate(payload);
     };
 
     return (
         <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmitSchool)} className="space-y-6">
+                {!isEdit && (
+                    <div className="bg-blue-50 dark:bg-blue-900/20 text-blue-800 dark:text-blue-300 p-4 rounded-lg text-sm mb-6 border border-blue-200 dark:border-blue-800 flex items-start gap-3">
+                        <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
+                        <p>Anda belum memiliki data sekolah. Silakan isi form di bawah ini untuk mendaftarkan institusi Anda. Akun Anda akan otomatis diatur sebagai <b>SUPER ADMIN</b> untuk institusi ini.</p>
+                    </div>
+                )}
+
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="name" render={({ field }) => (
                         <FormItem><FormLabel>Nama Sekolah</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
@@ -133,9 +188,9 @@ function SchoolProfileForm({ schoolData, authSchool, onSuccess }: { schoolData: 
                 </div>
 
                 <div className="flex justify-end pt-6">
-                    <Button type="submit" disabled={updateSchoolMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-                        {updateSchoolMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                        Simpan Perubahan
+                    <Button type="submit" disabled={saveSchoolMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+                        {saveSchoolMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                        {isEdit ? 'Simpan Perubahan' : 'Buat Institusi Baru'}
                     </Button>
                 </div>
             </form>
@@ -151,6 +206,7 @@ export function MasterSettingsPage() {
     const queryClient = useQueryClient();
     const location = useLocation();
 
+    // Pastikan user dari authStore memiliki informasi yang cukup
     const { school: authSchool, setSchool, user } = useAuthStore();
     const userRole = user?.role as string | undefined;
     const isSuperAdmin = userRole === 'SUPER_ADMIN' || userRole === 'SUPERADMIN' || userRole === 'ADMIN';
@@ -158,14 +214,15 @@ export function MasterSettingsPage() {
     const [activeTab, setActiveTab] = useState(location.state?.tab || 'profil');
     const [ayToDelete, setAyToDelete] = useState<{ id: string; name: string } | null>(null);
 
+    // Fetch School Data (Akan error diam-diam jika kosong karena RLS, jadi kita tangani dengan fallback null)
     const { data: schoolData, isLoading: isSchoolLoading } = useQuery({
         queryKey: ['school-profile', authSchool?.id],
         queryFn: async () => {
-            const { data, error } = await supabase.from('schools').select('*').eq('id', authSchool?.id || '').single();
-            if (error) throw new Error(error.message);
+            if (!authSchool?.id) return null;
+            const { data, error } = await supabase.from('schools').select('*').eq('id', authSchool.id).single();
+            if (error) return null; // Jika error/kosong kembalikan null agar pindah ke mode Create
             return data;
         },
-        enabled: !!authSchool?.id,
     });
 
     const { data: academicYearsResponse, isLoading: isAyLoading } = useQuery({
@@ -179,6 +236,7 @@ export function MasterSettingsPage() {
         mutationFn: async () => {
             const currentYear = new Date().getFullYear();
             const payload = {
+                id: crypto.randomUUID(), // <--- TAMBAHKAN BARIS INI
                 schoolId: authSchool?.id || '',
                 name: `${currentYear}/${currentYear + 1}`,
                 startYear: currentYear,
@@ -220,6 +278,9 @@ export function MasterSettingsPage() {
         }
     });
 
+    // Jika belum punya sekolah, paksa hanya tab profil yang terbuka
+    const hasSchool = !!schoolData;
+
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
             <AnimatePresence>
@@ -252,98 +313,102 @@ export function MasterSettingsPage() {
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
                 <TabsList className="grid w-full grid-cols-3 h-auto p-1 max-w-2xl">
                     <TabsTrigger value="profil" className="py-2.5">Profil Sekolah</TabsTrigger>
-                    <TabsTrigger value="tahun-ajaran" className="py-2.5">Tahun Ajaran</TabsTrigger>
-                    <TabsTrigger value="kelas" className="py-2.5">Data Kelas</TabsTrigger>
+                    <TabsTrigger value="tahun-ajaran" className="py-2.5" disabled={!hasSchool}>Tahun Ajaran</TabsTrigger>
+                    <TabsTrigger value="kelas" className="py-2.5" disabled={!hasSchool}>Data Kelas</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="profil" className="mt-6">
                     <Card className="border-border shadow-sm max-w-4xl">
                         <CardHeader className="bg-muted/20 border-b border-border">
                             <CardTitle className="text-lg flex items-center gap-2"><School className="w-5 h-5 text-emerald-600" /> Identitas Institusi</CardTitle>
-                            <CardDescription>Informasi ini akan digunakan pada kop surat, laporan, dan kuitansi.</CardDescription>
+                            <CardDescription>
+                                {hasSchool ? 'Informasi ini akan digunakan pada kop surat, laporan, dan kuitansi.' : 'Lengkapi data awal sekolah Anda untuk memulai.'}
+                            </CardDescription>
                         </CardHeader>
                         <CardContent className="pt-6">
                             {isSchoolLoading ? (
                                 <div className="flex justify-center py-8"><Loader2 className="w-8 h-8 animate-spin text-emerald-600" /></div>
                             ) : (
-                                schoolData && <SchoolProfileForm schoolData={schoolData} authSchool={authSchool} onSuccess={setSchool} />
+                                <SchoolProfileForm schoolData={schoolData} authUser={user} onSuccess={setSchool} />
                             )}
                         </CardContent>
                     </Card>
                 </TabsContent>
 
-                <TabsContent value="tahun-ajaran" className="mt-6">
-                    <Card className="border-border shadow-sm max-w-4xl">
-                        <CardHeader className="bg-muted/20 border-b border-border flex flex-row items-center justify-between">
-                            <div>
-                                <CardTitle className="text-lg">Daftar Tahun Ajaran</CardTitle>
-                                <CardDescription>Kelola tahun ajaran yang tersedia.</CardDescription>
-                            </div>
-                            <Button onClick={() => generateNewAcademicYear.mutate()} disabled={generateNewAcademicYear.isPending} className="bg-blue-600 hover:bg-blue-700 text-white">
-                                <Plus className="w-4 h-4 mr-2" /> Buat Baru
-                            </Button>
-                        </CardHeader>
-                        <CardContent className="pt-0 p-0">
-                            <table className="w-full text-left border-collapse">
-                                <thead>
-                                    <tr className="border-b border-border/50 bg-muted/30">
-                                        {/* Penambahan Header No. */}
-                                        <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase w-16">No.</th>
-                                        <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase">Tahun Ajaran</th>
-                                        <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-center">Status</th>
-                                        <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-right">Aksi</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border/50">
-                                    {isAyLoading ? (
-                                        <tr><td colSpan={4} className="px-6 py-12 text-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-600 mx-auto" /></td></tr>
-                                    ) : academicYears.length === 0 ? (
-                                        <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">Belum ada data.</td></tr>
-                                    ) : (
-                                        academicYears.map((ay, idx) => (
-                                            <tr key={ay.id} className="hover:bg-muted/30 transition-colors">
-                                                {/* Penambahan Data No. */}
-                                                <td className="px-6 py-4 text-sm text-muted-foreground font-medium">{idx + 1}</td>
-                                                <td className="px-6 py-4 font-semibold text-foreground text-base">{ay.name}</td>
-                                                <td className="px-6 py-4 text-center">
-                                                    {ay.isActive ? (
-                                                        <span className="inline-flex items-center bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 px-3 py-1 rounded-full text-xs font-bold">
-                                                            <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> SEDANG AKTIF
-                                                        </span>
-                                                    ) : (
-                                                        <span className="inline-flex items-center bg-muted text-muted-foreground border border-border px-3 py-1 rounded-full text-xs font-medium">
-                                                            Tidak Aktif
-                                                        </span>
-                                                    )}
-                                                </td>
-                                                <td className="px-6 py-4 text-right">
-                                                    <div className="flex items-center justify-end space-x-2">
-                                                        {!ay.isActive && (
-                                                            <Button variant="outline" size="sm" onClick={() => setActiveAcademicYear.mutate(ay.id)} disabled={setActiveAcademicYear.isPending}>
-                                                                Jadikan Aktif
-                                                            </Button>
-                                                        )}
-                                                        {isSuperAdmin && (
-                                                            <Button variant="ghost" size="icon" className="text-red-500 hover:bg-red-50 hover:text-red-700" onClick={() => setAyToDelete({ id: ay.id, name: ay.name })}>
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </Button>
-                                                        )}
-                                                    </div>
-                                                </td>
+                {hasSchool && (
+                    <>
+                        <TabsContent value="tahun-ajaran" className="mt-6">
+                            <Card className="border-border shadow-sm max-w-4xl">
+                                <CardHeader className="bg-muted/20 border-b border-border flex flex-row items-center justify-between">
+                                    <div>
+                                        <CardTitle className="text-lg">Daftar Tahun Ajaran</CardTitle>
+                                        <CardDescription>Kelola tahun ajaran yang tersedia.</CardDescription>
+                                    </div>
+                                    <Button onClick={() => generateNewAcademicYear.mutate()} disabled={generateNewAcademicYear.isPending} className="bg-blue-600 hover:bg-blue-700 text-white">
+                                        <Plus className="w-4 h-4 mr-2" /> Buat Baru
+                                    </Button>
+                                </CardHeader>
+                                <CardContent className="pt-0 p-0">
+                                    <table className="w-full text-left border-collapse">
+                                        <thead>
+                                            <tr className="border-b border-border/50 bg-muted/30">
+                                                <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase w-16">No.</th>
+                                                <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase">Tahun Ajaran</th>
+                                                <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-center">Status</th>
+                                                <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-right">Aksi</th>
                                             </tr>
-                                        ))
-                                    )}
-                                </tbody>
-                            </table>
-                        </CardContent>
-                    </Card>
-                </TabsContent>
+                                        </thead>
+                                        <tbody className="divide-y divide-border/50">
+                                            {isAyLoading ? (
+                                                <tr><td colSpan={4} className="px-6 py-12 text-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-600 mx-auto" /></td></tr>
+                                            ) : academicYears.length === 0 ? (
+                                                <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">Belum ada data.</td></tr>
+                                            ) : (
+                                                academicYears.map((ay, idx) => (
+                                                    <tr key={ay.id} className="hover:bg-muted/30 transition-colors">
+                                                        <td className="px-6 py-4 text-sm text-muted-foreground font-medium">{idx + 1}</td>
+                                                        <td className="px-6 py-4 font-semibold text-foreground text-base">{ay.name}</td>
+                                                        <td className="px-6 py-4 text-center">
+                                                            {ay.isActive ? (
+                                                                <span className="inline-flex items-center bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 px-3 py-1 rounded-full text-xs font-bold">
+                                                                    <CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> SEDANG AKTIF
+                                                                </span>
+                                                            ) : (
+                                                                <span className="inline-flex items-center bg-muted text-muted-foreground border border-border px-3 py-1 rounded-full text-xs font-medium">
+                                                                    Tidak Aktif
+                                                                </span>
+                                                            )}
+                                                        </td>
+                                                        <td className="px-6 py-4 text-right">
+                                                            <div className="flex items-center justify-end space-x-2">
+                                                                {!ay.isActive && (
+                                                                    <Button variant="outline" size="sm" onClick={() => setActiveAcademicYear.mutate(ay.id)} disabled={setActiveAcademicYear.isPending}>
+                                                                        Jadikan Aktif
+                                                                    </Button>
+                                                                )}
+                                                                {isSuperAdmin && (
+                                                                    <Button variant="ghost" size="icon" className="text-red-500 hover:bg-red-50 hover:text-red-700" onClick={() => setAyToDelete({ id: ay.id, name: ay.name })}>
+                                                                        <Trash2 className="w-4 h-4" />
+                                                                    </Button>
+                                                                )}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))
+                                            )}
+                                        </tbody>
+                                    </table>
+                                </CardContent>
+                            </Card>
+                        </TabsContent>
 
-                <TabsContent value="kelas" className="mt-6">
-                    <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
-                        <ClassListPage />
-                    </div>
-                </TabsContent>
+                        <TabsContent value="kelas" className="mt-6">
+                            <div className="bg-card border border-border rounded-xl p-6 shadow-sm">
+                                <ClassListPage />
+                            </div>
+                        </TabsContent>
+                    </>
+                )}
             </Tabs>
         </motion.div>
     );

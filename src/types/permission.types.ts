@@ -1,9 +1,8 @@
 import type { UserRole } from './common.types';
 
-// 1. Tambahkan 'academic' ke dalam tipe Module
 export type Module =
   | 'dashboard'
-  | 'academic' // <-- MODUL BARU DITAMBAHKAN DI SINI
+  | 'academic'
   | 'students'
   | 'teachers'
   | 'finance'
@@ -23,11 +22,13 @@ export interface Permission {
 
 export type RolePermissions = Record<UserRole, Permission[]>;
 
-// 2. Berikan izin akses modul 'academic' ke Role yang berhak
 export const ROLE_PERMISSIONS: RolePermissions = {
+  // ==========================================
+  // 👑 SUPER_ADMIN: Akses Dewa (Bisa Hapus Data & Ubah Profil Sekolah)
+  // ==========================================
   SUPER_ADMIN: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['create', 'read', 'update', 'delete'] }, // <-- TAMBAHKAN INI
+    { module: 'academic', actions: ['create', 'read', 'update', 'delete'] },
     { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import', 'approve'] },
@@ -38,22 +39,27 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'reports', actions: ['read', 'export'] },
     { module: 'settings', actions: ['create', 'read', 'update', 'delete'] },
   ],
+
+  // ==========================================
+  // 🛡️ ADMIN: Operasional Penuh (Tanpa Akses Hapus Master Data & Ubah Profil)
+  // ==========================================
   ADMIN: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['create', 'read', 'update', 'delete'] }, // <-- TAMBAHKAN INI
-    { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
-    { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
-    { module: 'finance', actions: ['create', 'read', 'update', 'export', 'import'] },
+    { module: 'academic', actions: ['create', 'read', 'update'] }, // Tidak bisa Delete
+    { module: 'students', actions: ['create', 'read', 'update', 'export', 'import'] }, // Tidak bisa Delete
+    { module: 'teachers', actions: ['create', 'read', 'update', 'export', 'import'] }, // Tidak bisa Delete
+    { module: 'finance', actions: ['create', 'read', 'update', 'export', 'import', 'approve'] },
     { module: 'schedules', actions: ['create', 'read', 'update', 'export'] },
     { module: 'inventory', actions: ['create', 'read', 'update', 'export'] },
     { module: 'administration', actions: ['create', 'read', 'update', 'export'] },
     { module: 'scholarships', actions: ['create', 'read', 'update', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
-    { module: 'settings', actions: ['read'] },
+    { module: 'settings', actions: ['read'] }, // Hanya bisa lihat profil sekolah
   ],
+
   KEPALA_SEKOLAH: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['read'] }, // <-- TAMBAHKAN INI (Hanya lihat)
+    { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'finance', actions: ['read', 'export', 'approve'] },
@@ -66,7 +72,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
   ],
   OPERATOR: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['create', 'read', 'update'] }, // <-- TAMBAHKAN INI
+    { module: 'academic', actions: ['create', 'read', 'update'] },
     { module: 'students', actions: ['create', 'read', 'update', 'export', 'import'] },
     { module: 'teachers', actions: ['create', 'read', 'update', 'export', 'import'] },
     { module: 'schedules', actions: ['create', 'read', 'update', 'delete', 'export'] },
@@ -79,13 +85,13 @@ export const ROLE_PERMISSIONS: RolePermissions = {
   ],
   WALI_KELAS: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['read'] }, // <-- TAMBAHKAN INI
+    { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['read', 'update', 'export'] },
     { module: 'schedules', actions: ['read'] },
   ],
   GURU: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['read'] }, // <-- TAMBAHKAN INI
+    { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['read'] },
     { module: 'schedules', actions: ['read'] },
   ],

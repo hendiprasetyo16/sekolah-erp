@@ -34,7 +34,13 @@ export function Sidebar() {
   const { hasAnyPermission } = usePermission();
   const location = useLocation();
 
-  const schoolName = useAuthStore((state) => state.school?.name);
+  // Ambil state user dan school
+  const user = useAuthStore((state) => state.user);
+  const school = useAuthStore((state) => state.school);
+
+  // LOGIKA CACHE BUSTER: 
+  // Jika user tidak punya schoolId (baru reset), paksakan nama sekolah menjadi null/undefined
+  const schoolName = user?.schoolId ? school?.name : null;
 
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management']);
 
@@ -116,11 +122,11 @@ export function Sidebar() {
               animate={{ opacity: 1, width: 'auto' }}
               exit={{ opacity: 0, width: 0 }}
               transition={{ duration: 0.2 }}
-              className="overflow-hidden whitespace-nowrap"
+              className="flex-1 overflow-hidden" // <-- Tambahkan flex-1 di sini, hapus whitespace-nowrap
             >
               <h1 className="font-bold text-sm text-foreground">SekolahERP</h1>
-              <p className="text-xs text-muted-foreground truncate max-w-[150px]">
-                {schoolName || 'Loading...'}
+              <p className="text-xs text-muted-foreground truncate w-full" title={schoolName || 'Belum ada data'}>
+                {schoolName || '-'}
               </p>
             </motion.div>
           )}

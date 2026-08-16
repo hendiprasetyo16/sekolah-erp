@@ -1,60 +1,71 @@
-# Rencana Implementasi: Integrasi Supabase & Modul Keuangan
+Rencana Implementasi: Sistem Informasi Sekolah (Multi-Tenant) & Modul Keuangan
+🎯 Tujuan Utama
+Arsitektur Multi-Tenant (Berbasis schoolId): Memastikan seluruh sistem dari Master Data hingga Pembayaran terisolasi dengan aman per institusi menggunakan Supabase. Tidak ada data sekolah yang bercampur.
 
-## 🎯 Tujuan Utama
-1. **Migrasi Arsitektur**: Menghubungkan frontend React secara langsung ke **Supabase** (PostgreSQL + Auth), menggantikan backend NestJS agar aplikasi bisa berjalan 100% serverless di Vercel.
-2. **Modul Keuangan**: Membangun sistem pencatatan tagihan dan pembayaran berdasarkan dokumen PDF (Rincian Biaya Tahunan & Buku untuk Kelas 1-6).
+Penyempurnaan Bertahap (Iterative): Membangun aplikasi secara modular mulai dari Master Data -> Siswa -> Keuangan, memastikan satu modul 100% bug-free dan terelasi kuat sebelum melangkah ke modul berikutnya.
 
----
+Modul Keuangan Dinamis: Mengelola tagihan dan pembayaran (cicilan/lunas) berdasarkan dokumen rincian biaya, namun didesain fleksibel untuk berbagai jenjang sekolah (TK, SD, SMP, SMA, SMK).
 
-> [!WARNING]
-> **Perombakan Arsitektur (Major Update)**
-> Karena Vercel didesain untuk frontend/serverless, backend NestJS yang ada sebelumnya tidak bisa di-deploy dengan mudah secara gratis. Oleh karena itu, kita akan mengubah aplikasi untuk berkomunikasi **langsung** ke Supabase menggunakan `@supabase/supabase-js`. 
+[!WARNING]
+Standar Arsitektur Database (Wajib)
 
-## 📝 Desain Database Keuangan (Tambahan)
+Setiap tabel utama (Tahun Ajaran, Kelas, Guru, Siswa, Tagihan) wajib memiliki schoolId.
 
-Untuk mengakomodasi rincian biaya dari PDF, kita perlu menambahkan beberapa tabel ke dalam database:
+Frontend Cache menggunakan React Query wajib menyertakan schoolId pada Query Keys (contoh: ['classes', schoolId]).
 
-1. **`FeeTemplate`** (Master Data Biaya per Kelas)
-   - Contoh: "Kegiatan Ekstrakurikuler Kelas 1" (Rp300.000), "LKS Lantip Kelas 1" (Rp170.000)
-2. **`StudentBill`** (Tagihan Siswa)
-   - Tagihan spesifik yang dibebankan ke siswa setiap awal tahun ajaran.
-3. **`Payment`** (Transaksi Pembayaran)
-   - Mencatat cicilan atau pelunasan. Sesuai PDF, pembayaran bisa diangsur hingga Oktober atau via transfer ke BPD DIY.
+Operasi Select, Insert, Update, dan Delete harus diverifikasi kepemilikannya ke schoolId aktif.
 
----
+📝 Desain Database (Ringkasan Skema Master)
+schools: Master entitas sekolah.
 
-## 🛠️ Langkah-langkah Implementasi
+academic_years: Tahun ajaran (Relasi ke schoolId).
 
-### Fase 1: Setup & Migrasi Supabase
-1. Install `@supabase/supabase-js` di frontend.
-2. Buat `src/services/supabase.client.ts` untuk koneksi.
-3. **Migrasi Database**: Saya akan memandu Anda untuk membuat project di Supabase.com, mendapatkan URL database, dan kita akan mem-push skema Prisma saat ini (ditambah tabel keuangan baru) langsung ke database PostgreSQL Supabase Anda.
+teachers: Data Guru/Wali Kelas (Relasi ke schoolId).
 
-### Fase 2: Refactor Frontend (Menghapus Mock Data)
-Mengubah layanan yang saat ini menggunakan data dummy (Mock Data) menjadi query langsung ke Supabase:
-- `auth.service.ts` -> Menggunakan Supabase Auth (Login/Logout).
-- `student.service.ts` -> Menggunakan Supabase Database (Select/Insert).
-- `teacher.service.ts` -> Menggunakan Supabase Database.
+classes: Data Kelas (Relasi ke schoolId, academicYearId, homeroomTeacherId).
 
-### Fase 3: Pembuatan Modul Keuangan (Sesuai PDF)
-1. **Master Data Script**: Membuat script untuk otomatis memasukkan data biaya Kelas 1 s/d Kelas 6 dari PDF ke dalam database.
-2. **UI Keuangan**: 
-   - Membuat halaman `/finance/dashboard` untuk ringkasan pembayaran.
-   - Membuat halaman `/finance/billing` untuk melihat tagihan per siswa.
-   - Membuat form **Penerimaan Pembayaran** (cicilan/lunas).
+students: Data Siswa (Relasi ke schoolId, classId).
 
----
+(Mendatang) fee_templates: Template tagihan per kelas/jenjang.
 
-## ❓ Open Questions (Pertanyaan untuk Anda)
+(Mendatang) student_bills & payments: Transaksi Keuangan.
 
-> [!IMPORTANT]
-> Sebelum kita mulai mengeksekusi rencana besar ini, mohon siapkan dan konfirmasi hal berikut:
-> 
-> 1. **Project Supabase**: Apakah Anda sudah membuat project baru di [Supabase](https://supabase.com)?
-> 2. **Kredensial**: Jika sudah, saya akan membutuhkan **Project URL** dan **anon public key** dari Supabase Anda untuk dihubungkan ke kode kita. Apakah Anda sudah memilikinya? (Bisa ditemukan di menu *Project Settings -> API*).
-> 3. **Sinkronisasi Kelas**: Di PDF terdapat rincian Kelas 1-6 (khas SD), namun di mock data sebelumnya tertulis SMK (Kelas X, XI, XII). Apakah kita akan merubah data sekolah ini menjadi Sekolah Dasar (SD) sepenuhnya?
+🛠️ Langkah-langkah Eksekusi (Roadmap)
+Fase 1: Finalisasi Master Data (SEDANG DIKERJAKAN ✅)
+Fokus: Memastikan fondasi dasar 100% akurat sebelum memasukkan data masal.
 
-## ✅ Rencana Verifikasi
-- Menguji login menggunakan sistem autentikasi asli Supabase.
-- Memasukkan data 1 siswa SD dan menghasilkan tagihan otomatis berdasarkan kelasnya.
-- Melakukan simulasi pembayaran cicilan (misal Rp100.000) dan memastikan sisa tagihan berkurang.
+Integrasi profil Institusi, Tahun Ajaran, dan Kelas murni dari Supabase.
+
+Implementasi filter schoolId di semua Service dan Cache.
+
+Menyelesaikan isu siklus hidup komponen UI (Dropdown tidak sinkron, Cache nyangkut).
+
+Validasi Akhir Fase 1: Semua operasi CRUD (Buat, Baca, Ubah, Hapus) pada Data Master berjalan lancar tanpa refresh browser.
+
+Fase 2: Modul Siswa & Import Data (Tertunda - Dikerjakan setelah Fase 1 Selesai)
+Fokus: Mengelola data ribuan siswa tanpa merusak performa aplikasi.
+
+UI Tabel Siswa berdasarkan filter Kelas dan Tahun Ajaran.
+
+Pembuatan algoritma Import Excel (500+ baris).
+
+Pemetaan ID Kelas secara otomatis saat import (Mencocokkan string nama kelas dari Excel ke UUID di Supabase).
+
+Penanganan error saat import (Misal: NISN ganda).
+
+Fase 3: Modul Keuangan (Sesuai PDF Rincian Biaya)
+Fokus: Tagihan otomatis dan pelacakan cicilan.
+
+Master Tagihan: Form untuk menginput rincian biaya (contoh: LKS, Ekstrakurikuler) berdasarkan jenjang kelas.
+
+Generate Tagihan: Algoritma yang secara otomatis membebankan total biaya kepada siswa saat siswa dimasukkan ke dalam suatu Kelas & Tahun Ajaran aktif.
+
+Penerimaan Pembayaran: UI kasir untuk menerima cicilan atau pelunasan secara penuh.
+
+❓ Konfirmasi Arsitektur (Untuk Anda)
+[!IMPORTANT]
+Terkait arah aplikasi ke depan:
+
+Fleksibilitas Jenjang: Form profil sekolah Anda sekarang memfasilitasi TK hingga SMA/SMK. Meskipun referensi PDF tagihan yang akan kita buat adalah untuk SD (Kelas 1-6), apakah kita mendesain Modul Keuangan ini agar dinamis (bisa dipakai sekolah SMK) atau dikhususkan strukturnya untuk SD saja?
+
+Keamanan Ekstra: Setelah Fase 1 ini selesai dan berjalan lancar, saya sarankan kita masuk ke Dashboard Supabase Anda untuk mengaktifkan Row Level Security (RLS) agar schoolId difilter langsung oleh database engine. Apakah Anda memegang akses ke dashboard Supabase?

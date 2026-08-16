@@ -84,7 +84,10 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
 
     const onSubmit = (values: ClassFormValues) => {
         if (!school?.id) return;
-        const payload: CreateClassPayload = {
+
+        // Kita buat payload-nya, dan tambahkan ID acak JIKA ini adalah mode Buat Baru (!isEdit)
+        const payload = {
+            ...(isEdit ? {} : { id: crypto.randomUUID() }), // <-- TAMBAHKAN BARIS INI
             schoolId: school.id,
             name: values.name,
             gradeLevel: values.gradeLevel,
@@ -92,7 +95,8 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
             capacity: values.capacity,
             major: values.major || undefined,
             homeroomTeacherId: values.homeroomTeacherId === 'none' ? undefined : values.homeroomTeacherId,
-        };
+        } as CreateClassPayload; // (Gunakan "as CreateClassPayload" agar TypeScript tidak protes tentang field 'id')
+
         mutation.mutate(payload);
     };
 
@@ -208,9 +212,10 @@ export function ClassFormPage() {
     });
 
     const { data: classDataResponse, isLoading: isFetchingClass } = useQuery({
-        queryKey: ['class', id],
-        queryFn: () => academicService.getClassById(id!),
-        enabled: isEdit,
+        queryKey: ['class', school?.id, id],
+        // PERHATIKAN BARIS DI BAWAH INI: Tambahkan school?.id sebagai parameter pertama
+        queryFn: () => academicService.getClassById(school?.id || '', id!),
+        enabled: isEdit && !!school?.id,
     });
     const classData = classDataResponse?.data;
 

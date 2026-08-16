@@ -14,7 +14,6 @@ import ReportsDashboardPage from '@/modules/reports/pages/ReportsDashboardPage';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, SettingsPlaceholder } from './placeholder-pages';
 
-// --- IMPORT HALAMAN BARU DI SINI ---
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
@@ -39,14 +38,10 @@ export function AppRouter() {
 
         {/* Protected routes */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-          {/* Dashboard */}
           <Route path="/dashboard" element={<AdminDashboard />} />
 
-          {/* --- ROUTING MODUL AKADEMIK (DATA MASTER) BARU --- */}
-          {/* Kita menggunakan 1 URL utama untuk halaman gabungan */}
+          {/* Academic / Master Data */}
           <Route path="/academic/master-data" element={<MasterSettingsPage />} />
-
-          {/* Sub-routing untuk form kelas yang dipanggil dari MasterSettingsPage */}
           <Route path="/academic/classes/new" element={<ClassFormPage />} />
           <Route path="/academic/classes/:id/edit" element={<ClassFormPage />} />
 
@@ -74,7 +69,7 @@ export function AppRouter() {
           <Route path="/reports" element={<ReportsDashboardPage />} />
           <Route path="/reports/*" element={<ReportsDashboardPage />} />
 
-          {/* Placeholders for Phase 2 */}
+          {/* Placeholders */}
           <Route path="/inventory/*" element={<InventoryPlaceholder />} />
           <Route path="/admin/*" element={<AdminPlaceholder />} />
           <Route path="/scholarships/*" element={<ScholarshipsPlaceholder />} />

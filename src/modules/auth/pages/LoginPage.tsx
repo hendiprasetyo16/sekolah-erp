@@ -11,24 +11,11 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { login, isLoading: storeLoading } = useAuthStore();
 
-  const [email, setEmail] = useState('admin@smknusantara.sch.id');
-  const [password, setPassword] = useState('Admin123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [selectedRole, setSelectedRole] = useState('admin');
-
-  const demoAccounts = [
-    { key: 'admin', label: 'Super Admin', email: 'admin@smknusantara.sch.id' },
-    // Menambahkan Admin Sekolah yang baru kita buat di database
-    { key: 'admin_sekolah', label: 'Admin Sekolah', email: 'admin2@smknusantara.sch.id' },
-    { key: 'kepsek', label: 'Kepala Sekolah', email: 'kepsek@smknusantara.sch.id' },
-    { key: 'bendahara', label: 'Bendahara', email: 'bendahara@smknusantara.sch.id' },
-    // Menambahkan kembali Operator yang sempat hilang
-    { key: 'operator', label: 'Operator', email: 'operator@smknusantara.sch.id' },
-    { key: 'guru', label: 'Guru', email: 'guru@smknusantara.sch.id' },
-    { key: 'walikelas', label: 'Wali Kelas', email: 'walikelas@smknusantara.sch.id' },
-  ];
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -50,38 +37,25 @@ export function LoginPage() {
     }
   };
 
-  const selectDemoAccount = (key: string) => {
-    const account = demoAccounts.find(a => a.key === key);
-    if (account) {
-      setSelectedRole(key);
-      setEmail(account.email);
-      setPassword('Admin123!');
-    }
-  };
-
   const loading = isLoading || storeLoading;
 
   return (
     <div className="min-h-screen flex">
       {/* Left Panel - Branding */}
       <div className="hidden lg:flex lg:w-1/2 xl:w-[55%] relative overflow-hidden">
-        {/* Background gradient */}
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-violet-700" />
 
-        {/* Animated background patterns */}
         <div className="absolute inset-0 opacity-20">
           <div className="absolute top-20 left-20 w-72 h-72 bg-white/10 rounded-full blur-3xl animate-pulse" />
           <div className="absolute bottom-20 right-20 w-96 h-96 bg-purple-300/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
           <div className="absolute top-1/2 left-1/3 w-64 h-64 bg-indigo-300/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }} />
         </div>
 
-        {/* Grid pattern overlay */}
         <div className="absolute inset-0 opacity-[0.03]" style={{
           backgroundImage: `linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)`,
           backgroundSize: '60px 60px'
         }} />
 
-        {/* Content */}
         <div className="relative z-10 flex flex-col justify-between p-12 xl:p-16 text-white">
           <div>
             <motion.div
@@ -114,7 +88,6 @@ export function LoginPage() {
             </motion.div>
           </div>
 
-          {/* Feature highlights */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -144,7 +117,6 @@ export function LoginPage() {
           transition={{ duration: 0.5, delay: 0.2 }}
           className="w-full max-w-md"
         >
-          {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 mb-8">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
               <School size={24} className="text-white" />
@@ -158,29 +130,6 @@ export function LoginPage() {
           <div className="mb-8">
             <h2 className="text-2xl font-bold text-foreground mb-2">{t('auth.loginTitle')}</h2>
             <p className="text-muted-foreground">{t('auth.loginSubtitle')}</p>
-          </div>
-
-          {/* Demo Account Selector */}
-          <div className="mb-6">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
-              Demo Account — Password: Admin123!
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {demoAccounts.map((account) => (
-                <button
-                  key={account.key}
-                  onClick={() => selectDemoAccount(account.key)}
-                  className={cn(
-                    'p-2 rounded-lg text-xs font-medium transition-all border',
-                    selectedRole === account.key
-                      ? 'bg-primary/10 border-primary/50 text-primary'
-                      : 'bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                  )}
-                >
-                  {account.label}
-                </button>
-              ))}
-            </div>
           </div>
 
           <form onSubmit={handleLogin} className="space-y-5">
@@ -235,7 +184,6 @@ export function LoginPage() {
               </div>
             </div>
 
-            {/* Remember me & Forgot */}
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-border bg-muted accent-primary" />
@@ -246,7 +194,6 @@ export function LoginPage() {
               </button>
             </div>
 
-            {/* Error */}
             {error && (
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
@@ -257,7 +204,6 @@ export function LoginPage() {
               </motion.div>
             )}
 
-            {/* Submit */}
             <button
               id="login-submit"
               type="submit"
@@ -281,7 +227,6 @@ export function LoginPage() {
             </button>
           </form>
 
-          {/* Footer */}
           <div className="mt-8 pt-6 border-t border-border/50 text-center">
             <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
               <Sparkles size={14} className="text-primary" />

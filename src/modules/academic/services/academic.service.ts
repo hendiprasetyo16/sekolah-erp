@@ -9,8 +9,13 @@ const handleDbError = (error: unknown) => {
 };
 
 export const academicService = {
-    // --- TAHUN AJARAN ---
+    // ==========================================
+    // TAHUN AJARAN
+    // ==========================================
     async getAcademicYears(schoolId: string): Promise<ApiResponse<AcademicYear[]>> {
+        // FILTER KETAT MULTI-TENANT
+        if (!schoolId) throw new Error('School ID is required');
+
         const { data, error } = await supabase
             .from('academic_years')
             .select('*')
@@ -26,9 +31,8 @@ export const academicService = {
         };
     },
 
-    // --- Hapus Tahun Ajaran ---
     async deleteAcademicYear(id: string): Promise<ApiResponse<void>> {
-        // Cek keamanan: Jangan izinkan hapus jika sudah ada kelas di tahun ajaran ini
+        // SAFETY CHECK DARI KODE LAMA ANDA
         const { count } = await supabase
             .from('classes')
             .select('*', { count: 'exact', head: true })
@@ -52,18 +56,23 @@ export const academicService = {
         };
     },
 
-    // --- KELAS ---
+    // ==========================================
+    // KELAS
+    // ==========================================
     async getClasses(schoolId: string, academicYearId?: string): Promise<ApiResponse<ClassItem[]>> {
-        // PERBAIKAN SUPER CEPAT: Tarik data students sekaligus menggunakan Join
+        // FILTER KETAT MULTI-TENANT
+        if (!schoolId) throw new Error('School ID is required');
+
+        // MENGGUNAKAN LOGIKA JOIN DARI KODE LAMA ANDA
         let query = supabase
             .from('classes')
             .select(`
                 *,
-                academic_years (name, isActive),
-                teachers (fullName),
+                academic_years (id, name, isActive),
+                teachers (id, fullName),
                 students (id, status)
             `)
-            .eq('schoolId', schoolId);
+            .eq('schoolId', schoolId); // Mengunci query hanya untuk sekolah ini
 
         if (academicYearId) {
             query = query.eq('academicYearId', academicYearId);
@@ -73,12 +82,10 @@ export const academicService = {
 
         if (error) throw handleDbError(error);
 
-        // Kalkulasi di dalam RAM/Memori lokal (Mencegah Lag Database)
+        // KALKULASI MEMORI DARI KODE LAMA ANDA
         const classesWithCount = data.map((cls: any) => {
             const activeStudentsCount = cls.students?.filter((s: any) => s.status === 'AKTIF').length || 0;
-
-            // Hapus array students dari payload agar transfer data ke frontend tetap ringan
-            const { students, ...rest } = cls;
+            const { students, ...rest } = cls; // Hapus array besar agar payload ringan
 
             return {
                 ...rest,
@@ -93,10 +100,18 @@ export const academicService = {
         };
     },
 
-    async getClassById(id: string): Promise<ApiResponse<ClassItem>> {
+    async getClassById(schoolId: string, id: string): Promise<ApiResponse<ClassItem>> {
+        // FILTER KETAT MULTI-TENANT
+        if (!schoolId) throw new Error('School ID is required');
+
         const { data, error } = await supabase
             .from('classes')
-            .select('*')
+            .select(`
+                *,
+                academic_years (id, name, isActive),
+                teachers (id, fullName)
+            `)
+            .eq('schoolId', schoolId)
             .eq('id', id)
             .single();
 
@@ -110,6 +125,8 @@ export const academicService = {
     },
 
     async createClass(payload: CreateClassPayload): Promise<ApiResponse<ClassItem>> {
+        if (!payload.schoolId) throw new Error('School ID is required');
+
         const { data, error } = await supabase
             .from('classes')
             .insert(payload)
@@ -143,7 +160,7 @@ export const academicService = {
     },
 
     async deleteClass(id: string): Promise<ApiResponse<void>> {
-        // Cek apakah kelas masih memiliki siswa aktif
+        // SAFETY CHECK DARI KODE LAMA ANDA
         const { count } = await supabase
             .from('students')
             .select('*', { count: 'exact', head: true })
