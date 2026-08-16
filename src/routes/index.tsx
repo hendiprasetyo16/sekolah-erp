@@ -17,6 +17,9 @@ import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, Settin
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
+// 1. IMPORT HALAMAN MANAJEMEN PENGGUNA DI SINI
+import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
   if (!isAuthenticated) return <Navigate to="/login" replace />;
@@ -33,10 +36,8 @@ export function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public routes */}
         <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
 
-        {/* Protected routes */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
           <Route path="/dashboard" element={<AdminDashboard />} />
 
@@ -68,6 +69,10 @@ export function AppRouter() {
           {/* Reports */}
           <Route path="/reports" element={<ReportsDashboardPage />} />
           <Route path="/reports/*" element={<ReportsDashboardPage />} />
+
+          {/* 2. TAMBAHKAN ROUTE SETTINGS / USER MANAGEMENT DI SINI */}
+          <Route path="/settings/users" element={<UserManagementPage />} />
+          <Route path="/settings" element={<Navigate to="/settings/users" replace />} />
 
           {/* Placeholders */}
           <Route path="/inventory/*" element={<InventoryPlaceholder />} />

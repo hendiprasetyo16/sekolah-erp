@@ -2,16 +2,17 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, School, Lock, Mail, ArrowRight, Sparkles } from 'lucide-react';
+import { toast } from 'sonner'; // <-- Import toast
+
 import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 
 export function LoginPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const navigate = useNavigate();
   const { login, isLoading: storeLoading } = useAuthStore();
 
-  // PERUBAHAN 1: Ganti nama state 'email' menjadi 'identifier'
   const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -24,7 +25,6 @@ export function LoginPage() {
     setError('');
 
     try {
-      // PERUBAHAN 2: Kirimkan 'identifier' ke fungsi login di store
       const result = await login(identifier, password);
 
       if (result.success) {
@@ -37,6 +37,17 @@ export function LoginPage() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleForgotPassword = () => {
+    // Tampilkan notifikasi alih-alih redirect ke halaman lain
+    const message = locale === 'id'
+      ? 'Silakan hubungi Admin atau Operator Sekolah Anda untuk melakukan reset password.'
+      : 'Please contact your School Admin or Operator to reset your password.';
+
+    toast.info(message, {
+      duration: 5000,
+    });
   };
 
   const loading = isLoading || storeLoading;
@@ -135,16 +146,15 @@ export function LoginPage() {
           </div>
 
           <form onSubmit={handleLogin} className="space-y-5">
-            {/* PERUBAHAN 3: Form Input untuk Identifier */}
             <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">
-                Email / Username (NISN/NIP)
+                {locale === 'id' ? 'Email / Username (NISN/NIP)' : 'Email / Username'}
               </label>
               <div className="relative">
                 <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
                   id="login-identifier"
-                  type="text" // <-- Diubah dari email menjadi text agar browser membolehkan input angka biasa
+                  type="text"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
                   className={cn(
@@ -153,13 +163,12 @@ export function LoginPage() {
                     'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50',
                     'transition-all'
                   )}
-                  placeholder="Email asli atau NISN/NIP"
+                  placeholder={locale === 'id' ? 'Email asli atau NISN/NIP' : 'Real email or NISN/NIP'}
                   required
                 />
               </div>
             </div>
 
-            {/* Password */}
             <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">{t('auth.password')}</label>
               <div className="relative">
@@ -193,7 +202,11 @@ export function LoginPage() {
                 <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-border bg-muted accent-primary" />
                 <span className="text-sm text-muted-foreground">{t('auth.rememberMe')}</span>
               </label>
-              <button type="button" className="text-sm text-primary hover:text-primary/80 transition-colors">
+              <button
+                type="button"
+                onClick={handleForgotPassword} // <-- Panggil fungsi toast di sini
+                className="text-sm text-primary hover:text-primary/80 transition-colors"
+              >
                 {t('auth.forgotPassword')}
               </button>
             </div>
@@ -202,7 +215,7 @@ export function LoginPage() {
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm"
+                className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 dark:text-red-400 text-sm"
               >
                 {error}
               </motion.div>
