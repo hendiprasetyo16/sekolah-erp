@@ -17,7 +17,7 @@ import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, Settin
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
-// 1. IMPORT HALAMAN MANAJEMEN PENGGUNA DI SINI
+// 1. IMPORT HALAMAN MANAJEMEN PENGGUNA
 import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -70,15 +70,21 @@ export function AppRouter() {
           <Route path="/reports" element={<ReportsDashboardPage />} />
           <Route path="/reports/*" element={<ReportsDashboardPage />} />
 
-          {/* 2. TAMBAHKAN ROUTE SETTINGS / USER MANAGEMENT DI SINI */}
-          <Route path="/settings/users" element={<UserManagementPage />} />
-          <Route path="/settings" element={<Navigate to="/settings/users" replace />} />
+          {/* ========================================================= */}
+          {/* PERUBAHAN: MEMISAHKAN MANAJEMEN PENGGUNA DAN SETTINGS */}
+          {/* ========================================================= */}
+
+          {/* Rute khusus untuk User Management */}
+          <Route path="/admin/users" element={<UserManagementPage />} />
+
+          {/* Rute khusus untuk Pengaturan Aplikasi (Tidak lagi me-redirect ke users) */}
+          <Route path="/settings" element={<SettingsPlaceholder />} />
+          <Route path="/settings/*" element={<SettingsPlaceholder />} />
 
           {/* Placeholders */}
           <Route path="/inventory/*" element={<InventoryPlaceholder />} />
           <Route path="/admin/*" element={<AdminPlaceholder />} />
           <Route path="/scholarships/*" element={<ScholarshipsPlaceholder />} />
-          <Route path="/settings/*" element={<SettingsPlaceholder />} />
         </Route>
 
         {/* Redirect */}

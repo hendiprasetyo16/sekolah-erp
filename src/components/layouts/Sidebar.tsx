@@ -81,18 +81,19 @@ export function Sidebar() {
     },
     {
       id: 'reports',
-      title: '',
+      title: '', // Tanpa judul grup
       items: [
         { label: t('sidebar.reports'), icon: <BarChart3 size={20} />, href: '/reports', module: 'reports' },
 
-        // 3. MENU MANAJEMEN PENGGUNA DITAMBAHKAN DI SINI
+        // PERUBAHAN: Mengubah href menjadi '/admin/users' agar sesuai dengan router baru
         {
           label: locale === 'id' ? 'Akses Pengguna' : 'User Access',
           icon: <ShieldCheck size={20} />,
-          href: '/settings/users',
-          module: 'settings'
+          href: '/admin/users',
+          module: 'administration' // Opsional: Diubah ke 'administration' agar izin aksesnya lebih masuk akal
         },
 
+        // Menu Settings berdiri sendiri dengan href '/settings'
         { label: t('sidebar.settings'), icon: <Settings size={20} />, href: '/settings', module: 'settings' },
       ],
     },

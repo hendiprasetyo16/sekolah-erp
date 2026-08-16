@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useForm } from 'react-hook-form';
@@ -7,7 +7,7 @@ import { z } from 'zod';
 import {
     Users, ShieldCheck, UserCog, GraduationCap, Users2,
     Search, Plus, MoreVertical, Edit, KeyRound, Ban, CheckCircle2,
-    Loader2, AlertCircle, X, Eye, EyeOff // <-- Tambahan Ikon Mata
+    Loader2, AlertCircle, X, Eye, EyeOff, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -82,13 +82,22 @@ export function UserManagementPage() {
 
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
 
+    // State Filter & Search
     const [activeTab, setActiveTab] = useState<string>('semua');
     const [searchQuery, setSearchQuery] = useState<string>('');
 
+    // State Pagination
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const ITEMS_PER_PAGE = 10;
+
+    // Reset halaman ke-1 setiap kali mencari atau pindah tab
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [searchQuery, activeTab]);
+
+    // State Modal & Visibilitas Password
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState<boolean>(false);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
-
-    // State untuk visibility password
     const [showAddPassword, setShowAddPassword] = useState<boolean>(false);
     const [showResetPassword, setShowResetPassword] = useState<boolean>(false);
 
@@ -102,13 +111,24 @@ export function UserManagementPage() {
         tabStaff: locale === 'id' ? 'Guru & Staff' : 'Teachers & Staff',
         tabStudent: locale === 'id' ? 'Siswa' : 'Students',
         tabParent: locale === 'id' ? 'Orang Tua' : 'Parents',
+
+        thNo: 'No.',
         thName: locale === 'id' ? 'Pengguna' : 'User',
         thRole: 'Role',
         thStatus: 'Status',
         thAction: locale === 'id' ? 'Aksi' : 'Action',
+
         statusActive: locale === 'id' ? 'Aktif' : 'Active',
         statusBlocked: locale === 'id' ? 'Diblokir' : 'Blocked',
         empty: locale === 'id' ? 'Tidak ada pengguna yang ditemukan.' : 'No users found.',
+
+        // Pagination Translations
+        pageInfo: locale === 'id' ? 'Menampilkan' : 'Showing',
+        pageOf: locale === 'id' ? 'dari' : 'of',
+        pageUsers: locale === 'id' ? 'pengguna' : 'users',
+        prev: locale === 'id' ? 'Sebelumnya' : 'Previous',
+        next: locale === 'id' ? 'Selanjutnya' : 'Next',
+        page: locale === 'id' ? 'Halaman' : 'Page',
 
         addTitle: locale === 'id' ? 'Tambah Pengguna Baru' : 'Add New User',
         addDesc: locale === 'id' ? 'Buat akun untuk memberi hak akses ke sistem.' : 'Create an account to grant system access.',
@@ -136,7 +156,7 @@ export function UserManagementPage() {
             setIsAddUserModalOpen(false);
             addUserForm.reset();
             setShowAddPassword(false);
-            queryClient.invalidateQueries({ queryKey: ['users-list', school?.id] });
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
         onError: (error: Error) => toast.error(error.message)
     });
@@ -164,40 +184,67 @@ export function UserManagementPage() {
         },
         onSuccess: () => {
             toast.success(t.toastBlockSuccess);
-            queryClient.invalidateQueries({ queryKey: ['users-list', school?.id] });
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
         onError: (error: Error) => toast.error(error.message)
     });
 
+    // ========================================================================
+    // PERBAIKAN FETCHING DATA AGAR SUPER_ADMIN BISA MELIHAT DATA
+    // ========================================================================
     const { data: users, isLoading } = useQuery<AppUser[], Error>({
-        queryKey: ['users-list', school?.id],
+        // Gunakan role isSuperAdmin dalam query key agar tercache terpisah
+        queryKey: ['users-list', school?.id, isSuperAdmin],
         queryFn: async () => {
-            if (!school?.id) return [];
-            const { data, error } = await supabase
+            // Jika bukan Super Admin, cegah fetching jika school.id kosong
+            if (!isSuperAdmin && !school?.id) {
+                console.warn("⚠️ PERINGATAN: school.id kosong, pencarian dibatalkan.");
+                return [];
+            }
+
+            let query = supabase
                 .from('users')
                 .select('*')
-                .eq('schoolId', school.id)
-                .neq('role', 'SUPER_ADMIN')
                 .order('createdAt', { ascending: false });
 
-            if (error) throw new Error(error.message);
+            // Jika BUKAN Super Admin, filter data khusus untuk sekolahnya saja
+            if (!isSuperAdmin && school) {
+                query = query.eq('schoolId', school.id);
+            }
+
+            const { data, error } = await query;
+
+            if (error) {
+                console.error("❌ ERROR dari Supabase:", error);
+                throw new Error(error.message);
+            }
+
             return (data as AppUser[]) || [];
         },
-        enabled: !!school?.id,
+        // PERBAIKAN: Jalankan query jika dia Super Admin ATAU dia punya school.id
+        enabled: isSuperAdmin || !!school?.id,
     });
 
+    // Filtering Data
     const filteredUsers: AppUser[] = (users || []).filter((user: AppUser) => {
         const matchesSearch = user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
             user.email.toLowerCase().includes(searchQuery.toLowerCase());
 
         let matchesTab = true;
-        if (activeTab === 'manajemen') matchesTab = ['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(user.role);
+        if (activeTab === 'manajemen') matchesTab = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(user.role);
         else if (activeTab === 'staff') matchesTab = ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(user.role);
         else if (activeTab === 'siswa') matchesTab = user.role === 'SISWA';
         else if (activeTab === 'orangtua') matchesTab = user.role === 'ORANG_TUA';
 
         return matchesSearch && matchesTab;
     });
+
+    // Pagination Logic
+    const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
+    const paginatedUsers = filteredUsers.slice(
+        (currentPage - 1) * ITEMS_PER_PAGE,
+        currentPage * ITEMS_PER_PAGE
+    );
 
     const addUserForm = useForm<CreateUserFormValues>({
         resolver: zodResolver(createUserSchema),
@@ -210,7 +257,9 @@ export function UserManagementPage() {
     });
 
     const formatRoleName = (role: AppUserRole): string => role.replace(/_/g, ' ').replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
+
     const getRoleBadgeColor = (role: AppUserRole): string => {
+        if (['SUPER_ADMIN'].includes(role)) return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 border-rose-200';
         if (['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(role)) return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200';
         if (['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(role)) return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200';
         if (role === 'SISWA') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200';
@@ -248,8 +297,8 @@ export function UserManagementPage() {
                                             <FormLabel>{t.fRole}</FormLabel>
                                             <Select value={field.value} onValueChange={field.onChange}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
-                                                {/* PERBAIKAN: Menambahkan position="popper" dan max-height agar scrollable & tidak terpotong */}
-                                                <SelectContent position="popper" className="max-h-[200px] overflow-y-auto z-[100]">
+                                                {/* PERBAIKAN: Menambahkan side="bottom" agar dropdown membuka ke bawah */}
+                                                <SelectContent position="popper" side="bottom" className="max-h-[200px] overflow-y-auto z-[9999]">
                                                     <SelectItem value="ADMIN">Admin IT</SelectItem>
                                                     <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
                                                     <SelectItem value="OPERATOR">Operator</SelectItem>
@@ -269,8 +318,8 @@ export function UserManagementPage() {
                                         <FormItem>
                                             <FormLabel>{t.fPass}</FormLabel>
                                             <FormControl>
-                                                {/* PERBAIKAN: Input Password dengan Toggle Mata */}
-                                                <div className="relative">
+                                                {/* PERBAIKAN: Input Password dengan Toggle Mata yang solid */}
+                                                <div className="relative flex items-center">
                                                     <Input
                                                         type={showAddPassword ? "text" : "password"}
                                                         placeholder="••••••••"
@@ -280,7 +329,7 @@ export function UserManagementPage() {
                                                     <button
                                                         type="button"
                                                         onClick={() => setShowAddPassword(!showAddPassword)}
-                                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                                        className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none"
                                                     >
                                                         {showAddPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                                                     </button>
@@ -326,8 +375,8 @@ export function UserManagementPage() {
                                         <FormItem>
                                             <FormLabel>{t.newPass}</FormLabel>
                                             <FormControl>
-                                                {/* PERBAIKAN: Input Password dengan Toggle Mata */}
-                                                <div className="relative">
+                                                {/* PERBAIKAN: Toggle Mata Reset Password */}
+                                                <div className="relative flex items-center">
                                                     <Input
                                                         type={showResetPassword ? "text" : "password"}
                                                         placeholder="••••••••"
@@ -337,7 +386,7 @@ export function UserManagementPage() {
                                                     <button
                                                         type="button"
                                                         onClick={() => setShowResetPassword(!showResetPassword)}
-                                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                                        className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none"
                                                     >
                                                         {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                                                     </button>
@@ -406,6 +455,7 @@ export function UserManagementPage() {
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-border bg-muted/20">
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">{t.thNo}</th>
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{t.thName}</th>
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{t.thRole}</th>
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{t.thStatus}</th>
@@ -415,19 +465,22 @@ export function UserManagementPage() {
                         <tbody className="divide-y divide-border">
                             {isLoading ? (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center">
+                                    <td colSpan={5} className="p-8 text-center">
                                         <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
                                     </td>
                                 </tr>
-                            ) : filteredUsers.length === 0 ? (
+                            ) : paginatedUsers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={4} className="p-8 text-center text-muted-foreground italic">
+                                    <td colSpan={5} className="p-8 text-center text-muted-foreground italic">
                                         {t.empty}
                                     </td>
                                 </tr>
                             ) : (
-                                filteredUsers.map((user: AppUser) => (
+                                paginatedUsers.map((user: AppUser, index: number) => (
                                     <tr key={user.id} className="hover:bg-muted/30 transition-colors">
+                                        <td className="px-4 py-3 text-center text-sm text-muted-foreground font-medium">
+                                            {(currentPage - 1) * ITEMS_PER_PAGE + index + 1}
+                                        </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-3">
                                                 <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
@@ -494,6 +547,44 @@ export function UserManagementPage() {
                         </tbody>
                     </table>
                 </div>
+
+                {/* =================================================================== */}
+                {/* PAGINATION CONTROLS */}
+                {/* =================================================================== */}
+                {filteredUsers.length > 0 && (
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
+                        <span className="text-sm text-muted-foreground">
+                            {t.pageInfo} <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, filteredUsers.length)}</span> {t.pageOf} <span className="font-medium text-foreground">{filteredUsers.length}</span> {t.pageUsers}
+                        </span>
+
+                        <div className="flex items-center gap-2">
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="h-8"
+                            >
+                                <ChevronLeft className="w-4 h-4 mr-1" /> {t.prev}
+                            </Button>
+
+                            <div className="text-sm font-medium px-2">
+                                {t.page} {currentPage} {t.pageOf} {totalPages || 1}
+                            </div>
+
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages || totalPages === 0}
+                                className="h-8"
+                            >
+                                {t.next} <ChevronRight className="w-4 h-4 ml-1" />
+                            </Button>
+                        </div>
+                    </div>
+                )}
+
             </div>
         </motion.div>
     );
