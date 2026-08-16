@@ -2,7 +2,7 @@ import { supabase } from '@/services/supabase.client';
 import type { User, School, AcademicYear } from '@/types/common.types';
 
 export interface LoginPayload {
-  email: string;
+  identifier: string; // Ubah dari 'email' menjadi 'identifier'
   password: string;
 }
 
@@ -21,9 +21,15 @@ export interface AuthResult {
 export const authService = {
   async login(payload: LoginPayload): Promise<AuthResult> {
     try {
-      // 1. Verifikasi Email & Password melalui Supabase Auth Asli
+      // 1. LOGIKA DUMMY EMAIL
+      const cleanIdentifier = payload.identifier.trim().toLowerCase();
+      const loginEmail = cleanIdentifier.includes('@')
+        ? cleanIdentifier
+        : `${cleanIdentifier}@sekolah.local`;
+
+      // 2. Verifikasi Email & Password melalui Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
-        email: payload.email,
+        email: loginEmail,
         password: payload.password,
       });
 
@@ -32,9 +38,11 @@ export const authService = {
         return {
           success: false,
           data: null as unknown as LoginResponse,
-          message: 'Email atau kata sandi salah.',
+          message: 'Email/Username atau kata sandi salah.',
         };
       }
+
+      // ... (sisanya biarkan sama persis seperti kode Anda sebelumnya) ...
 
       const userId = authData.user.id;
 

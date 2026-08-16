@@ -15,7 +15,9 @@ interface AuthState {
   setSchool: (school: School) => void;
   setAcademicYear: (year: AcademicYear) => void;
   setLoading: (loading: boolean) => void;
-  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
+
+  // PERUBAHAN 1: Ubah tipe data fungsi login dari 'email' menjadi 'identifier'
+  login: (identifier: string, password: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
 }
 
@@ -33,10 +35,12 @@ export const useAuthStore = create<AuthState>()(
       setAcademicYear: (year) => set({ academicYear: year }),
       setLoading: (loading) => set({ isLoading: loading }),
 
-      login: async (email: string, password: string) => {
+      // PERUBAHAN 2: Menerima 'identifier' dan meneruskannya ke authService
+      login: async (identifier: string, password: string) => {
         set({ isLoading: true });
         try {
-          const response = await authService.login({ email, password });
+          // authService.login sekarang dikirim payload { identifier, password }
+          const response = await authService.login({ identifier, password });
 
           if (response.success && response.data) {
             set({

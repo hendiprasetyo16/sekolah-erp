@@ -1,21 +1,34 @@
-import { Outlet } from 'react-router-dom';
+import { Outlet, useLocation } from 'react-router-dom'; // 👈 Tambahkan useLocation
 import { motion } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useUIStore } from '@/stores/ui.store';
-import { cn } from '@/utils/cn';
+import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { TenantSelector } from '@/modules/auth/components/TenantSelector';
 
 export function MainLayout() {
   const { sidebarCollapsed } = useUIStore();
+  const location = useLocation(); // 👈 Ambil rute saat ini
+
+  const user = useAuthStore((state) => state.user);
+  const school = useAuthStore((state) => state.school);
+
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+
+  // 👈 Cek apakah user sedang menuju halaman pembuatan sekolah
+  const isMasterDataPage = location.pathname === '/academic/master-data';
+
+  // INTERCEPTOR: Jika Super Admin, belum pilih sekolah, DAN BUKAN sedang di halaman buat sekolah
+  if (isSuperAdmin && !school && !isMasterDataPage) {
+    return <TenantSelector />;
+  }
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Sidebar - hidden on mobile */}
       <div className="hidden lg:block">
         <Sidebar />
       </div>
 
-      {/* Main content area */}
       <motion.div
         initial={false}
         animate={{ marginLeft: sidebarCollapsed ? 72 : 280 }}
@@ -29,7 +42,6 @@ export function MainLayout() {
         </main>
       </motion.div>
 
-      {/* Mobile layout */}
       <div className="lg:hidden">
         <Header />
         <main className="p-4">

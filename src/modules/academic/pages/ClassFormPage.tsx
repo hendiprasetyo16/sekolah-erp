@@ -14,13 +14,14 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage, FormDescription } from '@/components/ui/form';
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
 import type { CreateClassPayload } from '../types/academic.types';
 
+// Zod schema dengan bilingual error messages
 const classSchema = z.object({
-    name: z.string().min(2, 'Nama kelas minimal 2 karakter / Name requires 2 chars'),
+    name: z.string().min(2, 'Nama kelas minimal 2 karakter / Name requires at least 2 chars'),
     gradeLevel: z.coerce.number().min(1, 'Pilih tingkat / Select grade level').max(12),
     academicYearId: z.string().min(1, 'Tahun ajaran wajib dipilih / Academic year is required'),
     homeroomTeacherId: z.string().optional().or(z.literal('none')),
@@ -30,9 +31,6 @@ const classSchema = z.object({
 
 type ClassFormValues = z.infer<typeof classSchema>;
 
-// ============================================================================
-// SUB-KOMPONEN: Hanya dirender saat SEMUA data (Master & Relasi) sudah siap 100%
-// ============================================================================
 function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, classId }: {
     initialData?: any;
     academicYears: any[];
@@ -45,7 +43,27 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
-    // Inisialisasi MURNI menggunakan defaultValues (Tanpa reset, tanpa useEffect)
+    // Kamus Bahasa Form
+    const t = {
+        ayLabel: locale === 'id' ? 'Tahun Ajaran' : 'Academic Year',
+        ayPlaceholder: locale === 'id' ? 'Pilih Tahun Ajaran' : 'Select Academic Year',
+        ayActive: locale === 'id' ? '(Aktif)' : '(Active)',
+        gradeLabel: locale === 'id' ? 'Tingkat / Grade' : 'Grade Level',
+        gradePlaceholder: locale === 'id' ? 'Pilih Tingkat' : 'Select Grade',
+        gradeItem: locale === 'id' ? 'Tingkat' : 'Grade',
+        nameLabel: locale === 'id' ? 'Nama Rombel' : 'Class Name',
+        namePlaceholder: locale === 'id' ? 'Cth: Kelas 1A, 10 RPL A' : 'e.g: Class 1A, Grade 10A',
+        capacityLabel: locale === 'id' ? 'Kapasitas Maksimal' : 'Max Capacity',
+        teacherLabel: locale === 'id' ? 'Wali Kelas (Opsional)' : 'Homeroom Teacher (Optional)',
+        teacherPlaceholder: locale === 'id' ? 'Pilih Wali Kelas' : 'Select Teacher',
+        noTeacher: locale === 'id' ? '-- Belum Ada Wali Kelas --' : '-- No Homeroom Teacher --',
+        btnCancel: locale === 'id' ? 'Batal' : 'Cancel',
+        btnSave: locale === 'id' ? 'Simpan Perubahan' : 'Save Changes',
+        btnCreate: locale === 'id' ? 'Buat Kelas' : 'Create Class',
+        toastUpdateSuccess: locale === 'id' ? 'Kelas berhasil diperbarui' : 'Class updated successfully',
+        toastCreateSuccess: locale === 'id' ? 'Kelas berhasil ditambahkan' : 'Class created successfully',
+    };
+
     const form = useForm<ClassFormValues>({
         resolver: zodResolver(classSchema),
         defaultValues: isEdit && initialData ? {
@@ -65,18 +83,11 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
             return isEdit ? academicService.updateClass(classId!, data) : academicService.createClass(data);
         },
         onSuccess: async () => {
-            // 1. Tampilkan notifikasi sukses
-            toast.success(isEdit ? 'Kelas berhasil diperbarui' : 'Kelas berhasil ditambahkan');
-
-            // 2. Hapus cache daftar kelas (agar tabel terupdate)
+            toast.success(isEdit ? t.toastUpdateSuccess : t.toastCreateSuccess);
             await queryClient.invalidateQueries({ queryKey: ['classes'] });
-
-            // 3. FIX BUG: Hapus cache spesifik untuk kelas ini (agar form edit terupdate)
             if (isEdit && classId) {
                 await queryClient.invalidateQueries({ queryKey: ['class', classId] });
             }
-
-            // 4. Kembali ke halaman master data
             navigate('/academic/master-data', { state: { tab: 'kelas' } });
         },
         onError: (error: Error) => toast.error(error.message),
@@ -85,9 +96,8 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
     const onSubmit = (values: ClassFormValues) => {
         if (!school?.id) return;
 
-        // Kita buat payload-nya, dan tambahkan ID acak JIKA ini adalah mode Buat Baru (!isEdit)
         const payload = {
-            ...(isEdit ? {} : { id: crypto.randomUUID() }), // <-- TAMBAHKAN BARIS INI
+            ...(isEdit ? {} : { id: crypto.randomUUID() }),
             schoolId: school.id,
             name: values.name,
             gradeLevel: values.gradeLevel,
@@ -95,7 +105,7 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
             capacity: values.capacity,
             major: values.major || undefined,
             homeroomTeacherId: values.homeroomTeacherId === 'none' ? undefined : values.homeroomTeacherId,
-        } as CreateClassPayload; // (Gunakan "as CreateClassPayload" agar TypeScript tidak protes tentang field 'id')
+        } as CreateClassPayload;
 
         mutation.mutate(payload);
     };
@@ -106,13 +116,13 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="academicYearId" render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Tahun Ajaran <span className="text-red-500">*</span></FormLabel>
+                            <FormLabel>{t.ayLabel} <span className="text-red-500">*</span></FormLabel>
                             <Select value={field.value || ""} onValueChange={field.onChange}>
-                                <FormControl><SelectTrigger><SelectValue placeholder="Pilih Tahun Ajaran" /></SelectTrigger></FormControl>
+                                <FormControl><SelectTrigger><SelectValue placeholder={t.ayPlaceholder} /></SelectTrigger></FormControl>
                                 <SelectContent>
                                     {academicYears.map(ay => (
                                         <SelectItem key={ay.id} value={ay.id}>
-                                            {ay.name} {ay.isActive ? '(Aktif)' : ''}
+                                            {ay.name} {ay.isActive ? t.ayActive : ''}
                                         </SelectItem>
                                     ))}
                                 </SelectContent>
@@ -123,12 +133,12 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
 
                     <FormField control={form.control} name="gradeLevel" render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Tingkat / Grade <span className="text-red-500">*</span></FormLabel>
+                            <FormLabel>{t.gradeLabel} <span className="text-red-500">*</span></FormLabel>
                             <Select value={field.value ? String(field.value) : ""} onValueChange={(val) => field.onChange(Number(val))}>
-                                <FormControl><SelectTrigger><SelectValue placeholder="Pilih Tingkat" /></SelectTrigger></FormControl>
+                                <FormControl><SelectTrigger><SelectValue placeholder={t.gradePlaceholder} /></SelectTrigger></FormControl>
                                 <SelectContent>
                                     {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
-                                        <SelectItem key={num} value={String(num)}>Tingkat {num}</SelectItem>
+                                        <SelectItem key={num} value={String(num)}>{t.gradeItem} {num}</SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
@@ -140,15 +150,15 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="name" render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Nama Rombel <span className="text-red-500">*</span></FormLabel>
-                            <FormControl><Input placeholder="Cth: Kelas 1A, 10 RPL A" {...field} /></FormControl>
+                            <FormLabel>{t.nameLabel} <span className="text-red-500">*</span></FormLabel>
+                            <FormControl><Input placeholder={t.namePlaceholder} {...field} /></FormControl>
                             <FormMessage />
                         </FormItem>
                     )} />
 
                     <FormField control={form.control} name="capacity" render={({ field }) => (
                         <FormItem>
-                            <FormLabel>Kapasitas Maksimal</FormLabel>
+                            <FormLabel>{t.capacityLabel}</FormLabel>
                             <FormControl><Input type="number" {...field} /></FormControl>
                             <FormMessage />
                         </FormItem>
@@ -157,11 +167,11 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
 
                 <FormField control={form.control} name="homeroomTeacherId" render={({ field }) => (
                     <FormItem>
-                        <FormLabel>Wali Kelas (Opsional)</FormLabel>
+                        <FormLabel>{t.teacherLabel}</FormLabel>
                         <Select value={field.value || 'none'} onValueChange={field.onChange}>
-                            <FormControl><SelectTrigger><SelectValue placeholder="Pilih Wali Kelas" /></SelectTrigger></FormControl>
+                            <FormControl><SelectTrigger><SelectValue placeholder={t.teacherPlaceholder} /></SelectTrigger></FormControl>
                             <SelectContent>
-                                <SelectItem value="none">-- Belum Ada Wali Kelas --</SelectItem>
+                                <SelectItem value="none">{t.noTeacher}</SelectItem>
                                 {teachers.map(t => (
                                     <SelectItem key={t.id} value={t.id}>{t.fullName}</SelectItem>
                                 ))}
@@ -173,11 +183,11 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
 
                 <div className="flex justify-end gap-3 pt-4 border-t border-border">
                     <Button type="button" variant="outline" onClick={() => navigate('/academic/master-data', { state: { tab: 'kelas' } })} disabled={mutation.isPending}>
-                        <X className="w-4 h-4 mr-2" /> Batal
+                        <X className="w-4 h-4 mr-2" /> {t.btnCancel}
                     </Button>
                     <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={mutation.isPending}>
                         {mutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                        {isEdit ? 'Simpan Perubahan' : 'Buat Kelas'}
+                        {isEdit ? t.btnSave : t.btnCreate}
                     </Button>
                 </div>
             </form>
@@ -185,14 +195,19 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
     );
 }
 
-// ============================================================================
-// KOMPONEN UTAMA: Bertugas sebagai Data Fetcher & Loading State Guard
-// ============================================================================
 export function ClassFormPage() {
     const { id } = useParams<{ id: string }>();
     const isEdit = !!id;
     const navigate = useNavigate();
     const { school } = useAuthStore();
+    const { locale } = useTranslation();
+
+    const t = {
+        editTitle: locale === 'id' ? 'Edit Kelas' : 'Edit Class',
+        createTitle: locale === 'id' ? 'Tambah Kelas Baru' : 'Add New Class',
+        desc: locale === 'id' ? 'Atur rombongan belajar berdasarkan tingkat dan tahun ajaran.' : 'Manage study groups based on grade level and academic year.',
+        cardTitle: locale === 'id' ? 'Informasi Kelas' : 'Class Information',
+    };
 
     const { data: academicYearsResponse, isLoading: isLoadingAy } = useQuery({
         queryKey: ['academic-years', school?.id],
@@ -213,13 +228,11 @@ export function ClassFormPage() {
 
     const { data: classDataResponse, isLoading: isFetchingClass } = useQuery({
         queryKey: ['class', school?.id, id],
-        // PERHATIKAN BARIS DI BAWAH INI: Tambahkan school?.id sebagai parameter pertama
         queryFn: () => academicService.getClassById(school?.id || '', id!),
         enabled: isEdit && !!school?.id,
     });
     const classData = classDataResponse?.data;
 
-    // GUARD: Jangan render form sampai semua data relasi dan data utama siap
     const isDataReady = isEdit
         ? (!isLoadingAy && !isLoadingTeachers && !isFetchingClass && classData)
         : (!isLoadingAy && !isLoadingTeachers);
@@ -232,17 +245,15 @@ export function ClassFormPage() {
                 </Button>
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">
-                        {isEdit ? 'Edit Kelas' : 'Tambah Kelas Baru'}
+                        {isEdit ? t.editTitle : t.createTitle}
                     </h1>
-                    <p className="text-muted-foreground">
-                        Atur rombongan belajar berdasarkan tingkat dan tahun ajaran.
-                    </p>
+                    <p className="text-muted-foreground">{t.desc}</p>
                 </div>
             </div>
 
             <Card>
                 <CardHeader className="bg-muted/20 border-b border-border">
-                    <CardTitle className="text-lg">Informasi Kelas</CardTitle>
+                    <CardTitle className="text-lg">{t.cardTitle}</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-6">
                     {!isDataReady ? (

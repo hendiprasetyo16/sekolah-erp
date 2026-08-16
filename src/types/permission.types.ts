@@ -24,7 +24,7 @@ export type RolePermissions = Record<UserRole, Permission[]>;
 
 export const ROLE_PERMISSIONS: RolePermissions = {
   // ==========================================
-  // 👑 SUPER_ADMIN: Akses Dewa (Bisa Hapus Data & Ubah Profil Sekolah)
+  // 👑 SUPER_ADMIN: Pemilik Platform/SaaS (Tidak Punya schoolId)
   // ==========================================
   SUPER_ADMIN: [
     { module: 'dashboard', actions: ['read'] },
@@ -41,21 +41,23 @@ export const ROLE_PERMISSIONS: RolePermissions = {
   ],
 
   // ==========================================
-  // 🛡️ ADMIN: Operasional Penuh (Tanpa Akses Hapus Master Data & Ubah Profil)
+  // 🛡️ ADMIN: IT / Pemilik Sekolah (Dewa di Level Sekolah)
   // ==========================================
   ADMIN: [
     { module: 'dashboard', actions: ['read'] },
-    { module: 'academic', actions: ['create', 'read', 'update'] }, // Tidak bisa Delete
-    { module: 'students', actions: ['create', 'read', 'update', 'export', 'import'] }, // Tidak bisa Delete
-    { module: 'teachers', actions: ['create', 'read', 'update', 'export', 'import'] }, // Tidak bisa Delete
-    { module: 'finance', actions: ['create', 'read', 'update', 'export', 'import', 'approve'] },
-    { module: 'schedules', actions: ['create', 'read', 'update', 'export'] },
-    { module: 'inventory', actions: ['create', 'read', 'update', 'export'] },
-    { module: 'administration', actions: ['create', 'read', 'update', 'export'] },
-    { module: 'scholarships', actions: ['create', 'read', 'update', 'export'] },
+    { module: 'academic', actions: ['create', 'read', 'update', 'delete'] }, // ✅ Tambah delete
+    { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] }, // ✅ Tambah delete
+    { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] }, // ✅ Tambah delete
+    { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import', 'approve'] },
+    { module: 'schedules', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'inventory', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'administration', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'scholarships', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
-    { module: 'settings', actions: ['read'] }, // Hanya bisa lihat profil sekolah
+    { module: 'settings', actions: ['read', 'update'] }, // ✅ Tambah update agar bisa simpan profil sekolah
   ],
+
+  // ... (Role KEPALA_SEKOLAH dan yang lainnya sudah SANGAT BAGUS dan biarkan saja seperti semula) ...
 
   KEPALA_SEKOLAH: [
     { module: 'dashboard', actions: ['read'] },

@@ -11,7 +11,8 @@ export function LoginPage() {
   const navigate = useNavigate();
   const { login, isLoading: storeLoading } = useAuthStore();
 
-  const [email, setEmail] = useState('');
+  // PERUBAHAN 1: Ganti nama state 'email' menjadi 'identifier'
+  const [identifier, setIdentifier] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -23,7 +24,8 @@ export function LoginPage() {
     setError('');
 
     try {
-      const result = await login(email, password);
+      // PERUBAHAN 2: Kirimkan 'identifier' ke fungsi login di store
+      const result = await login(identifier, password);
 
       if (result.success) {
         navigate('/dashboard');
@@ -133,23 +135,25 @@ export function LoginPage() {
           </div>
 
           <form onSubmit={handleLogin} className="space-y-5">
-            {/* Email */}
+            {/* PERUBAHAN 3: Form Input untuk Identifier */}
             <div>
-              <label className="text-sm font-medium text-foreground mb-1.5 block">{t('auth.email')}</label>
+              <label className="text-sm font-medium text-foreground mb-1.5 block">
+                Email / Username (NISN/NIP)
+              </label>
               <div className="relative">
                 <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
-                  id="login-email"
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="login-identifier"
+                  type="text" // <-- Diubah dari email menjadi text agar browser membolehkan input angka biasa
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
                   className={cn(
                     'w-full pl-10 pr-4 py-2.5 rounded-lg border bg-muted/30 text-foreground text-sm',
                     'placeholder:text-muted-foreground',
                     'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50',
                     'transition-all'
                   )}
-                  placeholder="email@sekolah.sch.id"
+                  placeholder="Email asli atau NISN/NIP"
                   required
                 />
               </div>

@@ -40,7 +40,9 @@ export function Sidebar() {
 
   // LOGIKA CACHE BUSTER: 
   // Jika user tidak punya schoolId (baru reset), paksakan nama sekolah menjadi null/undefined
-  const schoolName = user?.schoolId ? school?.name : null;
+  // const schoolName = user?.schoolId ? school?.name : null;
+  // Ambil nama sekolah dari state authStore yang sedang aktif
+  const schoolName = school?.name;
 
   const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management']);
 
