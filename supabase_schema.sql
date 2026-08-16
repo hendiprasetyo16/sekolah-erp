@@ -1,8 +1,3 @@
-Library
-/
-ERP_SEKOLAH_v4.0_FINAL_PRODUCTION_FOUNDATION.sql
-
-
 -- =====================================================================================
 -- ERP SEKOLAH v4.0
 -- FINAL PRODUCTION FOUNDATION
