@@ -1,6 +1,7 @@
 -- =====================================================================================
--- ERP SEKOLAH v4.0
+-- ERP SEKOLAH v4.1
 -- FINAL PRODUCTION FOUNDATION
+-- SECURITY + FINANCIAL + INVENTORY HARDENED
 -- Supabase PostgreSQL
 --
 -- ONE-SHOT SCRIPT
@@ -17,6 +18,10 @@
 --   8. Financial totals/statuses are maintained by database triggers.
 --   9. Student bulk import is transactional.
 --  10. Parent/student self-service is supported through user_student_links.
+--  11. Financial bills are protected against NULL-period duplicates and overpayment.
+--  12. Payment bill/student consistency is enforced by a composite foreign key.
+--  13. Inventory uses positive quantities with explicit IN/OUT adjustment types.
+--  14. No hardcoded personal SUPER_ADMIN profile is created by this schema.
 --
 -- ROLES
 --   SUPER_ADMIN
@@ -67,6 +72,7 @@ DROP FUNCTION IF EXISTS public.current_user_can_manage_administration() CASCADE;
 DROP FUNCTION IF EXISTS public.current_user_can_manage_users() CASCADE;
 DROP FUNCTION IF EXISTS public.current_user_is_parent_or_student() CASCADE;
 DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT,TEXT,TEXT,INTEGER,INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT,TEXT,UUID,TEXT,TEXT,INTEGER,INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB) CASCADE;
 
 DROP TABLE IF EXISTS
@@ -144,6 +150,9 @@ CREATE TABLE public.academic_years (
 
 CREATE UNIQUE INDEX academic_years_school_year_key
     ON public.academic_years ("schoolId","startYear","endYear");
+CREATE UNIQUE INDEX academic_years_one_active_per_school
+    ON public.academic_years ("schoolId")
+    WHERE "isActive" = true;
 CREATE UNIQUE INDEX academic_years_school_id_key
     ON public.academic_years ("schoolId","id");
 CREATE INDEX academic_years_school_idx ON public.academic_years ("schoolId");
@@ -176,6 +185,9 @@ CREATE TABLE public.semesters (
 
 CREATE UNIQUE INDEX semesters_academic_year_type_key
     ON public.semesters ("academicYearId","type");
+CREATE UNIQUE INDEX semesters_one_active_per_year
+    ON public.semesters ("academicYearId")
+    WHERE "isActive" = true;
 CREATE UNIQUE INDEX semesters_school_id_key
     ON public.semesters ("schoolId","id");
 CREATE INDEX semesters_school_idx ON public.semesters ("schoolId");
@@ -217,6 +229,8 @@ CREATE TABLE public.users (
 );
 
 CREATE UNIQUE INDEX users_email_key ON public.users (lower("email"));
+CREATE UNIQUE INDEX users_school_id_key ON public.users ("schoolId","id")
+    WHERE "schoolId" IS NOT NULL;
 CREATE INDEX users_school_idx ON public.users ("schoolId");
 CREATE INDEX users_role_idx ON public.users ("role");
 
@@ -484,7 +498,8 @@ CREATE TABLE public.user_student_links (
         FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
         ON DELETE RESTRICT,
     CONSTRAINT user_student_links_user_fkey
-        FOREIGN KEY ("userId") REFERENCES public.users("id")
+        FOREIGN KEY ("schoolId","userId")
+        REFERENCES public.users("schoolId","id")
         ON DELETE CASCADE,
     CONSTRAINT user_student_links_student_fkey
         FOREIGN KEY ("schoolId","studentId")
@@ -494,6 +509,9 @@ CREATE TABLE public.user_student_links (
 
 CREATE UNIQUE INDEX user_student_links_unique
     ON public.user_student_links ("userId","studentId");
+CREATE UNIQUE INDEX user_student_links_one_primary_per_student
+    ON public.user_student_links ("studentId")
+    WHERE "isPrimary" = true;
 CREATE INDEX user_student_links_school_idx ON public.user_student_links ("schoolId");
 CREATE INDEX user_student_links_student_idx ON public.user_student_links ("studentId");
 
@@ -761,7 +779,8 @@ CREATE TABLE public.inventory_transactions (
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT inventory_transactions_pkey PRIMARY KEY ("id"),
     CONSTRAINT inventory_transaction_type_check
-        CHECK ("type" IN ('MASUK','KELUAR','PENYESUAIAN')),
+        CHECK ("type" IN ('SALDO_AWAL','MASUK','KELUAR','PENYESUAIAN_MASUK','PENYESUAIAN_KELUAR')),
+
     CONSTRAINT inventory_transaction_quantity_check
         CHECK ("quantity" > 0),
     CONSTRAINT inventory_transaction_school_fkey
@@ -880,7 +899,9 @@ CREATE TABLE public.fee_templates (
 );
 
 CREATE UNIQUE INDEX fee_templates_unique
-    ON public.fee_templates ("schoolId","academicYearId","name","gradeLevel");
+    ON public.fee_templates (
+        "schoolId","academicYearId","name",COALESCE("gradeLevel",0)
+    );
 CREATE UNIQUE INDEX fee_templates_school_id_key
     ON public.fee_templates ("schoolId","id");
 CREATE INDEX fee_templates_school_idx ON public.fee_templates ("schoolId");
@@ -936,11 +957,14 @@ CREATE TABLE public.student_bills (
 
 CREATE UNIQUE INDEX student_bills_unique_period
     ON public.student_bills (
-        "studentId","feeTemplateId","academicYearId","periodMonth","periodYear"
+        "studentId",
+        "feeTemplateId",
+        "academicYearId",
+        COALESCE("periodMonth",0),
+        COALESCE("periodYear",0)
     );
--- 👇👇👇 TAMBAHKAN BARIS INI 👇👇👇
-CREATE UNIQUE INDEX student_bills_school_id_key ON public.student_bills ("schoolId","id");
--- 👆👆👆 ======================== 👆👆👆
+CREATE UNIQUE INDEX student_bills_school_id_student_key
+    ON public.student_bills ("schoolId","id","studentId");
 CREATE INDEX bills_school_idx ON public.student_bills ("schoolId");
 CREATE INDEX bills_student_idx ON public.student_bills ("studentId");
 CREATE INDEX bills_year_idx ON public.student_bills ("academicYearId");
@@ -969,13 +993,9 @@ CREATE TABLE public.payment_transactions (
     CONSTRAINT payment_school_fkey
         FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
         ON DELETE RESTRICT,
-    CONSTRAINT payment_bill_fkey
-        FOREIGN KEY ("schoolId","billId")
-        REFERENCES public.student_bills("schoolId","id")
-        ON DELETE RESTRICT,
-    CONSTRAINT payment_student_fkey
-        FOREIGN KEY ("schoolId","studentId")
-        REFERENCES public.students("schoolId","id")
+    CONSTRAINT payment_bill_student_fkey
+        FOREIGN KEY ("schoolId","billId","studentId")
+        REFERENCES public.student_bills("schoolId","id","studentId")
         ON DELETE RESTRICT,
     CONSTRAINT payment_recorded_by_fkey
         FOREIGN KEY ("recordedBy") REFERENCES public.users("id")
@@ -1297,9 +1317,8 @@ BEGIN
     SELECT COALESCE(
         SUM(
             CASE
-                WHEN t."type" = 'MASUK' THEN t."quantity"
-                WHEN t."type" = 'KELUAR' THEN -t."quantity"
-                WHEN t."type" = 'PENYESUAIAN' THEN t."quantity"
+                WHEN t."type" IN ('SALDO_AWAL','MASUK','PENYESUAIAN_MASUK') THEN t."quantity"
+                WHEN t."type" IN ('KELUAR','PENYESUAIAN_KELUAR') THEN -t."quantity"
                 ELSE 0
             END
         ), 0
@@ -1385,25 +1404,34 @@ BEGIN
     FROM public.payment_transactions
     WHERE "billId" = p_bill_id;
 
+    IF v_paid > v_total THEN
+        RAISE EXCEPTION
+            'Transaksi ditolak: total pembayaran (Rp %) melebihi total tagihan (Rp %).',
+            v_paid, v_total;
+    END IF;
+
     IF v_paid <= 0 THEN
         v_status := 'BELUM_BAYAR';
-    ELSIF v_paid >= v_total THEN
+    ELSIF v_paid = v_total THEN
         v_status := 'LUNAS';
     ELSE
         v_status := 'CICILAN';
     END IF;
 
     UPDATE public.student_bills
-    SET "paidAmount" = LEAST(v_paid, v_total),
-        "status" =
-            CASE
-                WHEN "status" = 'DIBATALKAN' THEN 'DIBATALKAN'
-                ELSE v_status
-            END,
+    SET "paidAmount" = v_paid,
+        "status" = CASE
+            WHEN "status" = 'DIBATALKAN' THEN 'DIBATALKAN'
+            ELSE v_status
+        END,
         "updatedAt" = now()
     WHERE "id" = p_bill_id;
 END;
 $$;
+
+REVOKE ALL ON FUNCTION public.recalculate_student_bill(UUID) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.recalculate_student_bill(UUID) FROM anon;
+GRANT EXECUTE ON FUNCTION public.recalculate_student_bill(UUID) TO authenticated;
 
 CREATE OR REPLACE FUNCTION public.payment_change_trigger()
 RETURNS TRIGGER
@@ -1490,8 +1518,20 @@ WITH CHECK (public.is_super_admin());
 
 CREATE POLICY schools_update ON public.schools
 FOR UPDATE TO authenticated
-USING (public.is_super_admin() OR "id" = public.get_user_school_id())
-WITH CHECK (public.is_super_admin() OR "id" = public.get_user_school_id());
+USING (
+    public.is_super_admin()
+    OR (
+        "id" = public.get_user_school_id()
+        AND public.get_user_role() IN ('ADMIN','KEPALA_SEKOLAH')
+    )
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR (
+        "id" = public.get_user_school_id()
+        AND public.get_user_role() IN ('ADMIN','KEPALA_SEKOLAH')
+    )
+);
 
 CREATE POLICY schools_delete ON public.schools
 FOR DELETE TO authenticated
@@ -1724,11 +1764,11 @@ USING (
 CREATE POLICY user_student_links_manage ON public.user_student_links
 FOR ALL TO authenticated
 USING (
-    public.current_user_can_manage_students()
+    public.get_user_role() IN ('SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','STAFF_TU')
     AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
 )
 WITH CHECK (
-    public.current_user_can_manage_students()
+    public.get_user_role() IN ('SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','STAFF_TU')
     AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
 );
 
@@ -2059,8 +2099,15 @@ USING (
     )
 );
 
-CREATE POLICY payments_manage ON public.payment_transactions
-FOR ALL TO authenticated
+CREATE POLICY payments_insert ON public.payment_transactions
+FOR INSERT TO authenticated
+WITH CHECK (
+    public.current_user_can_manage_finance()
+    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+);
+
+CREATE POLICY payments_update ON public.payment_transactions
+FOR UPDATE TO authenticated
 USING (
     public.current_user_can_manage_finance()
     AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
@@ -2069,6 +2116,9 @@ WITH CHECK (
     public.current_user_can_manage_finance()
     AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
 );
+
+-- Payment transactions are intentionally immutable by DELETE.
+-- Cancel/reverse a payment by changing its status to DIBATALKAN.
 
 -- =====================================================================================
 -- 49. AUDIT LOGS
@@ -2106,7 +2156,9 @@ WITH CHECK (
 CREATE OR REPLACE FUNCTION public.setup_new_tenant(
     p_school_name TEXT,
     p_npsn TEXT,
-    p_full_name TEXT,
+    p_admin_auth_id UUID,
+    p_admin_email TEXT,
+    p_admin_full_name TEXT,
     p_start_year INTEGER,
     p_end_year INTEGER
 )
@@ -2118,16 +2170,53 @@ AS $$
 DECLARE
     v_school_id UUID;
     v_academic_year_id UUID;
+    v_existing_role TEXT;
+    v_auth_email TEXT;
 BEGIN
     IF NOT public.is_super_admin() THEN
         RAISE EXCEPTION 'Akses ditolak. Hanya SUPER_ADMIN yang dapat membuat sekolah.';
     END IF;
 
-    IF p_school_name IS NULL OR trim(p_school_name) = '' THEN
+    IF p_admin_auth_id IS NULL THEN
+        RAISE EXCEPTION 'p_admin_auth_id wajib diisi.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM auth.users au
+        WHERE au.id = p_admin_auth_id
+    ) THEN
+        RAISE EXCEPTION 'Akun administrator tersebut belum ada di Supabase Auth.';
+    END IF;
+
+    SELECT au.email
+      INTO v_auth_email
+    FROM auth.users au
+    WHERE au.id = p_admin_auth_id;
+
+    IF p_admin_email IS NULL OR trim(p_admin_email) = '' THEN
+        p_admin_email := v_auth_email;
+    END IF;
+
+    IF lower(trim(p_admin_email)) <> lower(coalesce(v_auth_email,'')) THEN
+        RAISE EXCEPTION 'Email administrator harus sama dengan email akun Supabase Auth.';
+    END IF;
+
+    SELECT u."role"
+      INTO v_existing_role
+    FROM public.users u
+    WHERE u."id" = p_admin_auth_id;
+
+    IF v_existing_role IS NOT NULL THEN
+        RAISE EXCEPTION
+            'Profil aplikasi untuk akun administrator sudah ada dengan role %. Gunakan akun Auth yang belum memiliki profil aplikasi.',
+            v_existing_role;
+    END IF;
+
+    IF NULLIF(trim(p_school_name),'') IS NULL THEN
         RAISE EXCEPTION 'Nama sekolah wajib diisi.';
     END IF;
 
-    IF p_npsn IS NULL OR trim(p_npsn) = '' THEN
+    IF NULLIF(trim(p_npsn),'') IS NULL THEN
         RAISE EXCEPTION 'NPSN wajib diisi.';
     END IF;
 
@@ -2135,7 +2224,7 @@ BEGIN
         RAISE EXCEPTION 'NPSN minimal 8 karakter.';
     END IF;
 
-    IF p_full_name IS NULL OR trim(p_full_name) = '' THEN
+    IF NULLIF(trim(p_admin_full_name),'') IS NULL THEN
         RAISE EXCEPTION 'Nama administrator wajib diisi.';
     END IF;
 
@@ -2165,19 +2254,31 @@ BEGIN
      p_start_year,p_end_year,true)
     RETURNING "id" INTO v_academic_year_id;
 
+    INSERT INTO public.users
+    ("id","schoolId","email","fullName","role","isActive")
+    VALUES
+    (
+        p_admin_auth_id,
+        v_school_id,
+        lower(trim(p_admin_email)),
+        trim(p_admin_full_name),
+        'ADMIN',
+        true
+    );
+
     RETURN jsonb_build_object(
         'success',true,
         'schoolId',v_school_id,
         'academicYearId',v_academic_year_id,
-        'adminFullName',trim(p_full_name),
-        'message','Sekolah dan tahun ajaran awal berhasil dibuat. Akun administrator dibuat melalui Supabase Auth.'
+        'adminUserId',p_admin_auth_id,
+        'message','Sekolah, tahun ajaran awal, dan profil ADMIN berhasil dibuat.'
     );
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT,TEXT,TEXT,INTEGER,INTEGER) FROM PUBLIC;
-REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT,TEXT,TEXT,INTEGER,INTEGER) FROM anon;
-GRANT EXECUTE ON FUNCTION public.setup_new_tenant(TEXT,TEXT,TEXT,INTEGER,INTEGER)
+REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT,TEXT,UUID,TEXT,TEXT,INTEGER,INTEGER) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT,TEXT,UUID,TEXT,TEXT,INTEGER,INTEGER) FROM anon;
+GRANT EXECUTE ON FUNCTION public.setup_new_tenant(TEXT,TEXT,UUID,TEXT,TEXT,INTEGER,INTEGER)
 TO authenticated;
 
 -- =====================================================================================
@@ -2476,30 +2577,21 @@ COMMENT ON TABLE public.payment_transactions IS 'Transaksi pembayaran siswa.';
 COMMENT ON TABLE public.audit_logs IS 'Audit trail aktivitas pengguna.';
 
 -- =====================================================================================
--- 53. SUPER ADMIN PROFILE
+-- 53. SUPER ADMIN PROFILE / DEVELOPMENT
 -- =====================================================================================
-
-INSERT INTO public.users
-(
-    "id","schoolId","email","fullName","role","isActive"
-)
-VALUES
-(
-    'f26eccdf-c806-474e-a8d6-0cf94c4941b0',
-    NULL,
-    'hendiprasetyo192@gmail.com',
-    'Hendi Prasetyo',
-    'SUPER_ADMIN',
-    true
-)
-ON CONFLICT ("id")
-DO UPDATE SET
-    "schoolId" = NULL,
-    "email" = EXCLUDED."email",
-    "fullName" = EXCLUDED."fullName",
-    "role" = 'SUPER_ADMIN',
-    "isActive" = true,
-    "updatedAt" = now();
+-- Production schema intentionally DOES NOT insert a hardcoded personal SUPER_ADMIN.
+--
+-- For development, after creating an Auth user in Supabase Auth, create the matching
+-- application profile using SQL Editor with the Auth user's real UUID:
+--
+-- INSERT INTO public.users ("id","schoolId","email","fullName","role","isActive")
+-- SELECT au.id, NULL, au.email, COALESCE(au.raw_user_meta_data->>'full_name', au.email),
+--        'SUPER_ADMIN', true
+-- FROM auth.users au
+-- WHERE au.id = 'YOUR-AUTH-USER-UUID';
+--
+-- Replace YOUR-AUTH-USER-UUID with the UUID from Supabase Auth.
+-- Remove this development step before production if SUPER_ADMIN is managed elsewhere.
 
 -- =====================================================================================
 -- 54. GRANTS
@@ -2520,59 +2612,124 @@ REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 
 DO $$
 DECLARE
-    v_count INTEGER;
-    v_expected INTEGER := 24;
+    v_missing_tables INTEGER;
+    v_rls_missing INTEGER;
+    v_required_tables TEXT[] := ARRAY[
+        'schools','academic_years','semesters','users','refresh_tokens',
+        'teachers','classes','students','student_class_history',
+        'user_student_links','student_parents','student_economics',
+        'attendances','subjects','schedule_entries','announcements',
+        'inventory_items','inventory_transactions','administration_records',
+        'scholarship_records','fee_templates','student_bills',
+        'payment_transactions','audit_logs'
+    ];
 BEGIN
     SELECT COUNT(*)
-    INTO v_count
-    FROM information_schema.tables
-    WHERE table_schema = 'public'
-      AND table_name IN (
-          'schools',
-          'academic_years',
-          'semesters',
-          'users',
-          'refresh_tokens',
-          'teachers',
-          'classes',
-          'students',
-          'student_class_history',
-          'user_student_links',
-          'student_parents',
-          'student_economics',
-          'attendances',
-          'subjects',
-          'schedule_entries',
-          'announcements',
-          'inventory_items',
-          'inventory_transactions',
-          'administration_records',
-          'scholarship_records',
-          'fee_templates',
-          'student_bills',
-          'payment_transactions',
-          'audit_logs'
-      );
+      INTO v_missing_tables
+    FROM unnest(v_required_tables) AS required(table_name)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM information_schema.tables t
+        WHERE t.table_schema = 'public'
+          AND t.table_name = required.table_name
+    );
 
-    IF v_count <> v_expected THEN
+    IF v_missing_tables > 0 THEN
         RAISE EXCEPTION
-            'VERIFIKASI GAGAL: % dari % tabel foundation ditemukan.',
-            v_count, v_expected;
+            'VERIFIKASI GAGAL: % tabel foundation tidak ditemukan.',
+            v_missing_tables;
+    END IF;
+
+    SELECT COUNT(*)
+      INTO v_rls_missing
+    FROM unnest(v_required_tables) AS required(table_name)
+    WHERE NOT EXISTS (
+        SELECT 1
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = 'public'
+          AND c.relname = required.table_name
+          AND c.relrowsecurity = true
+    );
+
+    IF v_rls_missing > 0 THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: % tabel belum mengaktifkan RLS.',
+            v_rls_missing;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND tablename = 'student_bills'
+          AND indexname = 'student_bills_unique_period'
+          AND indexdef ILIKE '%COALESCE%'
+    ) THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: unique index student_bills dengan COALESCE belum terpasang.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'payment_bill_student_fkey'
+    ) THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: composite FK payment_bill_student_fkey belum terpasang.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'inventory_transaction_type_check'
+    ) THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: inventory transaction type constraint belum terpasang.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'payment_status_trigger'
+          AND NOT tgisinternal
+    ) THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: payment trigger belum terpasang.';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_trigger
+        WHERE tgname = 'inventory_quantity_trigger'
+          AND NOT tgisinternal
+    ) THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: inventory trigger belum terpasang.';
     END IF;
 
     IF NOT EXISTS (
         SELECT 1
-        FROM public.users
-        WHERE "id" = 'f26eccdf-c806-474e-a8d6-0cf94c4941b0'
-          AND "role" = 'SUPER_ADMIN'
-          AND "schoolId" IS NULL
-          AND "isActive" = true
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+        WHERE n.nspname = 'public'
+          AND p.proname = 'setup_new_tenant'
+          AND pg_get_function_identity_arguments(p.oid)
+              = 'text, text, uuid, text, text, integer, integer'
     ) THEN
         RAISE EXCEPTION
-            'VERIFIKASI GAGAL: profile SUPER_ADMIN tidak ditemukan.';
+            'VERIFIKASI GAGAL: setup_new_tenant signature final belum terpasang.';
     END IF;
 
-    RAISE NOTICE 'ERP SEKOLAH v4.0 FINAL PRODUCTION FOUNDATION berhasil dibuat.';
+    IF EXISTS (
+        SELECT 1
+        FROM pg_indexes
+        WHERE schemaname = 'public'
+          AND indexname = 'student_bills_unique_period'
+          AND indexdef ILIKE '%"periodMonth"%'
+          AND indexdef NOT ILIKE '%COALESCE%'
+    ) THEN
+        RAISE EXCEPTION
+            'VERIFIKASI GAGAL: unique index student_bills masih menggunakan NULL-sensitive key.';
+    END IF;
+
+    RAISE NOTICE
+        'ERP SEKOLAH v4.1 FINAL FOUNDATION berhasil melewati verifikasi schema, RLS, financial integrity, inventory integrity, trigger, dan onboarding.';
 END;
 $$;
 
@@ -2580,5 +2737,5 @@ COMMIT;
 
 -- =====================================================================================
 -- SELESAI
--- ERP SEKOLAH v4.0 FINAL PRODUCTION FOUNDATION
+-- ERP SEKOLAH v4.1 FINAL PRODUCTION FOUNDATION
 -- =====================================================================================
