@@ -45,6 +45,24 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- 1. RESET ERP TABLES
 -- =====================================================================================
 
+-- =====================================================================================
+-- 1. RESET ERP TABLES & FUNCTIONS
+-- =====================================================================================
+
+-- Hapus semua fungsi lama berserta trigger yang menempel padanya (CASCADE)
+DROP FUNCTION IF EXISTS public.update_student_bill_status() CASCADE;
+DROP FUNCTION IF EXISTS public.recalculate_bill_after_payment_change() CASCADE;
+DROP FUNCTION IF EXISTS public.update_updated_at_column() CASCADE;
+DROP FUNCTION IF EXISTS public.is_user_active() CASCADE;
+DROP FUNCTION IF EXISTS public.is_user_role(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.get_user_role() CASCADE;
+DROP FUNCTION IF EXISTS public.get_user_school_id() CASCADE;
+DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB) CASCADE;
+DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS public.payment_change_trigger() CASCADE;
+DROP FUNCTION IF EXISTS public.recalculate_student_bill(UUID) CASCADE;
+
+-- Baru setelah itu hapus tabelnya
 DROP TABLE IF EXISTS
     "payment_transactions",
     "student_bills",
