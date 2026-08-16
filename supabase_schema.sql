@@ -1,89 +1,88 @@
--- ====================================================================================
--- DATABASE SEKOLAH ERP v3
+-- =====================================================================================
+-- DATABASE ERP SEKOLAH v3.1
 -- FINAL FOUNDATION
 -- Supabase PostgreSQL
 --
--- Multi Tenant / Multi School
--- Supabase Auth
--- RLS ketat berdasarkan schoolId
--- Master sekolah
--- Tahun ajaran
--- Semester
--- User
--- Guru
--- Kelas
--- Siswa
--- Orang tua
--- Data ekonomi
--- Histori kelas
--- Absensi
--- Pengumuman
--- Template tagihan
--- Tagihan siswa
--- Transaksi pembayaran
--- Audit log
--- Bulk import siswa
--- Setup tenant baru
+-- STATUS:
+--   FINAL FOUNDATION
 --
--- PENTING:
--- 1. Script ini RESET schema ERP.
--- 2. Data tabel lama akan dihapus.
--- 3. auth.users milik Supabase TIDAK dihapus.
--- 4. Nama tabel dan kolom dipertahankan agar kompatibel dengan aplikasi.
--- ====================================================================================
+-- PRINSIP:
+--   1. Supabase Auth = sumber autentikasi
+--   2. public.users = profile + role + tenant
+--   3. SUPER_ADMIN = platform-level, schoolId NULL
+--   4. Tidak ada public registration untuk user sekolah
+--   5. User sekolah dibuat/dikelola administrator
+--   6. Multi-tenant
+--   7. RLS isolation berdasarkan schoolId
+--   8. SUPER_ADMIN dapat mengelola seluruh tenant
+--   9. Password TIDAK disimpan di public.users
+--  10. Role authorization mengikuti hirarki aplikasi
+--
+-- ROLE:
+--   SUPER_ADMIN
+--   ADMIN
+--   KEPALA_SEKOLAH
+--   OPERATOR
+--   BENDAHARA
+--   WALI_KELAS
+--   GURU
+--   STAFF_TU
+--   STAFF_SARPRAS
+--   ORANG_TUA
+--   SISWA
+--
+-- =====================================================================================
 
 
--- ====================================================================================
+-- =====================================================================================
 -- 0. EXTENSION
--- ====================================================================================
+-- =====================================================================================
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 
--- ====================================================================================
--- 1. RESET TABLE
--- ====================================================================================
+-- =====================================================================================
+-- 1. RESET ERP TABLES
+-- =====================================================================================
 
 DROP TABLE IF EXISTS
-    public.payment_transactions,
-    public.student_bills,
-    public.fee_templates,
-    public.announcements,
-    public.attendances,
-    public.student_economics,
-    public.student_parents,
-    public.student_class_history,
-    public.students,
-    public.classes,
-    public.teachers,
-    public.audit_logs,
-    public.refresh_tokens,
-    public.users,
-    public.semesters,
-    public.academic_years,
-    public.schools
+    "payment_transactions",
+    "student_bills",
+    "fee_templates",
+    "scholarship_records",
+    "administration_records",
+    "inventory_transactions",
+    "inventory_items",
+    "schedule_entries",
+    "subjects",
+    "announcements",
+    "attendances",
+    "student_economics",
+    "student_parents",
+    "student_class_history",
+    "students",
+    "classes",
+    "teachers",
+    "audit_logs",
+    "refresh_tokens",
+    "users",
+    "semesters",
+    "academic_years",
+    "schools"
 CASCADE;
 
 
--- ====================================================================================
--- 2. RESET FUNCTIONS
--- ====================================================================================
-
-DROP FUNCTION IF EXISTS public.get_user_school_id();
-DROP FUNCTION IF EXISTS public.is_user_active();
-DROP FUNCTION IF EXISTS public.update_updated_at_column();
-DROP FUNCTION IF EXISTS public.recalculate_bill_status(TEXT);
-DROP FUNCTION IF EXISTS public.handle_payment_change();
-DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB);
-DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER);
+-- =====================================================================================
+-- 2. ENUM-LIKE CHECK CONSTANTS
+-- =====================================================================================
 
 
--- ====================================================================================
--- 3. MASTER SEKOLAH
--- ====================================================================================
+-- =====================================================================================
+-- 3. SCHOOLS
+-- =====================================================================================
 
-CREATE TABLE public.schools (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE TABLE "schools" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
 
     "name" TEXT NOT NULL,
     "npsn" TEXT NOT NULL,
@@ -95,44 +94,48 @@ CREATE TABLE public.schools (
     "city" TEXT NOT NULL DEFAULT '-',
     "province" TEXT NOT NULL DEFAULT '-',
 
+    "postalCode" TEXT,
+
     "phone" TEXT,
     "email" TEXT,
+
     "logoUrl" TEXT,
 
-    "settings" JSONB NOT NULL DEFAULT '{}'::JSONB,
+    "settings" JSONB NOT NULL DEFAULT '{}'::jsonb,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "schools_pkey"
         PRIMARY KEY ("id"),
-
-    CONSTRAINT "schools_name_check"
-        CHECK (length(trim("name")) > 0),
 
     CONSTRAINT "schools_npsn_check"
         CHECK (length(trim("npsn")) >= 8)
 );
 
 
--- ====================================================================================
--- 4. TAHUN AJARAN
--- ====================================================================================
+CREATE UNIQUE INDEX "schools_npsn_key"
+ON "schools"("npsn");
 
-CREATE TABLE public.academic_years (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+-- =====================================================================================
+-- 4. ACADEMIC YEARS
+-- =====================================================================================
+
+CREATE TABLE "academic_years" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
 
     "name" TEXT NOT NULL,
 
     "startYear" INTEGER NOT NULL,
     "endYear" INTEGER NOT NULL,
 
-    "isActive" BOOLEAN NOT NULL DEFAULT FALSE,
+    "isActive" BOOLEAN NOT NULL DEFAULT false,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "academic_years_pkey"
         PRIMARY KEY ("id"),
@@ -140,169 +143,276 @@ CREATE TABLE public.academic_years (
     CONSTRAINT "academic_years_year_check"
         CHECK ("endYear" = "startYear" + 1),
 
-    CONSTRAINT "academic_years_school_id_unique"
-        UNIQUE ("id", "schoolId")
+    CONSTRAINT "academic_years_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT
+        ON UPDATE CASCADE
 );
 
 
--- ====================================================================================
--- 5. SEMESTER
--- ====================================================================================
+CREATE UNIQUE INDEX "academic_years_school_year_key"
+ON "academic_years"
+(
+    "schoolId",
+    "startYear",
+    "endYear"
+);
 
-CREATE TABLE public.semesters (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
-    "academicYearId" TEXT NOT NULL,
+CREATE INDEX "academic_years_schoolId_idx"
+ON "academic_years"("schoolId");
+
+
+-- =====================================================================================
+-- 5. SEMESTERS
+-- =====================================================================================
+
+CREATE TABLE "semesters" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+    "academicYearId" UUID NOT NULL,
 
     "type" TEXT NOT NULL,
 
-    "startDate" TIMESTAMP(3) NOT NULL,
-    "endDate" TIMESTAMP(3) NOT NULL,
+    "startDate" DATE NOT NULL,
+    "endDate" DATE NOT NULL,
 
-    "isActive" BOOLEAN NOT NULL DEFAULT FALSE,
+    "isActive" BOOLEAN NOT NULL DEFAULT false,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "semesters_pkey"
         PRIMARY KEY ("id"),
 
     CONSTRAINT "semesters_type_check"
-        CHECK (
-            "type" IN ('GANJIL', 'GENAP')
-        ),
+        CHECK ("type" IN ('GANJIL', 'GENAP')),
 
     CONSTRAINT "semesters_date_check"
-        CHECK (
-            "endDate" > "startDate"
-        ),
+        CHECK ("endDate" > "startDate"),
 
-    CONSTRAINT "semesters_id_school_unique"
-        UNIQUE ("id", "schoolId")
+    CONSTRAINT "semesters_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "semesters_academicYearId_fkey"
+        FOREIGN KEY ("academicYearId")
+        REFERENCES "academic_years"("id")
+        ON DELETE RESTRICT
 );
 
 
--- ====================================================================================
--- 6. USERS
+CREATE UNIQUE INDEX "semesters_academic_year_type_key"
+ON "semesters"
+(
+    "academicYearId",
+    "type"
+);
+
+
+CREATE INDEX "semesters_schoolId_idx"
+ON "semesters"("schoolId");
+
+CREATE INDEX "semesters_academicYearId_idx"
+ON "semesters"("academicYearId");
+
+
+-- =====================================================================================
+-- 6. USERS / PROFILE
 --
--- id disimpan sebagai TEXT agar kompatibel dengan struktur aplikasi.
--- Nilainya harus sama dengan auth.users.id.
--- ====================================================================================
+-- ID HARUS SAMA DENGAN auth.users.id
+--
+-- SUPER_ADMIN:
+--   schoolId = NULL
+--
+-- USER SEKOLAH:
+--   schoolId = UUID sekolah
+--
+-- PASSWORD TIDAK DISIMPAN DI SINI.
+-- =====================================================================================
 
-CREATE TABLE public.users (
-    "id" TEXT NOT NULL,
+CREATE TABLE "users" (
+    "id" UUID NOT NULL,
 
-    "schoolId" TEXT NOT NULL,
+    "schoolId" UUID,
 
     "email" TEXT NOT NULL,
 
-    "passwordHash" TEXT,
-
     "fullName" TEXT NOT NULL,
 
-    "role" TEXT NOT NULL DEFAULT 'ADMIN',
+    "role" TEXT NOT NULL DEFAULT 'OPERATOR',
 
-    "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
 
     "avatarUrl" TEXT,
 
-    "lastLogin" TIMESTAMP(3),
+    "lastLogin" TIMESTAMPTZ,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "users_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "users_id_school_unique"
-        UNIQUE ("id", "schoolId")
+    CONSTRAINT "users_auth_fkey"
+        FOREIGN KEY ("id")
+        REFERENCES auth.users("id")
+        ON DELETE CASCADE,
+
+    CONSTRAINT "users_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "users_role_check"
+        CHECK (
+            "role" IN (
+                'SUPER_ADMIN',
+                'ADMIN',
+                'KEPALA_SEKOLAH',
+                'OPERATOR',
+                'BENDAHARA',
+                'WALI_KELAS',
+                'GURU',
+                'STAFF_TU',
+                'STAFF_SARPRAS',
+                'ORANG_TUA',
+                'SISWA'
+            )
+        ),
+
+    CONSTRAINT "users_super_admin_school_check"
+        CHECK (
+            ("role" = 'SUPER_ADMIN' AND "schoolId" IS NULL)
+            OR
+            ("role" <> 'SUPER_ADMIN' AND "schoolId" IS NOT NULL)
+        )
 );
 
 
--- ====================================================================================
+CREATE UNIQUE INDEX "users_email_key"
+ON "users"(lower("email"));
+
+
+CREATE INDEX "users_schoolId_idx"
+ON "users"("schoolId");
+
+CREATE INDEX "users_role_idx"
+ON "users"("role");
+
+
+-- =====================================================================================
 -- 7. REFRESH TOKENS
 --
--- Catatan:
--- Jika aplikasi sepenuhnya menggunakan Supabase Auth,
--- tabel ini sebenarnya tidak perlu digunakan untuk session Supabase.
--- Tetap dipertahankan agar kompatibel dengan struktur aplikasi lama.
--- ====================================================================================
+-- LEGACY / INTERNAL ONLY.
+-- Supabase Auth tetap menjadi pengelola session.
+-- =====================================================================================
 
-CREATE TABLE public.refresh_tokens (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE TABLE "refresh_tokens" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
 
-    "userId" TEXT NOT NULL,
+    "userId" UUID NOT NULL,
 
     "token" TEXT NOT NULL,
 
-    "expiresAt" TIMESTAMP(3) NOT NULL,
+    "expiresAt" TIMESTAMPTZ NOT NULL,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "refresh_tokens_pkey"
-        PRIMARY KEY ("id")
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "refresh_tokens_userId_fkey"
+        FOREIGN KEY ("userId")
+        REFERENCES "users"("id")
+        ON DELETE CASCADE
 );
 
 
--- ====================================================================================
--- 8. AUDIT LOG
--- ====================================================================================
+CREATE UNIQUE INDEX "refresh_tokens_token_key"
+ON "refresh_tokens"("token");
 
-CREATE TABLE public.audit_logs (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE INDEX "refresh_tokens_userId_idx"
+ON "refresh_tokens"("userId");
 
-    "userId" TEXT,
 
-    "schoolId" TEXT NOT NULL,
+-- =====================================================================================
+-- 8. AUDIT LOGS
+-- =====================================================================================
+
+CREATE TABLE "audit_logs" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "userId" UUID,
+
+    "schoolId" UUID,
 
     "action" TEXT NOT NULL,
-
     "module" TEXT NOT NULL,
 
     "entityType" TEXT,
-
     "entityId" TEXT,
 
     "oldValues" JSONB,
-
     "newValues" JSONB,
 
     "ipAddress" TEXT,
-
     "userAgent" TEXT,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "audit_logs_pkey"
-        PRIMARY KEY ("id")
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "audit_logs_userId_fkey"
+        FOREIGN KEY ("userId")
+        REFERENCES "users"("id")
+        ON DELETE SET NULL,
+
+    CONSTRAINT "audit_logs_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE SET NULL
 );
 
 
--- ====================================================================================
--- 9. GURU / TENAGA PENDIDIK
--- ====================================================================================
+CREATE INDEX "audit_logs_schoolId_idx"
+ON "audit_logs"("schoolId");
 
-CREATE TABLE public.teachers (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE INDEX "audit_logs_userId_idx"
+ON "audit_logs"("userId");
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "audit_logs_createdAt_idx"
+ON "audit_logs"("createdAt");
+
+
+-- =====================================================================================
+-- 9. TEACHERS
+-- =====================================================================================
+
+CREATE TABLE "teachers" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
 
     "nuptk" TEXT,
     "nip" TEXT,
+    "nik" TEXT,
 
     "fullName" TEXT NOT NULL,
 
-    "nik" TEXT,
-
     "gender" TEXT NOT NULL,
 
-    "birthDate" TIMESTAMP(3),
+    "birthDate" DATE,
     "birthPlace" TEXT,
 
     "address" TEXT,
     "phone" TEXT,
     "email" TEXT,
+
     "photoUrl" TEXT,
 
     "education" TEXT,
@@ -312,12 +422,12 @@ CREATE TABLE public.teachers (
     "status" TEXT,
     "position" TEXT,
 
-    "isCertified" BOOLEAN NOT NULL DEFAULT FALSE,
+    "isCertified" BOOLEAN NOT NULL DEFAULT false,
     "certificationNumber" TEXT,
 
-    "joinDate" TIMESTAMP(3),
+    "joinDate" DATE,
 
-    "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
 
     "baseSalary" NUMERIC(15,2),
 
@@ -325,38 +435,35 @@ CREATE TABLE public.teachers (
 
     "maxHoursPerWeek" INTEGER NOT NULL DEFAULT 24,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "teachers_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "teachers_id_school_unique"
-        UNIQUE ("id", "schoolId"),
-
-    CONSTRAINT "teachers_salary_check"
-        CHECK (
-            "baseSalary" IS NULL
-            OR "baseSalary" >= 0
-        ),
-
-    CONSTRAINT "teachers_hours_check"
-        CHECK (
-            "maxHoursPerWeek" > 0
-        )
+    CONSTRAINT "teachers_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT
 );
 
 
--- ====================================================================================
--- 10. KELAS
--- ====================================================================================
+CREATE INDEX "teachers_schoolId_idx"
+ON "teachers"("schoolId");
 
-CREATE TABLE public.classes (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE INDEX "teachers_fullName_idx"
+ON "teachers"("fullName");
 
-    "schoolId" TEXT NOT NULL,
 
-    "academicYearId" TEXT NOT NULL,
+-- =====================================================================================
+-- 10. CLASSES
+-- =====================================================================================
+
+CREATE TABLE "classes" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+    "academicYearId" UUID NOT NULL,
 
     "name" TEXT NOT NULL,
 
@@ -364,35 +471,66 @@ CREATE TABLE public.classes (
 
     "major" TEXT,
 
-    "homeroomTeacherId" TEXT,
+    "homeroomTeacherId" UUID,
 
     "capacity" INTEGER NOT NULL DEFAULT 36,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "classes_pkey"
         PRIMARY KEY ("id"),
-
-    CONSTRAINT "classes_id_school_unique"
-        UNIQUE ("id", "schoolId"),
 
     CONSTRAINT "classes_capacity_check"
         CHECK ("capacity" > 0),
 
     CONSTRAINT "classes_grade_check"
-        CHECK ("gradeLevel" > 0)
+        CHECK ("gradeLevel" > 0),
+
+    CONSTRAINT "classes_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "classes_academicYearId_fkey"
+        FOREIGN KEY ("academicYearId")
+        REFERENCES "academic_years"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "classes_homeroomTeacherId_fkey"
+        FOREIGN KEY ("homeroomTeacherId")
+        REFERENCES "teachers"("id")
+        ON DELETE SET NULL
 );
 
 
--- ====================================================================================
--- 11. SISWA
--- ====================================================================================
+CREATE UNIQUE INDEX "classes_school_year_name_key"
+ON "classes"
+(
+    "schoolId",
+    "academicYearId",
+    "name"
+);
 
-CREATE TABLE public.students (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "classes_schoolId_idx"
+ON "classes"("schoolId");
+
+CREATE INDEX "classes_academicYearId_idx"
+ON "classes"("academicYearId");
+
+CREATE INDEX "classes_homeroomTeacherId_idx"
+ON "classes"("homeroomTeacherId");
+
+
+-- =====================================================================================
+-- 11. STUDENTS
+-- =====================================================================================
+
+CREATE TABLE "students" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
 
     "nis" TEXT,
     "nisn" TEXT NOT NULL,
@@ -404,7 +542,7 @@ CREATE TABLE public.students (
 
     "gender" TEXT NOT NULL,
 
-    "birthDate" TIMESTAMP(3) NOT NULL,
+    "birthDate" DATE NOT NULL,
     "birthPlace" TEXT NOT NULL,
 
     "religion" TEXT,
@@ -429,9 +567,9 @@ CREATE TABLE public.students (
 
     "status" TEXT NOT NULL DEFAULT 'AKTIF',
 
-    "entryDate" TIMESTAMP(3) NOT NULL,
+    "entryDate" DATE NOT NULL DEFAULT CURRENT_DATE,
 
-    "classId" TEXT,
+    "classId" UUID,
 
     "skhun" TEXT,
     "noPesertaUn" TEXT,
@@ -459,61 +597,112 @@ CREATE TABLE public.students (
     "noRekening" TEXT,
     "namaRekening" TEXT,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "students_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "students_id_school_unique"
-        UNIQUE ("id", "schoolId"),
+    CONSTRAINT "students_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
 
-    CONSTRAINT "students_anakke_check"
-        CHECK (
-            "anakKe" IS NULL
-            OR "anakKe" > 0
-        ),
-
-    CONSTRAINT "students_saudara_check"
-        CHECK (
-            "jmlSaudara" IS NULL
-            OR "jmlSaudara" >= 0
-        )
+    CONSTRAINT "students_classId_fkey"
+        FOREIGN KEY ("classId")
+        REFERENCES "classes"("id")
+        ON DELETE SET NULL
 );
 
 
--- ====================================================================================
--- 12. HISTORI KELAS SISWA
--- ====================================================================================
+CREATE UNIQUE INDEX "students_school_nisn_key"
+ON "students"("schoolId", "nisn");
 
-CREATE TABLE public.student_class_history (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE UNIQUE INDEX "students_school_nis_key"
+ON "students"("schoolId", "nis")
+WHERE "nis" IS NOT NULL;
 
-    "schoolId" TEXT NOT NULL,
+CREATE UNIQUE INDEX "students_school_nik_key"
+ON "students"("schoolId", "nik");
 
-    "studentId" TEXT NOT NULL,
 
-    "academicYearId" TEXT NOT NULL,
+CREATE INDEX "students_schoolId_idx"
+ON "students"("schoolId");
 
-    "classId" TEXT NOT NULL,
+CREATE INDEX "students_classId_idx"
+ON "students"("classId");
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+CREATE INDEX "students_fullName_idx"
+ON "students"("fullName");
+
+
+-- =====================================================================================
+-- 12. STUDENT CLASS HISTORY
+-- =====================================================================================
+
+CREATE TABLE "student_class_history" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
+
+    "academicYearId" UUID NOT NULL,
+
+    "classId" UUID NOT NULL,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "student_class_history_pkey"
-        PRIMARY KEY ("id")
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "student_class_history_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "student_class_history_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE CASCADE,
+
+    CONSTRAINT "student_class_history_academicYearId_fkey"
+        FOREIGN KEY ("academicYearId")
+        REFERENCES "academic_years"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "student_class_history_classId_fkey"
+        FOREIGN KEY ("classId")
+        REFERENCES "classes"("id")
+        ON DELETE RESTRICT
 );
 
 
--- ====================================================================================
--- 13. ORANG TUA
--- ====================================================================================
+CREATE UNIQUE INDEX "student_class_history_unique"
+ON "student_class_history"
+(
+    "studentId",
+    "academicYearId"
+);
 
-CREATE TABLE public.student_parents (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "student_history_studentId_idx"
+ON "student_class_history"("studentId");
 
-    "studentId" TEXT NOT NULL,
+CREATE INDEX "student_history_academicYearId_idx"
+ON "student_class_history"("academicYearId");
+
+
+-- =====================================================================================
+-- 13. STUDENT PARENTS
+-- =====================================================================================
+
+CREATE TABLE "student_parents" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
 
     "relation" TEXT NOT NULL,
 
@@ -529,98 +718,111 @@ CREATE TABLE public.student_parents (
 
     "monthlyIncome" NUMERIC(15,2),
 
-    "isAlive" BOOLEAN NOT NULL DEFAULT TRUE,
+    "isAlive" BOOLEAN NOT NULL DEFAULT true,
 
     "address" TEXT,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "student_parents_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "student_parents_income_check"
-        CHECK (
-            "monthlyIncome" IS NULL
-            OR "monthlyIncome" >= 0
-        )
+    CONSTRAINT "student_parents_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "student_parents_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE CASCADE
 );
 
 
--- ====================================================================================
--- 14. DATA EKONOMI
--- ====================================================================================
+CREATE INDEX "parents_studentId_idx"
+ON "student_parents"("studentId");
 
-CREATE TABLE public.student_economics (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
+CREATE INDEX "parents_schoolId_idx"
+ON "student_parents"("schoolId");
 
-    "schoolId" TEXT NOT NULL,
 
-    "studentId" TEXT NOT NULL,
+-- =====================================================================================
+-- 14. STUDENT ECONOMICS
+-- =====================================================================================
 
-    "hasKip" BOOLEAN NOT NULL DEFAULT FALSE,
+CREATE TABLE "student_economics" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
+
+    "hasKip" BOOLEAN NOT NULL DEFAULT false,
     "kipNumber" TEXT,
     "namaKip" TEXT,
 
-    "layakPip" BOOLEAN NOT NULL DEFAULT FALSE,
+    "layakPip" BOOLEAN NOT NULL DEFAULT false,
     "alasanLayakPip" TEXT,
 
-    "hasKks" BOOLEAN NOT NULL DEFAULT FALSE,
+    "hasKks" BOOLEAN NOT NULL DEFAULT false,
     "kksNumber" TEXT,
 
-    "hasPkh" BOOLEAN NOT NULL DEFAULT FALSE,
+    "hasPkh" BOOLEAN NOT NULL DEFAULT false,
 
-    "isDtks" BOOLEAN NOT NULL DEFAULT FALSE,
+    "isDtks" BOOLEAN NOT NULL DEFAULT false,
 
     "houseOwnership" TEXT,
     "houseCondition" TEXT,
 
     "dependentsCount" INTEGER,
 
-    "isOrphan" BOOLEAN NOT NULL DEFAULT FALSE,
+    "isOrphan" BOOLEAN NOT NULL DEFAULT false,
     "orphanType" TEXT,
 
     "pipScore" DOUBLE PRECISION,
-
     "economicCategory" TEXT,
 
     "scoringDetails" JSONB,
 
-    "scoredAt" TIMESTAMP(3),
+    "scoredAt" TIMESTAMPTZ,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "student_economics_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "student_economics_student_unique"
-        UNIQUE ("studentId"),
+    CONSTRAINT "student_economics_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
 
-    CONSTRAINT "student_economics_id_school_unique"
-        UNIQUE ("id", "schoolId"),
-
-    CONSTRAINT "student_economics_dependents_check"
-        CHECK (
-            "dependentsCount" IS NULL
-            OR "dependentsCount" >= 0
-        )
+    CONSTRAINT "student_economics_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE CASCADE
 );
 
 
--- ====================================================================================
--- 15. ABSENSI
---
--- date menggunakan DATE, bukan TIMESTAMP.
--- Satu siswa hanya boleh memiliki satu absensi per tanggal.
--- ====================================================================================
+CREATE UNIQUE INDEX "student_economics_studentId_key"
+ON "student_economics"("studentId");
 
-CREATE TABLE public.attendances (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "economics_schoolId_idx"
+ON "student_economics"("schoolId");
 
-    "studentId" TEXT NOT NULL,
+
+-- =====================================================================================
+-- 15. ATTENDANCES
+-- =====================================================================================
+
+CREATE TABLE "attendances" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
 
     "date" DATE NOT NULL,
 
@@ -628,73 +830,419 @@ CREATE TABLE public.attendances (
 
     "notes" TEXT,
 
-    "recordedBy" TEXT,
+    "recordedBy" UUID,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "attendances_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "attendances_status_check"
-        CHECK (
-            "status" IN (
-                'HADIR',
-                'IZIN',
-                'SAKIT',
-                'ALPA',
-                'TERLAMBAT',
-                'DISPENSASI'
-            )
-        )
+    CONSTRAINT "attendances_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "attendances_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE CASCADE,
+
+    CONSTRAINT "attendances_recordedBy_fkey"
+        FOREIGN KEY ("recordedBy")
+        REFERENCES "users"("id")
+        ON DELETE SET NULL
 );
 
 
--- ====================================================================================
--- 16. PENGUMUMAN
--- ====================================================================================
+CREATE UNIQUE INDEX "attendances_student_date_key"
+ON "attendances"("studentId", "date");
 
-CREATE TABLE public.announcements (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "attendances_schoolId_idx"
+ON "attendances"("schoolId");
+
+CREATE INDEX "attendances_date_idx"
+ON "attendances"("date");
+
+
+-- =====================================================================================
+-- 16. SUBJECTS
+-- =====================================================================================
+
+CREATE TABLE "subjects" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "code" TEXT,
+    "name" TEXT NOT NULL,
+
+    "description" TEXT,
+
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "subjects_pkey"
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "subjects_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT
+);
+
+
+CREATE UNIQUE INDEX "subjects_school_code_key"
+ON "subjects"("schoolId", "code")
+WHERE "code" IS NOT NULL;
+
+CREATE INDEX "subjects_schoolId_idx"
+ON "subjects"("schoolId");
+
+
+-- =====================================================================================
+-- 17. SCHEDULES
+-- =====================================================================================
+
+CREATE TABLE "schedule_entries" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "academicYearId" UUID NOT NULL,
+
+    "classId" UUID NOT NULL,
+
+    "subjectId" UUID,
+
+    "teacherId" UUID,
+
+    "dayOfWeek" INTEGER NOT NULL,
+
+    "startTime" TIME NOT NULL,
+    "endTime" TIME NOT NULL,
+
+    "room" TEXT,
+
+    "notes" TEXT,
+
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "schedule_entries_pkey"
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "schedule_entries_day_check"
+        CHECK ("dayOfWeek" BETWEEN 1 AND 7),
+
+    CONSTRAINT "schedule_entries_time_check"
+        CHECK ("endTime" > "startTime"),
+
+    CONSTRAINT "schedule_entries_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "schedule_entries_academicYearId_fkey"
+        FOREIGN KEY ("academicYearId")
+        REFERENCES "academic_years"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "schedule_entries_classId_fkey"
+        FOREIGN KEY ("classId")
+        REFERENCES "classes"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "schedule_entries_subjectId_fkey"
+        FOREIGN KEY ("subjectId")
+        REFERENCES "subjects"("id")
+        ON DELETE SET NULL,
+
+    CONSTRAINT "schedule_entries_teacherId_fkey"
+        FOREIGN KEY ("teacherId")
+        REFERENCES "teachers"("id")
+        ON DELETE SET NULL
+);
+
+
+CREATE INDEX "schedule_schoolId_idx"
+ON "schedule_entries"("schoolId");
+
+CREATE INDEX "schedule_classId_idx"
+ON "schedule_entries"("classId");
+
+CREATE INDEX "schedule_teacherId_idx"
+ON "schedule_entries"("teacherId");
+
+
+-- =====================================================================================
+-- 18. ANNOUNCEMENTS
+-- =====================================================================================
+
+CREATE TABLE "announcements" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
 
     "title" TEXT NOT NULL,
-
     "content" TEXT NOT NULL,
 
     "target" TEXT NOT NULL DEFAULT 'SEMUA',
 
-    "isPinned" BOOLEAN NOT NULL DEFAULT FALSE,
+    "isPinned" BOOLEAN NOT NULL DEFAULT false,
 
-    "publishDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "publishDate" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expireDate" TIMESTAMPTZ,
 
-    "expireDate" TIMESTAMP(3),
+    "createdBy" UUID,
 
-    "createdBy" TEXT,
-
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "announcements_pkey"
         PRIMARY KEY ("id"),
 
-    CONSTRAINT "announcements_date_check"
-        CHECK (
-            "expireDate" IS NULL
-            OR "expireDate" > "publishDate"
-        )
+    CONSTRAINT "announcements_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "announcements_createdBy_fkey"
+        FOREIGN KEY ("createdBy")
+        REFERENCES "users"("id")
+        ON DELETE SET NULL
 );
 
 
--- ====================================================================================
--- 17. TEMPLATE PEMBAYARAN
--- ====================================================================================
+CREATE INDEX "announcements_schoolId_idx"
+ON "announcements"("schoolId");
 
-CREATE TABLE public.fee_templates (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+-- =====================================================================================
+-- 19. INVENTORY ITEMS
+-- =====================================================================================
 
-    "academicYearId" TEXT NOT NULL,
+CREATE TABLE "inventory_items" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "code" TEXT,
+    "name" TEXT NOT NULL,
+
+    "category" TEXT,
+    "unit" TEXT,
+
+    "quantity" NUMERIC(15,2) NOT NULL DEFAULT 0,
+
+    "minimumStock" NUMERIC(15,2) NOT NULL DEFAULT 0,
+
+    "location" TEXT,
+
+    "condition" TEXT DEFAULT 'BAIK',
+
+    "description" TEXT,
+
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "inventory_items_pkey"
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "inventory_items_quantity_check"
+        CHECK ("quantity" >= 0),
+
+    CONSTRAINT "inventory_items_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT
+);
+
+
+CREATE UNIQUE INDEX "inventory_items_school_code_key"
+ON "inventory_items"("schoolId", "code")
+WHERE "code" IS NOT NULL;
+
+
+CREATE INDEX "inventory_items_schoolId_idx"
+ON "inventory_items"("schoolId");
+
+
+-- =====================================================================================
+-- 20. INVENTORY TRANSACTIONS
+-- =====================================================================================
+
+CREATE TABLE "inventory_transactions" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "itemId" UUID NOT NULL,
+
+    "type" TEXT NOT NULL,
+
+    "quantity" NUMERIC(15,2) NOT NULL,
+
+    "reference" TEXT,
+
+    "notes" TEXT,
+
+    "recordedBy" UUID,
+
+    "transactionDate" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "inventory_transactions_pkey"
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "inventory_transactions_type_check"
+        CHECK ("type" IN ('MASUK', 'KELUAR', 'PENYESUAIAN')),
+
+    CONSTRAINT "inventory_transactions_quantity_check"
+        CHECK ("quantity" > 0),
+
+    CONSTRAINT "inventory_transactions_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "inventory_transactions_itemId_fkey"
+        FOREIGN KEY ("itemId")
+        REFERENCES "inventory_items"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "inventory_transactions_recordedBy_fkey"
+        FOREIGN KEY ("recordedBy")
+        REFERENCES "users"("id")
+        ON DELETE SET NULL
+);
+
+
+CREATE INDEX "inventory_transactions_schoolId_idx"
+ON "inventory_transactions"("schoolId");
+
+CREATE INDEX "inventory_transactions_itemId_idx"
+ON "inventory_transactions"("itemId");
+
+
+-- =====================================================================================
+-- 21. ADMINISTRATION
+-- =====================================================================================
+
+CREATE TABLE "administration_records" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "category" TEXT NOT NULL,
+
+    "title" TEXT NOT NULL,
+
+    "documentNumber" TEXT,
+
+    "description" TEXT,
+
+    "documentUrl" TEXT,
+
+    "documentDate" DATE,
+
+    "status" TEXT NOT NULL DEFAULT 'AKTIF',
+
+    "createdBy" UUID,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "administration_records_pkey"
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "administration_records_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "administration_records_createdBy_fkey"
+        FOREIGN KEY ("createdBy")
+        REFERENCES "users"("id")
+        ON DELETE SET NULL
+);
+
+
+CREATE INDEX "administration_schoolId_idx"
+ON "administration_records"("schoolId");
+
+
+-- =====================================================================================
+-- 22. SCHOLARSHIPS
+-- =====================================================================================
+
+CREATE TABLE "scholarship_records" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
+
+    "type" TEXT NOT NULL,
+
+    "name" TEXT NOT NULL,
+
+    "provider" TEXT,
+
+    "amount" NUMERIC(15,2),
+
+    "startDate" DATE,
+    "endDate" DATE,
+
+    "status" TEXT NOT NULL DEFAULT 'AKTIF',
+
+    "notes" TEXT,
+
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT "scholarship_records_pkey"
+        PRIMARY KEY ("id"),
+
+    CONSTRAINT "scholarship_records_amount_check"
+        CHECK ("amount" IS NULL OR "amount" >= 0),
+
+    CONSTRAINT "scholarship_records_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "scholarship_records_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE CASCADE
+);
+
+
+CREATE INDEX "scholarships_schoolId_idx"
+ON "scholarship_records"("schoolId");
+
+CREATE INDEX "scholarships_studentId_idx"
+ON "scholarship_records"("studentId");
+
+
+-- =====================================================================================
+-- 23. FEE TEMPLATES
+-- =====================================================================================
+
+CREATE TABLE "fee_templates" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "academicYearId" UUID NOT NULL,
 
     "name" TEXT NOT NULL,
 
@@ -708,10 +1256,10 @@ CREATE TABLE public.fee_templates (
 
     "description" TEXT,
 
-    "isActive" BOOLEAN NOT NULL DEFAULT TRUE,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "fee_templates_pkey"
         PRIMARY KEY ("id"),
@@ -721,38 +1269,50 @@ CREATE TABLE public.fee_templates (
 
     CONSTRAINT "fee_templates_period_check"
         CHECK (
-            "periodType" IN (
-                'BULANAN',
-                'TAHUNAN',
-                'SEKALI_BAYAR'
-            )
+            "periodType"
+            IN ('BULANAN', 'TAHUNAN', 'SEKALI_BAYAR')
         ),
 
-    CONSTRAINT "fee_templates_grade_check"
-        CHECK (
-            "gradeLevel" IS NULL
-            OR "gradeLevel" > 0
-        ),
+    CONSTRAINT "fee_templates_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
 
-    CONSTRAINT "fee_templates_id_school_unique"
-        UNIQUE ("id", "schoolId")
+    CONSTRAINT "fee_templates_academicYearId_fkey"
+        FOREIGN KEY ("academicYearId")
+        REFERENCES "academic_years"("id")
+        ON DELETE RESTRICT
 );
 
 
--- ====================================================================================
--- 18. TAGIHAN SISWA
--- ====================================================================================
+CREATE UNIQUE INDEX "fee_templates_unique"
+ON "fee_templates"
+(
+    "schoolId",
+    "academicYearId",
+    "name",
+    "gradeLevel"
+);
 
-CREATE TABLE public.student_bills (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "fee_templates_schoolId_idx"
+ON "fee_templates"("schoolId");
 
-    "studentId" TEXT NOT NULL,
 
-    "feeTemplateId" TEXT NOT NULL,
+-- =====================================================================================
+-- 24. STUDENT BILLS
+-- =====================================================================================
 
-    "academicYearId" TEXT NOT NULL,
+CREATE TABLE "student_bills" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
+
+    "feeTemplateId" UUID NOT NULL,
+
+    "academicYearId" UUID NOT NULL,
 
     "title" TEXT NOT NULL,
 
@@ -766,16 +1326,13 @@ CREATE TABLE public.student_bills (
 
     "status" TEXT NOT NULL DEFAULT 'BELUM_BAYAR',
 
-    "dueDate" TIMESTAMP(3),
+    "dueDate" DATE,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "student_bills_pkey"
         PRIMARY KEY ("id"),
-
-    CONSTRAINT "student_bills_id_school_unique"
-        UNIQUE ("id", "schoolId"),
 
     CONSTRAINT "student_bills_amount_check"
         CHECK (
@@ -787,9 +1344,7 @@ CREATE TABLE public.student_bills (
     CONSTRAINT "student_bills_month_check"
         CHECK (
             "periodMonth" IS NULL
-            OR (
-                "periodMonth" BETWEEN 1 AND 12
-            )
+            OR "periodMonth" BETWEEN 1 AND 12
         ),
 
     CONSTRAINT "student_bills_status_check"
@@ -800,38 +1355,82 @@ CREATE TABLE public.student_bills (
                 'LUNAS',
                 'DIBATALKAN'
             )
-        )
+        ),
+
+    CONSTRAINT "student_bills_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "student_bills_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "student_bills_feeTemplateId_fkey"
+        FOREIGN KEY ("feeTemplateId")
+        REFERENCES "fee_templates"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "student_bills_academicYearId_fkey"
+        FOREIGN KEY ("academicYearId")
+        REFERENCES "academic_years"("id")
+        ON DELETE RESTRICT
 );
 
 
--- ====================================================================================
--- 19. TRANSAKSI PEMBAYARAN
--- ====================================================================================
+CREATE UNIQUE INDEX "student_bills_unique_period"
+ON "student_bills"
+(
+    "studentId",
+    "feeTemplateId",
+    "academicYearId",
+    "periodMonth",
+    "periodYear"
+);
 
-CREATE TABLE public.payment_transactions (
-    "id" TEXT NOT NULL DEFAULT gen_random_uuid()::TEXT,
 
-    "schoolId" TEXT NOT NULL,
+CREATE INDEX "bills_schoolId_idx"
+ON "student_bills"("schoolId");
 
-    "billId" TEXT NOT NULL,
+CREATE INDEX "bills_studentId_idx"
+ON "student_bills"("studentId");
 
-    "studentId" TEXT NOT NULL,
+CREATE INDEX "bills_academicYearId_idx"
+ON "student_bills"("academicYearId");
+
+CREATE INDEX "bills_status_idx"
+ON "student_bills"("status");
+
+
+-- =====================================================================================
+-- 25. PAYMENT TRANSACTIONS
+-- =====================================================================================
+
+CREATE TABLE "payment_transactions" (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+
+    "schoolId" UUID NOT NULL,
+
+    "billId" UUID NOT NULL,
+
+    "studentId" UUID NOT NULL,
 
     "amount" NUMERIC(15,2) NOT NULL,
 
     "paymentMethod" TEXT NOT NULL DEFAULT 'TRANSFER',
 
-    "paymentDate" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "paymentDate" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     "reference" TEXT,
 
-    "recordedBy" TEXT,
+    "recordedBy" UUID,
 
     "status" TEXT NOT NULL DEFAULT 'BERHASIL',
 
     "notes" TEXT,
 
-    "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "payment_transactions_pkey"
         PRIMARY KEY ("id"),
@@ -841,599 +1440,136 @@ CREATE TABLE public.payment_transactions (
 
     CONSTRAINT "payment_transactions_status_check"
         CHECK (
-            "status" IN (
-                'BERHASIL',
-                'DIBATALKAN'
-            )
-        )
+            "status" IN ('BERHASIL', 'DIBATALKAN')
+        ),
+
+    CONSTRAINT "payment_transactions_schoolId_fkey"
+        FOREIGN KEY ("schoolId")
+        REFERENCES "schools"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "payment_transactions_billId_fkey"
+        FOREIGN KEY ("billId")
+        REFERENCES "student_bills"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "payment_transactions_studentId_fkey"
+        FOREIGN KEY ("studentId")
+        REFERENCES "students"("id")
+        ON DELETE RESTRICT,
+
+    CONSTRAINT "payment_transactions_recordedBy_fkey"
+        FOREIGN KEY ("recordedBy")
+        REFERENCES "users"("id")
+        ON DELETE SET NULL
 );
-
-
--- ====================================================================================
--- 20. UNIQUE INDEX
--- ====================================================================================
-
-CREATE UNIQUE INDEX "schools_npsn_key"
-ON public.schools ("npsn");
-
-
-CREATE UNIQUE INDEX "users_email_key"
-ON public.users ("email");
-
-
-CREATE UNIQUE INDEX "refresh_tokens_token_key"
-ON public.refresh_tokens ("token");
-
-
-CREATE UNIQUE INDEX "students_schoolId_nisn_key"
-ON public.students ("schoolId", "nisn");
-
-
-CREATE UNIQUE INDEX "students_schoolId_nis_key"
-ON public.students ("schoolId", "nis")
-WHERE "nis" IS NOT NULL;
-
-
-CREATE UNIQUE INDEX "students_schoolId_nik_key"
-ON public.students ("schoolId", "nik");
-
-
-CREATE UNIQUE INDEX "student_class_history_unique"
-ON public.student_class_history
-(
-    "studentId",
-    "academicYearId"
-);
-
-
-CREATE UNIQUE INDEX "attendances_student_date_key"
-ON public.attendances
-(
-    "studentId",
-    "date"
-);
-
-
-CREATE UNIQUE INDEX "fee_templates_unique"
-ON public.fee_templates
-(
-    "schoolId",
-    "academicYearId",
-    "name",
-    COALESCE("gradeLevel", 0)
-);
-
-
-CREATE UNIQUE INDEX "student_bills_unique_period"
-ON public.student_bills
-(
-    "studentId",
-    "feeTemplateId",
-    "academicYearId",
-    COALESCE("periodMonth", 0),
-    COALESCE("periodYear", 0)
-);
-
-
--- ====================================================================================
--- 21. INDEX PERFORMA
--- ====================================================================================
-
-CREATE INDEX "academic_years_schoolId_idx"
-ON public.academic_years ("schoolId");
-
-
-CREATE INDEX "academic_years_active_idx"
-ON public.academic_years ("schoolId", "isActive");
-
-
-CREATE INDEX "semesters_schoolId_idx"
-ON public.semesters ("schoolId");
-
-
-CREATE INDEX "semesters_academicYearId_idx"
-ON public.semesters ("academicYearId");
-
-
-CREATE INDEX "semesters_active_idx"
-ON public.semesters ("schoolId", "isActive");
-
-
-CREATE INDEX "teachers_schoolId_idx"
-ON public.teachers ("schoolId");
-
-
-CREATE INDEX "teachers_fullName_idx"
-ON public.teachers ("fullName");
-
-
-CREATE INDEX "teachers_nuptk_idx"
-ON public.teachers ("schoolId", "nuptk")
-WHERE "nuptk" IS NOT NULL;
-
-
-CREATE INDEX "teachers_nip_idx"
-ON public.teachers ("schoolId", "nip")
-WHERE "nip" IS NOT NULL;
-
-
-CREATE INDEX "classes_schoolId_idx"
-ON public.classes ("schoolId");
-
-
-CREATE INDEX "classes_academicYearId_idx"
-ON public.classes ("academicYearId");
-
-
-CREATE INDEX "classes_homeroomTeacherId_idx"
-ON public.classes ("homeroomTeacherId");
-
-
-CREATE INDEX "students_schoolId_idx"
-ON public.students ("schoolId");
-
-
-CREATE INDEX "students_classId_idx"
-ON public.students ("classId");
-
-
-CREATE INDEX "students_fullName_idx"
-ON public.students ("fullName");
-
-
-CREATE INDEX "students_status_idx"
-ON public.students ("schoolId", "status");
-
-
-CREATE INDEX "student_history_studentId_idx"
-ON public.student_class_history ("studentId");
-
-
-CREATE INDEX "student_history_academicYearId_idx"
-ON public.student_class_history ("academicYearId");
-
-
-CREATE INDEX "student_history_classId_idx"
-ON public.student_class_history ("classId");
-
-
-CREATE INDEX "parents_studentId_idx"
-ON public.student_parents ("studentId");
-
-
-CREATE INDEX "parents_schoolId_idx"
-ON public.student_parents ("schoolId");
-
-
-CREATE INDEX "economics_studentId_idx"
-ON public.student_economics ("studentId");
-
-
-CREATE INDEX "economics_schoolId_idx"
-ON public.student_economics ("schoolId");
-
-
-CREATE INDEX "attendances_schoolId_date_idx"
-ON public.attendances ("schoolId", "date");
-
-
-CREATE INDEX "attendances_studentId_date_idx"
-ON public.attendances ("studentId", "date");
-
-
-CREATE INDEX "bills_schoolId_idx"
-ON public.student_bills ("schoolId");
-
-
-CREATE INDEX "bills_studentId_idx"
-ON public.student_bills ("studentId");
-
-
-CREATE INDEX "bills_academicYearId_idx"
-ON public.student_bills ("academicYearId");
-
-
-CREATE INDEX "bills_status_idx"
-ON public.student_bills ("schoolId", "status");
 
 
 CREATE INDEX "payments_billId_idx"
-ON public.payment_transactions ("billId");
-
+ON "payment_transactions"("billId");
 
 CREATE INDEX "payments_studentId_idx"
-ON public.payment_transactions ("studentId");
-
+ON "payment_transactions"("studentId");
 
 CREATE INDEX "payments_schoolId_idx"
-ON public.payment_transactions ("schoolId");
+ON "payment_transactions"("schoolId");
 
 
-CREATE INDEX "payments_date_idx"
-ON public.payment_transactions ("schoolId", "paymentDate");
-
-
-CREATE INDEX "announcements_schoolId_idx"
-ON public.announcements ("schoolId");
-
-
-CREATE INDEX "audit_logs_schoolId_idx"
-ON public.audit_logs ("schoolId");
-
-
-CREATE INDEX "audit_logs_createdAt_idx"
-ON public.audit_logs ("schoolId", "createdAt");
-
-
--- ====================================================================================
--- 22. FOREIGN KEYS
---
--- BAGIAN PENTING:
--- FK menggunakan schoolId bersama ID untuk mencegah data lintas sekolah.
--- ====================================================================================
-
-
--- ACADEMIC YEARS
-ALTER TABLE public.academic_years
-ADD CONSTRAINT "academic_years_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- SEMESTERS
-ALTER TABLE public.semesters
-ADD CONSTRAINT "semesters_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.semesters
-ADD CONSTRAINT "semesters_academicYear_school_fkey"
-FOREIGN KEY ("academicYearId", "schoolId")
-REFERENCES public.academic_years ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- USERS
-ALTER TABLE public.users
-ADD CONSTRAINT "users_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- REFRESH TOKENS
-ALTER TABLE public.refresh_tokens
-ADD CONSTRAINT "refresh_tokens_userId_fkey"
-FOREIGN KEY ("userId")
-REFERENCES public.users ("id")
-ON DELETE CASCADE
-ON UPDATE CASCADE;
-
-
--- AUDIT LOG
-ALTER TABLE public.audit_logs
-ADD CONSTRAINT "audit_logs_userId_fkey"
-FOREIGN KEY ("userId")
-REFERENCES public.users ("id")
-ON DELETE SET NULL
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.audit_logs
-ADD CONSTRAINT "audit_logs_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- TEACHERS
-ALTER TABLE public.teachers
-ADD CONSTRAINT "teachers_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- CLASSES
-ALTER TABLE public.classes
-ADD CONSTRAINT "classes_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.classes
-ADD CONSTRAINT "classes_academicYear_school_fkey"
-FOREIGN KEY ("academicYearId", "schoolId")
-REFERENCES public.academic_years ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.classes
-ADD CONSTRAINT "classes_teacher_school_fkey"
-FOREIGN KEY ("homeroomTeacherId", "schoolId")
-REFERENCES public.teachers ("id", "schoolId")
-ON DELETE SET NULL
-ON UPDATE CASCADE;
-
-
--- STUDENTS
-ALTER TABLE public.students
-ADD CONSTRAINT "students_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.students
-ADD CONSTRAINT "students_class_school_fkey"
-FOREIGN KEY ("classId", "schoolId")
-REFERENCES public.classes ("id", "schoolId")
-ON DELETE SET NULL
-ON UPDATE CASCADE;
-
-
--- STUDENT HISTORY
-ALTER TABLE public.student_class_history
-ADD CONSTRAINT "student_history_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_class_history
-ADD CONSTRAINT "student_history_student_school_fkey"
-FOREIGN KEY ("studentId", "schoolId")
-REFERENCES public.students ("id", "schoolId")
-ON DELETE CASCADE
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_class_history
-ADD CONSTRAINT "student_history_academicYear_school_fkey"
-FOREIGN KEY ("academicYearId", "schoolId")
-REFERENCES public.academic_years ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_class_history
-ADD CONSTRAINT "student_history_class_school_fkey"
-FOREIGN KEY ("classId", "schoolId")
-REFERENCES public.classes ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- PARENTS
-ALTER TABLE public.student_parents
-ADD CONSTRAINT "student_parents_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_parents
-ADD CONSTRAINT "student_parents_student_school_fkey"
-FOREIGN KEY ("studentId", "schoolId")
-REFERENCES public.students ("id", "schoolId")
-ON DELETE CASCADE
-ON UPDATE CASCADE;
-
-
--- ECONOMICS
-ALTER TABLE public.student_economics
-ADD CONSTRAINT "student_economics_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_economics
-ADD CONSTRAINT "student_economics_student_school_fkey"
-FOREIGN KEY ("studentId", "schoolId")
-REFERENCES public.students ("id", "schoolId")
-ON DELETE CASCADE
-ON UPDATE CASCADE;
-
-
--- ATTENDANCE
-ALTER TABLE public.attendances
-ADD CONSTRAINT "attendances_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.attendances
-ADD CONSTRAINT "attendances_student_school_fkey"
-FOREIGN KEY ("studentId", "schoolId")
-REFERENCES public.students ("id", "schoolId")
-ON DELETE CASCADE
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.attendances
-ADD CONSTRAINT "attendances_recordedBy_fkey"
-FOREIGN KEY ("recordedBy")
-REFERENCES public.users ("id")
-ON DELETE SET NULL
-ON UPDATE CASCADE;
-
-
--- ANNOUNCEMENTS
-ALTER TABLE public.announcements
-ADD CONSTRAINT "announcements_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.announcements
-ADD CONSTRAINT "announcements_createdBy_fkey"
-FOREIGN KEY ("createdBy")
-REFERENCES public.users ("id")
-ON DELETE SET NULL
-ON UPDATE CASCADE;
-
-
--- FEE TEMPLATES
-ALTER TABLE public.fee_templates
-ADD CONSTRAINT "fee_templates_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.fee_templates
-ADD CONSTRAINT "fee_templates_academicYear_school_fkey"
-FOREIGN KEY ("academicYearId", "schoolId")
-REFERENCES public.academic_years ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- STUDENT BILLS
-ALTER TABLE public.student_bills
-ADD CONSTRAINT "student_bills_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_bills
-ADD CONSTRAINT "student_bills_student_school_fkey"
-FOREIGN KEY ("studentId", "schoolId")
-REFERENCES public.students ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_bills
-ADD CONSTRAINT "student_bills_feeTemplate_school_fkey"
-FOREIGN KEY ("feeTemplateId", "schoolId")
-REFERENCES public.fee_templates ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.student_bills
-ADD CONSTRAINT "student_bills_academicYear_school_fkey"
-FOREIGN KEY ("academicYearId", "schoolId")
-REFERENCES public.academic_years ("id", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
--- PAYMENTS
-ALTER TABLE public.payment_transactions
-ADD CONSTRAINT "payment_transactions_schoolId_fkey"
-FOREIGN KEY ("schoolId")
-REFERENCES public.schools ("id")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.payment_transactions
-ADD CONSTRAINT "payment_transactions_bill_student_school_fkey"
-FOREIGN KEY ("billId", "studentId", "schoolId")
-REFERENCES public.student_bills ("id", "studentId", "schoolId")
-ON DELETE RESTRICT
-ON UPDATE CASCADE;
-
-
-ALTER TABLE public.payment_transactions
-ADD CONSTRAINT "payment_transactions_recordedBy_fkey"
-FOREIGN KEY ("recordedBy")
-REFERENCES public.users ("id")
-ON DELETE SET NULL
-ON UPDATE CASCADE;
-
-
--- ====================================================================================
--- 23. ACTIVE YEAR / SEMESTER UNIQUE INDEX
--- ====================================================================================
-
-CREATE UNIQUE INDEX "academic_years_one_active_per_school"
-ON public.academic_years ("schoolId")
-WHERE "isActive" = TRUE;
-
-
-CREATE UNIQUE INDEX "semesters_one_active_per_school"
-ON public.semesters ("schoolId")
-WHERE "isActive" = TRUE;
-
-
--- ====================================================================================
--- 24. HELPER FUNCTION:
--- GET SCHOOL ID USER LOGIN
--- ====================================================================================
+-- =====================================================================================
+-- 26. SECURITY FUNCTIONS
+-- =====================================================================================
 
 CREATE OR REPLACE FUNCTION public.get_user_school_id()
-RETURNS TEXT
-LANGUAGE SQL
+RETURNS UUID
+LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-    SELECT u."schoolId"
-    FROM public.users u
-    WHERE u."id" = auth.uid()::TEXT
-      AND u."isActive" = TRUE
+    SELECT "schoolId"
+    FROM public.users
+    WHERE "id" = auth.uid()
     LIMIT 1;
 $$;
 
 
--- ====================================================================================
--- 25. HELPER FUNCTION:
--- USER ACTIVE
--- ====================================================================================
+CREATE OR REPLACE FUNCTION public.get_user_role()
+RETURNS TEXT
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT "role"
+    FROM public.users
+    WHERE "id" = auth.uid()
+    LIMIT 1;
+$$;
+
 
 CREATE OR REPLACE FUNCTION public.is_user_active()
 RETURNS BOOLEAN
-LANGUAGE SQL
+LANGUAGE sql
 STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
     SELECT COALESCE(
         (
-            SELECT u."isActive"
-            FROM public.users u
-            WHERE u."id" = auth.uid()::TEXT
-            LIMIT 1
+            SELECT "isActive"
+            FROM public.users
+            WHERE "id" = auth.uid()
         ),
-        FALSE
+        false
     );
 $$;
 
 
--- ====================================================================================
--- 26. UPDATED AT FUNCTION
--- ====================================================================================
+CREATE OR REPLACE FUNCTION public.is_super_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.users
+        WHERE "id" = auth.uid()
+          AND "role" = 'SUPER_ADMIN'
+          AND "isActive" = true
+          AND "schoolId" IS NULL
+    );
+$$;
+
+
+CREATE OR REPLACE FUNCTION public.is_school_admin()
+RETURNS BOOLEAN
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.users
+        WHERE "id" = auth.uid()
+          AND "role" IN (
+              'SUPER_ADMIN',
+              'ADMIN'
+          )
+          AND "isActive" = true
+    );
+$$;
+
+
+-- =====================================================================================
+-- 27. UPDATE TIMESTAMP FUNCTION
+-- =====================================================================================
 
 CREATE OR REPLACE FUNCTION public.update_updated_at_column()
 RETURNS TRIGGER
-LANGUAGE PLPGSQL
+LANGUAGE plpgsql
 AS $$
 BEGIN
     NEW."updatedAt" = CURRENT_TIMESTAMP;
@@ -1442,143 +1578,163 @@ END;
 $$;
 
 
--- ====================================================================================
--- 27. UPDATED AT TRIGGERS
--- ====================================================================================
+-- =====================================================================================
+-- 28. UPDATED AT TRIGGERS
+-- =====================================================================================
 
 CREATE TRIGGER "schools_updatedAt"
-BEFORE UPDATE ON public.schools
+BEFORE UPDATE ON "schools"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "academic_years_updatedAt"
-BEFORE UPDATE ON public.academic_years
+BEFORE UPDATE ON "academic_years"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "semesters_updatedAt"
+BEFORE UPDATE ON "semesters"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "users_updatedAt"
-BEFORE UPDATE ON public.users
+BEFORE UPDATE ON "users"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "teachers_updatedAt"
-BEFORE UPDATE ON public.teachers
+BEFORE UPDATE ON "teachers"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "classes_updatedAt"
-BEFORE UPDATE ON public.classes
+BEFORE UPDATE ON "classes"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "students_updatedAt"
-BEFORE UPDATE ON public.students
+BEFORE UPDATE ON "students"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "student_parents_updatedAt"
-BEFORE UPDATE ON public.student_parents
+BEFORE UPDATE ON "student_parents"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "student_economics_updatedAt"
-BEFORE UPDATE ON public.student_economics
+BEFORE UPDATE ON "student_economics"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "subjects_updatedAt"
+BEFORE UPDATE ON "subjects"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "schedule_entries_updatedAt"
+BEFORE UPDATE ON "schedule_entries"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "announcements_updatedAt"
+BEFORE UPDATE ON "announcements"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "inventory_items_updatedAt"
+BEFORE UPDATE ON "inventory_items"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "administration_records_updatedAt"
+BEFORE UPDATE ON "administration_records"
+FOR EACH ROW
+EXECUTE FUNCTION public.update_updated_at_column();
+
+
+CREATE TRIGGER "scholarship_records_updatedAt"
+BEFORE UPDATE ON "scholarship_records"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "fee_templates_updatedAt"
-BEFORE UPDATE ON public.fee_templates
+BEFORE UPDATE ON "fee_templates"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
 CREATE TRIGGER "student_bills_updatedAt"
-BEFORE UPDATE ON public.student_bills
+BEFORE UPDATE ON "student_bills"
 FOR EACH ROW
 EXECUTE FUNCTION public.update_updated_at_column();
 
 
--- ====================================================================================
--- 28. FUNCTION RECALCULATE BILL
--- ====================================================================================
+-- =====================================================================================
+-- 29. PAYMENT STATUS RECALCULATION
+-- =====================================================================================
 
-CREATE OR REPLACE FUNCTION public.recalculate_bill_status(
-    p_bill_id TEXT
+CREATE OR REPLACE FUNCTION public.recalculate_student_bill(
+    p_bill_id UUID
 )
 RETURNS VOID
-LANGUAGE PLPGSQL
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
     v_total NUMERIC(15,2);
     v_paid NUMERIC(15,2);
-    v_current_status TEXT;
-    v_new_status TEXT;
 BEGIN
 
-    SELECT
-        "totalAmount",
-        "status"
-    INTO
-        v_total,
-        v_current_status
+    SELECT "totalAmount"
+    INTO v_total
     FROM public.student_bills
-    WHERE "id" = p_bill_id
-    FOR UPDATE;
+    WHERE "id" = p_bill_id;
 
-    IF NOT FOUND THEN
+    IF v_total IS NULL THEN
         RETURN;
     END IF;
 
-
-    SELECT
-        COALESCE(
-            SUM(
-                CASE
-                    WHEN "status" = 'BERHASIL'
-                    THEN "amount"
-                    ELSE 0
-                END
-            ),
-            0
-        )
+    SELECT COALESCE(
+        SUM(
+            CASE
+                WHEN "status" = 'BERHASIL'
+                THEN "amount"
+                ELSE 0
+            END
+        ),
+        0
+    )
     INTO v_paid
     FROM public.payment_transactions
     WHERE "billId" = p_bill_id;
 
-
-    IF v_current_status = 'DIBATALKAN' THEN
-
-        v_new_status := 'DIBATALKAN';
-
-    ELSIF v_paid <= 0 THEN
-
-        v_new_status := 'BELUM_BAYAR';
-
-    ELSIF v_paid >= v_total THEN
-
-        v_new_status := 'LUNAS';
-
-    ELSE
-
-        v_new_status := 'CICILAN';
-
-    END IF;
-
-
     UPDATE public.student_bills
     SET
         "paidAmount" = LEAST(v_paid, v_total),
-        "status" = v_new_status,
+        "status" =
+            CASE
+                WHEN v_paid <= 0
+                    THEN 'BELUM_BAYAR'
+                WHEN v_paid >= v_total
+                    THEN 'LUNAS'
+                ELSE 'CICILAN'
+            END,
         "updatedAt" = CURRENT_TIMESTAMP
     WHERE "id" = p_bill_id;
 
@@ -1586,48 +1742,17 @@ END;
 $$;
 
 
--- ====================================================================================
--- 29. PAYMENT CHANGE TRIGGER
---
--- Menangani:
--- INSERT
--- UPDATE
--- DELETE
---
--- Termasuk apabila transaksi dipindahkan dari bill A ke bill B.
--- ====================================================================================
-
-CREATE OR REPLACE FUNCTION public.handle_payment_change()
+CREATE OR REPLACE FUNCTION public.payment_change_trigger()
 RETURNS TRIGGER
-LANGUAGE PLPGSQL
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 BEGIN
 
-    IF TG_OP = 'INSERT' THEN
+    IF TG_OP = 'DELETE' THEN
 
-        PERFORM public.recalculate_bill_status(
-            NEW."billId"
-        );
-
-        RETURN NEW;
-
-    ELSIF TG_OP = 'UPDATE' THEN
-
-        PERFORM public.recalculate_bill_status(
-            OLD."billId"
-        );
-
-        PERFORM public.recalculate_bill_status(
-            NEW."billId"
-        );
-
-        RETURN NEW;
-
-    ELSIF TG_OP = 'DELETE' THEN
-
-        PERFORM public.recalculate_bill_status(
+        PERFORM public.recalculate_student_bill(
             OLD."billId"
         );
 
@@ -1635,228 +1760,803 @@ BEGIN
 
     END IF;
 
-    RETURN NULL;
+
+    PERFORM public.recalculate_student_bill(
+        NEW."billId"
+    );
+
+
+    IF TG_OP = 'UPDATE'
+       AND OLD."billId" IS DISTINCT FROM NEW."billId"
+    THEN
+
+        PERFORM public.recalculate_student_bill(
+            OLD."billId"
+        );
+
+    END IF;
+
+
+    RETURN NEW;
 
 END;
 $$;
 
 
-CREATE TRIGGER "payment_recalculate_bill"
+CREATE TRIGGER "payment_status_trigger"
 AFTER INSERT OR UPDATE OR DELETE
-ON public.payment_transactions
+ON "payment_transactions"
 FOR EACH ROW
-EXECUTE FUNCTION public.handle_payment_change();
+EXECUTE FUNCTION public.payment_change_trigger();
 
 
--- ====================================================================================
--- 30. BULK IMPORT SISWA
--- ====================================================================================
+-- =====================================================================================
+-- 30. RLS ENABLE
+-- =====================================================================================
+
+ALTER TABLE "schools" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "academic_years" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "semesters" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "users" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "teachers" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "classes" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "students" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "student_class_history" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "student_parents" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "student_economics" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "attendances" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "subjects" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "schedule_entries" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "announcements" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "inventory_items" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "inventory_transactions" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "administration_records" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "scholarship_records" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "fee_templates" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "student_bills" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "payment_transactions" ENABLE ROW LEVEL SECURITY;
+ALTER TABLE "audit_logs" ENABLE ROW LEVEL SECURITY;
+
+
+-- =====================================================================================
+-- 31. SCHOOLS RLS
+-- =====================================================================================
+
+CREATE POLICY "schools_select"
+ON "schools"
+FOR SELECT
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "id" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "schools_insert"
+ON "schools"
+FOR INSERT
+TO authenticated
+WITH CHECK (
+    public.is_super_admin()
+);
+
+
+CREATE POLICY "schools_update"
+ON "schools"
+FOR UPDATE
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "id" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR
+    "id" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "schools_delete"
+ON "schools"
+FOR DELETE
+TO authenticated
+USING (
+    public.is_super_admin()
+);
+
+
+-- =====================================================================================
+-- 32. ACADEMIC YEARS RLS
+-- =====================================================================================
+
+CREATE POLICY "academic_years_select"
+ON "academic_years"
+FOR SELECT
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "academic_years_insert"
+ON "academic_years"
+FOR INSERT
+TO authenticated
+WITH CHECK (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "academic_years_update"
+ON "academic_years"
+FOR UPDATE
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "academic_years_delete"
+ON "academic_years"
+FOR DELETE
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+);
+
+
+-- =====================================================================================
+-- 33. SEMESTERS RLS
+-- =====================================================================================
+
+CREATE POLICY "semesters_all"
+ON "semesters"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR
+    "schoolId" = public.get_user_school_id()
+);
+
+
+-- =====================================================================================
+-- 34. USERS RLS
+--
+-- SUPER_ADMIN:
+--   dapat melihat/mengelola semua user
+--
+-- ADMIN:
+--   hanya user dalam sekolahnya
+--
+-- USER BIASA:
+--   hanya profile dirinya sendiri
+--
+-- SUPER_ADMIN tidak boleh dibuat melalui INSERT biasa oleh ADMIN.
+-- =====================================================================================
+
+CREATE POLICY "users_select"
+ON "users"
+FOR SELECT
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "id" = auth.uid()
+    OR
+    (
+        "schoolId" = public.get_user_school_id()
+        AND public.get_user_role() = 'ADMIN'
+    )
+);
+
+
+CREATE POLICY "users_insert"
+ON "users"
+FOR INSERT
+TO authenticated
+WITH CHECK (
+    (
+        public.is_super_admin()
+        AND (
+            "role" = 'SUPER_ADMIN'
+            OR "schoolId" IS NOT NULL
+        )
+    )
+    OR
+    (
+        public.get_user_role() = 'ADMIN'
+        AND "schoolId" = public.get_user_school_id()
+        AND "role" <> 'SUPER_ADMIN'
+    )
+);
+
+
+CREATE POLICY "users_update"
+ON "users"
+FOR UPDATE
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    "id" = auth.uid()
+    OR
+    (
+        public.get_user_role() = 'ADMIN'
+        AND "schoolId" = public.get_user_school_id()
+    )
+)
+WITH CHECK (
+    (
+        public.is_super_admin()
+    )
+    OR
+    (
+        "id" = auth.uid()
+        AND "schoolId" = public.get_user_school_id()
+    )
+    OR
+    (
+        public.get_user_role() = 'ADMIN'
+        AND "schoolId" = public.get_user_school_id()
+        AND "role" <> 'SUPER_ADMIN'
+    )
+);
+
+
+CREATE POLICY "users_delete"
+ON "users"
+FOR DELETE
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR
+    (
+        public.get_user_role() = 'ADMIN'
+        AND "schoolId" = public.get_user_school_id()
+        AND "role" <> 'SUPER_ADMIN'
+    )
+);
+
+
+-- =====================================================================================
+-- 35. GENERIC SCHOOL RLS
+-- =====================================================================================
+
+
+-- TEACHERS
+
+CREATE POLICY "teachers_all"
+ON "teachers"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- CLASSES
+
+CREATE POLICY "classes_all"
+ON "classes"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- STUDENTS
+
+CREATE POLICY "students_all"
+ON "students"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- STUDENT HISTORY
+
+CREATE POLICY "student_history_all"
+ON "student_class_history"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- PARENTS
+
+CREATE POLICY "parents_all"
+ON "student_parents"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- ECONOMICS
+
+CREATE POLICY "economics_all"
+ON "student_economics"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- ATTENDANCES
+
+CREATE POLICY "attendances_all"
+ON "attendances"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- SUBJECTS
+
+CREATE POLICY "subjects_all"
+ON "subjects"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- SCHEDULES
+
+CREATE POLICY "schedule_entries_all"
+ON "schedule_entries"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- ANNOUNCEMENTS
+
+CREATE POLICY "announcements_all"
+ON "announcements"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- INVENTORY
+
+CREATE POLICY "inventory_items_all"
+ON "inventory_items"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "inventory_transactions_all"
+ON "inventory_transactions"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- ADMINISTRATION
+
+CREATE POLICY "administration_all"
+ON "administration_records"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- SCHOLARSHIPS
+
+CREATE POLICY "scholarships_all"
+ON "scholarship_records"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- FEE TEMPLATES
+
+CREATE POLICY "fee_templates_all"
+ON "fee_templates"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- STUDENT BILLS
+
+CREATE POLICY "student_bills_all"
+ON "student_bills"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- PAYMENTS
+
+CREATE POLICY "payments_all"
+ON "payment_transactions"
+FOR ALL
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+)
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- AUDIT
+
+CREATE POLICY "audit_logs_select"
+ON "audit_logs"
+FOR SELECT
+TO authenticated
+USING (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+CREATE POLICY "audit_logs_insert"
+ON "audit_logs"
+FOR INSERT
+TO authenticated
+WITH CHECK (
+    public.is_super_admin()
+    OR "schoolId" = public.get_user_school_id()
+);
+
+
+-- =====================================================================================
+-- 36. TENANT SETUP
+--
+-- HANYA SUPER_ADMIN.
+--
+-- Fungsi ini:
+--   1. Membuat sekolah
+--   2. Membuat tahun ajaran awal
+--
+-- TIDAK membuat akun user baru.
+--
+-- Akun ADMIN dibuat melalui Supabase Auth oleh sistem/admin.
+-- =====================================================================================
+
+DROP FUNCTION IF EXISTS public.setup_new_tenant(
+    TEXT,
+    TEXT,
+    TEXT,
+    INTEGER,
+    INTEGER
+);
+
+
+CREATE OR REPLACE FUNCTION public.setup_new_tenant(
+    p_school_name TEXT,
+    p_npsn TEXT,
+    p_full_name TEXT,
+    p_start_year INTEGER,
+    p_end_year INTEGER
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_school_id UUID;
+    v_academic_year_id UUID;
+BEGIN
+
+    IF NOT public.is_super_admin() THEN
+        RAISE EXCEPTION
+            'Akses ditolak. Hanya SUPER_ADMIN yang dapat membuat sekolah.';
+    END IF;
+
+
+    IF p_school_name IS NULL
+       OR trim(p_school_name) = ''
+    THEN
+        RAISE EXCEPTION
+            'Nama sekolah wajib diisi.';
+    END IF;
+
+
+    IF p_npsn IS NULL
+       OR trim(p_npsn) = ''
+    THEN
+        RAISE EXCEPTION
+            'NPSN wajib diisi.';
+    END IF;
+
+
+    IF p_start_year IS NULL
+       OR p_end_year IS NULL
+       OR p_end_year <> p_start_year + 1
+    THEN
+        RAISE EXCEPTION
+            'Tahun ajaran tidak valid.';
+    END IF;
+
+
+    IF EXISTS (
+        SELECT 1
+        FROM public.schools
+        WHERE "npsn" = trim(p_npsn)
+    )
+    THEN
+        RAISE EXCEPTION
+            'NPSN tersebut sudah terdaftar.';
+    END IF;
+
+
+    INSERT INTO public.schools
+    (
+        "name",
+        "npsn",
+        "level",
+        "type",
+        "address",
+        "city",
+        "province"
+    )
+    VALUES
+    (
+        trim(p_school_name),
+        trim(p_npsn),
+        'BELUM_DIATUR',
+        'BELUM_DIATUR',
+        '-',
+        '-',
+        '-'
+    )
+    RETURNING "id"
+    INTO v_school_id;
+
+
+    INSERT INTO public.academic_years
+    (
+        "schoolId",
+        "name",
+        "startYear",
+        "endYear",
+        "isActive"
+    )
+    VALUES
+    (
+        v_school_id,
+        p_start_year || '/' || p_end_year,
+        p_start_year,
+        p_end_year,
+        true
+    )
+    RETURNING "id"
+    INTO v_academic_year_id;
+
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'schoolId', v_school_id,
+        'academicYearId', v_academic_year_id,
+        'message', 'Sekolah berhasil dibuat.'
+    );
+
+END;
+$$;
+
+
+REVOKE EXECUTE
+ON FUNCTION public.setup_new_tenant(
+    TEXT,
+    TEXT,
+    TEXT,
+    INTEGER,
+    INTEGER
+)
+FROM PUBLIC;
+
+
+REVOKE EXECUTE
+ON FUNCTION public.setup_new_tenant(
+    TEXT,
+    TEXT,
+    TEXT,
+    INTEGER,
+    INTEGER
+)
+FROM anon;
+
+
+GRANT EXECUTE
+ON FUNCTION public.setup_new_tenant(
+    TEXT,
+    TEXT,
+    TEXT,
+    INTEGER,
+    INTEGER
+)
+TO authenticated;
+
+
+-- =====================================================================================
+-- 37. BULK IMPORT STUDENTS
+-- =====================================================================================
+
+DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB);
+
 
 CREATE OR REPLACE FUNCTION public.bulk_import_students(
     batch_data JSONB
 )
 RETURNS JSONB
-LANGUAGE PLPGSQL
+LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
-
-    auth_school_id TEXT;
+    v_school_id UUID;
 
     student_record JSONB;
     parent_record JSONB;
     economic_record JSONB;
 
-    inserted_student_id TEXT;
+    v_student_id UUID;
 
-    success_count INTEGER := 0;
-
+    v_success_count INTEGER := 0;
 BEGIN
 
-    -- ============================================================
-    -- VALIDASI LOGIN
-    -- ============================================================
+    v_school_id := public.get_user_school_id();
 
-    IF auth.uid() IS NULL THEN
 
+    IF v_school_id IS NULL THEN
         RAISE EXCEPTION
-            'User belum login.';
-
+            'User tidak terafiliasi dengan sekolah.';
     END IF;
 
-
-    -- ============================================================
-    -- SCHOOL USER
-    -- ============================================================
-
-    auth_school_id := public.get_user_school_id();
-
-
-    IF auth_school_id IS NULL THEN
-
-        RAISE EXCEPTION
-            'User tidak terafiliasi dengan sekolah aktif.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- VALIDASI ARRAY
-    -- ============================================================
 
     IF batch_data IS NULL
        OR jsonb_typeof(batch_data) <> 'array'
     THEN
-
         RAISE EXCEPTION
             'batch_data harus berupa JSON array.';
-
     END IF;
 
 
-    -- ============================================================
-    -- LOOP
-    -- ============================================================
-
     FOR student_record IN
-        SELECT value
+        SELECT *
         FROM jsonb_array_elements(batch_data)
     LOOP
 
-        -- ========================================================
-        -- VALIDASI FIELD WAJIB
-        -- ========================================================
-
-        IF COALESCE(
-            NULLIF(student_record->>'nisn', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'NISN wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'nik', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'NIK wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'fullName', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Nama siswa wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'gender', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Jenis kelamin wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'birthDate', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Tanggal lahir wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'birthPlace', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Tempat lahir wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'address', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Alamat wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'city', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Kota wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'province', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Provinsi wajib diisi.';
-        END IF;
-
-
-        IF COALESCE(
-            NULLIF(student_record->>'entryDate', ''),
-            ''
-        ) = ''
-        THEN
-            RAISE EXCEPTION
-                'Tanggal masuk wajib diisi.';
-        END IF;
-
-
-        -- ========================================================
-        -- VALIDASI CLASS
-        -- ========================================================
-
-        IF NULLIF(student_record->>'classId', '') IS NOT NULL THEN
-
-            IF NOT EXISTS (
-                SELECT 1
-                FROM public.classes c
-                WHERE c."id" = student_record->>'classId'
-                  AND c."schoolId" = auth_school_id
-            )
-            THEN
-
-                RAISE EXCEPTION
-                    'classId tidak valid atau bukan milik sekolah user.';
-
-            END IF;
-
-        END IF;
-
-
-        -- ========================================================
-        -- INSERT STUDENT
-        -- ========================================================
-
         INSERT INTO public.students
         (
-            "id",
             "schoolId",
 
             "nis",
@@ -1893,11 +2593,6 @@ BEGIN
 
             "classId",
 
-            "skhun",
-            "noPesertaUn",
-            "noIjazah",
-            "noAktaLahir",
-
             "anakKe",
             "jmlSaudara",
 
@@ -1912,22 +2607,13 @@ BEGIN
 
             "jenisTinggal",
             "alatTransportasi",
-            "kebutuhanKhusus",
 
             "sekolahAsal",
-
-            "bank",
-            "noRekening",
-            "namaRekening"
+            "kebutuhanKhusus"
         )
         VALUES
         (
-            COALESCE(
-                NULLIF(student_record->>'id', ''),
-                gen_random_uuid()::TEXT
-            ),
-
-            auth_school_id,
+            v_school_id,
 
             NULLIF(student_record->>'nis', ''),
             student_record->>'nisn',
@@ -1939,7 +2625,7 @@ BEGIN
 
             student_record->>'gender',
 
-            (student_record->>'birthDate')::TIMESTAMP,
+            (student_record->>'birthDate')::DATE,
             student_record->>'birthPlace',
 
             NULLIF(student_record->>'religion', ''),
@@ -1949,13 +2635,13 @@ BEGIN
             NULLIF(student_record->>'rw', ''),
 
             COALESCE(
-                NULLIF(student_record->>'kelurahan', ''),
-                NULLIF(student_record->>'village', '')
+                NULLIF(student_record->>'village', ''),
+                NULLIF(student_record->>'kelurahan', '')
             ),
 
             COALESCE(
-                NULLIF(student_record->>'kecamatan', ''),
-                NULLIF(student_record->>'district', '')
+                NULLIF(student_record->>'district', ''),
+                NULLIF(student_record->>'kecamatan', '')
             ),
 
             student_record->>'city',
@@ -1970,14 +2656,12 @@ BEGIN
                 'AKTIF'
             ),
 
-            (student_record->>'entryDate')::TIMESTAMP,
+            COALESCE(
+                NULLIF(student_record->>'entryDate', '')::DATE,
+                CURRENT_DATE
+            ),
 
-            NULLIF(student_record->>'classId', ''),
-
-            NULLIF(student_record->>'skhun', ''),
-            NULLIF(student_record->>'noPesertaUn', ''),
-            NULLIF(student_record->>'noIjazah', ''),
-            NULLIF(student_record->>'noAktaLahir', ''),
+            NULLIF(student_record->>'classId', '')::UUID,
 
             NULLIF(student_record->>'anakKe', '')::INTEGER,
             NULLIF(student_record->>'jmlSaudara', '')::INTEGER,
@@ -1993,56 +2677,27 @@ BEGIN
 
             NULLIF(student_record->>'jenisTinggal', ''),
             NULLIF(student_record->>'alatTransportasi', ''),
-            NULLIF(student_record->>'kebutuhanKhusus', ''),
 
             NULLIF(student_record->>'sekolahAsal', ''),
-
-            NULLIF(student_record->>'bank', ''),
-            NULLIF(student_record->>'noRekening', ''),
-            NULLIF(student_record->>'namaRekening', '')
+            NULLIF(student_record->>'kebutuhanKhusus', '')
         )
         RETURNING "id"
-        INTO inserted_student_id;
+        INTO v_student_id;
 
-
-        -- ========================================================
-        -- INSERT PARENTS
-        -- ========================================================
 
         IF student_record ? 'parents'
            AND jsonb_typeof(student_record->'parents') = 'array'
         THEN
 
             FOR parent_record IN
-                SELECT value
+                SELECT *
                 FROM jsonb_array_elements(
                     student_record->'parents'
                 )
             LOOP
 
-                IF COALESCE(
-                    NULLIF(parent_record->>'relation', ''),
-                    ''
-                ) = ''
-                THEN
-                    RAISE EXCEPTION
-                        'Relation orang tua wajib diisi.';
-                END IF;
-
-
-                IF COALESCE(
-                    NULLIF(parent_record->>'fullName', ''),
-                    ''
-                ) = ''
-                THEN
-                    RAISE EXCEPTION
-                        'Nama orang tua wajib diisi.';
-                END IF;
-
-
                 INSERT INTO public.student_parents
                 (
-                    "id",
                     "schoolId",
                     "studentId",
 
@@ -2063,18 +2718,11 @@ BEGIN
                 )
                 VALUES
                 (
-                    COALESCE(
-                        NULLIF(parent_record->>'id', ''),
-                        gen_random_uuid()::TEXT
-                    ),
-
-                    auth_school_id,
-
-                    inserted_student_id,
+                    v_school_id,
+                    v_student_id,
 
                     parent_record->>'relation',
                     parent_record->>'fullName',
-
                     NULLIF(parent_record->>'nik', ''),
 
                     NULLIF(parent_record->>'phone', ''),
@@ -2083,8 +2731,8 @@ BEGIN
                     NULLIF(parent_record->>'education', ''),
 
                     COALESCE(
-                        NULLIF(parent_record->>'occupation', ''),
-                        NULLIF(parent_record->>'job', '')
+                        NULLIF(parent_record->>'job', ''),
+                        NULLIF(parent_record->>'occupation', '')
                     ),
 
                     CASE
@@ -2094,35 +2742,28 @@ BEGIN
                                     parent_record->>'income',
                                     ''
                                 ),
-                                '[^0-9]',
+                                '\D',
                                 '',
                                 'g'
                             ),
                             ''
                         ) IS NULL
                         THEN NULL
-
                         ELSE
                             regexp_replace(
                                 parent_record->>'income',
-                                '[^0-9]',
+                                '\D',
                                 '',
                                 'g'
                             )::NUMERIC(15,2)
                     END,
 
                     COALESCE(
-                        NULLIF(
-                            parent_record->>'isAlive',
-                            ''
-                        )::BOOLEAN,
-                        TRUE
+                        (parent_record->>'isAlive')::BOOLEAN,
+                        true
                     ),
 
-                    NULLIF(
-                        parent_record->>'address',
-                        ''
-                    )
+                    NULLIF(parent_record->>'address', '')
                 );
 
             END LOOP;
@@ -2130,21 +2771,13 @@ BEGIN
         END IF;
 
 
-        -- ========================================================
-        -- INSERT ECONOMIC
-        -- ========================================================
+        IF student_record ? 'economic' THEN
 
-        IF student_record ? 'economic'
-           AND jsonb_typeof(student_record->'economic') = 'object'
-        THEN
-
-            economic_record :=
-                student_record->'economic';
+            economic_record := student_record->'economic';
 
 
             INSERT INTO public.student_economics
             (
-                "id",
                 "schoolId",
                 "studentId",
 
@@ -2160,38 +2793,16 @@ BEGIN
 
                 "hasPkh",
 
-                "isDtks",
-
-                "houseOwnership",
-                "houseCondition",
-
-                "dependentsCount",
-
-                "isOrphan",
-                "orphanType",
-
-                "pipScore",
-                "economicCategory",
-                "scoringDetails",
-                "scoredAt"
+                "isDtks"
             )
             VALUES
             (
-                COALESCE(
-                    NULLIF(economic_record->>'id', ''),
-                    gen_random_uuid()::TEXT
-                ),
-
-                auth_school_id,
-
-                inserted_student_id,
+                v_school_id,
+                v_student_id,
 
                 COALESCE(
-                    NULLIF(
-                        economic_record->>'hasKip',
-                        ''
-                    )::BOOLEAN,
-                    FALSE
+                    (economic_record->>'hasKip')::BOOLEAN,
+                    false
                 ),
 
                 NULLIF(
@@ -2205,11 +2816,8 @@ BEGIN
                 ),
 
                 COALESCE(
-                    NULLIF(
-                        economic_record->>'layakPip',
-                        ''
-                    )::BOOLEAN,
-                    FALSE
+                    (economic_record->>'layakPip')::BOOLEAN,
+                    false
                 ),
 
                 NULLIF(
@@ -2218,11 +2826,8 @@ BEGIN
                 ),
 
                 COALESCE(
-                    NULLIF(
-                        economic_record->>'hasKks',
-                        ''
-                    )::BOOLEAN,
-                    FALSE
+                    (economic_record->>'hasKks')::BOOLEAN,
+                    false
                 ),
 
                 NULLIF(
@@ -2231,90 +2836,29 @@ BEGIN
                 ),
 
                 COALESCE(
-                    NULLIF(
-                        economic_record->>'hasPkh',
-                        ''
-                    )::BOOLEAN,
-                    FALSE
+                    (economic_record->>'hasPkh')::BOOLEAN,
+                    false
                 ),
 
                 COALESCE(
-                    NULLIF(
-                        economic_record->>'isDtks',
-                        ''
-                    )::BOOLEAN,
-                    FALSE
-                ),
-
-                NULLIF(
-                    economic_record->>'houseOwnership',
-                    ''
-                ),
-
-                NULLIF(
-                    economic_record->>'houseCondition',
-                    ''
-                ),
-
-                NULLIF(
-                    economic_record->>'dependentsCount',
-                    ''
-                )::INTEGER,
-
-                COALESCE(
-                    NULLIF(
-                        economic_record->>'isOrphan',
-                        ''
-                    )::BOOLEAN,
-                    FALSE
-                ),
-
-                NULLIF(
-                    economic_record->>'orphanType',
-                    ''
-                ),
-
-                NULLIF(
-                    economic_record->>'pipScore',
-                    ''
-                )::DOUBLE PRECISION,
-
-                NULLIF(
-                    economic_record->>'economicCategory',
-                    ''
-                ),
-
-                CASE
-                    WHEN economic_record ? 'scoringDetails'
-                    THEN economic_record->'scoringDetails'
-                    ELSE NULL
-                END,
-
-                NULLIF(
-                    economic_record->>'scoredAt',
-                    ''
-                )::TIMESTAMP
+                    (economic_record->>'isDtks')::BOOLEAN,
+                    false
+                )
             );
 
         END IF;
 
 
-        success_count :=
-            success_count + 1;
+        v_success_count := v_success_count + 1;
 
     END LOOP;
 
 
     RETURN jsonb_build_object(
-        'success',
-        TRUE,
-
-        'count',
-        success_count,
-
+        'success', true,
+        'count', v_success_count,
         'message',
-        success_count ||
-        ' siswa berhasil diimport.'
+        v_success_count || ' siswa berhasil diimport.'
     );
 
 
@@ -2322,384 +2866,58 @@ EXCEPTION
     WHEN OTHERS THEN
 
         RETURN jsonb_build_object(
-            'success',
-            FALSE,
-
-            'count',
-            success_count,
-
-            'message',
-            SQLERRM
+            'success', false,
+            'count', v_success_count,
+            'message', SQLERRM
         );
 
 END;
 $$;
 
 
--- ====================================================================================
--- 31. SETUP TENANT BARU
---
--- Membuat:
--- 1. School
--- 2. Academic Year
--- 3. User SUPER_ADMIN
---
--- Dipanggil setelah auth.users berhasil dibuat.
--- ====================================================================================
-
-CREATE OR REPLACE FUNCTION public.setup_new_tenant(
-    p_school_name TEXT,
-    p_npsn TEXT,
-    p_full_name TEXT,
-    p_start_year INTEGER,
-    p_end_year INTEGER
-)
-RETURNS JSONB
-LANGUAGE PLPGSQL
-SECURITY DEFINER
-SET search_path = public
-AS $$
-DECLARE
-
-    v_user_id TEXT;
-    v_email TEXT;
-
-    v_school_id TEXT;
-    v_academic_year_id TEXT;
-
-    v_existing_school_id TEXT;
-    v_existing_user_school_id TEXT;
-
-BEGIN
-
-    -- ============================================================
-    -- LOGIN
-    -- ============================================================
-
-    v_user_id :=
-        auth.uid()::TEXT;
-
-
-    IF v_user_id IS NULL THEN
-
-        RAISE EXCEPTION
-            'Akses ditolak. Anda harus login terlebih dahulu.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- EMAIL
-    -- ============================================================
-
-    v_email :=
-        auth.jwt() ->> 'email';
-
-
-    IF v_email IS NULL
-       OR trim(v_email) = ''
-    THEN
-
-        RAISE EXCEPTION
-            'Email akun tidak ditemukan.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- VALIDASI NAMA SEKOLAH
-    -- ============================================================
-
-    IF p_school_name IS NULL
-       OR trim(p_school_name) = ''
-    THEN
-
-        RAISE EXCEPTION
-            'Nama sekolah wajib diisi.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- VALIDASI NPSN
-    -- ============================================================
-
-    IF p_npsn IS NULL
-       OR trim(p_npsn) = ''
-    THEN
-
-        RAISE EXCEPTION
-            'NPSN wajib diisi.';
-
-    END IF;
-
-
-    IF length(trim(p_npsn)) < 8
-       OR length(trim(p_npsn)) > 12
-    THEN
-
-        RAISE EXCEPTION
-            'Format NPSN tidak valid.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- VALIDASI NAMA ADMIN
-    -- ============================================================
-
-    IF p_full_name IS NULL
-       OR trim(p_full_name) = ''
-    THEN
-
-        RAISE EXCEPTION
-            'Nama pengguna wajib diisi.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- VALIDASI TAHUN AJARAN
-    -- ============================================================
-
-    IF p_start_year IS NULL
-       OR p_end_year IS NULL
-       OR p_end_year <> p_start_year + 1
-    THEN
-
-        RAISE EXCEPTION
-            'Tahun ajaran tidak valid.';
-
-    END IF;
-
-
-    -- ============================================================
-    -- USER SUDAH MEMILIKI PROFILE?
-    -- ============================================================
-
-    SELECT
-        u."schoolId"
-    INTO
-        v_existing_user_school_id
-    FROM public.users u
-    WHERE u."id" = v_user_id
-    LIMIT 1;
-
-
-    IF v_existing_user_school_id IS NOT NULL THEN
-
-        RETURN jsonb_build_object(
-            'success',
-            FALSE,
-
-            'code',
-            'USER_ALREADY_SETUP',
-
-            'message',
-            'User sudah memiliki sekolah.',
-
-            'schoolId',
-            v_existing_user_school_id
-        );
-
-    END IF;
-
-
-    -- ============================================================
-    -- CEK NPSN
-    -- ============================================================
-
-    SELECT
-        s."id"
-    INTO
-        v_existing_school_id
-    FROM public.schools s
-    WHERE s."npsn" = trim(p_npsn)
-    LIMIT 1;
-
-
-    IF v_existing_school_id IS NOT NULL THEN
-
-        RETURN jsonb_build_object(
-            'success',
-            FALSE,
-
-            'code',
-            'NPSN_ALREADY_EXISTS',
-
-            'message',
-            'NPSN tersebut sudah terdaftar.'
-        );
-
-    END IF;
-
-
-    -- ============================================================
-    -- BUAT SEKOLAH
-    -- ============================================================
-
-    INSERT INTO public.schools
-    (
-        "name",
-        "npsn",
-        "level",
-        "type",
-        "address",
-        "city",
-        "province"
-    )
-    VALUES
-    (
-        trim(p_school_name),
-        trim(p_npsn),
-        'BELUM_DIATUR',
-        'BELUM_DIATUR',
-        '-',
-        '-',
-        '-'
-    )
-    RETURNING "id"
-    INTO v_school_id;
-
-
-    -- ============================================================
-    -- BUAT TAHUN AJARAN
-    -- ============================================================
-
-    INSERT INTO public.academic_years
-    (
-        "schoolId",
-        "name",
-        "startYear",
-        "endYear",
-        "isActive"
-    )
-    VALUES
-    (
-        v_school_id,
-
-        p_start_year ||
-        '/' ||
-        p_end_year,
-
-        p_start_year,
-        p_end_year,
-
-        TRUE
-    )
-    RETURNING "id"
-    INTO v_academic_year_id;
-
-
-    -- ============================================================
-    -- BUAT USER SUPER ADMIN
-    -- ============================================================
-
-    INSERT INTO public.users
-    (
-        "id",
-        "schoolId",
-        "email",
-        "fullName",
-        "role",
-        "isActive"
-    )
-    VALUES
-    (
-        v_user_id,
-        v_school_id,
-        lower(trim(v_email)),
-        trim(p_full_name),
-        'SUPER_ADMIN',
-        TRUE
-    );
-
-
-    -- ============================================================
-    -- RETURN
-    -- ============================================================
-
-    RETURN jsonb_build_object(
-        'success',
-        TRUE,
-
-        'schoolId',
-        v_school_id,
-
-        'academicYearId',
-        v_academic_year_id,
-
-        'userId',
-        v_user_id,
-
-        'message',
-        'Institusi berhasil didaftarkan.'
-    );
-
-
-EXCEPTION
-
-    WHEN unique_violation THEN
-
-        RETURN jsonb_build_object(
-            'success',
-            FALSE,
-
-            'code',
-            'DUPLICATE_DATA',
-
-            'message',
-            SQLERRM
-        );
-
-END;
-$$;
-
-
--- ====================================================================================
--- 32. REVOKE / GRANT RPC
--- ====================================================================================
-
-REVOKE EXECUTE
-ON FUNCTION public.setup_new_tenant(
-    TEXT,
-    TEXT,
-    TEXT,
-    INTEGER,
-    INTEGER
-)
+-- =====================================================================================
+-- 38. FUNCTION GRANTS
+-- =====================================================================================
+
+REVOKE ALL
+ON FUNCTION public.get_user_school_id()
 FROM PUBLIC;
 
+REVOKE ALL
+ON FUNCTION public.get_user_role()
+FROM PUBLIC;
 
-REVOKE EXECUTE
-ON FUNCTION public.setup_new_tenant(
-    TEXT,
-    TEXT,
-    TEXT,
-    INTEGER,
-    INTEGER
-)
-FROM anon;
+REVOKE ALL
+ON FUNCTION public.is_user_active()
+FROM PUBLIC;
 
+REVOKE ALL
+ON FUNCTION public.is_super_admin()
+FROM PUBLIC;
 
-GRANT EXECUTE
-ON FUNCTION public.setup_new_tenant(
-    TEXT,
-    TEXT,
-    TEXT,
-    INTEGER,
-    INTEGER
-)
-TO authenticated;
+REVOKE ALL
+ON FUNCTION public.is_school_admin()
+FROM PUBLIC;
 
 
 GRANT EXECUTE
 ON FUNCTION public.get_user_school_id()
 TO authenticated;
 
+GRANT EXECUTE
+ON FUNCTION public.get_user_role()
+TO authenticated;
 
 GRANT EXECUTE
 ON FUNCTION public.is_user_active()
+TO authenticated;
+
+GRANT EXECUTE
+ON FUNCTION public.is_super_admin()
+TO authenticated;
+
+GRANT EXECUTE
+ON FUNCTION public.is_school_admin()
 TO authenticated;
 
 
@@ -2708,758 +2926,137 @@ ON FUNCTION public.bulk_import_students(JSONB)
 TO authenticated;
 
 
--- ====================================================================================
--- 33. ENABLE RLS
--- ====================================================================================
-
-ALTER TABLE public.schools ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.academic_years ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.semesters ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.refresh_tokens ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.teachers ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.classes ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.students ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.student_class_history ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.student_parents ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.student_economics ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.attendances ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.announcements ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.fee_templates ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.student_bills ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.payment_transactions ENABLE ROW LEVEL SECURITY;
-
-ALTER TABLE public.audit_logs ENABLE ROW LEVEL SECURITY;
-
-
--- ====================================================================================
--- 34. SCHOOLS RLS
--- ====================================================================================
-
-CREATE POLICY "schools_select_own"
-ON public.schools
-FOR SELECT
-TO authenticated
-USING (
-    "id" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "schools_update_own"
-ON public.schools
-FOR UPDATE
-TO authenticated
-USING (
-    "id" = public.get_user_school_id()
-)
-WITH CHECK (
-    "id" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 35. USERS RLS
---
--- INSERT sengaja TIDAK diberikan kepada client.
--- Profile dibuat melalui setup_new_tenant().
--- ====================================================================================
-
-CREATE POLICY "users_select_own"
-ON public.users
-FOR SELECT
-TO authenticated
-USING (
-    "id" = auth.uid()::TEXT
-);
-
-
-CREATE POLICY "users_update_own"
-ON public.users
-FOR UPDATE
-TO authenticated
-USING (
-    "id" = auth.uid()::TEXT
-)
-WITH CHECK (
-    "id" = auth.uid()::TEXT
-);
-
-
--- ====================================================================================
--- 36. ACADEMIC YEARS RLS
--- ====================================================================================
-
-CREATE POLICY "academic_years_select"
-ON public.academic_years
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "academic_years_insert"
-ON public.academic_years
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "academic_years_update"
-ON public.academic_years
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "academic_years_delete"
-ON public.academic_years
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 37. SEMESTERS RLS
--- ====================================================================================
-
-CREATE POLICY "semesters_select"
-ON public.semesters
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "semesters_insert"
-ON public.semesters
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "semesters_update"
-ON public.semesters
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "semesters_delete"
-ON public.semesters
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 38. TEACHERS RLS
--- ====================================================================================
-
-CREATE POLICY "teachers_select"
-ON public.teachers
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "teachers_insert"
-ON public.teachers
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "teachers_update"
-ON public.teachers
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "teachers_delete"
-ON public.teachers
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 39. CLASSES RLS
--- ====================================================================================
-
-CREATE POLICY "classes_select"
-ON public.classes
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "classes_insert"
-ON public.classes
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "classes_update"
-ON public.classes
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "classes_delete"
-ON public.classes
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 40. STUDENTS RLS
--- ====================================================================================
-
-CREATE POLICY "students_select"
-ON public.students
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "students_insert"
-ON public.students
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "students_update"
-ON public.students
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "students_delete"
-ON public.students
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 41. STUDENT CLASS HISTORY RLS
--- ====================================================================================
-
-CREATE POLICY "student_history_select"
-ON public.student_class_history
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "student_history_insert"
-ON public.student_class_history
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "student_history_update"
-ON public.student_class_history
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "student_history_delete"
-ON public.student_class_history
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 42. PARENTS RLS
--- ====================================================================================
-
-CREATE POLICY "parents_select"
-ON public.student_parents
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "parents_insert"
-ON public.student_parents
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "parents_update"
-ON public.student_parents
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "parents_delete"
-ON public.student_parents
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 43. ECONOMICS RLS
--- ====================================================================================
-
-CREATE POLICY "economics_select"
-ON public.student_economics
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "economics_insert"
-ON public.student_economics
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "economics_update"
-ON public.student_economics
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "economics_delete"
-ON public.student_economics
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 44. ATTENDANCES RLS
--- ====================================================================================
-
-CREATE POLICY "attendances_select"
-ON public.attendances
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "attendances_insert"
-ON public.attendances
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "attendances_update"
-ON public.attendances
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "attendances_delete"
-ON public.attendances
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 45. ANNOUNCEMENTS RLS
--- ====================================================================================
-
-CREATE POLICY "announcements_select"
-ON public.announcements
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "announcements_insert"
-ON public.announcements
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "announcements_update"
-ON public.announcements
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "announcements_delete"
-ON public.announcements
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 46. FEE TEMPLATES RLS
--- ====================================================================================
-
-CREATE POLICY "fee_templates_select"
-ON public.fee_templates
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "fee_templates_insert"
-ON public.fee_templates
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "fee_templates_update"
-ON public.fee_templates
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "fee_templates_delete"
-ON public.fee_templates
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 47. STUDENT BILLS RLS
--- ====================================================================================
-
-CREATE POLICY "student_bills_select"
-ON public.student_bills
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "student_bills_insert"
-ON public.student_bills
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "student_bills_update"
-ON public.student_bills
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "student_bills_delete"
-ON public.student_bills
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 48. PAYMENT TRANSACTIONS RLS
--- ====================================================================================
-
-CREATE POLICY "payments_select"
-ON public.payment_transactions
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "payments_insert"
-ON public.payment_transactions
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "payments_update"
-ON public.payment_transactions
-FOR UPDATE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-)
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "payments_delete"
-ON public.payment_transactions
-FOR DELETE
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 49. AUDIT LOG RLS
--- ====================================================================================
-
-CREATE POLICY "audit_logs_select"
-ON public.audit_logs
-FOR SELECT
-TO authenticated
-USING (
-    "schoolId" = public.get_user_school_id()
-);
-
-
-CREATE POLICY "audit_logs_insert"
-ON public.audit_logs
-FOR INSERT
-TO authenticated
-WITH CHECK (
-    "schoolId" = public.get_user_school_id()
-);
-
-
--- ====================================================================================
--- 50. REFRESH TOKENS RLS
---
--- Karena refresh token seharusnya tidak diakses langsung oleh browser,
--- tidak diberikan policy SELECT/INSERT/UPDATE/DELETE kepada authenticated.
--- ====================================================================================
-
-
--- ====================================================================================
--- 51. COMMENTS
--- ====================================================================================
-
-COMMENT ON TABLE public.schools
+-- =====================================================================================
+-- 39. COMMENTS
+-- =====================================================================================
+
+COMMENT ON TABLE "schools"
 IS 'Master sekolah / tenant aplikasi ERP.';
 
 
-COMMENT ON TABLE public.academic_years
+COMMENT ON TABLE "users"
+IS 'Profile pengguna yang terhubung langsung dengan auth.users. Password dikelola Supabase Auth.';
+
+
+COMMENT ON TABLE "academic_years"
 IS 'Master tahun ajaran per sekolah.';
 
 
-COMMENT ON TABLE public.semesters
+COMMENT ON TABLE "semesters"
 IS 'Semester dalam tahun ajaran.';
 
 
-COMMENT ON TABLE public.users
-IS 'Profile user aplikasi yang terhubung dengan Supabase Auth.';
-
-
-COMMENT ON TABLE public.teachers
+COMMENT ON TABLE "teachers"
 IS 'Master guru dan tenaga pendidik.';
 
 
-COMMENT ON TABLE public.classes
+COMMENT ON TABLE "classes"
 IS 'Master kelas berdasarkan tahun ajaran.';
 
 
-COMMENT ON TABLE public.students
+COMMENT ON TABLE "students"
 IS 'Master data siswa.';
 
 
-COMMENT ON TABLE public.student_class_history
+COMMENT ON TABLE "student_class_history"
 IS 'Riwayat kelas siswa berdasarkan tahun ajaran.';
 
 
-COMMENT ON TABLE public.student_parents
+COMMENT ON TABLE "student_parents"
 IS 'Data orang tua/wali siswa.';
 
 
-COMMENT ON TABLE public.student_economics
-IS 'Data sosial ekonomi dan indikator PIP siswa.';
+COMMENT ON TABLE "student_economics"
+IS 'Data ekonomi siswa termasuk KIP, KKS, PKH, DTKS dan PIP.';
 
 
-COMMENT ON TABLE public.attendances
-IS 'Absensi harian siswa.';
+COMMENT ON TABLE "attendances"
+IS 'Data absensi siswa.';
 
 
-COMMENT ON TABLE public.announcements
-IS 'Pengumuman sekolah.';
+COMMENT ON TABLE "subjects"
+IS 'Master mata pelajaran.';
 
 
-COMMENT ON TABLE public.fee_templates
-IS 'Template jenis tagihan/pembayaran sekolah.';
+COMMENT ON TABLE "schedule_entries"
+IS 'Jadwal pelajaran sekolah.';
 
 
-COMMENT ON TABLE public.student_bills
+COMMENT ON TABLE "inventory_items"
+IS 'Master sarana dan prasarana/barang sekolah.';
+
+
+COMMENT ON TABLE "inventory_transactions"
+IS 'Transaksi keluar masuk dan penyesuaian inventaris.';
+
+
+COMMENT ON TABLE "administration_records"
+IS 'Administrasi dan dokumen sekolah.';
+
+
+COMMENT ON TABLE "scholarship_records"
+IS 'Data beasiswa siswa.';
+
+
+COMMENT ON TABLE "fee_templates"
+IS 'Template jenis pembayaran sekolah.';
+
+
+COMMENT ON TABLE "student_bills"
 IS 'Tagihan individual siswa.';
 
 
-COMMENT ON TABLE public.payment_transactions
-IS 'Transaksi pembayaran tagihan siswa.';
+COMMENT ON TABLE "payment_transactions"
+IS 'Transaksi pembayaran siswa.';
 
 
-COMMENT ON TABLE public.audit_logs
-IS 'Log aktivitas perubahan data aplikasi.';
+COMMENT ON TABLE "audit_logs"
+IS 'Audit trail aktivitas pengguna.';
 
 
--- ====================================================================================
--- 52. FINAL DATABASE CHECK
--- ====================================================================================
+-- =====================================================================================
+-- 40. SUPER ADMIN PROFILE
+--
+-- AKUN SUPABASE AUTH:
+--   f26eccdf-c806-474e-a8d6-0cf94c4941b0
+--
+-- schoolId NULL = PLATFORM SUPER ADMIN
+--
+-- Jika profile sudah ada, gunakan UPDATE.
+-- Jika belum ada, INSERT.
+-- =====================================================================================
+
+INSERT INTO public.users
+(
+    "id",
+    "schoolId",
+    "email",
+    "fullName",
+    "role",
+    "isActive"
+)
+VALUES
+(
+    'f26eccdf-c806-474e-a8d6-0cf94c4941b0',
+    NULL,
+    'hendiprasetyo192@gmail.com',
+    'Hendi Prasetyo',
+    'SUPER_ADMIN',
+    true
+)
+ON CONFLICT ("id")
+DO UPDATE SET
+    "schoolId" = NULL,
+    "email" = EXCLUDED."email",
+    "fullName" = EXCLUDED."fullName",
+    "role" = 'SUPER_ADMIN',
+    "isActive" = true,
+    "updatedAt" = CURRENT_TIMESTAMP;
+
+
+-- =====================================================================================
+-- 41. FINAL VERIFICATION
+-- =====================================================================================
 
 DO $$
 DECLARE
@@ -3475,7 +3072,6 @@ BEGIN
           'academic_years',
           'semesters',
           'users',
-          'refresh_tokens',
           'teachers',
           'classes',
           'students',
@@ -3483,84 +3079,31 @@ BEGIN
           'student_parents',
           'student_economics',
           'attendances',
+          'subjects',
+          'schedule_entries',
           'announcements',
+          'inventory_items',
+          'inventory_transactions',
+          'administration_records',
+          'scholarship_records',
           'fee_templates',
           'student_bills',
           'payment_transactions',
           'audit_logs'
       );
 
-
-    IF v_count <> 17 THEN
-
+    IF v_count <> 22 THEN
         RAISE EXCEPTION
-            'Database ERP gagal lengkap. Ditemukan % dari 17 tabel.',
+            'VERIFIKASI GAGAL: hanya % dari 22 tabel utama ditemukan.',
             v_count;
-
     END IF;
-
-
-    RAISE NOTICE
-        '====================================================';
-
-    RAISE NOTICE
-        'DATABASE SEKOLAH ERP v3 BERHASIL DIBUAT';
-
-    RAISE NOTICE
-        '17 tabel utama tersedia.';
-
-    RAISE NOTICE
-        'RLS aktif.';
-
-    RAISE NOTICE
-        'Tenant isolation aktif.';
-
-    RAISE NOTICE
-        'Payment trigger aktif.';
-
-    RAISE NOTICE
-        'Bulk import RPC aktif.';
-
-    RAISE NOTICE
-        'Setup tenant RPC aktif.';
-
-    RAISE NOTICE
-        '====================================================';
 
 END;
 $$;
 
 
--- ====================================================================================
--- 53. OPTIONAL VERIFICATION QUERY
--- ====================================================================================
-
-SELECT
-    table_name
-FROM information_schema.tables
-WHERE table_schema = 'public'
-  AND table_name IN (
-      'schools',
-      'academic_years',
-      'semesters',
-      'users',
-      'refresh_tokens',
-      'teachers',
-      'classes',
-      'students',
-      'student_class_history',
-      'student_parents',
-      'student_economics',
-      'attendances',
-      'announcements',
-      'fee_templates',
-      'student_bills',
-      'payment_transactions',
-      'audit_logs'
-  )
-ORDER BY table_name;
-
-
--- ====================================================================================
+-- =====================================================================================
 -- SELESAI
--- ====================================================================================
+--
+-- DATABASE ERP SEKOLAH v3.1 FINAL FOUNDATION
+-- =====================================================================================
