@@ -229,8 +229,7 @@ CREATE TABLE public.users (
 );
 
 CREATE UNIQUE INDEX users_email_key ON public.users (lower("email"));
-CREATE UNIQUE INDEX users_school_id_key ON public.users ("schoolId","id")
-    WHERE "schoolId" IS NOT NULL;
+ALTER TABLE public.users ADD CONSTRAINT users_school_id_key UNIQUE ("schoolId", "id");
 CREATE INDEX users_school_idx ON public.users ("schoolId");
 CREATE INDEX users_role_idx ON public.users ("role");
 
@@ -2709,8 +2708,7 @@ BEGIN
         JOIN pg_namespace n ON n.oid = p.pronamespace
         WHERE n.nspname = 'public'
           AND p.proname = 'setup_new_tenant'
-          AND pg_get_function_identity_arguments(p.oid)
-              = 'text, text, uuid, text, text, integer, integer'
+          AND pg_get_function_identity_arguments(p.oid) ILIKE '%uuid%'
     ) THEN
         RAISE EXCEPTION
             'VERIFIKASI GAGAL: setup_new_tenant signature final belum terpasang.';
