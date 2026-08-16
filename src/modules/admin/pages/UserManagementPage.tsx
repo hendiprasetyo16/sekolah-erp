@@ -191,8 +191,25 @@ export function UserManagementPage() {
 
     const resetPasswordMutation = useMutation({
         mutationFn: async (payload: { userId: string, newPass: string }) => {
-            // Simulasi API Admin Update Password
-            return new Promise((resolve) => setTimeout(resolve, 1000));
+            // Memanggil Supabase Edge Function dari Vite
+            const { data, error } = await supabase.functions.invoke('reset-password', {
+                body: {
+                    targetUserId: payload.userId, // <--- INI DISESUAIKAN DENGAN KODE DENO ANDA
+                    newPassword: payload.newPass
+                }
+            });
+
+            if (error) {
+                // error dari sistem pemanggilan Supabase
+                throw new Error(error.message || 'Gagal terhubung ke server.');
+            }
+
+            if (data?.error) {
+                // error yang kita lempar dari blok try-catch di Edge Function
+                throw new Error(data.error);
+            }
+
+            return data;
         },
         onSuccess: () => {
             toast.success(t.toastResetSuccess);
