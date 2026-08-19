@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'; // <--- TAMBAH useLocation
 import { MainLayout } from '@/components/layouts/MainLayout';
 import { LoginPage } from '@/modules/auth/pages/LoginPage';
 import { AdminDashboard } from '@/modules/dashboard/pages/AdminDashboard';
@@ -17,12 +17,31 @@ import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, Settin
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
-// 1. IMPORT HALAMAN MANAJEMEN PENGGUNA
 import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
 
+// 1. IMPORT HALAMAN FORCE CHANGE PASSWORD
+import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswordPage';
+
+// ============================================================================
+// KOMPONEN PENCEGAT RUTE (SATPAM APLIKASI)
+// ============================================================================
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useAuthStore();
+  const { isAuthenticated, user } = useAuthStore();
+  const location = useLocation(); // Untuk mendeteksi user sedang berada di URL mana
+
+  // 1. Jika belum login, lempar ke halaman login
   if (!isAuthenticated) return <Navigate to="/login" replace />;
+
+  // 2. CEGATAN FASE 3: Jika isFirstLogin = true, dan dia sedang tidak di halaman ganti password, paksa pindah!
+  if (user?.isFirstLogin && location.pathname !== '/force-change-password') {
+    return <Navigate to="/force-change-password" replace />;
+  }
+
+  // 3. Jika isFirstLogin = false, tapi dia iseng mencoba buka halaman ganti password, kembalikan ke dashboard
+  if (!user?.isFirstLogin && location.pathname === '/force-change-password') {
+    return <Navigate to="/dashboard" replace />;
+  }
+
   return <>{children}</>;
 }
 
@@ -36,8 +55,20 @@ export function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* RUTE PUBLIK (Hanya bisa diakses jika BELUM login) */}
         <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
 
+        {/* RUTE STANDALONE (Sudah login, tapi tidak pakai Layout utama) */}
+        <Route
+          path="/force-change-password"
+          element={
+            <ProtectedRoute>
+              <ForceChangePasswordPage />
+            </ProtectedRoute>
+          }
+        />
+
+        {/* RUTE TERLINDUNGI (Menggunakan Sidebar & Header) */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
           <Route path="/dashboard" element={<AdminDashboard />} />
 
@@ -70,14 +101,10 @@ export function AppRouter() {
           <Route path="/reports" element={<ReportsDashboardPage />} />
           <Route path="/reports/*" element={<ReportsDashboardPage />} />
 
-          {/* ========================================================= */}
-          {/* PERUBAHAN: MEMISAHKAN MANAJEMEN PENGGUNA DAN SETTINGS */}
-          {/* ========================================================= */}
-
           {/* Rute khusus untuk User Management */}
           <Route path="/admin/users" element={<UserManagementPage />} />
 
-          {/* Rute khusus untuk Pengaturan Aplikasi (Tidak lagi me-redirect ke users) */}
+          {/* Rute khusus untuk Pengaturan Aplikasi */}
           <Route path="/settings" element={<SettingsPlaceholder />} />
           <Route path="/settings/*" element={<SettingsPlaceholder />} />
 
@@ -87,7 +114,7 @@ export function AppRouter() {
           <Route path="/scholarships/*" element={<ScholarshipsPlaceholder />} />
         </Route>
 
-        {/* Redirect */}
+        {/* Redirect: Jika rute tidak dikenali, arahkan ke dashboard */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

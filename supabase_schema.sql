@@ -2737,3 +2737,7 @@ COMMIT;
 -- SELESAI
 -- ERP SEKOLAH v4.1 FINAL PRODUCTION FOUNDATION
 -- =====================================================================================
+
+-- Menambahkan kolom isFirstLogin dengan nilai bawaan TRUE
+ALTER TABLE public.users 
+ADD COLUMN "isFirstLogin" BOOLEAN NOT NULL DEFAULT TRUE;

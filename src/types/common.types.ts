@@ -80,6 +80,7 @@ export interface User {
   schoolId: string;
   isActive: boolean;
   lastLogin?: string;
+  isFirstLogin?: boolean;
 }
 
 export interface School {
