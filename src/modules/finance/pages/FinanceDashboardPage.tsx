@@ -1,29 +1,29 @@
 import React, { useState, useEffect } from 'react';
 import { motion, type Variants } from 'framer-motion';
-import { 
-  TrendingUp, 
-  TrendingDown, 
-  Wallet, 
-  AlertCircle, 
-  Users, 
-  ArrowUpRight, 
-  Download, 
+import {
+  TrendingUp,
+  TrendingDown,
+  Wallet,
+  AlertCircle,
+  Users,
+  ArrowUpRight,
+  Download,
   Filter,
   Activity,
   CreditCard,
   Building,
   Receipt
 } from 'lucide-react';
-import { 
-  ResponsiveContainer, 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip as RechartsTooltip, 
-  PieChart, 
-  Pie, 
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  PieChart,
+  Pie,
   Cell,
   Legend
 } from 'recharts';
@@ -83,7 +83,7 @@ export default function FinanceDashboardPage() {
   }, []);
 
   return (
-    <motion.div 
+    <motion.div
       className="space-y-6"
       variants={containerVariants}
       initial="hidden"
@@ -105,7 +105,7 @@ export default function FinanceDashboardPage() {
       {/* STATS ROW */}
       <motion.div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6" variants={itemVariants}>
         <Card className="relative overflow-hidden border-0 shadow-md">
-          <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 to-transparent" />
+          <div className="absolute inset-0 bg-linear-to-br from-emerald-500/10 to-transparent" />
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0 relative z-10">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Pemasukan</CardTitle>
             <div className="p-2 bg-emerald-100 dark:bg-emerald-950 rounded-full">
@@ -121,7 +121,7 @@ export default function FinanceDashboardPage() {
         </Card>
 
         <Card className="relative overflow-hidden border-0 shadow-md">
-          <div className="absolute inset-0 bg-gradient-to-br from-rose-500/10 to-transparent" />
+          <div className="absolute inset-0 bg-linear-to-br from-rose-500/10 to-transparent" />
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0 relative z-10">
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Pengeluaran</CardTitle>
             <div className="p-2 bg-rose-100 dark:bg-rose-950 rounded-full">
@@ -137,7 +137,7 @@ export default function FinanceDashboardPage() {
         </Card>
 
         <Card className="relative overflow-hidden border-0 shadow-md">
-          <div className="absolute inset-0 bg-gradient-to-br from-amber-500/10 to-transparent" />
+          <div className="absolute inset-0 bg-linear-to-br from-amber-500/10 to-transparent" />
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0 relative z-10">
             <CardTitle className="text-sm font-medium text-muted-foreground">Tunggakan Tagihan</CardTitle>
             <div className="p-2 bg-amber-100 dark:bg-amber-950 rounded-full">
@@ -153,7 +153,7 @@ export default function FinanceDashboardPage() {
           </CardContent>
         </Card>
 
-        <Card className="relative overflow-hidden border-0 shadow-md bg-gradient-to-br from-blue-600 to-indigo-700 text-white">
+        <Card className="relative overflow-hidden border-0 shadow-md bg-linear-to-br from-blue-600 to-indigo-700 text-white">
           <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0 relative z-10">
             <CardTitle className="text-sm font-medium text-blue-100">Saldo Kas Bersih</CardTitle>
             <div className="p-2 bg-white/20 rounded-full backdrop-blur-sm">
@@ -179,26 +179,26 @@ export default function FinanceDashboardPage() {
             </div>
           </CardHeader>
           <CardContent>
-            <div className="h-[280px] w-full">
+            <div className="h-70 w-full">
               {revenueData.length > 0 && revenueData.some(d => d.income > 0) ? (
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={revenueData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id="incomeGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
-                        <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
+                        <stop offset="5%" stopColor="#10b981" stopOpacity={0.4} />
+                        <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--border))" />
                     <XAxis dataKey="name" stroke="hsl(var(--muted-foreground))" fontSize={12} tickLine={false} axisLine={false} />
-                    <YAxis 
-                      stroke="hsl(var(--muted-foreground))" 
-                      fontSize={12} 
-                      tickLine={false} 
+                    <YAxis
+                      stroke="hsl(var(--muted-foreground))"
+                      fontSize={12}
+                      tickLine={false}
                       axisLine={false}
                       tickFormatter={(value) => `Rp ${(value / 1000000).toFixed(0)}Jt`}
                     />
-                    <RechartsTooltip 
+                    <RechartsTooltip
                       contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                       itemStyle={{ color: 'hsl(var(--foreground))' }}
                       formatter={(value: any) => [formatCurrency(Number(value) || 0), 'Pemasukan']}
@@ -320,7 +320,7 @@ export default function FinanceDashboardPage() {
               {arrears.map((tunggakan) => (
                 <div key={tunggakan.id} className="flex items-center justify-between p-3 rounded-lg border border-border/50 hover:bg-muted/30 transition-colors">
                   <div className="flex items-center gap-3">
-                    <div className="h-10 w-10 rounded-full bg-amber-100 dark:bg-amber-950 flex items-center justify-center flex-shrink-0">
+                    <div className="h-10 w-10 rounded-full bg-amber-100 dark:bg-amber-950 flex items-center justify-center shrink-0">
                       <span className="text-amber-700 dark:text-amber-400 font-bold text-sm">
                         {tunggakan.studentName ? tunggakan.studentName.split(' ').map(n => n[0]).join('').substring(0, 2) : 'SW'}
                       </span>

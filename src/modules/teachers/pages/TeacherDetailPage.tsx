@@ -27,7 +27,7 @@ export default function TeacherDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="flex h-[400px] items-center justify-center">
+      <div className="flex h-100 items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
       </div>
     );
@@ -35,7 +35,7 @@ export default function TeacherDetailPage() {
 
   if (isError || !teacher) {
     return (
-      <div className="flex h-[400px] flex-col items-center justify-center gap-4">
+      <div className="flex h-100 flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Failed to load teacher data.</p>
         <Button variant="outline" asChild>
           <Link to="/teachers">Back to Teachers</Link>

@@ -225,7 +225,7 @@ export function AdminDashboard() {
     <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
       {/* Welcome Banner */}
       <motion.div variants={item} className="relative overflow-hidden rounded-2xl p-6 lg:p-8">
-        <div className="absolute inset-0 bg-gradient-to-r from-emerald-600 via-teal-600 to-emerald-800 opacity-90" />
+        <div className="absolute inset-0 bg-linear-to-r from-emerald-600 via-teal-600 to-emerald-800 opacity-90" />
         <div className="absolute inset-0 opacity-10" style={{ backgroundImage: `radial-gradient(circle at 20% 50%, rgba(255,255,255,0.2) 0%, transparent 50%), radial-gradient(circle at 80% 50%, rgba(255,255,255,0.1) 0%, transparent 50%)` }} />
         <div className="relative z-10 flex items-center justify-between">
           <div>
@@ -282,13 +282,13 @@ export function AdminDashboard() {
               <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-purple-400" /><span className="text-muted-foreground">{locale === 'id' ? 'Pengeluaran' : 'Expense'}</span></div>
             </div>
           </div>
-          <div className="relative w-full h-[280px]">
+          <div className="relative w-full h-70">
             {revenueChartData.length === 0 || revenueChartData.every(d => d.pemasukan === 0) ? (
               <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-lg">
                 <div className="text-center bg-card/90 p-4 rounded-xl border border-border/50 shadow-lg">
                   <Wallet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm font-medium text-foreground">{locale === 'id' ? 'Belum Ada Transaksi Pembayaran' : 'No Payment Transactions Yet'}</p>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-[220px]">{locale === 'id' ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat di Supabase.' : 'Chart will populate automatically as student payments are recorded.'}</p>
+                  <p className="text-xs text-muted-foreground mt-1 max-w-55">{locale === 'id' ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat di Supabase.' : 'Chart will populate automatically as student payments are recorded.'}</p>
                 </div>
               </div>
             ) : null}
@@ -325,7 +325,7 @@ export function AdminDashboard() {
           <div className="grid grid-cols-2 gap-2 mt-2">
             {studentDistribution.map((entry) => (
               <div key={entry.name} className="flex items-center gap-2 text-xs">
-                <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: entry.color }} />
+                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.color }} />
                 <span className="text-muted-foreground truncate">{entry.name}</span>
                 <span className="text-foreground font-medium ml-auto">{entry.value}</span>
               </div>

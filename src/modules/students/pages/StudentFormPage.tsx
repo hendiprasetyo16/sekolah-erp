@@ -299,7 +299,7 @@ export function StudentFormPage() {
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
 
             {/* FIX DARK MODE 1: Hapus hardcoded bg colors, biarkan Shadcn yang menangani */}
-            <TabsList className="grid w-full grid-cols-5 h-auto p-1 lg:w-[800px]">
+            <TabsList className="grid w-full grid-cols-5 h-auto p-1 lg:w-200">
               <TabsTrigger value="pribadi">{locale === 'id' ? 'Pribadi' : 'Personal'}</TabsTrigger>
               <TabsTrigger value="akademik">{locale === 'id' ? 'Akademik' : 'Academic'}</TabsTrigger>
               <TabsTrigger value="orangtua">{locale === 'id' ? 'Orang Tua/Wali' : 'Parents/Guardian'}</TabsTrigger>
