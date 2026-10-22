@@ -1,0 +1,25 @@
+# Nama aksi ini di GitHub
+name: Supabase Keep Alive Robot
+
+# 1. Kapan robot ini harus berjalan?
+on:
+  schedule:
+    # Menggunakan format CRON. 
+    # Jadwal di bawah ini berarti: "Jalankan pada menit 0, jam 0, setiap 3 hari sekali"
+    - cron: '0 0 */3 * *' 
+  
+  # Ini memungkinkan kita menjalankan skrip secara manual dari tombol di GitHub jika diperlukan
+  workflow_dispatch: 
+
+jobs:
+  ping-supabase:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Melakukan Request ke API Supabase
+        # 2. Skrip untuk mengetuk (ping) tabel 'users' di database kita
+        # Kita hanya meminta 1 data (limit=1) agar sangat ringan dan cepat.
+        run: |
+          curl -X GET '${{ secrets.VITE_SUPABASE_URL }}/rest/v1/users?select=id&limit=1' \
+          -H 'apikey: ${{ secrets.VITE_SUPABASE_ANON_KEY }}' \
+          -H 'Authorization: Bearer ${{ secrets.VITE_SUPABASE_ANON_KEY }}'

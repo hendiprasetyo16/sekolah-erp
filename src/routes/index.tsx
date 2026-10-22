@@ -6,8 +6,13 @@ import { StudentListPage } from '@/modules/students/pages/StudentListPage';
 import { StudentFormPage } from '@/modules/students/pages/StudentFormPage';
 import { StudentDetailPage } from '@/modules/students/pages/StudentDetailPage';
 import { TeacherListPage } from '@/modules/teachers/pages/TeacherListPage';
+import TeacherFormPage from '@/modules/teachers/pages/TeacherFormPage';
+import TeacherDetailPage from '@/modules/teachers/pages/TeacherDetailPage';
+import FinanceDashboardPage from '@/modules/finance/pages/FinanceDashboardPage';
+import ScheduleDashboardPage from '@/modules/schedules/pages/ScheduleDashboardPage';
+import ReportsDashboardPage from '@/modules/reports/pages/ReportsDashboardPage';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { FinancePlaceholder, SchedulesPlaceholder, InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, ReportsPlaceholder, SettingsPlaceholder } from './placeholder-pages';
+import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, SettingsPlaceholder } from './placeholder-pages';
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore();
@@ -30,18 +35,37 @@ export function AppRouter() {
 
         {/* Protected routes */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
+          {/* Dashboard */}
           <Route path="/dashboard" element={<AdminDashboard />} />
+
+          {/* Students */}
           <Route path="/students" element={<StudentListPage />} />
           <Route path="/students/new" element={<StudentFormPage />} />
           <Route path="/students/:id" element={<StudentDetailPage />} />
           <Route path="/students/:id/edit" element={<StudentFormPage />} />
+
+          {/* Teachers */}
           <Route path="/teachers" element={<TeacherListPage />} />
-          <Route path="/finance/*" element={<FinancePlaceholder />} />
-          <Route path="/schedules/*" element={<SchedulesPlaceholder />} />
+          <Route path="/teachers/new" element={<TeacherFormPage />} />
+          <Route path="/teachers/:id" element={<TeacherDetailPage />} />
+          <Route path="/teachers/:id/edit" element={<TeacherFormPage />} />
+
+          {/* Finance */}
+          <Route path="/finance" element={<FinanceDashboardPage />} />
+          <Route path="/finance/*" element={<FinanceDashboardPage />} />
+
+          {/* Schedules */}
+          <Route path="/schedules" element={<ScheduleDashboardPage />} />
+          <Route path="/schedules/*" element={<ScheduleDashboardPage />} />
+
+          {/* Reports */}
+          <Route path="/reports" element={<ReportsDashboardPage />} />
+          <Route path="/reports/*" element={<ReportsDashboardPage />} />
+
+          {/* Placeholders for Phase 2 */}
           <Route path="/inventory/*" element={<InventoryPlaceholder />} />
           <Route path="/admin/*" element={<AdminPlaceholder />} />
           <Route path="/scholarships/*" element={<ScholarshipsPlaceholder />} />
-          <Route path="/reports/*" element={<ReportsPlaceholder />} />
           <Route path="/settings/*" element={<SettingsPlaceholder />} />
         </Route>
 
