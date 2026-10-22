@@ -202,6 +202,10 @@ model StudentEconomic {
   kksNumber        String?
   hasPkh           Boolean  @default(false)
   isDtks           Boolean  @default(false)
+  desil            Int?
+  namaKip          String?
+  layakPip         Boolean  @default(false)
+  alasanLayakPip   String?
   houseOwnership   String?
   houseCondition   String?
   dependentsCount  Int?

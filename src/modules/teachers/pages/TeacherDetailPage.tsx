@@ -17,11 +17,13 @@ export default function TeacherDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { t } = useTranslation();
 
-  const { data: teacher, isLoading, isError } = useQuery({
+  const { data: response, isLoading, isError } = useQuery({
     queryKey: ['teacher', id],
     queryFn: () => teacherService.getById(id!),
     enabled: !!id,
   });
+
+  const teacher = response?.data;
 
   if (isLoading) {
     return (
@@ -83,7 +85,7 @@ export default function TeacherDetailPage() {
             </div>
             <h2 className="text-xl font-bold">{teacher.fullName}</h2>
             <p className="text-sm text-muted-foreground mb-4">{teacher.position || 'Teacher'}</p>
-            
+
             <Badge className={cn("mb-6", teacher.status ? statusColorMap[teacher.status] : "")} variant="secondary">
               {teacher.status || 'No Status'}
             </Badge>
@@ -110,7 +112,7 @@ export default function TeacherDetailPage() {
             <TabsTrigger value="personal">Data Pribadi</TabsTrigger>
             <TabsTrigger value="professional">Data Kepegawaian</TabsTrigger>
           </TabsList>
-          
+
           <TabsContent value="personal" className="mt-6 space-y-6">
             <Card>
               <CardHeader>
@@ -122,12 +124,12 @@ export default function TeacherDetailPage() {
                   <div>{teacher.fullName}</div>
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-muted-foreground">NIK</div>
-                  <div>{teacher.nik || '-'}</div>
+                  <div className="text-sm font-medium text-muted-foreground">Gender</div>
+                  <div>{teacher.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</div>
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-muted-foreground">Gender</div>
-                  <div>{teacher.gender === 'L' ? 'Laki-laki (L)' : teacher.gender === 'P' ? 'Perempuan (P)' : '-'}</div>
+                  <div className="text-sm font-medium text-muted-foreground">NIK</div>
+                  <div>{teacher.nik || '-'}</div>
                 </div>
                 <div>
                   <div className="text-sm font-medium text-muted-foreground">Birth Place & Date</div>
@@ -135,37 +137,9 @@ export default function TeacherDetailPage() {
                     {teacher.birthPlace || '-'}, {teacher.birthDate ? formatDate(teacher.birthDate) : '-'}
                   </div>
                 </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Phone</div>
-                  <div>{teacher.phone || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Email</div>
-                  <div>{teacher.email || '-'}</div>
-                </div>
                 <div className="sm:col-span-2">
                   <div className="text-sm font-medium text-muted-foreground">Address</div>
                   <div>{teacher.address || '-'}</div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Education Background</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Latest Education</div>
-                  <div>{teacher.education || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">University</div>
-                  <div>{teacher.university || '-'}</div>
-                </div>
-                <div className="sm:col-span-2">
-                  <div className="text-sm font-medium text-muted-foreground">Major</div>
-                  <div>{teacher.major || '-'}</div>
                 </div>
               </CardContent>
             </Card>
@@ -174,7 +148,7 @@ export default function TeacherDetailPage() {
           <TabsContent value="professional" className="mt-6 space-y-6">
             <Card>
               <CardHeader>
-                <CardTitle>Employment Details</CardTitle>
+                <CardTitle>Employment & Academic Information</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-4 sm:grid-cols-2">
                 <div>
@@ -186,12 +160,24 @@ export default function TeacherDetailPage() {
                   <div>{teacher.nuptk || '-'}</div>
                 </div>
                 <div>
-                  <div className="text-sm font-medium text-muted-foreground">Status</div>
+                  <div className="text-sm font-medium text-muted-foreground">Employment Status</div>
                   <div>{teacher.status || '-'}</div>
                 </div>
                 <div>
                   <div className="text-sm font-medium text-muted-foreground">Position</div>
                   <div>{teacher.position || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground">Last Education</div>
+                  <div>{teacher.education || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground">Major / Field of Study</div>
+                  <div>{teacher.major || '-'}</div>
+                </div>
+                <div>
+                  <div className="text-sm font-medium text-muted-foreground">University / Institution</div>
+                  <div>{teacher.university || '-'}</div>
                 </div>
                 <div>
                   <div className="text-sm font-medium text-muted-foreground">Join Date</div>
@@ -201,23 +187,9 @@ export default function TeacherDetailPage() {
                   <div className="text-sm font-medium text-muted-foreground">Base Salary</div>
                   <div>{teacher.baseSalary ? formatCurrency(teacher.baseSalary) : '-'}</div>
                 </div>
-              </CardContent>
-            </Card>
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Academic & Certification</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
                 <div>
-                  <div className="text-sm font-medium text-muted-foreground">Certification Status</div>
-                  <div>
-                    {teacher.isCertified ? (
-                      <Badge variant="default" className="bg-green-500 hover:bg-green-600">Certified</Badge>
-                    ) : (
-                      <Badge variant="secondary">Not Certified</Badge>
-                    )}
-                  </div>
+                  <div className="text-sm font-medium text-muted-foreground">Certified</div>
+                  <div>{teacher.isCertified ? 'Yes' : 'No'}</div>
                 </div>
                 <div>
                   <div className="text-sm font-medium text-muted-foreground">Certification Number</div>
@@ -236,7 +208,7 @@ export default function TeacherDetailPage() {
                       ))
                     ) : (
                       typeof teacher.subjects === 'string' && teacher.subjects ? (
-                        teacher.subjects.split(',').map((sub, i) => (
+                        teacher.subjects.split(',').map((sub: string, i: number) => (
                           <Badge key={i} variant="outline">{sub.trim()}</Badge>
                         ))
                       ) : '-'

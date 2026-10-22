@@ -52,12 +52,12 @@ const teacherSchema = z.object({
   university: z.string().optional(),
   status: z.string().optional(),
   position: z.string().optional(),
-  isCertified: z.boolean().default(false),
+  isCertified: z.boolean(),
   certificationNumber: z.string().optional(),
   joinDate: z.string().optional(),
   baseSalary: z.coerce.number().optional(),
   subjects: z.string().optional(),
-  maxHoursPerWeek: z.coerce.number().default(24),
+  maxHoursPerWeek: z.coerce.number(),
 });
 
 type TeacherFormValues = z.infer<typeof teacherSchema>;
@@ -95,11 +95,13 @@ export default function TeacherFormPage() {
     },
   });
 
-  const { data: teacher, isLoading } = useQuery({
+  const { data: response, isLoading } = useQuery({
     queryKey: ['teacher', id],
     queryFn: () => teacherService.getById(id!),
     enabled: isEdit,
   });
+
+  const teacher = response?.data;
 
   useEffect(() => {
     if (teacher) {
@@ -123,7 +125,7 @@ export default function TeacherFormPage() {
         certificationNumber: teacher.certificationNumber || '',
         joinDate: teacher.joinDate ? String(teacher.joinDate).split('T')[0] : '',
         baseSalary: teacher.baseSalary || 0,
-        subjects: typeof teacher.subjects === 'string' ? teacher.subjects : (teacher.subjects?.join(', ') || ''),
+        subjects: typeof teacher.subjects === 'string' ? teacher.subjects : (Array.isArray(teacher.subjects) ? (teacher.subjects as unknown as string[]).join(', ') : ''),
         maxHoursPerWeek: teacher.maxHoursPerWeek || 24,
       });
     }
@@ -133,7 +135,10 @@ export default function TeacherFormPage() {
     mutationFn: (values: TeacherFormValues) => {
       const payload = {
         ...values,
-        subjects: values.subjects ? values.subjects.split(',').map(s => s.trim()) : [],
+        gender: values.gender as 'L' | 'P',
+        status: values.status || '',
+        position: values.position || '',
+        isActive: true,
       };
       return isEdit ? teacherService.update(id!, payload) : teacherService.create(payload);
     },
@@ -186,7 +191,7 @@ export default function TeacherFormPage() {
               <TabsTrigger value="personal">Data Pribadi</TabsTrigger>
               <TabsTrigger value="professional">Kepegawaian & Akademik</TabsTrigger>
             </TabsList>
-            
+
             <TabsContent value="personal" className="mt-6">
               <Card>
                 <CardHeader>
@@ -209,7 +214,7 @@ export default function TeacherFormPage() {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="gender"
@@ -223,8 +228,8 @@ export default function TeacherFormPage() {
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="L">Laki-laki (L)</SelectItem>
-                            <SelectItem value="P">Perempuan (P)</SelectItem>
+                            <SelectItem value="L">Laki-laki</SelectItem>
+                            <SelectItem value="P">Perempuan</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -239,7 +244,7 @@ export default function TeacherFormPage() {
                       <FormItem>
                         <FormLabel>NIK</FormLabel>
                         <FormControl>
-                          <Input placeholder="16 digits NIK" {...field} />
+                          <Input placeholder="16-digit NIK" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -253,7 +258,7 @@ export default function TeacherFormPage() {
                       <FormItem>
                         <FormLabel>Birth Place</FormLabel>
                         <FormControl>
-                          <Input placeholder="City" {...field} />
+                          <Input placeholder="City of birth" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -281,7 +286,7 @@ export default function TeacherFormPage() {
                       <FormItem>
                         <FormLabel>Phone Number</FormLabel>
                         <FormControl>
-                          <Input placeholder="08..." {...field} />
+                          <Input placeholder="08xxxxxxxxxx" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -295,7 +300,7 @@ export default function TeacherFormPage() {
                       <FormItem>
                         <FormLabel>Email</FormLabel>
                         <FormControl>
-                          <Input type="email" placeholder="example@email.com" {...field} />
+                          <Input type="email" placeholder="teacher@example.com" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -309,7 +314,7 @@ export default function TeacherFormPage() {
                       <FormItem className="sm:col-span-2">
                         <FormLabel>Address</FormLabel>
                         <FormControl>
-                          <Input placeholder="Full address" {...field} />
+                          <Input placeholder="Full home address" {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -322,9 +327,9 @@ export default function TeacherFormPage() {
             <TabsContent value="professional" className="mt-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Professional Information</CardTitle>
+                  <CardTitle>Employment & Academic Information</CardTitle>
                   <CardDescription>
-                    Employment status, education, and academic details.
+                    Teacher's professional background and school assignment.
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-6 sm:grid-cols-2">
@@ -341,7 +346,7 @@ export default function TeacherFormPage() {
                       </FormItem>
                     )}
                   />
-                  
+
                   <FormField
                     control={form.control}
                     name="nuptk"
@@ -455,8 +460,8 @@ export default function TeacherFormPage() {
                     render={({ field }) => (
                       <FormItem>
                         <FormLabel>Certification Status</FormLabel>
-                        <Select 
-                          onValueChange={(val) => field.onChange(val === 'true')} 
+                        <Select
+                          onValueChange={(val) => field.onChange(val === 'true')}
                           defaultValue={field.value ? 'true' : 'false'}
                           value={field.value ? 'true' : 'false'}
                         >

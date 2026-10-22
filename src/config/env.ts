@@ -31,7 +31,7 @@ export const env: EnvConfig = {
   apiBaseUrl: getEnvVar('VITE_API_BASE_URL', 'http://localhost:4000/api'),
   appName: getEnvVar('VITE_APP_NAME', 'SekolahERP'),
   appVersion: getEnvVar('VITE_APP_VERSION', '1.0.0'),
-  enableMock: getBoolEnv('VITE_ENABLE_MOCK', true),
+  enableMock: getBoolEnv('VITE_ENABLE_MOCK', false),
   enableDebug: getBoolEnv('VITE_ENABLE_DEBUG', false),
   isDev: import.meta.env.DEV,
   isProd: import.meta.env.PROD,

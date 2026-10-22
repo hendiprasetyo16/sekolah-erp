@@ -2,6 +2,7 @@ import type { UserRole } from './common.types';
 
 export type Module =
   | 'dashboard'
+  | 'academic'
   | 'students'
   | 'teachers'
   | 'finance'
@@ -22,8 +23,12 @@ export interface Permission {
 export type RolePermissions = Record<UserRole, Permission[]>;
 
 export const ROLE_PERMISSIONS: RolePermissions = {
+  // ==========================================
+  // 👑 SUPER_ADMIN: Pemilik Platform/SaaS (Tidak Punya schoolId)
+  // ==========================================
   SUPER_ADMIN: [
     { module: 'dashboard', actions: ['read'] },
+    { module: 'academic', actions: ['create', 'read', 'update', 'delete'] },
     { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import', 'approve'] },
@@ -34,8 +39,29 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'reports', actions: ['read', 'export'] },
     { module: 'settings', actions: ['create', 'read', 'update', 'delete'] },
   ],
+
+  // ==========================================
+  // 🛡️ ADMIN: IT / Pemilik Sekolah (Dewa di Level Sekolah)
+  // ==========================================
+  ADMIN: [
+    { module: 'dashboard', actions: ['read'] },
+    { module: 'academic', actions: ['create', 'read', 'update', 'delete'] }, // ✅ Tambah delete
+    { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] }, // ✅ Tambah delete
+    { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] }, // ✅ Tambah delete
+    { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import', 'approve'] },
+    { module: 'schedules', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'inventory', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'administration', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'scholarships', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'reports', actions: ['read', 'export'] },
+    { module: 'settings', actions: ['read', 'update'] }, // ✅ Tambah update agar bisa simpan profil sekolah
+  ],
+
+  // ... (Role KEPALA_SEKOLAH dan yang lainnya sudah SANGAT BAGUS dan biarkan saja seperti semula) ...
+
   KEPALA_SEKOLAH: [
     { module: 'dashboard', actions: ['read'] },
+    { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'teachers', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
     { module: 'finance', actions: ['read', 'export', 'approve'] },
@@ -46,25 +72,28 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'reports', actions: ['read', 'export'] },
     { module: 'settings', actions: ['read', 'update'] },
   ],
-  BENDAHARA: [
-    { module: 'dashboard', actions: ['read'] },
-    { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
-    { module: 'reports', actions: ['read', 'export'] },
-  ],
   OPERATOR: [
     { module: 'dashboard', actions: ['read'] },
+    { module: 'academic', actions: ['create', 'read', 'update'] },
     { module: 'students', actions: ['create', 'read', 'update', 'export', 'import'] },
     { module: 'teachers', actions: ['create', 'read', 'update', 'export', 'import'] },
     { module: 'schedules', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'scholarships', actions: ['create', 'read', 'update', 'export'] },
   ],
+  BENDAHARA: [
+    { module: 'dashboard', actions: ['read'] },
+    { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import'] },
+    { module: 'reports', actions: ['read', 'export'] },
+  ],
   WALI_KELAS: [
     { module: 'dashboard', actions: ['read'] },
+    { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['read', 'update', 'export'] },
     { module: 'schedules', actions: ['read'] },
   ],
   GURU: [
     { module: 'dashboard', actions: ['read'] },
+    { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['read'] },
     { module: 'schedules', actions: ['read'] },
   ],

@@ -1,125 +1,71 @@
-# Rencana Deploy SekolahERP ke Vercel + GitHub
+Rencana Implementasi: Sistem Informasi Sekolah (Multi-Tenant) & Modul Keuangan
+🎯 Tujuan Utama
+Arsitektur Multi-Tenant (Berbasis schoolId): Memastikan seluruh sistem dari Master Data hingga Pembayaran terisolasi dengan aman per institusi menggunakan Supabase. Tidak ada data sekolah yang bercampur.
 
-## Analisis Situasi
+Penyempurnaan Bertahap (Iterative): Membangun aplikasi secara modular mulai dari Master Data -> Siswa -> Keuangan, memastikan satu modul 100% bug-free dan terelasi kuat sebelum melangkah ke modul berikutnya.
 
-Aplikasi saat ini memiliki arsitektur **dual-stack**:
-- **Frontend**: React + Vite (siap build, sudah punya mock data)
-- **Backend**: NestJS + Prisma + SQLite (tidak bisa jalan di Vercel serverless)
+Modul Keuangan Dinamis: Mengelola tagihan dan pembayaran (cicilan/lunas) berdasarkan dokumen rincian biaya, namun didesain fleksibel untuk berbagai jenjang sekolah (TK, SD, SMP, SMA, SMK).
 
-Frontend sudah dirancang dengan **mock mode** (`VITE_ENABLE_MOCK=true`) yang memungkinkan semua halaman bekerja tanpa backend. Ini adalah kunci deployment cepat.
+[!WARNING]
+Standar Arsitektur Database (Wajib)
 
-## Strategi Deployment
+Setiap tabel utama (Tahun Ajaran, Kelas, Guru, Siswa, Tagihan) wajib memiliki schoolId.
 
-> [!IMPORTANT]
-> **Pendekatan yang saya rekomendasikan**: Deploy frontend dulu ke Vercel dengan **mock mode ON**. Semua fitur yang sudah ada (Login, Dashboard, CRUD Siswa, dll) akan berfungsi penuh. Database Supabase akan diintegrasikan di fase berikutnya ketika backend siap.
+Frontend Cache menggunakan React Query wajib menyertakan schoolId pada Query Keys (contoh: ['classes', schoolId]).
 
-### Kenapa tidak langsung pakai Supabase sekarang?
-- NestJS **tidak bisa berjalan di Vercel** (terlalu berat untuk serverless)
-- Mengubah seluruh arsitektur backend ke Supabase client langsung membutuhkan refactor besar (~2-3 hari kerja)
-- Dengan mock mode, aplikasi sudah **fully functional** dan bisa di-demo-kan
+Operasi Select, Insert, Update, dan Delete harus diverifikasi kepemilikannya ke schoolId aktif.
 
-## Proposed Changes
+📝 Desain Database (Ringkasan Skema Master)
+schools: Master entitas sekolah.
 
-### 1. Fix Build Errors
-Pastikan `npm run build` berhasil tanpa error.
+academic_years: Tahun ajaran (Relasi ke schoolId).
 
-#### [MODIFY] [vite.config.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/vite.config.ts)
-- Pastikan konfigurasi build production benar
+teachers: Data Guru/Wali Kelas (Relasi ke schoolId).
 
-#### [MODIFY] File-file yang mungkin ada TypeScript error
-- Fix import errors dan type issues yang muncul saat build production
+classes: Data Kelas (Relasi ke schoolId, academicYearId, homeroomTeacherId).
 
----
+students: Data Siswa (Relasi ke schoolId, classId).
 
-### 2. Setup Environment untuk Production
+(Mendatang) fee_templates: Template tagihan per kelas/jenjang.
 
-#### [MODIFY] [.env](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/.env)
-- Set `VITE_ENABLE_MOCK=true` untuk deployment awal (semua data pakai mock)
-- Set `VITE_ENABLE_DEBUG=false`
+(Mendatang) student_bills & payments: Transaksi Keuangan.
 
-#### [MODIFY] [.env.example](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/.env.example)
-- Update template dengan variabel Supabase (untuk masa depan)
+🛠️ Langkah-langkah Eksekusi (Roadmap)
+Fase 1: Finalisasi Master Data (SEDANG DIKERJAKAN ✅)
+Fokus: Memastikan fondasi dasar 100% akurat sebelum memasukkan data masal.
 
----
+Integrasi profil Institusi, Tahun Ajaran, dan Kelas murni dari Supabase.
 
-### 3. Fix Vercel Configuration
+Implementasi filter schoolId di semua Service dan Cache.
 
-#### [MODIFY] [vercel.json](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/vercel.json)
-- Konfigurasi SPA routing (semua path → `/index.html`)
-- Ignore folder `server/` agar tidak di-build Vercel
+Menyelesaikan isu siklus hidup komponen UI (Dropdown tidak sinkron, Cache nyangkut).
 
----
+Validasi Akhir Fase 1: Semua operasi CRUD (Buat, Baca, Ubah, Hapus) pada Data Master berjalan lancar tanpa refresh browser.
 
-### 4. Update .gitignore
+Fase 2: Modul Siswa & Import Data (Tertunda - Dikerjakan setelah Fase 1 Selesai)
+Fokus: Mengelola data ribuan siswa tanpa merusak performa aplikasi.
 
-#### [MODIFY] [.gitignore](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/.gitignore)
-- Pastikan `node_modules/`, `.env`, `dist/`, `server/node_modules/`, `*.db` tidak masuk Git
-- Pastikan `server/.env` juga di-exclude
+UI Tabel Siswa berdasarkan filter Kelas dan Tahun Ajaran.
 
----
+Pembuatan algoritma Import Excel (500+ baris).
 
-### 5. Complete Placeholder Modules (Basic Pages)
+Pemetaan ID Kelas secara otomatis saat import (Mencocokkan string nama kelas dari Excel ke UUID di Supabase).
 
-Modul-modul yang masih placeholder akan diberi halaman dasar agar terlihat lebih lengkap saat online:
+Penanganan error saat import (Misal: NISN ganda).
 
-#### [MODIFY] Routes — Sambungkan TeacherListPage yang sudah ada
-#### Modul placeholder tetap tampil dengan pesan "Coming Soon" yang profesional
+Fase 3: Modul Keuangan (Sesuai PDF Rincian Biaya)
+Fokus: Tagihan otomatis dan pelacakan cicilan.
 
----
+Master Tagihan: Form untuk menginput rincian biaya (contoh: LKS, Ekstrakurikuler) berdasarkan jenjang kelas.
 
-### 6. Git + GitHub Setup
+Generate Tagihan: Algoritma yang secara otomatis membebankan total biaya kepada siswa saat siswa dimasukkan ke dalam suatu Kelas & Tahun Ajaran aktif.
 
-```bash
-# Initialize git
-git init
-git add .
-git commit -m "feat: SekolahERP Phase 1 MVP"
+Penerimaan Pembayaran: UI kasir untuk menerima cicilan atau pelunasan secara penuh.
 
-# Push ke GitHub (user perlu buat repo dulu atau pakai GitHub CLI)
-gh repo create sekolah-erp --public --source=. --push
-# ATAU
-git remote add origin https://github.com/USERNAME/sekolah-erp.git
-git push -u origin main
-```
+❓ Konfirmasi Arsitektur (Untuk Anda)
+[!IMPORTANT]
+Terkait arah aplikasi ke depan:
 
----
+Fleksibilitas Jenjang: Form profil sekolah Anda sekarang memfasilitasi TK hingga SMA/SMK. Meskipun referensi PDF tagihan yang akan kita buat adalah untuk SD (Kelas 1-6), apakah kita mendesain Modul Keuangan ini agar dinamis (bisa dipakai sekolah SMK) atau dikhususkan strukturnya untuk SD saja?
 
-### 7. Deploy ke Vercel
-
-```bash
-# Install Vercel CLI
-npm i -g vercel
-
-# Login ke Vercel
-vercel login
-
-# Deploy
-vercel --prod
-```
-
-## Open Questions
-
-> [!IMPORTANT]
-> **Pertanyaan untuk Anda:**
-> 1. **Akun GitHub**: Apakah Anda sudah punya akun GitHub? Apa username-nya? Atau mau saya bantu buat repo via GitHub CLI (`gh`)?
-> 2. **Akun Vercel**: Apakah Anda sudah punya akun Vercel? Sudah pernah login via `vercel login`?
-> 3. **GitHub CLI**: Apakah `gh` (GitHub CLI) sudah terinstall? Jika belum, kita bisa push manual.
-
-## Verification Plan
-
-### Build Test
-```bash
-npm run build
-```
-Harus berhasil tanpa error.
-
-### Local Preview
-```bash
-npm run preview
-```
-Test semua halaman: Login → Dashboard → Students → Teachers → Placeholder pages
-
-### Deployment Check
-- Buka URL Vercel yang diberikan setelah deploy
-- Test login dengan demo account
-- Navigasi ke semua halaman
+Keamanan Ekstra: Setelah Fase 1 ini selesai dan berjalan lancar, saya sarankan kita masuk ke Dashboard Supabase Anda untuk mengaktifkan Row Level Security (RLS) agar schoolId difilter langsung oleh database engine. Apakah Anda memegang akses ke dashboard Supabase?

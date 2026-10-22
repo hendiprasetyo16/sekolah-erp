@@ -2,31 +2,22 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, School, Lock, Mail, ArrowRight, Sparkles } from 'lucide-react';
+import { toast } from 'sonner'; // <-- Import toast
+
 import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { authService } from '@/modules/auth/services/auth.service';
 
 export function LoginPage() {
-  const { t } = useTranslation();
+  const { t, locale } = useTranslation();
   const navigate = useNavigate();
-  const { setUser, setSchool, setAcademicYear, setTokens } = useAuthStore();
+  const { login, isLoading: storeLoading } = useAuthStore();
 
-  const [email, setEmail] = useState('admin@smknusantara.sch.id');
-  const [password, setPassword] = useState('admin123');
+  const [identifier, setIdentifier] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
-  const [selectedRole, setSelectedRole] = useState('admin');
-
-  const demoAccounts = [
-    { key: 'admin', label: 'Super Admin', email: 'admin@smknusantara.sch.id' },
-    { key: 'kepsek', label: 'Kepala Sekolah', email: 'kepsek@smknusantara.sch.id' },
-    { key: 'bendahara', label: 'Bendahara', email: 'bendahara@smknusantara.sch.id' },
-    { key: 'operator', label: 'Operator', email: 'operator@smknusantara.sch.id' },
-    { key: 'guru', label: 'Guru', email: 'guru@smknusantara.sch.id' },
-    { key: 'walikelas', label: 'Wali Kelas', email: 'walikelas@smknusantara.sch.id' },
-  ];
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,16 +25,12 @@ export function LoginPage() {
     setError('');
 
     try {
-      const response = await authService.login({ email, password });
+      const result = await login(identifier, password);
 
-      if (response.success) {
-        setUser(response.data.user);
-        setSchool(response.data.school);
-        setAcademicYear(response.data.academicYear);
-        setTokens(response.data.token, response.data.refreshToken);
+      if (result.success) {
         navigate('/dashboard');
       } else {
-        setError(response.message || t('auth.loginError'));
+        setError(result.message || t('auth.loginError'));
       }
     } catch {
       setError(t('auth.loginError'));
@@ -52,36 +39,36 @@ export function LoginPage() {
     }
   };
 
-  const selectDemoAccount = (key: string) => {
-    const account = demoAccounts.find(a => a.key === key);
-    if (account) {
-      setSelectedRole(key);
-      setEmail(account.email);
-      setPassword('admin123');
-    }
+  const handleForgotPassword = () => {
+    // Tampilkan notifikasi alih-alih redirect ke halaman lain
+    const message = locale === 'id'
+      ? 'Silakan hubungi Admin atau Operator Sekolah Anda untuk melakukan reset password.'
+      : 'Please contact your School Admin or Operator to reset your password.';
+
+    toast.info(message, {
+      duration: 5000,
+    });
   };
+
+  const loading = isLoading || storeLoading;
 
   return (
     <div className="min-h-screen flex">
       {/* Left Panel - Branding */}
       <div className="hidden lg:flex lg:w-1/2 xl:w-[55%] relative overflow-hidden">
-        {/* Background gradient */}
         <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-violet-700" />
 
-        {/* Animated background patterns */}
         <div className="absolute inset-0 opacity-20">
           <div className="absolute top-20 left-20 w-72 h-72 bg-white/10 rounded-full blur-3xl animate-pulse" />
           <div className="absolute bottom-20 right-20 w-96 h-96 bg-purple-300/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '1s' }} />
           <div className="absolute top-1/2 left-1/3 w-64 h-64 bg-indigo-300/10 rounded-full blur-3xl animate-pulse" style={{ animationDelay: '2s' }} />
         </div>
 
-        {/* Grid pattern overlay */}
         <div className="absolute inset-0 opacity-[0.03]" style={{
           backgroundImage: `linear-gradient(rgba(255,255,255,0.1) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.1) 1px, transparent 1px)`,
           backgroundSize: '60px 60px'
         }} />
 
-        {/* Content */}
         <div className="relative z-10 flex flex-col justify-between p-12 xl:p-16 text-white">
           <div>
             <motion.div
@@ -109,12 +96,11 @@ export function LoginPage() {
                 Sekolah <span className="text-purple-200">Modern</span>
               </h1>
               <p className="text-lg text-white/70 max-w-md leading-relaxed">
-                Platform ERP lengkap untuk mengelola seluruh operasional sekolah Indonesia — dari akademik hingga keuangan.
+                Platform ERP lengkap untuk mengelola seluruh operasional sekolah — dari akademik hingga keuangan, untuk SD, SMP, SMA, dan SMK.
               </p>
             </motion.div>
           </div>
 
-          {/* Feature highlights */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -144,7 +130,6 @@ export function LoginPage() {
           transition={{ duration: 0.5, delay: 0.2 }}
           className="w-full max-w-md"
         >
-          {/* Mobile logo */}
           <div className="lg:hidden flex items-center gap-3 mb-8">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
               <School size={24} className="text-white" />
@@ -160,57 +145,36 @@ export function LoginPage() {
             <p className="text-muted-foreground">{t('auth.loginSubtitle')}</p>
           </div>
 
-          {/* Demo Account Selector */}
-          <div className="mb-6">
-            <label className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2 block">
-              Demo Account
-            </label>
-            <div className="grid grid-cols-3 gap-2">
-              {demoAccounts.map((account) => (
-                <button
-                  key={account.key}
-                  onClick={() => selectDemoAccount(account.key)}
-                  className={cn(
-                    'p-2 rounded-lg text-xs font-medium transition-all border',
-                    selectedRole === account.key
-                      ? 'bg-primary/10 border-primary/50 text-primary'
-                      : 'bg-muted/30 border-border/50 text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                  )}
-                >
-                  {account.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
           <form onSubmit={handleLogin} className="space-y-5">
-            {/* Email */}
             <div>
-              <label className="text-sm font-medium text-foreground mb-1.5 block">{t('auth.email')}</label>
+              <label className="text-sm font-medium text-foreground mb-1.5 block">
+                {locale === 'id' ? 'Email / Username (NISN/NIP)' : 'Email / Username'}
+              </label>
               <div className="relative">
                 <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  id="login-identifier"
+                  type="text"
+                  value={identifier}
+                  onChange={(e) => setIdentifier(e.target.value)}
                   className={cn(
                     'w-full pl-10 pr-4 py-2.5 rounded-lg border bg-muted/30 text-foreground text-sm',
                     'placeholder:text-muted-foreground',
                     'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50',
                     'transition-all'
                   )}
-                  placeholder="email@sekolah.sch.id"
+                  placeholder={locale === 'id' ? 'Email asli atau NISN/NIP' : 'Real email or NISN/NIP'}
                   required
                 />
               </div>
             </div>
 
-            {/* Password */}
             <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">{t('auth.password')}</label>
               <div className="relative">
                 <Lock size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
                 <input
+                  id="login-password"
                   type={showPassword ? 'text' : 'password'}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -233,32 +197,34 @@ export function LoginPage() {
               </div>
             </div>
 
-            {/* Remember me & Forgot */}
             <div className="flex items-center justify-between">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input type="checkbox" defaultChecked className="w-4 h-4 rounded border-border bg-muted accent-primary" />
                 <span className="text-sm text-muted-foreground">{t('auth.rememberMe')}</span>
               </label>
-              <button type="button" className="text-sm text-primary hover:text-primary/80 transition-colors">
+              <button
+                type="button"
+                onClick={handleForgotPassword} // <-- Panggil fungsi toast di sini
+                className="text-sm text-primary hover:text-primary/80 transition-colors"
+              >
                 {t('auth.forgotPassword')}
               </button>
             </div>
 
-            {/* Error */}
             {error && (
               <motion.div
                 initial={{ opacity: 0, y: -8 }}
                 animate={{ opacity: 1, y: 0 }}
-                className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-400 text-sm"
+                className="p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-500 dark:text-red-400 text-sm"
               >
                 {error}
               </motion.div>
             )}
 
-            {/* Submit */}
             <button
+              id="login-submit"
               type="submit"
-              disabled={isLoading}
+              disabled={loading}
               className={cn(
                 'w-full flex items-center justify-center gap-2 py-3 rounded-lg font-medium text-sm transition-all',
                 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white',
@@ -267,7 +233,7 @@ export function LoginPage() {
                 'active:scale-[0.98]'
               )}
             >
-              {isLoading ? (
+              {loading ? (
                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
               ) : (
                 <>
@@ -278,11 +244,10 @@ export function LoginPage() {
             </button>
           </form>
 
-          {/* Footer */}
           <div className="mt-8 pt-6 border-t border-border/50 text-center">
             <div className="flex items-center justify-center gap-1.5 text-xs text-muted-foreground">
               <Sparkles size={14} className="text-primary" />
-              <span>SekolahERP v1.0.0 — Sistem Manajemen Sekolah Indonesia</span>
+              <span>SekolahERP v1.0.0 — Sistem Manajemen Sekolah</span>
             </div>
           </div>
         </motion.div>

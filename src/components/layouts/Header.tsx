@@ -3,7 +3,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Bell, Sun, Moon, Globe, LogOut, User,
-  Settings, ChevronRight, Menu, X
+  Settings, ChevronRight, Menu, X, Building2
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
@@ -17,17 +17,26 @@ export function Header() {
   const navigate = useNavigate();
   const location = useLocation();
   const { theme, setTheme, locale: currentLocale, setLocale, sidebarCollapsed, setSidebarOpen } = useUIStore();
-  const { user, logout } = useAuthStore();
+  const { user, school, logout } = useAuthStore();
   const { unreadCount } = useNotificationStore();
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
-  // Generate breadcrumb from location
+  // 1. LOGIKA BREADCRUMB
   const pathSegments = location.pathname.split('/').filter(Boolean);
-  const breadcrumbs = pathSegments.map((segment, idx) => ({
-    label: segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' '),
-    href: '/' + pathSegments.slice(0, idx + 1).join('/'),
-  }));
+  const breadcrumbs = pathSegments.map((segment, idx) => {
+    const isId = segment.length >= 24 || /^[0-9a-fA-F-]{36}$/.test(segment);
+    let label = segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+
+    if (isId) {
+      label = locale === 'id' ? 'Detail' : 'Detail';
+    }
+
+    return {
+      label,
+      href: '/' + pathSegments.slice(0, idx + 1).join('/'),
+    };
+  });
 
   const handleLogout = () => {
     logout();
@@ -98,6 +107,24 @@ export function Header() {
 
       {/* Right: Actions */}
       <div className="flex items-center gap-1">
+
+        {/* ========================================================= */}
+        {/* TOMBOL GANTI SEKOLAH (HANYA MUNCUL UNTUK SUPER_ADMIN)     */}
+        {/* ========================================================= */}
+        {user?.role === 'SUPER_ADMIN' && school && (
+          <button
+            onClick={() => useAuthStore.setState({ school: null, academicYear: null })}
+            className="hidden md:flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-emerald-600 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-500/30 rounded-lg hover:bg-emerald-100 transition-colors mr-2"
+            title={locale === 'id' ? 'Klik untuk berpindah ke institusi lain' : 'Click to switch to another institution'}
+          >
+            <Building2 size={16} />
+            <span className="max-w-[150px] truncate">{school.name}</span>
+            <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.5 rounded">
+              {locale === 'id' ? 'Ganti' : 'Change'}
+            </span>
+          </button>
+        )}
+
         {/* Language toggle */}
         <button
           onClick={toggleLocale}
