@@ -259,35 +259,40 @@ export const studentService = {
 // --- PERBAIKAN: Fungsi Import Massal Tanpa RPC ---
   async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
     let successCount = 0;
+    let lastDbError = null;
 
     for (const item of payload) {
-      const { parents, economic, ...studentData } = item;
+      // 1. Destructure dan BUANG properti 'rawClassName' agar tidak merusak query Supabase!
+      const { parents, economic, rawClassName, ...studentData } = item;
 
-      // 1. Simpan Data Siswa 
-      // Menggunakan 'schoolId, nisn' jika constraint unik di database adalah kombinasi keduanya
+      // 2. Simpan Data Siswa 
       const { data: student, error: studentError } = await supabase
         .from('students')
-        .upsert(studentData, { onConflict: 'schoolId, nisn' }) 
+        .upsert(studentData, { onConflict: 'schoolId,nisn' }) 
         .select()
         .single();
 
       if (studentError) {
-        console.error("Gagal simpan siswa:", studentError);
+        console.error(`Gagal simpan siswa [${studentData.fullName}]:`, studentError.message);
+        lastDbError = studentError.message; // Tangkap error asli dari Postgres
         continue; // Lewati siswa ini jika gagal, lanjut ke siswa berikutnya
       }
 
-      // 2. Simpan Data Orang Tua
+      // 3. Simpan Data Orang Tua
       if (parents && parents.length > 0) {
-        // Gabungkan studentId ke masing-masing data orang tua
-        const parentsData = parents.map((p: any) => ({ ...p, studentId: student.id }));
-        await supabase.from('student_parents').upsert(parentsData, { onConflict: 'id' });
+        await supabase.from('student_parents').delete().eq('studentId', student.id);
+        const parentsData = parents.map((p: any) => {
+          const { id, ...rest } = p;
+          return { ...rest, studentId: student.id };
+        });
+        await supabase.from('student_parents').insert(parentsData);
       }
 
-      // 3. Simpan Data Kesejahteraan (Ekonomi)
+      // 4. Simpan Data Kesejahteraan (Ekonomi)
       if (economic) {
-        // Gunakan onConflict 'studentId' karena 1 siswa hanya boleh punya 1 data ekonomi
+        const { id, ...economicData } = economic;
         await supabase.from('student_economics').upsert(
-          { ...economic, studentId: student.id }, 
+          { ...economicData, studentId: student.id }, 
           { onConflict: 'studentId' }
         );
       }
@@ -296,7 +301,8 @@ export const studentService = {
     }
 
     if (successCount === 0) {
-      throw new Error('Gagal menyimpan semua data ke database. Periksa format data Excel Anda.');
+      // Menampilkan pesan asli postgres jika gagal untuk mudahkan debugging kedepannya
+      throw new Error(`Gagal menyimpan data ke database. Error DB: ${lastDbError || 'Format data salah.'}`);
     }
 
     return {
@@ -304,5 +310,5 @@ export const studentService = {
       data: { count: successCount },
       message: `${successCount} siswa berhasil diimpor`
     };
-  },
+  }
 };

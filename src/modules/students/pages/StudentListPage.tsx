@@ -19,7 +19,6 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 
 // ==========================================
 // T Y P E S C R I P T   I N T E R F A C E S
-// (Menggantikan penggunaan 'any')
 // ==========================================
 interface ImportParent {
   id: string;
@@ -49,7 +48,7 @@ interface ImportEconomic {
 interface StudentImportPayload {
   id: string;
   schoolId: string;
-  nis: string;
+  nis: string | null;
   nisn: string;
   nik: string;
   noKk: string;
@@ -61,26 +60,27 @@ interface StudentImportPayload {
   address: string;
   rt: string;
   rw: string;
-  village: string;
-  district: string;
+  kelurahan: string; // <-- SEBELUMNYA village
+  kecamatan: string; // <-- SEBELUMNYA district
   city: string;
   province: string;
   postalCode: string;
   phone: string;
   email: string;
-  anakKe: string | number;
-  jmlSaudara: string | number;
+  anakKe: number | null;
+  jmlSaudara: number | null;
   lintang: string;
   bujur: string;
-  beratBadan: string | number;
-  tinggiBadan: string | number;
-  lingkarKepala: string | number;
-  jarakSekolah: string | number;
+  beratBadan: number | null;
+  tinggiBadan: number | null;
+  lingkarKepala: number | null;
+  jarakSekolah: number | null;
   jenisTinggal: string;
   alatTransportasi: string;
   sekolahAsal: string;
   kebutuhanKhusus: string;
   classId: string | null;
+  rawClassName?: string;
   entryDate: string;
   status: string;
   parents: ImportParent[];
@@ -108,7 +108,7 @@ export function StudentListPage() {
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
-  // WIZARD IMPORT STATES (Menggunakan interface StudentImportPayload, bukan 'any')
+  // WIZARD IMPORT STATES
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [wizardState, setWizardState] = useState<'idle' | 'parsing' | 'preview' | 'importing'>('idle');
   const [parsedImportData, setParsedImportData] = useState<StudentImportPayload[]>([]);
@@ -132,6 +132,21 @@ export function StudentListPage() {
       if (error) throw error;
       return data as { id: string; name: string; gradeLevel: number }[];
     }
+  });
+
+  // Mengambil Tahun Ajaran Aktif
+  const { data: activeYear } = useQuery({
+    queryKey: ['active-academic-year'],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from('academic_years')
+        .select('id')
+        .eq('schoolId', school?.id || '')
+        .eq('isActive', true)
+        .maybeSingle();
+      return data;
+    },
+    enabled: !!school?.id
   });
 
   // Fetch Students
@@ -211,7 +226,6 @@ export function StudentListPage() {
         const bstr = evt.target?.result;
         const workbook = XLSX.read(bstr, { type: 'binary' });
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-        // Menggunakan array 2 dimensi unknown untuk raw data sheet
         const rawData = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1 });
 
         if (rawData.length === 0) throw new Error(locale === 'id' ? 'File kosong' : 'Empty file');
@@ -250,7 +264,6 @@ export function StudentListPage() {
           const rowObject: ExcelRow = {};
           cleanHeaders.forEach((header, index) => {
             if (header) {
-              // Mengkonversi nilai dari array menjadi objek
               const cellValue = (rowArray as unknown[])[index];
               rowObject[header] = cellValue !== undefined && cellValue !== null ? String(cellValue) : '';
             }
@@ -264,18 +277,26 @@ export function StudentListPage() {
             .replace(/saat ini/g, '').replace(/tingkat/g, '').replace(/-/g, '').replace(/\s+/g, '').trim();
         };
 
+        // Helper fungsi untuk memvalidasi angka agar tidak merusak Constraint Database (> 0)
+        const getValidNumber = (val: any, min: number = 0) => {
+          const num = Number(val);
+          return !isNaN(num) && num >= min ? num : null;
+        };
+
         const parsedPayloads: StudentImportPayload[] = [];
         let missingClassCount = 0;
         let missingMandatoryCount = 0;
-        const unfoundClassSet = new Set<string>();
+        let duplicateCount = 0;
 
+        const unfoundClassSet = new Set<string>();
+        const seenNis = new Set<string>(); // Set baru untuk mencegah NIS/NIPD ganda
+
+        // Mengambil existing NISN...
         const { data: existingStudents } = await supabase
           .from('students')
           .select('nisn')
           .eq('schoolId', school?.id || '');
         const existingNisns = new Set(existingStudents?.map(s => s.nisn) || []);
-
-        let duplicateCount = 0;
 
         for (const row of data) {
           if (!row['nama'] && !row['nipd'] && !row['nisn']) continue;
@@ -289,6 +310,16 @@ export function StudentListPage() {
           if (currentNisn && existingNisns.has(currentNisn)) {
             duplicateCount++;
             continue;
+          }
+
+          // Cek duplikasi NIS (NIPD) secara internal agar tidak ditolak DB
+          let parsedNis = (row['nipd'] || row['nis']) ? String(row['nipd'] || row['nis']).trim() : null;
+          if (parsedNis) {
+            if (seenNis.has(parsedNis)) {
+              parsedNis = null; // Jadikan null jika sudah ada, DB akan menerima karena NIS boleh Null (tidak boleh duplikat).
+            } else {
+              seenNis.add(parsedNis);
+            }
           }
 
           const rombelKey = Object.keys(row).find(k => k.includes('rombel') || k.includes('kelas'));
@@ -309,16 +340,15 @@ export function StudentListPage() {
             unfoundClassSet.add(rawExcelRombel || '(Kosong/Empty)');
           }
 
-          // Helper pembaca boolean
           const toBool = (val: unknown) => String(val).toLowerCase().trim() === 'ya';
 
           parsedPayloads.push({
             id: crypto.randomUUID(),
             schoolId: school?.id || '',
-            nis: String(row['nipd'] || row['nis'] || ''),
+            nis: parsedNis, // <-- Menggunakan NIS yang sudah divalidasi anti-ganda
             nisn: currentNisn,
-            nik: String(row['nik'] || ''),
-            noKk: String(row['no kk'] || row['nokk'] || '-'),
+            nik: row['nik'] ? String(row['nik']).trim() : `NONIK-${currentNisn}`,
+            noKk: (row['no kk'] || row['nokk']) ? String(row['no kk'] || row['nokk']).trim() : '-',
             fullName: String(row['nama'] || ''),
             gender: (String(row['jk'] || row['jenis kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P'),
             birthPlace: String(row['tempat lahir'] || '-'),
@@ -329,28 +359,30 @@ export function StudentListPage() {
             address: String(row['alamat'] || row['dusun'] || '-'),
             rt: String(row['rt'] || ''),
             rw: String(row['rw'] || ''),
-            village: String(row['kelurahan'] || ''),
-            district: String(row['kecamatan'] || ''),
+            kelurahan: String(row['kelurahan'] || ''), // <-- PERBAIKAN: ubah dari village ke kelurahan
+            kecamatan: String(row['kecamatan'] || ''), // <-- PERBAIKAN: ubah dari district ke kecamatan
             city: String(row['kabupaten/kota'] || row['kota'] || ''),
             province: String(row['provinsi'] || ''),
             postalCode: String(row['kode pos'] || ''),
             phone: String(row['hp'] || row['telepon'] || ''),
             email: String(row['e-mail'] || row['email'] || ''),
-            anakKe: String(row['anak ke-berapa'] || ''),
-            jmlSaudara: String(row['jml. saudara kandung'] || ''),
+            anakKe: getValidNumber(row['anak ke-berapa'], 1), // <-- Harus lebih dari 0 karena constraint
+            jmlSaudara: getValidNumber(row['jml. saudara kandung'], 0),
             lintang: String(row['lintang'] || ''),
             bujur: String(row['bujur'] || ''),
-            beratBadan: String(row['berat badan'] || ''),
-            tinggiBadan: String(row['tinggi badan'] || ''),
-            lingkarKepala: String(row['lingkar kepala'] || ''),
-            jarakSekolah: String(row['jarak rumah ke sekolah (km)'] || ''),
+            beratBadan: getValidNumber(row['berat badan'], 0),
+            tinggiBadan: getValidNumber(row['tinggi badan'], 0),
+            lingkarKepala: getValidNumber(row['lingkar kepala'], 0),
+            jarakSekolah: getValidNumber(row['jarak rumah ke sekolah (km)'], 0),
             jenisTinggal: String(row['jenis tinggal'] || ''),
             alatTransportasi: String(row['alat transportasi'] || ''),
             sekolahAsal: String(row['sekolah asal'] || ''),
             kebutuhanKhusus: String(row['kebutuhan khusus'] || ''),
             classId: matchedClass?.id || null,
+            rawClassName: rawExcelRombel || 'Belum Ada Kelas',
             entryDate: new Date().toISOString(),
             status: 'AKTIF',
+            // ... (lanjutan parent dan economic tetap sama seperti sebelumnya)
             parents: [
               ...(row['data ayah nama'] || row['nama ayah'] ? [{
                 id: crypto.randomUUID(),
@@ -429,14 +461,105 @@ export function StudentListPage() {
     reader.readAsBinaryString(file);
   };
 
-  const executeImport = () => {
-    const finalPayload = parsedImportData.filter(d => d.classId !== null);
-    if (finalPayload.length === 0) {
+  const executeImport = async () => {
+    if (parsedImportData.length === 0) {
       toast.error(locale === 'id' ? 'Tidak ada data baru yang valid.' : 'No valid new data.');
       return;
     }
+
+    if (unmatchedClasses.length > 0 && !activeYear?.id) {
+      toast.error(locale === 'id' ? 'Tahun Ajaran Aktif tidak ditemukan! Silakan atur di menu Tahun Ajaran agar sistem bisa membuat kelas otomatis.' : 'Active Academic Year not found! Please set it first.');
+      return;
+    }
+
     setWizardState('importing');
-    importMutation.mutate(finalPayload);
+
+    try {
+      let currentClasses = classesData || [];
+
+      // 1. Buat Kelas Otomatis jika ada yang belum terdaftar
+      if (unmatchedClasses.length > 0 && activeYear?.id) {
+        const uniqueClassNames = Array.from(new Set(unmatchedClasses));
+
+        const classesToCreate = uniqueClassNames.map(className => {
+          let gradeLevel = 1;
+          const upper = className.toUpperCase();
+          if (upper.includes('XII') || upper.includes('12')) gradeLevel = 12;
+          else if (upper.includes('XI') || upper.includes('11')) gradeLevel = 11;
+          else if (upper.includes('X') || upper.includes('10')) gradeLevel = 10;
+          else if (upper.includes('IX') || upper.includes('9')) gradeLevel = 9;
+          else if (upper.includes('VIII') || upper.includes('8')) gradeLevel = 8;
+          else if (upper.includes('VII') || upper.includes('7')) gradeLevel = 7;
+          else if (upper.includes('VI') || upper.includes('6')) gradeLevel = 6;
+          else if (upper.includes('V') || upper.includes('5')) gradeLevel = 5;
+          else if (upper.includes('IV') || upper.includes('4')) gradeLevel = 4;
+          else if (upper.includes('III') || upper.includes('3')) gradeLevel = 3;
+          else if (upper.includes('II') || upper.includes('2')) gradeLevel = 2;
+          else if (upper.includes('I') || upper.includes('1')) gradeLevel = 1;
+
+          return {
+            schoolId: school!.id,
+            academicYearId: activeYear.id,
+            name: className,
+            gradeLevel: gradeLevel,
+            capacity: 36
+          };
+        });
+
+        const { data: newClasses, error: classError } = await supabase
+          .from('classes')
+          .upsert(classesToCreate, { onConflict: 'schoolId, academicYearId, name' })
+          .select('id, name, gradeLevel');
+
+        if (classError) {
+          console.error("Error creating classes:", classError);
+          throw classError;
+        }
+
+        if (newClasses) {
+          const newClassNames = newClasses.map(nc => nc.name);
+          currentClasses = [
+            ...currentClasses.filter(cc => !newClassNames.includes(cc.name)),
+            ...newClasses
+          ];
+          queryClient.invalidateQueries({ queryKey: ['classes-list'] });
+        }
+      }
+
+      // ==============================================================
+      // PERBAIKAN DI SINI: Bersihkan payload dari properti sementara
+      // ==============================================================
+      const finalPayload = parsedImportData.map(payload => {
+        let updatedClassId = payload.classId;
+
+        if (!updatedClassId && payload.rawClassName) {
+          const matched = currentClasses.find(c => c.name === payload.rawClassName);
+          if (matched) {
+            updatedClassId = matched.id;
+          }
+        }
+
+        // Kita pisahkan (destructure) 'rawClassName' agar sisanya (cleanPayload) 
+        // benar-benar bersih dan sesuai dengan struktur tabel database
+        const { rawClassName, ...cleanPayload } = payload;
+
+        return {
+          ...cleanPayload,
+          classId: updatedClassId
+        };
+      }).filter(d => d.classId !== null);
+
+      if (finalPayload.length === 0) {
+        throw new Error("Gagal memasangkan kelas.");
+      }
+
+      // 3. Eksekusi import masal siswa (Gunakan "as any" untuk mengabaikan beda struktur tipe TS)
+      importMutation.mutate(finalPayload as any);
+
+    } catch (error: any) {
+      toast.error(error.message || (locale === 'id' ? 'Gagal membuat kelas otomatis.' : 'Failed to auto-create classes.'));
+      setWizardState('preview');
+    }
   };
 
   const closeImportWizard = () => {
@@ -447,13 +570,11 @@ export function StudentListPage() {
 
   const triggerImport = () => fileInputRef.current?.click();
 
-  // --- LOGIKA EXPORT ---
   const handleExport = async () => {
     try {
       setIsExporting(true);
       const toastId = toast.loading(locale === 'id' ? 'Menyiapkan file Excel...' : 'Preparing Excel file...');
 
-      // 1. Ambil semua data tanpa batasan paginasi
       const response = await studentService.exportAll();
       let dataToExport = response.data || [];
 
@@ -461,12 +582,10 @@ export function StudentListPage() {
         throw new Error(locale === 'id' ? 'Tidak ada data untuk diexport' : 'No data to export');
       }
 
-      // 2. Filter data jika ada baris yang dicentang
       if (selectedRows.length > 0) {
         dataToExport = dataToExport.filter(s => selectedRows.includes(s.id));
       }
 
-      // 3. Format Header & Data Excel (Mendukung Bilingual / 2 Bahasa)
       const excelData = dataToExport.map((s, index) => ({
         'No': index + 1,
         'NISN': s.nisn,
@@ -485,11 +604,9 @@ export function StudentListPage() {
         'Status': s.status
       }));
 
-      // 4. Proses pembuatan file Excel
       const worksheet = XLSX.utils.json_to_sheet(excelData);
       const workbook = XLSX.utils.book_new();
 
-      // Mengatur lebar kolom agar rapi saat dibuka
       worksheet['!cols'] = [
         { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 35 },
         { wch: 10 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 40 },
@@ -498,7 +615,6 @@ export function StudentListPage() {
 
       XLSX.utils.book_append_sheet(workbook, worksheet, "Data_Siswa");
 
-      // 5. Penamaan file dinamis berdasarkan centang
       const dateStr = new Date().toISOString().split('T')[0];
       const fileName = selectedRows.length > 0
         ? `Data_Siswa_Terpilih_${dateStr}.xlsx`
@@ -569,7 +685,7 @@ export function StudentListPage() {
                         <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-1">{locale === 'id' ? 'Total Excel' : 'Excel Total'}</span>
                       </div>
                       <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl flex flex-col items-center justify-center text-center">
-                        <span className="text-3xl font-black text-emerald-600">{importStats.valid - importStats.missingClass}</span>
+                        <span className="text-3xl font-black text-emerald-600">{importStats.valid}</span>
                         <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400 uppercase tracking-wider mt-1">{locale === 'id' ? 'Data Baru' : 'New Data'}</span>
                       </div>
                     </div>
@@ -598,18 +714,18 @@ export function StudentListPage() {
                       )}
 
                       {importStats.missingClass > 0 && (
-                        <div className="flex items-start gap-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400">
+                        <div className="flex items-start gap-3 p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-400">
                           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                           <div className="w-full">
-                            <p className="text-sm font-semibold">{locale === 'id' ? `Kelas Tidak Ditemukan (${importStats.missingClass} Siswa)` : `Class Not Found (${importStats.missingClass} Students)`}</p>
+                            <p className="text-sm font-semibold">{locale === 'id' ? `Kelas Baru Ditemukan (${importStats.missingClass} Siswa)` : `New Classes Found (${importStats.missingClass} Students)`}</p>
                             <div className="flex flex-wrap gap-1.5 mt-2 mb-2">
                               {unmatchedClasses.map((className, idx) => (
-                                <span key={idx} className="bg-amber-500/20 px-2 py-1 rounded text-xs font-bold font-mono">
+                                <span key={idx} className="bg-indigo-500/20 px-2 py-1 rounded text-xs font-bold font-mono">
                                   {className}
                                 </span>
                               ))}
                             </div>
-                            <p className="text-xs italic">{locale === 'id' ? '*Solusi: Buat kelas dengan nama di atas pada menu Kelas, lalu ulangi Import.' : '*Solution: Create classes with the names above, then retry.'}</p>
+                            <p className="text-xs italic">{locale === 'id' ? '*Sistem akan otomatis membuat kelas-kelas ini sebelum menyimpan data siswa.' : '*The system will automatically create these classes before importing.'}</p>
                           </div>
                         </div>
                       )}
@@ -628,8 +744,8 @@ export function StudentListPage() {
               {wizardState === 'preview' && (
                 <div className="p-4 border-t border-border bg-muted/20 flex justify-end gap-3">
                   <Button variant="outline" onClick={closeImportWizard} disabled={importMutation.isPending}>{locale === 'id' ? 'Batal' : 'Cancel'}</Button>
-                  <Button onClick={executeImport} disabled={importMutation.isPending || (importStats.valid - importStats.missingClass) === 0} className="bg-blue-600 hover:bg-blue-700 text-white">
-                    {locale === 'id' ? `Mulai Import (${importStats.valid - importStats.missingClass} Data Baru)` : `Start Import (${importStats.valid - importStats.missingClass} New Data)`}
+                  <Button onClick={executeImport} disabled={importMutation.isPending || importStats.valid === 0} className="bg-blue-600 hover:bg-blue-700 text-white">
+                    {locale === 'id' ? `Mulai Import (${importStats.valid} Data Baru)` : `Start Import (${importStats.valid} New Data)`}
                   </Button>
                 </div>
               )}
