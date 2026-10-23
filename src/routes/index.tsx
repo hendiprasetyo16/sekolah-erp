@@ -12,6 +12,11 @@ import FinanceDashboardPage from '@/modules/finance/pages/FinanceDashboardPage';
 import ScheduleDashboardPage from '@/modules/schedules/pages/ScheduleDashboardPage';
 import ReportsDashboardPage from '@/modules/reports/pages/ReportsDashboardPage';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+
+// Attendance module
+import { StudentKioskPage } from '@/modules/attendance/pages/StudentKioskPage';
+import { TeacherAttendancePage } from '@/modules/attendance/pages/TeacherAttendancePage';
+import { AttendanceDashboardPage } from '@/modules/attendance/pages/AttendanceDashboardPage';
 import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, SettingsPlaceholder } from './placeholder-pages';
 
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
@@ -105,6 +110,10 @@ export function AppRouter() {
           {/* User Management */}
           <Route path="/admin/users" element={<UserManagementPage />} />
 
+          {/* Attendance */}
+          <Route path="/attendance" element={<AttendanceDashboardPage />} />
+          <Route path="/attendance/teacher" element={<TeacherAttendancePage />} />
+
           {/* Settings */}
           <Route path="/settings" element={<SettingsPlaceholder />} />
           <Route path="/settings/*" element={<SettingsPlaceholder />} />
@@ -114,6 +123,9 @@ export function AppRouter() {
           <Route path="/admin/*" element={<AdminPlaceholder />} />
           <Route path="/scholarships/*" element={<ScholarshipsPlaceholder />} />
         </Route>
+
+        {/* Kiosk Absensi Siswa - rute publik khusus layar/monitor */}
+        <Route path="/kiosk" element={<StudentKioskPage />} />
 
         {/* Redirect: Jika rute tidak dikenali, arahkan ke dashboard */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />

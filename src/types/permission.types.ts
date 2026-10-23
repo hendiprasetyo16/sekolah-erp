@@ -11,7 +11,8 @@ export type Module =
   | 'administration'
   | 'scholarships'
   | 'reports'
-  | 'settings';
+  | 'settings'
+  | 'attendance';
 
 export type Action = 'create' | 'read' | 'update' | 'delete' | 'export' | 'import' | 'approve';
 
@@ -38,6 +39,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'scholarships', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
     { module: 'settings', actions: ['create', 'read', 'update', 'delete'] },
+    { module: 'attendance', actions: ['create', 'read', 'update', 'delete', 'export'] },
   ],
 
   // ==========================================
@@ -54,7 +56,8 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'administration', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'scholarships', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
-    { module: 'settings', actions: ['read', 'update'] }, // ✅ Tambah update agar bisa simpan profil sekolah
+    { module: 'settings', actions: ['read', 'update'] },
+    { module: 'attendance', actions: ['create', 'read', 'update', 'delete', 'export'] },
   ],
 
   // ... (Role KEPALA_SEKOLAH dan yang lainnya sudah SANGAT BAGUS dan biarkan saja seperti semula) ...
@@ -71,6 +74,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'scholarships', actions: ['read', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
     { module: 'settings', actions: ['read', 'update'] },
+    { module: 'attendance', actions: ['create', 'read', 'update', 'export'] },
   ],
   OPERATOR: [
     { module: 'dashboard', actions: ['read'] },
@@ -96,6 +100,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'academic', actions: ['read'] },
     { module: 'students', actions: ['read'] },
     { module: 'schedules', actions: ['read'] },
+    { module: 'attendance', actions: ['create', 'read'] }, // Guru bisa absen sendiri
   ],
   STAFF_TU: [
     { module: 'dashboard', actions: ['read'] },

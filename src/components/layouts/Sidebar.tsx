@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, GraduationCap, Calendar, Wallet,
   Package, FileText, Award, BarChart3, Settings, ChevronLeft,
   ChevronRight, School, ChevronDown, BookOpen, CreditCard, Receipt,
-  Building2, CalendarDays, ShieldCheck // <-- 1. TAMBAHKAN ShieldCheck DI SINI
+  Building2, CalendarDays, ShieldCheck, ClipboardCheck, UserCheck // tambahan attendance icons
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
@@ -64,6 +64,23 @@ export function Sidebar() {
         { label: t('sidebar.students'), icon: <Users size={20} />, href: '/students', module: 'students' },
         { label: t('sidebar.teachers'), icon: <GraduationCap size={20} />, href: '/teachers', module: 'teachers' },
         { label: t('sidebar.schedules'), icon: <Calendar size={20} />, href: '/schedules', module: 'schedules' },
+      ],
+    },
+    {
+      id: 'attendance',
+      title: locale === 'id' ? 'Absensi' : 'Attendance',
+      items: [
+        {
+          label: locale === 'id' ? 'Rekap Absensi' : 'Attendance Report',
+          icon: <ClipboardCheck size={20} />,
+          href: '/attendance',
+          module: 'attendance' as Module,
+        },
+        {
+          label: locale === 'id' ? 'Absen Saya (GPS)' : 'My Attendance (GPS)',
+          icon: <UserCheck size={20} />,
+          href: '/attendance/teacher',
+        },
       ],
     },
     {
