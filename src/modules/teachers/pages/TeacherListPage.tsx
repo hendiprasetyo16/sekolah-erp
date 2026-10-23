@@ -36,6 +36,79 @@ export function TeacherListPage() {
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [isImporting, setIsImporting] = useState(false);
 
+  const [isExporting, setIsExporting] = useState(false);
+
+  const handleExport = async () => {
+    setIsExporting(true);
+    const toastId = toast.loading(locale === 'id' ? 'Menyiapkan file Excel...' : 'Preparing Excel file...');
+
+    try {
+      // 1. Mengambil seluruh data dari database
+      const response = await teacherService.exportAll();
+      let teachersToExport = response.data;
+
+      if (!teachersToExport || teachersToExport.length === 0) {
+        throw new Error(locale === 'id' ? 'Tidak ada data untuk diekspor' : 'No data to export');
+      }
+
+      // ==========================================================
+      // 2. LOGIKA BARU: Filter data jika ada baris yang dicentang
+      // ==========================================================
+      if (selectedRows.length > 0) {
+        teachersToExport = teachersToExport.filter(t => selectedRows.includes(t.id));
+      }
+
+      // 3. Format data agar header tabel Excel berbahasa Indonesia dan rapi
+      const exportData = teachersToExport.map((t, index) => ({
+        'No': index + 1,
+        'Nama Lengkap': t.fullName,
+        'JK': t.gender,
+        'NIP': t.nip || '-',
+        'NUPTK': t.nuptk || '-',
+        'Jenis PTK (Jabatan)': t.position || '-',
+        'Status Kepegawaian': t.status || '-',
+        'Sertifikasi': t.isCertified ? 'Sudah' : 'Belum',
+        'Email': t.email || '-',
+        'Telepon': t.phone || '-',
+      }));
+
+      // 4. Membuat Worksheet dan Workbook menggunakan xlsx
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+
+      // 5. Mengatur lebar kolom otomatis agar rapi
+      const wscols = [
+        { wch: 5 },  // No
+        { wch: 30 }, // Nama Lengkap
+        { wch: 5 },  // JK
+        { wch: 20 }, // NIP
+        { wch: 20 }, // NUPTK
+        { wch: 20 }, // Jabatan
+        { wch: 20 }, // Status
+        { wch: 15 }, // Sertifikasi
+        { wch: 25 }, // Email
+        { wch: 15 }, // Telepon
+      ];
+      ws['!cols'] = wscols;
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Data Guru');
+
+      // 6. Mengunduh file dengan format nama dinamis sesuai tanggal
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = selectedRows.length > 0
+        ? `Data_Guru_Terpilih_${dateStr}.xlsx`
+        : `Data_Guru_Pegawai_${dateStr}.xlsx`;
+
+      XLSX.writeFile(wb, fileName);
+
+      toast.success(locale === 'id' ? 'Data berhasil diekspor!' : 'Data successfully exported!', { id: toastId });
+    } catch (error: any) {
+      toast.error(error.message, { id: toastId });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; type: 'single' | 'bulk'; id?: string }>({ isOpen: false, type: 'single' });
 
   const pageSize = 10;
@@ -231,8 +304,12 @@ export function TeacherListPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors">
-            <Download size={16} />
+          <button
+            onClick={handleExport}
+            disabled={isExporting}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
+          >
+            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
             <span className="hidden sm:inline">{dict.exportBtn}</span>
           </button>
           <Link to="/teachers/new" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm">

@@ -39,6 +39,20 @@ class TeacherService {
     };
   }
 
+  // --- FUNGSI EXPORT EXCEL (BARU) ---
+  async exportAll() {
+    const { data, error } = await supabase
+      .from('teachers')
+      .select('*')
+      .order('fullName', { ascending: true });
+
+    if (error) {
+      throw new Error(error.message);
+    }
+
+    return { data: data as TeacherDetail[] };
+  }
+  
   async getById(id: string) {
     const { data, error } = await supabase
       .from('teachers')
