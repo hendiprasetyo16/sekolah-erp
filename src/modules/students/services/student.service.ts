@@ -232,20 +232,77 @@ export const studentService = {
    * FUNGSI BARU: Mengirim data massal ke Supabase RPC.
    * RPC akan menjamin keamanan transaksi (All or Nothing).
    */
-  async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
-    const { data, error } = await supabase.rpc('bulk_import_students', {
-      batch_data: payload
-    });
+// --- FUNGSI BARU: Ekspor Semua Data ---
+  async exportAll(): Promise<ApiResponse<StudentDetail[]>> {
+    const { data, error } = await supabase
+      .from('students')
+      .select('*, classes(name, gradeLevel)')
+      .order('fullName', { ascending: true });
 
     if (error) {
-      // Tangkap error dari PostgreSQL (biasanya kita lempar ke handleDbError)
-      throw new Error(error.message || 'Gagal melakukan import massal');
+      throw new Error(error.message);
+    }
+
+    const mappedData = data.map((item: any) => ({
+      ...item,
+      className: item.classes?.name || '-',
+      gradeLevel: item.classes?.gradeLevel || 0,
+    })) as StudentDetail[];
+
+    return {
+      success: true,
+      data: mappedData,
+      message: 'Berhasil mengambil semua data siswa'
+    };
+  },
+
+// --- PERBAIKAN: Fungsi Import Massal Tanpa RPC ---
+  async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
+    let successCount = 0;
+
+    for (const item of payload) {
+      const { parents, economic, ...studentData } = item;
+
+      // 1. Simpan Data Siswa 
+      // Menggunakan 'schoolId, nisn' jika constraint unik di database adalah kombinasi keduanya
+      const { data: student, error: studentError } = await supabase
+        .from('students')
+        .upsert(studentData, { onConflict: 'schoolId, nisn' }) 
+        .select()
+        .single();
+
+      if (studentError) {
+        console.error("Gagal simpan siswa:", studentError);
+        continue; // Lewati siswa ini jika gagal, lanjut ke siswa berikutnya
+      }
+
+      // 2. Simpan Data Orang Tua
+      if (parents && parents.length > 0) {
+        // Gabungkan studentId ke masing-masing data orang tua
+        const parentsData = parents.map((p: any) => ({ ...p, studentId: student.id }));
+        await supabase.from('student_parents').upsert(parentsData, { onConflict: 'id' });
+      }
+
+      // 3. Simpan Data Kesejahteraan (Ekonomi)
+      if (economic) {
+        // Gunakan onConflict 'studentId' karena 1 siswa hanya boleh punya 1 data ekonomi
+        await supabase.from('student_economics').upsert(
+          { ...economic, studentId: student.id }, 
+          { onConflict: 'studentId' }
+        );
+      }
+
+      successCount++;
+    }
+
+    if (successCount === 0) {
+      throw new Error('Gagal menyimpan semua data ke database. Periksa format data Excel Anda.');
     }
 
     return {
       success: true,
-      data: { count: data?.count || payload.length },
-      message: `${data?.count || 0} siswa berhasil diimpor`
+      data: { count: successCount },
+      message: `${successCount} siswa berhasil diimpor`
     };
   },
 };

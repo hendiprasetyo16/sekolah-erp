@@ -451,27 +451,64 @@ export function StudentListPage() {
   const handleExport = async () => {
     try {
       setIsExporting(true);
-      toast.info(locale === 'id' ? 'Menyiapkan data...' : 'Preparing data...');
-      const response = await studentService.list({ page: 1, limit: 10000, search: searchQuery, classId: selectedClass === 'all' ? undefined : selectedClass });
-      const allData = response.data?.data || [];
-      if (allData.length === 0) return toast.warning(locale === 'id' ? 'Tidak ada data untuk diexport' : 'No data to export');
+      const toastId = toast.loading(locale === 'id' ? 'Menyiapkan file Excel...' : 'Preparing Excel file...');
 
-      const excelData = allData.map((s, index) => ({
-        'No': index + 1, 'NISN': s.nisn, 'NIK': s.nik, 'Nama Lengkap': s.fullName,
-        'Jenis Kelamin': s.gender === 'L' ? 'Laki-laki' : 'Perempuan',
-        'Kelas': s.className, 'Tempat Lahir': s.birthPlace,
-        'Tanggal Lahir': s.birthDate ? new Date(s.birthDate).toLocaleDateString('id-ID') : '',
-        'Alamat': s.address, 'Status': s.status
+      // 1. Ambil semua data tanpa batasan paginasi
+      const response = await studentService.exportAll();
+      let dataToExport = response.data || [];
+
+      if (dataToExport.length === 0) {
+        throw new Error(locale === 'id' ? 'Tidak ada data untuk diexport' : 'No data to export');
+      }
+
+      // 2. Filter data jika ada baris yang dicentang
+      if (selectedRows.length > 0) {
+        dataToExport = dataToExport.filter(s => selectedRows.includes(s.id));
+      }
+
+      // 3. Format Header & Data Excel (Mendukung Bilingual / 2 Bahasa)
+      const excelData = dataToExport.map((s, index) => ({
+        'No': index + 1,
+        'NISN': s.nisn,
+        'NIS': s.nis || '-',
+        'NIK': s.nik || '-',
+        [locale === 'id' ? 'Nama Lengkap' : 'Full Name']: s.fullName,
+        [locale === 'id' ? 'L/P' : 'Gender']: s.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female'),
+        [locale === 'id' ? 'Kelas' : 'Class']: s.className,
+        [locale === 'id' ? 'Tempat Lahir' : 'Birth Place']: s.birthPlace || '-',
+        [locale === 'id' ? 'Tanggal Lahir' : 'Birth Date']: s.birthDate ? new Date(s.birthDate).toLocaleDateString('id-ID') : '-',
+        [locale === 'id' ? 'Alamat' : 'Address']: s.address || '-',
+        [locale === 'id' ? 'Desa/Kelurahan' : 'Village']: s.kelurahan || '-',
+        [locale === 'id' ? 'Kecamatan' : 'District']: s.kecamatan || '-',
+        [locale === 'id' ? 'Kab/Kota' : 'City']: s.city || '-',
+        [locale === 'id' ? 'No. HP/Telepon' : 'Phone Number']: s.phone || '-',
+        'Status': s.status
       }));
 
+      // 4. Proses pembuatan file Excel
       const worksheet = XLSX.utils.json_to_sheet(excelData);
       const workbook = XLSX.utils.book_new();
+
+      // Mengatur lebar kolom agar rapi saat dibuka
+      worksheet['!cols'] = [
+        { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 35 },
+        { wch: 10 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 40 },
+        { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 15 }, { wch: 15 }
+      ];
+
       XLSX.utils.book_append_sheet(workbook, worksheet, "Data_Siswa");
-      worksheet['!cols'] = [{ wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 30 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 40 }, { wch: 15 }];
-      XLSX.writeFile(workbook, `Data_Siswa_${new Date().getTime()}.xlsx`);
-      toast.success(locale === 'id' ? 'Export berhasil!' : 'Export successful!');
-    } catch (error) {
-      toast.error(locale === 'id' ? 'Gagal melakukan export data' : 'Export failed');
+
+      // 5. Penamaan file dinamis berdasarkan centang
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = selectedRows.length > 0
+        ? `Data_Siswa_Terpilih_${dateStr}.xlsx`
+        : `Data_Siswa_Keseluruhan_${dateStr}.xlsx`;
+
+      XLSX.writeFile(workbook, fileName);
+
+      toast.success(locale === 'id' ? 'Export berhasil!' : 'Export successful!', { id: toastId });
+    } catch (error: any) {
+      toast.error(error.message || (locale === 'id' ? 'Gagal melakukan export data' : 'Export failed'));
     } finally {
       setIsExporting(false);
     }
