@@ -132,7 +132,7 @@ export function Sidebar() {
       )}
     >
       <div className={cn("flex items-center h-16 border-b border-border/50 transition-all", sidebarCollapsed ? "justify-center px-0" : "px-4 gap-3")}>
-        <div className="flex-shrink-0 w-9 h-9 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+        <div className="shrink-0 w-9 h-9 rounded-lg bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
           <School size={20} className="text-white" />
         </div>
         <AnimatePresence>
@@ -200,7 +200,7 @@ export function Sidebar() {
                         )}
                       >
                         <span className={cn(
-                          'flex-shrink-0 transition-colors',
+                          'shrink-0 transition-colors',
                           isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-primary'
                         )}>
                           {item.icon}
@@ -220,7 +220,7 @@ export function Sidebar() {
                         </AnimatePresence>
 
                         {!sidebarCollapsed && item.badge && (
-                          <span className="flex-shrink-0 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full font-medium">
+                          <span className="shrink-0 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full font-medium">
                             {item.badge}
                           </span>
                         )}
