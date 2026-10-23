@@ -117,3 +117,25 @@ graph TB
 > 1. **Selesaikan modul Guru** — halaman sudah ada tapi belum di-route
 > 2. **Integrasi frontend ↔ backend** — pastikan semua CRUD terhubung ke API
 > 3. **Mulai Phase 2** — Keuangan dan Jadwal Pelajaran
+
+Status Pengembangan SekolahERP (Telah Diperbarui)✅ Yang Sudah Selesai (Phase 1 MVP)Frontend (React + Vite + TypeScript)KomponenStatusKeteranganLogin Page✅ SelesaiAutentikasi terhubung dengan SupabaseAdmin Dashboard✅ SelesaiHalaman utama setelah loginData Master Akademik✅ SelesaiManajemen Tahun Ajaran, Kelas, Semester, MapelManajemen Siswa✅ SelesaiList, Detail, Form (Termasuk data Ortu & Kesejahteraan)Manajemen Guru✅ SelesaiList, Detail, Form (CRUD lengkap)Sidebar & Header✅ SelesaiNavigasi responsifUI Component Library✅ Selesai8 komponen (Button, Card, Badge, Form, Input, Label, Select, Tabs)Auth Store (Zustand)✅ SelesaiState management untuk autentikasiDark/Light Theme✅ SelesaiToggle tersedia di headerBilingual (ID/EN)✅ SelesaiImplementasi translasi manualRBAC Permissions✅ SelesaiManajemen hak akses penggunaProtected Routes✅ SelesaiRoute guards navigasiBackend (NestJS + Prisma + SQLite)KomponenStatusDetailDatabase Schema✅ Selesai13 model yang saling terelasiAuth Module✅ SelesaiController, Service, Guards, StrategiesStudents Module✅ SelesaiController, Service (CRUD)Teachers Module✅ SelesaiController, Service (CRUD)Prisma Service✅ SelesaiDatabase connection layer🚧 Belum Dimulai (Phase 2-4)ModulRouteFase RencanaJadwal Pelajaran/schedules/*Phase 2Absensi/attendance/*Phase 2Keuangan/finance/*Phase 2-3Inventaris/inventory/*Phase 3Administrasi/admin/*Phase 3Beasiswa/PIP/scholarships/*Phase 3-4Laporan/reports/*Phase 3-4Pengaturan/settings/*Phase 4
+
+Cara Memperbarui dan Menghasilkan File APK
+Setiap kali kamu selesai mengubah kode React di VS Code, kamu hanya perlu menjalankan rangkaian perintah ini untuk memperbarui dan membuat file APK-nya:
+
+Bash
+# 1. Build project React/Vite (untuk menghasilkan folder dist)
+npm run build
+
+# 2. Sinkronkan (copy) hasil build ke folder Android
+npx cap sync
+
+# 3. Buka project-mu di Android Studio untuk build APK
+npx cap open android
+Ketika Android Studio terbuka secara otomatis:
+
+Hubungkan HP-mu dengan kabel USB (atau gunakan Emulator).
+
+Di Android Studio, klik menu Build > Build Bundle(s) / APK(s) > Build APK(s).
+
+Android Studio akan bekerja membuat file app-debug.apk yang bisa langsung kamu install dan bagikan!
