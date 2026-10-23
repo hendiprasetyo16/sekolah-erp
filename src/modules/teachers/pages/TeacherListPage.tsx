@@ -382,24 +382,43 @@ export function TeacherListPage() {
           </table>
         </div>
 
-        {/* KONTROL PAGINASI ANTI TUMPANG TINDIH (FLEX-NOWRAP) */}
+        {/* =================================================================== */}
+        {/* KONTROL PAGINASI (TEKS DI KIRI, TOMBOL DI KANAN) */}
+        {/* =================================================================== */}
         {totalPages > 0 && (
-          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground bg-muted/10">
+          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground bg-background rounded-b-xl">
+
+            {/* Bagian Kiri: Teks Informasi */}
             <div className="text-center sm:text-left w-full sm:w-auto">
               {dict.showing} {teachers.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} - {Math.min(currentPage * pageSize, totalData)} {dict.of} {totalData} {dict.dataText}
             </div>
 
-            <div className="flex items-center justify-center gap-1 sm:gap-2 flex-nowrap overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
-              <button title="Pertama" onClick={() => setCurrentPage(1)} disabled={currentPage === 1 || isLoading} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border disabled:opacity-50 transition-all shrink-0">
+            {/* Bagian Kanan: Kontrol Paginasi */}
+            <div className="flex items-center justify-center sm:justify-end gap-1 sm:gap-2 flex-nowrap overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+
+              {/* Tombol Pertama (<<) */}
+              <button
+                title="Pertama"
+                onClick={() => setCurrentPage(1)}
+                disabled={currentPage === 1 || isLoading}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
+              >
                 <ChevronsLeft size={18} />
               </button>
 
-              <button title="Sebelumnya" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1 || isLoading} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border disabled:opacity-50 transition-all shrink-0">
+              {/* Tombol Sebelumnya (<) */}
+              <button
+                title="Sebelumnya"
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                disabled={currentPage === 1 || isLoading}
+                className="p-1.5 mr-1 sm:mr-3 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
+              >
                 <ChevronLeft size={18} />
               </button>
 
-              <div className="flex items-center gap-1.5 px-1 shrink-0">
-                <span className="hidden sm:inline whitespace-nowrap">{dict.page}</span>
+              {/* Area Input Halaman (Hal [ 1 ] dari 4) */}
+              <div className="flex items-center gap-2 px-1 shrink-0">
+                <span className="font-medium text-muted-foreground">{dict.page}</span>
                 <input
                   type="number"
                   value={pageInputValue}
@@ -407,18 +426,33 @@ export function TeacherListPage() {
                   onKeyDown={(e) => e.key === 'Enter' && handlePageSubmit()}
                   onBlur={handlePageSubmit}
                   disabled={isLoading}
-                  className="w-12 h-8 text-center font-medium border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shrink-0"
+                  className="w-12 sm:w-14 h-8 text-center font-medium border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shrink-0 shadow-sm"
+                  min={1}
+                  max={totalPages}
                 />
-                <span className="whitespace-nowrap shrink-0">{dict.of} {totalPages}</span>
+                <span className="font-medium text-muted-foreground">{dict.of} {totalPages}</span>
               </div>
 
-              <button title="Selanjutnya" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || isLoading} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border disabled:opacity-50 transition-all shrink-0">
+              {/* Tombol Selanjutnya (>) */}
+              <button
+                title="Selanjutnya"
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages || isLoading}
+                className="p-1.5 ml-1 sm:ml-3 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
+              >
                 <ChevronRight size={18} />
               </button>
 
-              <button title="Terakhir" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || isLoading} className="p-1.5 rounded-lg hover:bg-muted border border-transparent hover:border-border disabled:opacity-50 transition-all shrink-0">
+              {/* Tombol Terakhir (>>) */}
+              <button
+                title="Terakhir"
+                onClick={() => setCurrentPage(totalPages)}
+                disabled={currentPage === totalPages || isLoading}
+                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
+              >
                 <ChevronsRight size={18} />
               </button>
+
             </div>
           </div>
         )}
