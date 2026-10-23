@@ -256,59 +256,99 @@ export const studentService = {
     };
   },
 
-// --- PERBAIKAN: Fungsi Import Massal Tanpa RPC ---
-  async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
-    let successCount = 0;
-    let lastDbError = null;
+// --- FUNGSI BARU: Hapus Seluruh Data Siswa 1 Sekolah Sekaligus ---
+  async deleteAll(schoolId: string): Promise<ApiResponse<void>> {
+    if (!schoolId) throw new Error("School ID tidak valid");
 
-    for (const item of payload) {
-      // 1. Destructure dan BUANG properti 'rawClassName' agar tidak merusak query Supabase!
-      const { parents, economic, rawClassName, ...studentData } = item;
+    // Karena di database Anda sudah ada ON DELETE CASCADE pada tabel terkait (ortu, ekonomi), 
+    // cukup menghapus tabel master 'students', sisanya akan otomatis terhapus bersih.
+    const { error } = await supabase
+      .from('students')
+      .delete()
+      .eq('schoolId', schoolId);
 
-      // 2. Simpan Data Siswa 
-      const { data: student, error: studentError } = await supabase
-        .from('students')
-        .upsert(studentData, { onConflict: 'schoolId,nisn' }) 
-        .select()
-        .single();
-
-      if (studentError) {
-        console.error(`Gagal simpan siswa [${studentData.fullName}]:`, studentError.message);
-        lastDbError = studentError.message; // Tangkap error asli dari Postgres
-        continue; // Lewati siswa ini jika gagal, lanjut ke siswa berikutnya
+    if (error) {
+      if (error.message.includes('student_bills')) {
+        throw new Error('Tidak bisa dihapus semua karena ada siswa yang sudah memiliki riwayat Tagihan/Pembayaran.');
       }
-
-      // 3. Simpan Data Orang Tua
-      if (parents && parents.length > 0) {
-        await supabase.from('student_parents').delete().eq('studentId', student.id);
-        const parentsData = parents.map((p: any) => {
-          const { id, ...rest } = p;
-          return { ...rest, studentId: student.id };
-        });
-        await supabase.from('student_parents').insert(parentsData);
-      }
-
-      // 4. Simpan Data Kesejahteraan (Ekonomi)
-      if (economic) {
-        const { id, ...economicData } = economic;
-        await supabase.from('student_economics').upsert(
-          { ...economicData, studentId: student.id }, 
-          { onConflict: 'studentId' }
-        );
-      }
-
-      successCount++;
-    }
-
-    if (successCount === 0) {
-      // Menampilkan pesan asli postgres jika gagal untuk mudahkan debugging kedepannya
-      throw new Error(`Gagal menyimpan data ke database. Error DB: ${lastDbError || 'Format data salah.'}`);
+      throw new Error(`Gagal menghapus semua data: ${error.message}`);
     }
 
     return {
       success: true,
-      data: { count: successCount },
-      message: `${successCount} siswa berhasil diimpor`
+      data: undefined,
+      message: 'Seluruh data siswa berhasil dikosongkan'
+    };
+  },
+
+  // --- PERBAIKAN PADA bulkImport ---
+  async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
+    if (!payload || payload.length === 0) throw new Error('Payload kosong.');
+    
+    const BATCH_SIZE = 100; 
+    let totalSuccess = 0;
+
+    for (let i = 0; i < payload.length; i += BATCH_SIZE) {
+      const batch = payload.slice(i, i + BATCH_SIZE);
+      
+      const studentsToUpsert = batch.map(item => {
+        // PERBAIKAN UTAMA: Destructure (pisahkan) 'id' agar tidak ikut terkirim ke Supabase!
+        // Ini memastikan Supabase melakukan update pada existing ID, bukan membuat ID baru.
+        const { id, parents, economic, rawClassName, ...studentData } = item;
+        return studentData; 
+      });
+
+      const { data: upsertedStudents, error: studentError } = await supabase
+        .from('students')
+        .upsert(studentsToUpsert, { onConflict: 'schoolId,nisn' })
+        .select('id, nisn');
+
+      if (studentError) {
+        console.error('Gagal upsert batch siswa:', studentError.message);
+        throw new Error(`Gagal menyimpan data siswa: ${studentError.message}`);
+      }
+
+      const studentIdMap = new Map();
+      upsertedStudents?.forEach(s => studentIdMap.set(s.nisn, s.id));
+
+      const parentsToInsert: any[] = [];
+      const economicsToUpsert: any[] = [];
+
+      batch.forEach(item => {
+        const studentId = studentIdMap.get(item.nisn);
+        if (studentId) {
+          if (item.parents && item.parents.length > 0) {
+            item.parents.forEach((p: any) => {
+              const { id, ...rest } = p;
+              parentsToInsert.push({ ...rest, studentId });
+            });
+          }
+          if (item.economic) {
+            const { id, ...rest } = item.economic;
+            economicsToUpsert.push({ ...rest, studentId, schoolId: item.schoolId });
+          }
+        }
+      });
+
+      if (upsertedStudents && upsertedStudents.length > 0) {
+         const studentIds = upsertedStudents.map(s => s.id);
+         
+         await supabase.from('student_parents').delete().in('studentId', studentIds);
+         if (parentsToInsert.length > 0) {
+           await supabase.from('student_parents').insert(parentsToInsert);
+         }
+         
+         if (economicsToUpsert.length > 0) {
+           await supabase.from('student_economics').upsert(economicsToUpsert, { onConflict: 'studentId' });
+         }
+      }
+      totalSuccess += batch.length;
+    }
+
+    return {
+      success: true,
+      data: { count: totalSuccess },
+      message: `${totalSuccess} siswa berhasil diimpor`
     };
   }
 };

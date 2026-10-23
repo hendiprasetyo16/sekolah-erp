@@ -25,8 +25,8 @@ interface ImportParent {
   relation: string;
   fullName: string;
   nik: string;
-  job: string;
-  income: string;
+  occupation: string; // <-- SEBELUMNYA 'job', ini yang membuat ortu ditolak
+  monthlyIncome: number | null; // <-- SEBELUMNYA 'income' berbentuk string
   education: string;
   isAlive: boolean;
   schoolId: string;
@@ -85,6 +85,13 @@ interface StudentImportPayload {
   status: string;
   parents: ImportParent[];
   economic: ImportEconomic;
+  skhun: string;
+  noPesertaUn: string;
+  noIjazah: string;
+  noAktaLahir: string;
+  bank: string;
+  noRekening: string;
+  namaRekening: string;
 }
 
 type ExcelRow = Record<string, string | number | boolean>;
@@ -189,6 +196,23 @@ export function StudentListPage() {
     onError: (error: Error) => {
       toast.error(error.message || (locale === 'id' ? 'Gagal menghapus data massal' : 'Failed to bulk delete data'));
       setIsBulkDeleting(false);
+    }
+  });
+
+  const [isDeletingAll, setIsDeletingAll] = useState(false); // State untuk modal Hapus Semua
+
+  // Mutation untuk Hapus Semua Data
+  const deleteAllMutation = useMutation({
+    mutationFn: () => studentService.deleteAll(school!.id),
+    onSuccess: (res) => {
+      toast.success(res.message);
+      queryClient.invalidateQueries({ queryKey: ['students'] });
+      setSelectedRows([]);
+      setIsDeletingAll(false);
+    },
+    onError: (error: Error) => {
+      toast.error(error.message);
+      setIsDeletingAll(false);
     }
   });
 
@@ -298,12 +322,29 @@ export function StudentListPage() {
           .eq('schoolId', school?.id || '');
         const existingNisns = new Set(existingStudents?.map(s => s.nisn) || []);
 
+        // Helper Parser Penghasilan agar DB menerima format Nominal Number (misal: "Rp 2.000.000 - Rp 4.000.000" -> 2000000)
+        const parseIncome = (val: any) => {
+          if (!val || String(val).trim() === '-' || String(val).trim() === '') return null;
+          const str = String(val).toLowerCase();
+          if (str.includes('tidak')) return 0;
+          const numStr = str.split('-')[0].replace(/[^0-9]/g, '');
+          return numStr ? Number(numStr) : null;
+        };
+
         for (const row of data) {
           if (!row['nama'] && !row['nipd'] && !row['nisn']) continue;
 
           if (!row['nama'] || (!row['nipd'] && !row['nisn'])) {
             missingMandatoryCount++;
             continue;
+          }
+
+          // PERBAIKAN: Menyatukan Dusun ke dalam string Alamat
+          const alamatRaw = String(row['alamat'] || '');
+          const dusunRaw = String(row['dusun'] || '');
+          let finalAddress = alamatRaw;
+          if (dusunRaw && !finalAddress.toLowerCase().includes(dusunRaw.toLowerCase())) {
+            finalAddress = finalAddress ? `${finalAddress}, Dusun ${dusunRaw}` : `Dusun ${dusunRaw}`;
           }
 
           const currentNisn = String(row['nisn'] || '').trim();
@@ -356,7 +397,8 @@ export function StudentListPage() {
               ? new Date(Math.round((Number(row['tanggal lahir']) - 25569) * 86400 * 1000)).toISOString()
               : String(row['tanggal lahir'] || new Date().toISOString()),
             religion: String(row['agama'] || 'ISLAM').toUpperCase(),
-            address: String(row['alamat'] || row['dusun'] || '-'),
+            //address: String(row['alamat'] || row['dusun'] || '-'),
+            address: finalAddress || '-', // Dusun sekarang masuk ke sini
             rt: String(row['rt'] || ''),
             rw: String(row['rw'] || ''),
             kelurahan: String(row['kelurahan'] || ''), // <-- PERBAIKAN: ubah dari village ke kelurahan
@@ -382,6 +424,14 @@ export function StudentListPage() {
             rawClassName: rawExcelRombel || 'Belum Ada Kelas',
             entryDate: new Date().toISOString(),
             status: 'AKTIF',
+            // Kolom Padanan Fisik Dapodik
+            skhun: String(row['skhun'] || ''),
+            noPesertaUn: String(row['no peserta ujian nasional'] || ''),
+            noIjazah: String(row['no seri ijazah'] || ''),
+            noAktaLahir: String(row['no registrasi akta lahir'] || ''),
+            bank: String(row['bank'] || ''),
+            noRekening: String(row['nomor rekening bank'] || ''),
+            namaRekening: String(row['rekening atas nama'] || ''),
             // ... (lanjutan parent dan economic tetap sama seperti sebelumnya)
             parents: [
               ...(row['data ayah nama'] || row['nama ayah'] ? [{
@@ -389,8 +439,8 @@ export function StudentListPage() {
                 relation: 'AYAH',
                 fullName: String(row['data ayah nama'] || row['nama ayah']),
                 nik: String(row['data ayah nik'] || ''),
-                job: String(row['data ayah pekerjaan'] || ''),
-                income: String(row['data ayah penghasilan'] || ''),
+                occupation: String(row['data ayah pekerjaan'] || ''),
+                monthlyIncome: parseIncome(row['data ayah penghasilan']),
                 education: String(row['data ayah jenjang pendidikan'] || ''),
                 isAlive: true,
                 schoolId: school?.id || ''
@@ -400,8 +450,8 @@ export function StudentListPage() {
                 relation: 'IBU',
                 fullName: String(row['data ibu nama'] || row['nama ibu']),
                 nik: String(row['data ibu nik'] || ''),
-                job: String(row['data ibu pekerjaan'] || ''),
-                income: String(row['data ibu penghasilan'] || ''),
+                occupation: String(row['data ibu pekerjaan'] || ''),
+                monthlyIncome: parseIncome(row['data ibu penghasilan']),
                 education: String(row['data ibu jenjang pendidikan'] || ''),
                 isAlive: true,
                 schoolId: school?.id || ''
@@ -411,8 +461,8 @@ export function StudentListPage() {
                 relation: 'WALI',
                 fullName: String(row['data wali nama']),
                 nik: String(row['data wali nik'] || ''),
-                job: String(row['data wali pekerjaan'] || ''),
-                income: String(row['data wali penghasilan'] || ''),
+                occupation: String(row['data wali pekerjaan'] || ''),
+                monthlyIncome: parseIncome(row['data wali penghasilan']),
                 education: String(row['data wali jenjang pendidikan'] || ''),
                 isAlive: true,
                 schoolId: school?.id || ''
@@ -779,6 +829,32 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
+      {/* --- MODAL KONFIRMASI HAPUS SEMUA (DANGER ZONE) --- */}
+      <AnimatePresence>
+        {isDeletingAll && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden">
+              <div className="p-6">
+                <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
+                <h3 className="text-xl font-bold text-foreground mb-2">{locale === 'id' ? 'KOSONGKAN SEMUA DATA?' : 'WIPE ALL DATA?'}</h3>
+                <p className="text-muted-foreground text-sm">
+                  {locale === 'id'
+                    ? `Tindakan ini sangat berbahaya! Anda akan menghapus KESELURUHAN DATA SISWA (${meta?.total || 0} Siswa) beserta data Orang Tua dan Kesejahteraannya dari sekolah ini. Tindakan ini tidak dapat dibatalkan.`
+                    : `Dangerous action! This will wipe ALL STUDENT DATA (${meta?.total || 0} Students) for this school. It cannot be undone.`}
+                </p>
+              </div>
+              <div className="bg-muted/50 p-4 flex justify-end gap-3 border-t border-border/50">
+                <Button variant="outline" onClick={() => setIsDeletingAll(false)} disabled={deleteAllMutation.isPending}>{locale === 'id' ? 'Batal' : 'Cancel'}</Button>
+                <Button variant="destructive" onClick={() => deleteAllMutation.mutate()} disabled={deleteAllMutation.isPending}>
+                  {deleteAllMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
+                  {locale === 'id' ? 'Ya, Hapus Semuanya!' : 'Yes, Wipe Everything!'}
+                </Button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* Header & Buttons */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
@@ -788,11 +864,18 @@ export function StudentListPage() {
         <div className="flex flex-wrap items-center gap-2">
           {selectedRows.length > 0 && (
             <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} onClick={() => setIsBulkDeleting(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-bold hover:bg-red-500/20 transition-colors shadow-sm">
-              <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? `Hapus (${selectedRows.length})` : `Delete (${selectedRows.length})`}</span>
+              <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? `Hapus Terpilih (${selectedRows.length})` : `Delete Selected (${selectedRows.length})`}</span>
             </motion.button>
           )}
-          <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
-            <Upload size={16} /> <span className="hidden sm:inline">Import Verval PD</span>
+
+          {/* PERBAIKAN: Tombol Hapus Semua muncul jika ada data */}
+          {(meta?.total || 0) > 0 && (
+            <button onClick={() => setIsDeletingAll(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm">
+              <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? 'Kosongkan Data' : 'Wipe Data'}</span>
+            </button>
+          )}
+
+          <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">           <Upload size={16} /> <span className="hidden sm:inline">Import Verval PD</span>
           </button>
           <button onClick={handleExport} disabled={isExporting} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} <span className="hidden sm:inline">Export Data</span>
