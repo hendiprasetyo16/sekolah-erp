@@ -53,21 +53,24 @@ const studentSchema = z.object({
   fatherPhone: z.string().optional(),
   fatherEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   fatherOccupation: z.string().optional(),
-  fatherIncome: z.coerce.number().optional(),
+  //fatherIncome: z.coerce.number().optional(),
+  fatherIncome: z.string().optional(), // <-- Ubah menjadi string
 
   motherName: z.string().optional(),
   motherNik: z.string().optional(),
   motherPhone: z.string().optional(),
   motherEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   motherOccupation: z.string().optional(),
-  motherIncome: z.coerce.number().optional(),
+  //motherIncome: z.coerce.number().optional(),
+  motherIncome: z.string().optional(), // <-- Ubah menjadi string
 
   guardianName: z.string().optional(),
   guardianNik: z.string().optional(),
   guardianPhone: z.string().optional(),
   guardianEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   guardianOccupation: z.string().optional(),
-  guardianIncome: z.coerce.number().optional(),
+  //guardianIncome: z.coerce.number().optional(),
+  guardianIncome: z.string().optional(), // <-- Ubah menjadi string
 
   hasKip: z.boolean().optional(),
   kipNumber: z.string().optional(),
@@ -102,7 +105,8 @@ type StudentFormValues = z.infer<typeof studentSchema>;
 // FIX TS ERROR 2: Strict Combined Payload
 type CombinedStudentPayload = Omit<CreateStudentPayload, 'parents' | 'economic'> & {
   schoolId: string;
-  parents: Omit<StudentParent, 'id'>[];
+  // Menambahkan schoolId ke dalam tipe array parents
+  parents: (Omit<StudentParent, 'id'> & { schoolId: string })[];
   economic?: Omit<StudentEconomic, 'studentId' | 'id'> & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number | null };
   noAktaLahir?: string; anakKe?: number; jmlSaudara?: number; beratBadan?: number;
   tinggiBadan?: number; lingkarKepala?: number; jarakSekolah?: number; jenisTinggal?: string;
@@ -141,9 +145,10 @@ export function StudentFormPage() {
       birthDate: '', birthPlace: '', religion: '', address: '', rt: '', rw: '',
       kelurahan: '', kecamatan: '', city: '', province: '', postalCode: '', phone: '', email: '',
       classId: '', entryDate: new Date().toISOString().split('T')[0],
-      fatherName: '', fatherNik: '', fatherPhone: '', fatherEmail: '', fatherOccupation: '', fatherIncome: 0,
-      motherName: '', motherNik: '', motherPhone: '', motherEmail: '', motherOccupation: '', motherIncome: 0,
-      guardianName: '', guardianNik: '', guardianPhone: '', guardianEmail: '', guardianOccupation: '', guardianIncome: 0,
+      // Bagian defaultValues:
+      fatherName: '', fatherNik: '', fatherPhone: '', fatherEmail: '', fatherOccupation: '', fatherIncome: '',
+      motherName: '', motherNik: '', motherPhone: '', motherEmail: '', motherOccupation: '', motherIncome: '',
+      guardianName: '', guardianNik: '', guardianPhone: '', guardianEmail: '', guardianOccupation: '', guardianIncome: '',
       hasKip: false, kipNumber: '', namaKip: '', layakPip: false, alasanLayakPip: '', desil: 0, hasPkh: false, hasKks: false, kksNumber: '', isDtks: false, houseOwnership: '', dependentsCount: 0,
       noAktaLahir: '', anakKe: 0, jmlSaudara: 0, beratBadan: 0, tinggiBadan: 0, lingkarKepala: 0, jarakSekolah: 0, jenisTinggal: '', alatTransportasi: '', sekolahAsal: '', bank: '', noRekening: '', namaRekening: ''
     },
@@ -172,9 +177,10 @@ export function StudentFormPage() {
         postalCode: (d.postalCode as string) || '', phone: (d.phone as string) || '', email: (d.email as string) || '',
         classId: (d.classId as string) || '', entryDate: (d.entryDate as string)?.split('T')[0] || '',
 
-        fatherName: ayah?.fullName || '', fatherNik: ayah?.nik || '', fatherPhone: ayah?.phone || '', fatherEmail: ayah?.email || '', fatherOccupation: ayah?.occupation || '', fatherIncome: ayah?.monthlyIncome || 0,
-        motherName: ibu?.fullName || '', motherNik: ibu?.nik || '', motherPhone: ibu?.phone || '', motherEmail: ibu?.email || '', motherOccupation: ibu?.occupation || '', motherIncome: ibu?.monthlyIncome || 0,
-        guardianName: wali?.fullName || '', guardianNik: wali?.nik || '', guardianPhone: wali?.phone || '', guardianEmail: wali?.email || '', guardianOccupation: wali?.occupation || '', guardianIncome: wali?.monthlyIncome || 0,
+        // Bagian form.reset:
+        fatherName: ayah?.fullName || '', fatherNik: ayah?.nik || '', fatherPhone: ayah?.phone || '', fatherEmail: ayah?.email || '', fatherOccupation: ayah?.occupation || '', fatherIncome: (ayah?.monthlyIncome as string) || '',
+        motherName: ibu?.fullName || '', motherNik: ibu?.nik || '', motherPhone: ibu?.phone || '', motherEmail: ibu?.email || '', motherOccupation: ibu?.occupation || '', motherIncome: (ibu?.monthlyIncome as string) || '',
+        guardianName: wali?.fullName || '', guardianNik: wali?.nik || '', guardianPhone: wali?.phone || '', guardianEmail: wali?.email || '', guardianOccupation: wali?.occupation || '', guardianIncome: (wali?.monthlyIncome as string) || '',
 
         hasKip: (eco?.hasKip as boolean) || false, kipNumber: (eco?.kipNumber as string) || '', namaKip: (eco?.namaKip as string) || '', layakPip: (eco?.layakPip as boolean) || false, alasanLayakPip: (eco?.alasanLayakPip as string) || '',
         desil: (eco?.desil as number) || 0,
@@ -215,10 +221,13 @@ export function StudentFormPage() {
   });
 
   const onSubmit = (data: StudentFormValues) => {
-    const parentsArray: Omit<StudentParent, 'id'>[] = [];
-    if (data.fatherName) parentsArray.push({ relation: 'AYAH', fullName: data.fatherName, nik: data.fatherNik, phone: data.fatherPhone, email: data.fatherEmail, occupation: data.fatherOccupation, monthlyIncome: data.fatherIncome, isAlive: true });
-    if (data.motherName) parentsArray.push({ relation: 'IBU', fullName: data.motherName, nik: data.motherNik, phone: data.motherPhone, email: data.motherEmail, occupation: data.motherOccupation, monthlyIncome: data.motherIncome, isAlive: true });
-    if (data.guardianName) parentsArray.push({ relation: 'WALI', fullName: data.guardianName, nik: data.guardianNik, phone: data.guardianPhone, email: data.guardianEmail, occupation: data.guardianOccupation, monthlyIncome: data.guardianIncome, isAlive: true });
+    // Memberi tahu TypeScript bahwa array ini menerima objek StudentParent PLUS schoolId
+    const parentsArray: (Omit<StudentParent, 'id'> & { schoolId: string })[] = [];
+
+    // PERBAIKAN: Menambahkan parameter schoolId: school?.id || '' agar tidak ditolak Database
+    if (data.fatherName) parentsArray.push({ relation: 'AYAH', fullName: data.fatherName, nik: data.fatherNik, phone: data.fatherPhone, email: data.fatherEmail, occupation: data.fatherOccupation, monthlyIncome: data.fatherIncome, isAlive: true, schoolId: school?.id || '' });
+    if (data.motherName) parentsArray.push({ relation: 'IBU', fullName: data.motherName, nik: data.motherNik, phone: data.motherPhone, email: data.motherEmail, occupation: data.motherOccupation, monthlyIncome: data.motherIncome, isAlive: true, schoolId: school?.id || '' });
+    if (data.guardianName) parentsArray.push({ relation: 'WALI', fullName: data.guardianName, nik: data.guardianNik, phone: data.guardianPhone, email: data.guardianEmail, occupation: data.guardianOccupation, monthlyIncome: data.guardianIncome, isAlive: true, schoolId: school?.id || '' });
 
     const {
       fatherName, fatherNik, fatherPhone, fatherEmail, fatherOccupation, fatherIncome,

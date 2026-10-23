@@ -10,19 +10,17 @@ import type {
   StudentStatus
 } from '../types/student.types';
 
-// FUNGSI BARU: Penerjemah Error Database ke Bahasa Manusia (STRICT TYPE)
 const handleDbError = (error: unknown) => {
   const pgError = error as PostgrestError;
   let message = pgError?.message || 'Terjadi kesalahan pada database';
 
-  // Deteksi error duplikat (Kode PostgreSQL 23505)
   if (pgError?.code === '23505' || message.includes('unique constraint')) {
     if (message.includes('nisn_key')) {
       message = 'NISN tersebut sudah terdaftar di sistem. Silakan gunakan NISN lain.';
     } else if (message.includes('nis_key')) {
       message = 'NIS tersebut sudah digunakan oleh siswa lain.';
     } else if (message.includes('nik_key')) {
-      message = 'NIK tersebut sudah digunakan oleh siswa lain.'; // <-- Tambahan untuk NIK
+      message = 'NIK tersebut sudah digunakan oleh siswa lain.';
     } else {
       message = 'Data tersebut sudah terdaftar (Duplikat).';
     }
@@ -33,33 +31,18 @@ const handleDbError = (error: unknown) => {
 export const studentService = {
   async list(params: PaginatedParams & { classId?: string; status?: string }): Promise<ApiResponsePaginated<StudentListItem>> {
     const { page = 1, limit = 10, search, classId, status } = params;
+    let query = supabase.from('students').select('*, classes(name, gradeLevel)', { count: 'exact' });
 
-    let query = supabase
-      .from('students')
-      .select('*, classes(name, gradeLevel)', { count: 'exact' });
-
-    if (search) {
-      query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%,nis.ilike.%${search}%`);
-    }
-    if (classId) {
-      query = query.eq('classId', classId);
-    }
-    if (status) {
-      query = query.eq('status', status);
-    }
+    if (search) query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%,nis.ilike.%${search}%`);
+    if (classId) query = query.eq('classId', classId);
+    if (status) query = query.eq('status', status);
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query
-      .order('fullName', { ascending: true })
-      .range(from, to);
+    const { data, count, error } = await query.order('fullName', { ascending: true }).range(from, to);
+    if (error) throw new Error(error.message);
 
-    if (error) {
-      throw new Error(error.message);
-    }
-
-    // Menggunakan tipe data tegas (Record<string, unknown>) alih-alih 'any'
     const mappedData: StudentListItem[] = (data || []).map((item: Record<string, unknown>) => {
       const cls = item.classes as { name?: string; gradeLevel?: number } | null;
       return {
@@ -75,8 +58,6 @@ export const studentService = {
         status: item.status as StudentStatus,
         phone: item.phone as string | undefined,
         entryDate: item.entryDate as string,
-
-        // --- PERBAIKAN BARU: Melengkapi data yang diminta oleh antarmuka (interface) StudentListItem terbaru ---
         birthPlace: item.birthPlace as string,
         birthDate: item.birthDate as string,
         religion: item.religion as string | undefined,
@@ -87,47 +68,18 @@ export const studentService = {
     const totalPages = Math.ceil((count || 0) / limit);
     return {
       success: true,
-      data: {
-        data: mappedData,
-        meta: {
-          total: count || 0,
-          page,
-          limit,
-          totalPages,
-          hasNext: page < totalPages,
-          hasPrev: page > 1
-        }
-      },
+      data: { data: mappedData, meta: { total: count || 0, page, limit, totalPages, hasNext: page < totalPages, hasPrev: page > 1 } },
       message: 'Berhasil mengambil data siswa'
     };
   },
 
   async getById(id: string): Promise<ApiResponse<StudentDetail>> {
-    // 1. Ambil data utama siswa dan kelasnya
-    const { data: studentData, error } = await supabase
-      .from('students')
-      .select('*, classes(name, gradeLevel)')
-      .eq('id', id)
-      .single();
-
-    if (error) {
-      throw new Error(error.message);
-    }
+    const { data: studentData, error } = await supabase.from('students').select('*, classes(name, gradeLevel)').eq('id', id).single();
+    if (error) throw new Error(error.message);
 
     const cls = studentData.classes as { name?: string; gradeLevel?: number } | null;
-
-    // 2. Ambil data orang tua dari tabel 'student_parents'
-    const { data: parentsData } = await supabase
-      .from('student_parents')
-      .select('*')
-      .eq('studentId', id);
-
-    // 3. Ambil data ekonomi (PIP/KIP) dari tabel 'student_economics'
-    const { data: economicData } = await supabase
-      .from('student_economics')
-      .select('*')
-      .eq('studentId', id)
-      .maybeSingle();
+    const { data: parentsData } = await supabase.from('student_parents').select('*').eq('studentId', id);
+    const { data: economicData } = await supabase.from('student_economics').select('*').eq('studentId', id).maybeSingle();
 
     const mappedData: StudentDetail = {
       ...studentData,
@@ -137,151 +89,76 @@ export const studentService = {
       economic: economicData || undefined,
     } as StudentDetail;
 
-    return {
-      success: true,
-      data: mappedData,
-      message: 'Berhasil mengambil detail siswa'
-    };
+    return { success: true, data: mappedData, message: 'Berhasil mengambil detail siswa' };
   },
 
   async create(payload: CreateStudentPayload & { schoolId: string; economic?: Omit<StudentEconomic, 'id' | 'studentId'> }): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...studentData } = payload;
-
-    // 1. Simpan data utama siswa
-    const { data, error } = await supabase
-      .from('students')
-      .insert(studentData)
-      .select()
-      .single();
-
+    const { data, error } = await supabase.from('students').insert(studentData).select().single();
     if (error) throw handleDbError(error);
 
-    // 2. Simpan data orang tua jika ada
     if (parents && parents.length > 0) {
       const parentsData = parents.map(p => ({ ...p, studentId: data.id }));
-      const { error: parentError } = await supabase
-        .from('student_parents')
-        .insert(parentsData);
-
+      const { error: parentError } = await supabase.from('student_parents').insert(parentsData);
       if (parentError) throw handleDbError(parentError);
     }
 
-    // 3. Simpan data ekonomi/PIP jika ada
-    if (economic) {
-      await supabase
-        .from('student_economics')
-        .insert({ ...economic, studentId: data.id });
-    }
-
+    if (economic) await supabase.from('student_economics').insert({ ...economic, studentId: data.id });
     return this.getById(data.id);
   },
 
   async update(id: string, payload: UpdateStudentPayload & { economic?: Omit<StudentEconomic, 'id' | 'studentId'> }): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...studentData } = payload;
-
     if (Object.keys(studentData).length > 0) {
-      const { error } = await supabase
-        .from('students')
-        .update(studentData)
-        .eq('id', id);
-
+      const { error } = await supabase.from('students').update(studentData).eq('id', id);
       if (error) throw handleDbError(error);
     }
 
-    // Perbarui data orang tua
     if (parents && parents.length > 0) {
       await supabase.from('student_parents').delete().eq('studentId', id);
       const parentsData = parents.map(p => ({ ...p, studentId: id }));
-      await supabase.from('student_parents').insert(parentsData);
+      const { error: parentError } = await supabase.from('student_parents').insert(parentsData);
+      if (parentError) throw handleDbError(parentError);
     }
 
-    // Perbarui data ekonomi
-    if (economic) {
-      await supabase.from('student_economics').upsert({ ...economic, studentId: id });
-    }
-
+    if (economic) await supabase.from('student_economics').upsert({ ...economic, studentId: id });
     return this.getById(id);
   },
 
   async delete(id: string): Promise<ApiResponse<void>> {
-    const { error } = await supabase
-      .from('students')
-      .delete()
-      .eq('id', id);
-
+    const { error } = await supabase.from('students').delete().eq('id', id);
     if (error) throw new Error(error.message);
-
-    return {
-      success: true,
-      data: undefined,
-      message: 'Siswa berhasil dihapus'
-    };
+    return { success: true, data: undefined, message: 'Siswa berhasil dihapus' };
   },
 
   async importExcel(_file: File): Promise<ApiResponse<{ imported: number; skipped: number; errors: string[] }>> {
-    throw new Error('Not implemented for direct Supabase client yet');
+    throw new Error('Not implemented');
   },
-
   async exportData(_format: 'excel' | 'pdf', _params?: PaginatedParams): Promise<Blob> {
-    throw new Error('Not implemented for direct Supabase client yet');
+    throw new Error('Not implemented');
   },
 
-  // ... kode fungsi lain (list, create, update, delete) ...
-
-  /**
-   * FUNGSI BARU: Mengirim data massal ke Supabase RPC.
-   * RPC akan menjamin keamanan transaksi (All or Nothing).
-   */
-// --- FUNGSI BARU: Ekspor Semua Data ---
   async exportAll(): Promise<ApiResponse<StudentDetail[]>> {
-    const { data, error } = await supabase
-      .from('students')
-      .select('*, classes(name, gradeLevel)')
-      .order('fullName', { ascending: true });
-
-    if (error) {
-      throw new Error(error.message);
-    }
+    const { data, error } = await supabase.from('students').select('*, classes(name, gradeLevel)').order('fullName', { ascending: true });
+    if (error) throw new Error(error.message);
 
     const mappedData = data.map((item: any) => ({
-      ...item,
-      className: item.classes?.name || '-',
-      gradeLevel: item.classes?.gradeLevel || 0,
+      ...item, className: item.classes?.name || '-', gradeLevel: item.classes?.gradeLevel || 0,
     })) as StudentDetail[];
-
-    return {
-      success: true,
-      data: mappedData,
-      message: 'Berhasil mengambil semua data siswa'
-    };
+    return { success: true, data: mappedData, message: 'Berhasil mengambil semua data siswa' };
   },
 
-// --- FUNGSI BARU: Hapus Seluruh Data Siswa 1 Sekolah Sekaligus ---
   async deleteAll(schoolId: string): Promise<ApiResponse<void>> {
     if (!schoolId) throw new Error("School ID tidak valid");
-
-    // Karena di database Anda sudah ada ON DELETE CASCADE pada tabel terkait (ortu, ekonomi), 
-    // cukup menghapus tabel master 'students', sisanya akan otomatis terhapus bersih.
-    const { error } = await supabase
-      .from('students')
-      .delete()
-      .eq('schoolId', schoolId);
-
+    const { error } = await supabase.from('students').delete().eq('schoolId', schoolId);
     if (error) {
-      if (error.message.includes('student_bills')) {
-        throw new Error('Tidak bisa dihapus semua karena ada siswa yang sudah memiliki riwayat Tagihan/Pembayaran.');
-      }
-      throw new Error(`Gagal menghapus semua data: ${error.message}`);
+      if (error.message.includes('student_bills')) throw new Error('Tidak bisa dihapus karena ada riwayat Tagihan/Pembayaran.');
+      throw new Error(`Gagal menghapus: ${error.message}`);
     }
-
-    return {
-      success: true,
-      data: undefined,
-      message: 'Seluruh data siswa berhasil dikosongkan'
-    };
+    return { success: true, data: undefined, message: 'Seluruh data siswa dikosongkan' };
   },
 
-  // --- PERBAIKAN PADA bulkImport ---
+  // PERBAIKAN: Menambahkan Error Handling untuk Parents & Economics di proses Bulk Import
   async bulkImport(payload: any[]): Promise<ApiResponse<{ count: number }>> {
     if (!payload || payload.length === 0) throw new Error('Payload kosong.');
     
@@ -292,8 +169,6 @@ export const studentService = {
       const batch = payload.slice(i, i + BATCH_SIZE);
       
       const studentsToUpsert = batch.map(item => {
-        // PERBAIKAN UTAMA: Destructure (pisahkan) 'id' agar tidak ikut terkirim ke Supabase!
-        // Ini memastikan Supabase melakukan update pada existing ID, bukan membuat ID baru.
         const { id, parents, economic, rawClassName, ...studentData } = item;
         return studentData; 
       });
@@ -333,13 +208,23 @@ export const studentService = {
       if (upsertedStudents && upsertedStudents.length > 0) {
          const studentIds = upsertedStudents.map(s => s.id);
          
+         // 1. Proses Data Orang Tua
          await supabase.from('student_parents').delete().in('studentId', studentIds);
          if (parentsToInsert.length > 0) {
-           await supabase.from('student_parents').insert(parentsToInsert);
+           const { error: parentError } = await supabase.from('student_parents').insert(parentsToInsert);
+           if (parentError) {
+             console.error('Gagal insert parents:', parentError);
+             throw new Error(`Gagal menyimpan data Orang Tua: ${parentError.message}`);
+           }
          }
          
+         // 2. Proses Data Kesejahteraan/Ekonomi
          if (economicsToUpsert.length > 0) {
-           await supabase.from('student_economics').upsert(economicsToUpsert, { onConflict: 'studentId' });
+           const { error: ecoError } = await supabase.from('student_economics').upsert(economicsToUpsert, { onConflict: 'studentId' });
+           if (ecoError) {
+             console.error('Gagal upsert economics:', ecoError);
+             throw new Error(`Gagal menyimpan data Kesejahteraan: ${ecoError.message}`);
+           }
          }
       }
       totalSuccess += batch.length;

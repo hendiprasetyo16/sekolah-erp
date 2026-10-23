@@ -75,7 +75,8 @@ export interface StudentParent {
   email?: string;
   education?: string;
   occupation?: string;
-  monthlyIncome?: number;
+  // UBAH DARI number MENJADI string | null
+  monthlyIncome?: string | null; 
   isAlive: boolean;
   address?: string;
 }

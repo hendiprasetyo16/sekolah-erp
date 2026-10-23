@@ -26,7 +26,8 @@ interface ImportParent {
   fullName: string;
   nik: string;
   occupation: string; // <-- SEBELUMNYA 'job', ini yang membuat ortu ditolak
-  monthlyIncome: number | null; // <-- SEBELUMNYA 'income' berbentuk string
+  // monthlyIncome: number | null; // <-- SEBELUMNYA 'income' berbentuk string
+  monthlyIncome: string | null; // <-- Ubah dari number ke string
   education: string;
   isAlive: boolean;
   schoolId: string;
@@ -437,37 +438,39 @@ export function StudentListPage() {
             noRekening: String(row['nomor rekening bank'] || ''),
             namaRekening: String(row['rekening atas nama'] || ''),
             // ... (lanjutan parent dan economic tetap sama seperti sebelumnya)
+            // PERBAIKAN: Fallback header pembacaan format Dapodik
+            // Pemetaan Data Orang Tua dengan Teks Utuh Dapodik
             parents: [
               ...(row['data ayah nama'] || row['nama ayah'] ? [{
                 id: crypto.randomUUID(),
                 relation: 'AYAH',
-                fullName: String(row['data ayah nama'] || row['nama ayah']),
-                nik: String(row['data ayah nik'] || ''),
-                occupation: String(row['data ayah pekerjaan'] || ''),
-                monthlyIncome: parseIncome(row['data ayah penghasilan']),
-                education: String(row['data ayah jenjang pendidikan'] || ''),
+                fullName: String(row['data ayah nama'] || row['nama ayah'] || ''),
+                nik: String(row['data ayah nik'] || row['nik ayah'] || ''),
+                occupation: String(row['data ayah pekerjaan'] || row['pekerjaan ayah'] || ''),
+                monthlyIncome: row['data ayah penghasilan'] || row['penghasilan ayah'] ? String(row['data ayah penghasilan'] || row['penghasilan ayah']) : null,
+                education: String(row['data ayah jenjang pendidikan'] || row['pendidikan ayah'] || ''),
                 isAlive: true,
                 schoolId: school?.id || ''
               }] : []),
               ...(row['data ibu nama'] || row['nama ibu'] ? [{
                 id: crypto.randomUUID(),
                 relation: 'IBU',
-                fullName: String(row['data ibu nama'] || row['nama ibu']),
-                nik: String(row['data ibu nik'] || ''),
-                occupation: String(row['data ibu pekerjaan'] || ''),
-                monthlyIncome: parseIncome(row['data ibu penghasilan']),
-                education: String(row['data ibu jenjang pendidikan'] || ''),
+                fullName: String(row['data ibu nama'] || row['nama ibu'] || ''),
+                nik: String(row['data ibu nik'] || row['nik ibu'] || ''),
+                occupation: String(row['data ibu pekerjaan'] || row['pekerjaan ibu'] || ''),
+                monthlyIncome: row['data ibu penghasilan'] || row['penghasilan ibu'] ? String(row['data ibu penghasilan'] || row['penghasilan ibu']) : null,
+                education: String(row['data ibu jenjang pendidikan'] || row['pendidikan ibu'] || ''),
                 isAlive: true,
                 schoolId: school?.id || ''
               }] : []),
-              ...(row['data wali nama'] ? [{
+              ...(row['data wali nama'] || row['nama wali'] ? [{
                 id: crypto.randomUUID(),
                 relation: 'WALI',
-                fullName: String(row['data wali nama']),
-                nik: String(row['data wali nik'] || ''),
-                occupation: String(row['data wali pekerjaan'] || ''),
-                monthlyIncome: parseIncome(row['data wali penghasilan']),
-                education: String(row['data wali jenjang pendidikan'] || ''),
+                fullName: String(row['data wali nama'] || row['nama wali'] || ''),
+                nik: String(row['data wali nik'] || row['nik wali'] || ''),
+                occupation: String(row['data wali pekerjaan'] || row['pekerjaan wali'] || ''),
+                monthlyIncome: row['data wali penghasilan'] || row['penghasilan wali'] ? String(row['data wali penghasilan'] || row['penghasilan wali']) : null,
+                education: String(row['data wali jenjang pendidikan'] || row['pendidikan wali'] || ''),
                 isAlive: true,
                 schoolId: school?.id || ''
               }] : [])

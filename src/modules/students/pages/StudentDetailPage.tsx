@@ -43,7 +43,7 @@ interface ExtendedStudentData {
   className: string;
   gradeLevel: number;
   parents?: StudentParent[];
-  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string };
+  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number };
   noAktaLahir?: string;
   anakKe?: number;
   jmlSaudara?: number;
@@ -71,7 +71,7 @@ export function StudentDetailPage() {
 
   const student = studentResponse?.data as unknown as ExtendedStudentData;
 
-  // --- TAMBAHKAN 3 BARIS INI UNTUK MENANGKAP STRUKTUR SUPABASE ---
+  // --- VARIABEL PEMBANTU UNTUK STRUKTUR SUPABASE ---
   const parentsList = student?.parents || (student as any)?.student_parents || [];
   const rawEco = student?.economic || (student as any)?.student_economics;
   const ecoData = (Array.isArray(rawEco) ? rawEco[0] : rawEco) || {};
@@ -302,13 +302,6 @@ export function StudentDetailPage() {
               const titleID = relation === 'AYAH' ? 'Data Ayah' : (relation === 'IBU' ? 'Data Ibu' : 'Data Wali');
               const titleEN = relation === 'AYAH' ? 'Father Data' : (relation === 'IBU' ? 'Mother Data' : 'Guardian Data');
 
-              {
-                (!parentsList || parentsList.length === 0) && (
-                  <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
-                    {locale === 'id' ? 'Data orang tua/wali belum dilengkapi.' : 'Parent/guardian data has not been provided yet.'}
-                  </div>
-                )
-              }
               return (
                 <Card key={relation} className="shadow-sm">
                   <CardHeader className="bg-muted/20 border-b border-border pb-4">
@@ -338,6 +331,7 @@ export function StudentDetailPage() {
               );
             })}
 
+            {/* PERBAIKAN: Gunakan parentsList untuk logika kosong */}
             {(!parentsList || parentsList.length === 0) && (
               <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
                 {locale === 'id' ? 'Data orang tua/wali belum dilengkapi.' : 'Parent/guardian data has not been provided yet.'}
@@ -346,7 +340,7 @@ export function StudentDetailPage() {
           </div>
         </TabsContent>
 
-        {/* TAB 4: KESEJAHTERAAN (EKONOMI) - STANDAR SHADCN */}
+        {/* TAB 4: KESEJAHTERAAN (EKONOMI) */}
         <TabsContent value="ekonomi" className="mt-6 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
 
