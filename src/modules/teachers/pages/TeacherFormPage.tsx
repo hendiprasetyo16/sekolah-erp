@@ -36,16 +36,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { teacherService } from '../services/teacher.service';
 import { useTranslation } from '@/hooks/useTranslation';
 
+// Schema validasi dengan pesan error bilingual
 const teacherSchema = z.object({
-  fullName: z.string().min(1, 'Full name is required'),
-  gender: z.string().min(1, 'Gender is required'),
+  fullName: z.string().min(1, 'Nama lengkap wajib diisi / Full name is required'),
+  gender: z.string().min(1, 'Jenis kelamin wajib diisi / Gender is required'),
   nip: z.string().optional(),
   nuptk: z.string().optional(),
   nik: z.string().optional(),
   birthDate: z.string().optional(),
   birthPlace: z.string().optional(),
   phone: z.string().optional(),
-  email: z.string().email('Invalid email').optional().or(z.literal('')),
+  email: z.string().email('Email tidak valid / Invalid email').optional().or(z.literal('')),
   address: z.string().optional(),
   education: z.string().optional(),
   major: z.string().optional(),
@@ -65,8 +66,60 @@ type TeacherFormValues = z.infer<typeof teacherSchema>;
 export default function TeacherFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { t } = useTranslation();
+  const { locale } = useTranslation();
   const isEdit = Boolean(id);
+
+  // Kamus terjemahan lokal
+  const dict = {
+    addTitle: locale === 'id' ? 'Tambah Guru Baru' : 'Add New Teacher',
+    editTitle: locale === 'id' ? 'Edit Data Guru' : 'Edit Teacher',
+    addDesc: locale === 'id' ? 'Masukkan informasi untuk guru baru.' : 'Enter information for a new teacher.',
+    editDesc: locale === 'id' ? 'Perbarui informasi data guru yang sudah ada.' : 'Update existing teacher information.',
+    tabPersonal: locale === 'id' ? 'Data Pribadi' : 'Personal Information',
+    tabProf: locale === 'id' ? 'Kepegawaian & Akademik' : 'Employment & Academic',
+    cardPersonalTitle: locale === 'id' ? 'Informasi Pribadi' : 'Personal Information',
+    cardPersonalDesc: locale === 'id' ? 'Detail pribadi dan informasi kontak guru.' : "Teacher's personal details and contact information.",
+    cardProfTitle: locale === 'id' ? 'Informasi Kepegawaian & Akademik' : 'Employment & Academic Information',
+    cardProfDesc: locale === 'id' ? 'Latar belakang profesional dan penugasan sekolah.' : "Teacher's professional background and school assignment.",
+    fullName: locale === 'id' ? 'Nama Lengkap' : 'Full Name',
+    gender: locale === 'id' ? 'Jenis Kelamin' : 'Gender',
+    genderPlaceholder: locale === 'id' ? 'Pilih jenis kelamin' : 'Select gender',
+    male: locale === 'id' ? 'Laki-laki' : 'Male',
+    female: locale === 'id' ? 'Perempuan' : 'Female',
+    nik: 'NIK',
+    birthPlace: locale === 'id' ? 'Tempat Lahir' : 'Birth Place',
+    birthDate: locale === 'id' ? 'Tanggal Lahir' : 'Birth Date',
+    phone: locale === 'id' ? 'Nomor Telepon' : 'Phone Number',
+    email: 'Email',
+    address: locale === 'id' ? 'Alamat Lengkap' : 'Full Address',
+    nip: 'NIP',
+    nuptk: 'NUPTK',
+    status: 'Status',
+    statusPlaceholder: locale === 'id' ? 'Pilih status' : 'Select status',
+    position: locale === 'id' ? 'Jabatan' : 'Position',
+    positionPlaceholder: locale === 'id' ? 'Cth. Guru Kelas' : 'e.g. Homeroom Teacher',
+    education: locale === 'id' ? 'Pendidikan' : 'Education',
+    educationPlaceholder: locale === 'id' ? 'Pilih pendidikan' : 'Select education',
+    major: locale === 'id' ? 'Jurusan' : 'Major',
+    majorPlaceholder: locale === 'id' ? 'Cth. Pendidikan Matematika' : 'e.g. Mathematics Education',
+    university: locale === 'id' ? 'Universitas' : 'University',
+    universityPlaceholder: locale === 'id' ? 'Nama universitas' : 'University name',
+    isCertified: locale === 'id' ? 'Status Sertifikasi' : 'Certification Status',
+    certifiedPlaceholder: locale === 'id' ? 'Apakah sudah sertifikasi?' : 'Is certified?',
+    certifiedYes: locale === 'id' ? 'Sudah Sertifikasi' : 'Certified',
+    certifiedNo: locale === 'id' ? 'Belum Sertifikasi' : 'Not Certified',
+    certNumber: locale === 'id' ? 'Nomor Sertifikasi' : 'Certification Number',
+    joinDate: locale === 'id' ? 'Tanggal Bergabung' : 'Join Date',
+    baseSalary: locale === 'id' ? 'Gaji Pokok' : 'Base Salary',
+    maxHours: locale === 'id' ? 'Maks. Jam per Minggu' : 'Max Hours Per Week',
+    subjects: locale === 'id' ? 'Mata Pelajaran (pisahkan dengan koma)' : 'Subjects (comma separated)',
+    subjectsPlaceholder: locale === 'id' ? 'Cth. Matematika, Fisika' : 'e.g. Math, Physics',
+    btnCancel: locale === 'id' ? 'Batal' : 'Cancel',
+    btnSave: locale === 'id' ? 'Simpan' : 'Save',
+    toastCreateSuccess: locale === 'id' ? 'Data guru berhasil ditambahkan' : 'Teacher created successfully',
+    toastUpdateSuccess: locale === 'id' ? 'Data guru berhasil diperbarui' : 'Teacher updated successfully',
+    toastError: locale === 'id' ? 'Gagal menyimpan data guru' : 'Failed to save teacher',
+  };
 
   const form = useForm<TeacherFormValues>({
     resolver: zodResolver(teacherSchema),
@@ -143,12 +196,12 @@ export default function TeacherFormPage() {
       return isEdit ? teacherService.update(id!, payload) : teacherService.create(payload);
     },
     onSuccess: () => {
-      toast.success(isEdit ? 'Teacher updated successfully' : 'Teacher created successfully');
+      toast.success(isEdit ? dict.toastUpdateSuccess : dict.toastCreateSuccess);
       navigate('/teachers');
     },
     onError: (error) => {
       console.error(error);
-      toast.error('Failed to save teacher');
+      toast.error(dict.toastError);
     },
   });
 
@@ -174,12 +227,10 @@ export default function TeacherFormPage() {
         </Button>
         <div>
           <h1 className="text-2xl font-bold tracking-tight">
-            {isEdit ? 'Edit Teacher' : 'Add New Teacher'}
+            {isEdit ? dict.editTitle : dict.addTitle}
           </h1>
           <p className="text-muted-foreground">
-            {isEdit
-              ? 'Update existing teacher information'
-              : 'Enter information for a new teacher'}
+            {isEdit ? dict.editDesc : dict.addDesc}
           </p>
         </div>
       </div>
@@ -188,16 +239,16 @@ export default function TeacherFormPage() {
         <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
           <Tabs defaultValue="personal" className="w-full">
             <TabsList className="grid w-full max-w-md grid-cols-2">
-              <TabsTrigger value="personal">Data Pribadi</TabsTrigger>
-              <TabsTrigger value="professional">Kepegawaian & Akademik</TabsTrigger>
+              <TabsTrigger value="personal">{dict.tabPersonal}</TabsTrigger>
+              <TabsTrigger value="professional">{dict.tabProf}</TabsTrigger>
             </TabsList>
 
             <TabsContent value="personal" className="mt-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Personal Information</CardTitle>
+                  <CardTitle>{dict.cardPersonalTitle}</CardTitle>
                   <CardDescription>
-                    Teacher's personal details and contact information.
+                    {dict.cardPersonalDesc}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-6 sm:grid-cols-2">
@@ -206,7 +257,7 @@ export default function TeacherFormPage() {
                     name="fullName"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Full Name <span className="text-destructive">*</span></FormLabel>
+                        <FormLabel>{dict.fullName} <span className="text-destructive">*</span></FormLabel>
                         <FormControl>
                           <Input placeholder="John Doe" {...field} />
                         </FormControl>
@@ -220,16 +271,16 @@ export default function TeacherFormPage() {
                     name="gender"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Gender <span className="text-destructive">*</span></FormLabel>
+                        <FormLabel>{dict.gender} <span className="text-destructive">*</span></FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select gender" />
+                              <SelectValue placeholder={dict.genderPlaceholder} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="L">Laki-laki</SelectItem>
-                            <SelectItem value="P">Perempuan</SelectItem>
+                            <SelectItem value="L">{dict.male}</SelectItem>
+                            <SelectItem value="P">{dict.female}</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -242,7 +293,7 @@ export default function TeacherFormPage() {
                     name="nik"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>NIK</FormLabel>
+                        <FormLabel>{dict.nik}</FormLabel>
                         <FormControl>
                           <Input placeholder="16-digit NIK" {...field} />
                         </FormControl>
@@ -256,9 +307,9 @@ export default function TeacherFormPage() {
                     name="birthPlace"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Birth Place</FormLabel>
+                        <FormLabel>{dict.birthPlace}</FormLabel>
                         <FormControl>
-                          <Input placeholder="City of birth" {...field} />
+                          <Input placeholder={dict.birthPlace} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -270,7 +321,7 @@ export default function TeacherFormPage() {
                     name="birthDate"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Birth Date</FormLabel>
+                        <FormLabel>{dict.birthDate}</FormLabel>
                         <FormControl>
                           <Input type="date" {...field} />
                         </FormControl>
@@ -284,7 +335,7 @@ export default function TeacherFormPage() {
                     name="phone"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Phone Number</FormLabel>
+                        <FormLabel>{dict.phone}</FormLabel>
                         <FormControl>
                           <Input placeholder="08xxxxxxxxxx" {...field} />
                         </FormControl>
@@ -298,7 +349,7 @@ export default function TeacherFormPage() {
                     name="email"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Email</FormLabel>
+                        <FormLabel>{dict.email}</FormLabel>
                         <FormControl>
                           <Input type="email" placeholder="teacher@example.com" {...field} />
                         </FormControl>
@@ -312,9 +363,9 @@ export default function TeacherFormPage() {
                     name="address"
                     render={({ field }) => (
                       <FormItem className="sm:col-span-2">
-                        <FormLabel>Address</FormLabel>
+                        <FormLabel>{dict.address}</FormLabel>
                         <FormControl>
-                          <Input placeholder="Full home address" {...field} />
+                          <Input placeholder={dict.address} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -327,9 +378,9 @@ export default function TeacherFormPage() {
             <TabsContent value="professional" className="mt-6">
               <Card>
                 <CardHeader>
-                  <CardTitle>Employment & Academic Information</CardTitle>
+                  <CardTitle>{dict.cardProfTitle}</CardTitle>
                   <CardDescription>
-                    Teacher's professional background and school assignment.
+                    {dict.cardProfDesc}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="grid gap-6 sm:grid-cols-2">
@@ -338,7 +389,7 @@ export default function TeacherFormPage() {
                     name="nip"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>NIP</FormLabel>
+                        <FormLabel>{dict.nip}</FormLabel>
                         <FormControl>
                           <Input placeholder="NIP" {...field} />
                         </FormControl>
@@ -352,7 +403,7 @@ export default function TeacherFormPage() {
                     name="nuptk"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>NUPTK</FormLabel>
+                        <FormLabel>{dict.nuptk}</FormLabel>
                         <FormControl>
                           <Input placeholder="NUPTK" {...field} />
                         </FormControl>
@@ -366,11 +417,11 @@ export default function TeacherFormPage() {
                     name="status"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Status</FormLabel>
+                        <FormLabel>{dict.status}</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select status" />
+                              <SelectValue placeholder={dict.statusPlaceholder} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -391,9 +442,9 @@ export default function TeacherFormPage() {
                     name="position"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Position</FormLabel>
+                        <FormLabel>{dict.position}</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. Guru Kelas" {...field} />
+                          <Input placeholder={dict.positionPlaceholder} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -405,11 +456,11 @@ export default function TeacherFormPage() {
                     name="education"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Education</FormLabel>
+                        <FormLabel>{dict.education}</FormLabel>
                         <Select onValueChange={field.onChange} defaultValue={field.value} value={field.value}>
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Select education" />
+                              <SelectValue placeholder={dict.educationPlaceholder} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
@@ -431,9 +482,9 @@ export default function TeacherFormPage() {
                     name="major"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Major</FormLabel>
+                        <FormLabel>{dict.major}</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. Pendidikan Matematika" {...field} />
+                          <Input placeholder={dict.majorPlaceholder} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -445,9 +496,9 @@ export default function TeacherFormPage() {
                     name="university"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>University</FormLabel>
+                        <FormLabel>{dict.university}</FormLabel>
                         <FormControl>
-                          <Input placeholder="University name" {...field} />
+                          <Input placeholder={dict.universityPlaceholder} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -459,7 +510,7 @@ export default function TeacherFormPage() {
                     name="isCertified"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Certification Status</FormLabel>
+                        <FormLabel>{dict.isCertified}</FormLabel>
                         <Select
                           onValueChange={(val) => field.onChange(val === 'true')}
                           defaultValue={field.value ? 'true' : 'false'}
@@ -467,12 +518,12 @@ export default function TeacherFormPage() {
                         >
                           <FormControl>
                             <SelectTrigger>
-                              <SelectValue placeholder="Is certified?" />
+                              <SelectValue placeholder={dict.certifiedPlaceholder} />
                             </SelectTrigger>
                           </FormControl>
                           <SelectContent>
-                            <SelectItem value="true">Certified</SelectItem>
-                            <SelectItem value="false">Not Certified</SelectItem>
+                            <SelectItem value="true">{dict.certifiedYes}</SelectItem>
+                            <SelectItem value="false">{dict.certifiedNo}</SelectItem>
                           </SelectContent>
                         </Select>
                         <FormMessage />
@@ -485,9 +536,9 @@ export default function TeacherFormPage() {
                     name="certificationNumber"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Certification Number</FormLabel>
+                        <FormLabel>{dict.certNumber}</FormLabel>
                         <FormControl>
-                          <Input placeholder="Cert number if applicable" {...field} />
+                          <Input placeholder={dict.certNumber} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -499,7 +550,7 @@ export default function TeacherFormPage() {
                     name="joinDate"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Join Date</FormLabel>
+                        <FormLabel>{dict.joinDate}</FormLabel>
                         <FormControl>
                           <Input type="date" {...field} />
                         </FormControl>
@@ -513,7 +564,7 @@ export default function TeacherFormPage() {
                     name="baseSalary"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Base Salary</FormLabel>
+                        <FormLabel>{dict.baseSalary}</FormLabel>
                         <FormControl>
                           <Input type="number" {...field} />
                         </FormControl>
@@ -527,7 +578,7 @@ export default function TeacherFormPage() {
                     name="maxHoursPerWeek"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel>Max Hours Per Week</FormLabel>
+                        <FormLabel>{dict.maxHours}</FormLabel>
                         <FormControl>
                           <Input type="number" {...field} />
                         </FormControl>
@@ -541,9 +592,9 @@ export default function TeacherFormPage() {
                     name="subjects"
                     render={({ field }) => (
                       <FormItem className="sm:col-span-2">
-                        <FormLabel>Subjects (comma separated)</FormLabel>
+                        <FormLabel>{dict.subjects}</FormLabel>
                         <FormControl>
-                          <Input placeholder="e.g. Matematika, Fisika" {...field} />
+                          <Input placeholder={dict.subjectsPlaceholder} {...field} />
                         </FormControl>
                         <FormMessage />
                       </FormItem>
@@ -557,11 +608,11 @@ export default function TeacherFormPage() {
 
           <div className="flex items-center justify-end space-x-4">
             <Button variant="outline" type="button" onClick={() => navigate('/teachers')} disabled={mutation.isPending}>
-              <X className="mr-2 h-4 w-4" /> Cancel
+              <X className="mr-2 h-4 w-4" /> {dict.btnCancel}
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              <Save className="mr-2 h-4 w-4" /> Save
+              <Save className="mr-2 h-4 w-4" /> {dict.btnSave}
             </Button>
           </div>
         </form>
