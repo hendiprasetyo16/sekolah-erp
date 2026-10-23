@@ -115,9 +115,23 @@ export function StudentDetailPage() {
     }
   };
 
-  const formatCurrency = (amount?: number) => {
+  const formatCurrency = (amount?: number | string) => {
     if (!amount) return '-';
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(amount);
+
+    // Coba konversi nilai menjadi tipe angka murni
+    const num = Number(amount);
+
+    // Jika hasilnya NaN (Not a Number), berarti data mengandung teks huruf/simbol
+    if (isNaN(num)) {
+      return String(amount); // Kembalikan teks aslinya apa adanya
+    }
+
+    // Jika sukses menjadi angka murni, format ke bentuk Rupiah secara otomatis
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0
+    }).format(num);
   };
 
   const formatBool = (val?: boolean) => {

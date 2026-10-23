@@ -25,9 +25,8 @@ interface ImportParent {
   relation: string;
   fullName: string;
   nik: string;
-  occupation: string; // <-- SEBELUMNYA 'job', ini yang membuat ortu ditolak
-  // monthlyIncome: number | null; // <-- SEBELUMNYA 'income' berbentuk string
-  monthlyIncome: string | null; // <-- Ubah dari number ke string
+  occupation: string;
+  monthlyIncome: string | null; // <-- Tepat! Sudah diubah ke string
   education: string;
   isAlive: boolean;
   schoolId: string;
@@ -61,8 +60,8 @@ interface StudentImportPayload {
   address: string;
   rt: string;
   rw: string;
-  kelurahan: string; // <-- SEBELUMNYA village
-  kecamatan: string; // <-- SEBELUMNYA district
+  kelurahan: string;
+  kecamatan: string;
   city: string;
   province: string;
   postalCode: string;
@@ -200,7 +199,7 @@ export function StudentListPage() {
     }
   });
 
-  const [isDeletingAll, setIsDeletingAll] = useState(false); // State untuk modal Hapus Semua
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
 
   // Mutation untuk Hapus Semua Data
   const deleteAllMutation = useMutation({
@@ -302,7 +301,6 @@ export function StudentListPage() {
             .replace(/saat ini/g, '').replace(/tingkat/g, '').replace(/-/g, '').replace(/\s+/g, '').trim();
         };
 
-        // Helper fungsi untuk memvalidasi angka agar tidak merusak Constraint Database (> 0)
         const getValidNumber = (val: any, min: number = 0) => {
           const num = Number(val);
           return !isNaN(num) && num >= min ? num : null;
@@ -314,23 +312,13 @@ export function StudentListPage() {
         let duplicateCount = 0;
 
         const unfoundClassSet = new Set<string>();
-        const seenNis = new Set<string>(); // Set baru untuk mencegah NIS/NIPD ganda
+        const seenNis = new Set<string>();
 
-        // Mengambil existing NISN...
         const { data: existingStudents } = await supabase
           .from('students')
           .select('nisn')
           .eq('schoolId', school?.id || '');
         const existingNisns = new Set(existingStudents?.map(s => s.nisn) || []);
-
-        // Helper Parser Penghasilan agar DB menerima format Nominal Number (misal: "Rp 2.000.000 - Rp 4.000.000" -> 2000000)
-        const parseIncome = (val: any) => {
-          if (!val || String(val).trim() === '-' || String(val).trim() === '') return null;
-          const str = String(val).toLowerCase();
-          if (str.includes('tidak')) return 0;
-          const numStr = str.split('-')[0].replace(/[^0-9]/g, '');
-          return numStr ? Number(numStr) : null;
-        };
 
         for (const row of data) {
           if (!row['nama'] && !row['nipd'] && !row['nisn']) continue;
@@ -340,7 +328,6 @@ export function StudentListPage() {
             continue;
           }
 
-          // PERBAIKAN: Menyatukan Dusun ke dalam string Alamat
           const alamatRaw = String(row['alamat'] || '');
           const dusunRaw = String(row['dusun'] || '');
           let finalAddress = alamatRaw;
@@ -354,11 +341,10 @@ export function StudentListPage() {
             continue;
           }
 
-          // Cek duplikasi NIS (NIPD) secara internal agar tidak ditolak DB
           let parsedNis = (row['nipd'] || row['nis']) ? String(row['nipd'] || row['nis']).trim() : null;
           if (parsedNis) {
             if (seenNis.has(parsedNis)) {
-              parsedNis = null; // Jadikan null jika sudah ada, DB akan menerima karena NIS boleh Null (tidak boleh duplikat).
+              parsedNis = null;
             } else {
               seenNis.add(parsedNis);
             }
@@ -387,7 +373,7 @@ export function StudentListPage() {
           parsedPayloads.push({
             id: crypto.randomUUID(),
             schoolId: school?.id || '',
-            nis: parsedNis, // <-- Menggunakan NIS yang sudah divalidasi anti-ganda
+            nis: parsedNis,
             nisn: currentNisn,
             nik: row['nik'] ? String(row['nik']).trim() : `NONIK-${currentNisn}`,
             noKk: (row['no kk'] || row['nokk']) ? String(row['no kk'] || row['nokk']).trim() : '-',
@@ -398,22 +384,17 @@ export function StudentListPage() {
               ? new Date(Math.round((Number(row['tanggal lahir']) - 25569) * 86400 * 1000)).toISOString()
               : String(row['tanggal lahir'] || new Date().toISOString()),
             religion: String(row['agama'] || 'ISLAM').toUpperCase(),
-            //address: String(row['alamat'] || row['dusun'] || '-'),
-            address: finalAddress || '-', // Dusun sekarang masuk ke sini
+            address: finalAddress || '-',
             rt: String(row['rt'] || ''),
             rw: String(row['rw'] || ''),
-            kelurahan: String(row['kelurahan'] || ''), // <-- PERBAIKAN: ubah dari village ke kelurahan
-            kecamatan: String(row['kecamatan'] || ''), // <-- PERBAIKAN: ubah dari district ke kecamatan
-            //city: String(row['kabupaten/kota'] || row['kota'] || ''),
-            //province: String(row['provinsi'] || ''),
-            // PERBAIKAN: Ambil dari profil sekolah jika kolom di Dapodik tidak ada
+            kelurahan: String(row['kelurahan'] || ''),
+            kecamatan: String(row['kecamatan'] || ''),
             city: String(row['kabupaten/kota'] || row['kota'] || school?.city || '-'),
             province: String(row['provinsi'] || school?.province || '-'),
-
             postalCode: String(row['kode pos'] || ''),
             phone: String(row['hp'] || row['telepon'] || ''),
             email: String(row['e-mail'] || row['email'] || ''),
-            anakKe: getValidNumber(row['anak ke-berapa'], 1), // <-- Harus lebih dari 0 karena constraint
+            anakKe: getValidNumber(row['anak ke-berapa'], 1),
             jmlSaudara: getValidNumber(row['jml. saudara kandung'], 0),
             lintang: String(row['lintang'] || ''),
             bujur: String(row['bujur'] || ''),
@@ -429,7 +410,6 @@ export function StudentListPage() {
             rawClassName: rawExcelRombel || 'Belum Ada Kelas',
             entryDate: new Date().toISOString(),
             status: 'AKTIF',
-            // Kolom Padanan Fisik Dapodik
             skhun: String(row['skhun'] || ''),
             noPesertaUn: String(row['no peserta ujian nasional'] || ''),
             noIjazah: String(row['no seri ijazah'] || ''),
@@ -437,9 +417,6 @@ export function StudentListPage() {
             bank: String(row['bank'] || ''),
             noRekening: String(row['nomor rekening bank'] || ''),
             namaRekening: String(row['rekening atas nama'] || ''),
-            // ... (lanjutan parent dan economic tetap sama seperti sebelumnya)
-            // PERBAIKAN: Fallback header pembacaan format Dapodik
-            // Pemetaan Data Orang Tua dengan Teks Utuh Dapodik
             parents: [
               ...(row['data ayah nama'] || row['nama ayah'] ? [{
                 id: crypto.randomUUID(),
@@ -534,7 +511,6 @@ export function StudentListPage() {
     try {
       let currentClasses = classesData || [];
 
-      // 1. Buat Kelas Otomatis jika ada yang belum terdaftar
       if (unmatchedClasses.length > 0 && activeYear?.id) {
         const uniqueClassNames = Array.from(new Set(unmatchedClasses));
 
@@ -583,9 +559,6 @@ export function StudentListPage() {
         }
       }
 
-      // ==============================================================
-      // PERBAIKAN DI SINI: Bersihkan payload dari properti sementara
-      // ==============================================================
       const finalPayload = parsedImportData.map(payload => {
         let updatedClassId = payload.classId;
 
@@ -596,8 +569,6 @@ export function StudentListPage() {
           }
         }
 
-        // Kita pisahkan (destructure) 'rawClassName' agar sisanya (cleanPayload) 
-        // benar-benar bersih dan sesuai dengan struktur tabel database
         const { rawClassName, ...cleanPayload } = payload;
 
         return {
@@ -610,7 +581,6 @@ export function StudentListPage() {
         throw new Error("Gagal memasangkan kelas.");
       }
 
-      // 3. Eksekusi import masal siswa (Gunakan "as any" untuk mengabaikan beda struktur tipe TS)
       importMutation.mutate(finalPayload as any);
 
     } catch (error: any) {
@@ -875,7 +845,6 @@ export function StudentListPage() {
             </motion.button>
           )}
 
-          {/* PERBAIKAN: Tombol Hapus Semua muncul jika ada data */}
           {(meta?.total || 0) > 0 && (
             <button onClick={() => setIsDeletingAll(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm">
               <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? 'Kosongkan Data' : 'Wipe Data'}</span>

@@ -37,9 +37,6 @@ const studentSchema = z.object({
   rw: z.string().optional(),
   kelurahan: z.string().optional(),
   kecamatan: z.string().optional(),
-  //city: z.string().min(3, 'Kota wajib diisi'),
-  //province: z.string().min(3, 'Provinsi wajib diisi'),
-  // Karena saat import bisa saja kita isi '-', min character harus 1, bukan 3
   city: z.string().min(1, 'Kota wajib diisi'),
   province: z.string().min(1, 'Provinsi wajib diisi'),
   postalCode: z.string().optional(),
@@ -53,24 +50,21 @@ const studentSchema = z.object({
   fatherPhone: z.string().optional(),
   fatherEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   fatherOccupation: z.string().optional(),
-  //fatherIncome: z.coerce.number().optional(),
-  fatherIncome: z.string().optional(), // <-- Ubah menjadi string
+  fatherIncome: z.string().optional(),
 
   motherName: z.string().optional(),
   motherNik: z.string().optional(),
   motherPhone: z.string().optional(),
   motherEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   motherOccupation: z.string().optional(),
-  //motherIncome: z.coerce.number().optional(),
-  motherIncome: z.string().optional(), // <-- Ubah menjadi string
+  motherIncome: z.string().optional(),
 
   guardianName: z.string().optional(),
   guardianNik: z.string().optional(),
   guardianPhone: z.string().optional(),
   guardianEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   guardianOccupation: z.string().optional(),
-  //guardianIncome: z.coerce.number().optional(),
-  guardianIncome: z.string().optional(), // <-- Ubah menjadi string
+  guardianIncome: z.string().optional(),
 
   hasKip: z.boolean().optional(),
   kipNumber: z.string().optional(),
@@ -102,10 +96,8 @@ const studentSchema = z.object({
 
 type StudentFormValues = z.infer<typeof studentSchema>;
 
-// FIX TS ERROR 2: Strict Combined Payload
 type CombinedStudentPayload = Omit<CreateStudentPayload, 'parents' | 'economic'> & {
   schoolId: string;
-  // Menambahkan schoolId ke dalam tipe array parents
   parents: (Omit<StudentParent, 'id'> & { schoolId: string })[];
   economic?: Omit<StudentEconomic, 'studentId' | 'id'> & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number | null };
   noAktaLahir?: string; anakKe?: number; jmlSaudara?: number; beratBadan?: number;
@@ -145,7 +137,6 @@ export function StudentFormPage() {
       birthDate: '', birthPlace: '', religion: '', address: '', rt: '', rw: '',
       kelurahan: '', kecamatan: '', city: '', province: '', postalCode: '', phone: '', email: '',
       classId: '', entryDate: new Date().toISOString().split('T')[0],
-      // Bagian defaultValues:
       fatherName: '', fatherNik: '', fatherPhone: '', fatherEmail: '', fatherOccupation: '', fatherIncome: '',
       motherName: '', motherNik: '', motherPhone: '', motherEmail: '', motherOccupation: '', motherIncome: '',
       guardianName: '', guardianNik: '', guardianPhone: '', guardianEmail: '', guardianOccupation: '', guardianIncome: '',
@@ -158,7 +149,6 @@ export function StudentFormPage() {
     if (student?.data) {
       const d = student.data as unknown as Record<string, unknown>;
 
-      // PERBAIKAN: Tangkap properti student_parents dan student_economics
       const parentsData = ((d.parents || d.student_parents) as StudentParent[]) || [];
       const ecoRaw = d.economic || d.student_economics;
       const eco = ((Array.isArray(ecoRaw) ? ecoRaw[0] : ecoRaw) as Record<string, unknown>) || {};
@@ -166,7 +156,6 @@ export function StudentFormPage() {
       const ayah = parentsData.find((p) => p.relation === 'AYAH');
       const ibu = parentsData.find((p) => p.relation === 'IBU');
       const wali = parentsData.find((p) => p.relation === 'WALI');
-      //const eco = (d.economic as Record<string, unknown>) || {};
 
       form.reset({
         nis: (d.nis as string) || '', nisn: (d.nisn as string) || '', nik: (d.nik as string) || '', noKk: (d.noKk as string) || '', fullName: (d.fullName as string) || '',
@@ -177,7 +166,6 @@ export function StudentFormPage() {
         postalCode: (d.postalCode as string) || '', phone: (d.phone as string) || '', email: (d.email as string) || '',
         classId: (d.classId as string) || '', entryDate: (d.entryDate as string)?.split('T')[0] || '',
 
-        // Bagian form.reset:
         fatherName: ayah?.fullName || '', fatherNik: ayah?.nik || '', fatherPhone: ayah?.phone || '', fatherEmail: ayah?.email || '', fatherOccupation: ayah?.occupation || '', fatherIncome: (ayah?.monthlyIncome as string) || '',
         motherName: ibu?.fullName || '', motherNik: ibu?.nik || '', motherPhone: ibu?.phone || '', motherEmail: ibu?.email || '', motherOccupation: ibu?.occupation || '', motherIncome: (ibu?.monthlyIncome as string) || '',
         guardianName: wali?.fullName || '', guardianNik: wali?.nik || '', guardianPhone: wali?.phone || '', guardianEmail: wali?.email || '', guardianOccupation: wali?.occupation || '', guardianIncome: (wali?.monthlyIncome as string) || '',
@@ -194,7 +182,6 @@ export function StudentFormPage() {
 
   const mutation = useMutation({
     mutationFn: (data: CombinedStudentPayload) => {
-      // FIX TS ERROR 2: Menggunakan Parameters utility untuk 100% strict matching
       return isEdit
         ? studentService.update(id!, data as Parameters<typeof studentService.update>[1])
         : studentService.create(data as Parameters<typeof studentService.create>[0]);
@@ -221,10 +208,8 @@ export function StudentFormPage() {
   });
 
   const onSubmit = (data: StudentFormValues) => {
-    // Memberi tahu TypeScript bahwa array ini menerima objek StudentParent PLUS schoolId
     const parentsArray: (Omit<StudentParent, 'id'> & { schoolId: string })[] = [];
 
-    // PERBAIKAN: Menambahkan parameter schoolId: school?.id || '' agar tidak ditolak Database
     if (data.fatherName) parentsArray.push({ relation: 'AYAH', fullName: data.fatherName, nik: data.fatherNik, phone: data.fatherPhone, email: data.fatherEmail, occupation: data.fatherOccupation, monthlyIncome: data.fatherIncome, isAlive: true, schoolId: school?.id || '' });
     if (data.motherName) parentsArray.push({ relation: 'IBU', fullName: data.motherName, nik: data.motherNik, phone: data.motherPhone, email: data.motherEmail, occupation: data.motherOccupation, monthlyIncome: data.motherIncome, isAlive: true, schoolId: school?.id || '' });
     if (data.guardianName) parentsArray.push({ relation: 'WALI', fullName: data.guardianName, nik: data.guardianNik, phone: data.guardianPhone, email: data.guardianEmail, occupation: data.guardianOccupation, monthlyIncome: data.guardianIncome, isAlive: true, schoolId: school?.id || '' });
@@ -315,7 +300,6 @@ export function StudentFormPage() {
         <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} onKeyDown={preventAutoSubmitOnEnter} className="space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
 
-            {/* FIX DARK MODE 1: Hapus hardcoded bg colors, biarkan Shadcn yang menangani */}
             <TabsList className="grid w-full grid-cols-5 h-auto p-1 lg:w-200">
               <TabsTrigger value="pribadi">{locale === 'id' ? 'Pribadi' : 'Personal'}</TabsTrigger>
               <TabsTrigger value="akademik">{locale === 'id' ? 'Akademik' : 'Academic'}</TabsTrigger>
@@ -368,7 +352,22 @@ export function StudentFormPage() {
                 <TabsContent value="akademik" className="m-0 space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="classId" render={({ field }) => (
-                      <FormItem><FormLabel>{locale === 'id' ? 'Kelas' : 'Class'}</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value} disabled={isLoadingClasses}><FormControl><SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih Kelas' : 'Select Class'} /></SelectTrigger></FormControl><SelectContent>{classesData?.map((cls) => (<SelectItem key={cls.id} value={cls.id}>{locale === 'id' ? 'Kelas' : 'Grade'} {cls.gradeLevel} - {cls.name}</SelectItem>))}</SelectContent></Select><FormMessage /></FormItem>
+                      <FormItem>
+                        <FormLabel>{locale === 'id' ? 'Kelas' : 'Class'}</FormLabel>
+                        <Select onValueChange={field.onChange} defaultValue={field.value} disabled={isLoadingClasses}>
+                          <FormControl>
+                            <SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih Kelas' : 'Select Class'} /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            {classesData?.map((cls) => (
+                              <SelectItem key={cls.id} value={cls.id}>
+                                {locale === 'id' ? 'Kelas' : 'Grade'} {cls.gradeLevel} {cls.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
                     )} />
                     <FormField control={form.control} name="entryDate" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tanggal Masuk' : 'Entry Date'}</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>)} />
                   </div>
@@ -413,7 +412,6 @@ export function StudentFormPage() {
                 {/* --- TAB 4: EKONOMI --- */}
                 <TabsContent value="ekonomi" className="m-0 space-y-6">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                    {/* FIX DARK MODE 2: Menggunakan bg-muted/40 (warna semantik bawaan Shadcn) */}
                     <div className="space-y-4 col-span-1 md:col-span-2 border border-border p-5 rounded-xl bg-muted/40">
                       <h4 className="font-bold text-primary">
                         {locale === 'id' ? 'Program Indonesia Pintar (PIP / KIP)' : 'Smart Indonesia Program (PIP / KIP)'}
