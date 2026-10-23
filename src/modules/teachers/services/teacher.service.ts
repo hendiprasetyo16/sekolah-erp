@@ -63,6 +63,18 @@ class TeacherService {
     return { data: data as TeacherDetail };
   }
 
+  // --- FUNGSI IMPORT EXCEL (BARU) ---
+  async importBulk(payloads: any[]) {
+    const { data, error } = await supabase
+      .from('teachers')
+      .insert(payloads)
+      .select();
+
+    if (error) throw new Error(error.message);
+
+    return { data };
+  }
+
   async update(id: string, payload: UpdateTeacherPayload) {
     const { data, error } = await supabase
       .from('teachers')
@@ -85,6 +97,17 @@ class TeacherService {
     if (error) throw new Error(error.message);
 
     return { data: undefined };
+  }
+
+  // --- FUNGSI BARU UNTUK HAPUS MASSAL ---
+  async deleteBulk(ids: string[]) {
+    const { error } = await supabase
+      .from('teachers')
+      .delete()
+      .in('id', ids);
+
+    if (error) throw new Error(error.message);
+    return { success: true };
   }
 }
 
