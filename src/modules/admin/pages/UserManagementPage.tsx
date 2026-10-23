@@ -8,7 +8,7 @@ import {
     Users, ShieldCheck, UserCog, GraduationCap, Users2,
     Search, Plus, MoreVertical, Edit, KeyRound, Ban, CheckCircle2,
     Loader2, AlertCircle, X, Eye, EyeOff, ChevronLeft, ChevronRight,
-    ChevronsLeft, ChevronsRight // <-- Tambahan Ikon Halaman Awal/Akhir
+    ChevronsLeft, ChevronsRight
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -107,9 +107,9 @@ export function UserManagementPage() {
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState<boolean>(false);
     const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
+    const [userToDelete, setUserToDelete] = useState<AppUser | null>(null); // Tambahkan baris ini
     const [showAddPassword, setShowAddPassword] = useState<boolean>(false);
     const [showResetPassword, setShowResetPassword] = useState<boolean>(false);
-
     const t = {
         title: locale === 'id' ? 'Manajemen Pengguna' : 'User Management',
         subtitle: locale === 'id' ? 'Kelola akses login, role, dan keamanan akun.' : 'Manage login access, roles, and account security.',
@@ -150,6 +150,11 @@ export function UserManagementPage() {
         resetDesc: locale === 'id' ? 'Atur ulang kata sandi untuk akun:' : 'Reset password for account:',
         newPass: locale === 'id' ? 'Kata Sandi Baru' : 'New Password',
 
+        // Tambahkan 3 baris ini
+        deleteTitle: locale === 'id' ? 'Hapus Pengguna' : 'Delete User',
+        deleteDesc: locale === 'id' ? 'Apakah Anda yakin ingin menghapus akun ini secara permanen? Data yang dihapus tidak dapat dipulihkan.' : 'Are you sure you want to permanently delete this account? This action cannot be undone.',
+        btnDelete: locale === 'id' ? 'Ya, Hapus' : 'Yes, Delete',
+
         toastAddSuccess: locale === 'id' ? 'Pengguna berhasil ditambahkan!' : 'User added successfully!',
         toastEditSuccess: locale === 'id' ? 'Profil berhasil diperbarui!' : 'Profile updated successfully!',
         toastResetSuccess: locale === 'id' ? 'Kata sandi berhasil di-reset!' : 'Password reset successfully!',
@@ -161,7 +166,19 @@ export function UserManagementPage() {
     // ========================================================================
     const addUserMutation = useMutation({
         mutationFn: async (payload: CreateUserFormValues) => {
-            return new Promise((resolve) => setTimeout(resolve, 1500));
+            const { data, error } = await supabase.functions.invoke('create-user', {
+                body: {
+                    email: payload.email,
+                    fullName: payload.fullName,
+                    password: payload.password,
+                    role: payload.role,
+                    schoolId: school?.id
+                }
+            });
+
+            if (error) throw new Error(error.message || 'Gagal terhubung ke server.');
+            if (data?.error) throw new Error(data.error);
+            return data;
         },
         onSuccess: () => {
             toast.success(t.toastAddSuccess);
@@ -175,11 +192,16 @@ export function UserManagementPage() {
 
     const editUserMutation = useMutation({
         mutationFn: async (payload: { id: string, data: EditUserFormValues }) => {
-            const { error } = await supabase
+            const { data, error } = await supabase
                 .from('users')
                 .update({ fullName: payload.data.fullName, role: payload.data.role })
-                .eq('id', payload.id);
+                .eq('id', payload.id)
+                .select();
+
             if (error) throw new Error(error.message);
+            if (!data || data.length === 0) {
+                throw new Error('Gagal memperbarui profil. Anda mungkin tidak memiliki hak akses (RLS).');
+            }
         },
         onSuccess: () => {
             toast.success(t.toastEditSuccess);
@@ -191,24 +213,15 @@ export function UserManagementPage() {
 
     const resetPasswordMutation = useMutation({
         mutationFn: async (payload: { userId: string, newPass: string }) => {
-            // Memanggil Supabase Edge Function dari Vite
             const { data, error } = await supabase.functions.invoke('reset-password', {
                 body: {
-                    targetUserId: payload.userId, // <--- INI DISESUAIKAN DENGAN KODE DENO ANDA
+                    targetUserId: payload.userId,
                     newPassword: payload.newPass
                 }
             });
 
-            if (error) {
-                // error dari sistem pemanggilan Supabase
-                throw new Error(error.message || 'Gagal terhubung ke server.');
-            }
-
-            if (data?.error) {
-                // error yang kita lempar dari blok try-catch di Edge Function
-                throw new Error(data.error);
-            }
-
+            if (error) throw new Error(error.message || 'Gagal terhubung ke server.');
+            if (data?.error) throw new Error(data.error);
             return data;
         },
         onSuccess: () => {
@@ -222,11 +235,16 @@ export function UserManagementPage() {
 
     const toggleStatusMutation = useMutation({
         mutationFn: async (payload: { userId: string, currentStatus: boolean }) => {
-            const { error } = await supabase
+            const { data, error } = await supabase
                 .from('users')
                 .update({ isActive: !payload.currentStatus })
-                .eq('id', payload.userId);
+                .eq('id', payload.userId)
+                .select();
+
             if (error) throw new Error(error.message);
+            if (!data || data.length === 0) {
+                throw new Error('Gagal merubah status. Anda mungkin tidak memiliki hak akses (RLS).');
+            }
         },
         onSuccess: () => {
             toast.success(t.toastBlockSuccess);
@@ -235,10 +253,28 @@ export function UserManagementPage() {
         onError: (error: Error) => toast.error(error.message)
     });
 
+    const deleteUserMutation = useMutation({
+        mutationFn: async (userId: string) => {
+            const { data, error } = await supabase.functions.invoke('delete-user', {
+                body: { targetUserId: userId }
+            });
+
+            if (error) throw new Error(error.message || 'Gagal terhubung ke server.');
+            if (data?.error) throw new Error(data.error);
+            return data;
+        },
+        onSuccess: () => {
+            toast.success("Pengguna berhasil dihapus secara permanen!");
+            setUserToDelete(null); // Tutup modal setelah berhasil
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
     // ========================================================================
     // FETCHING & FILTERING
     // ========================================================================
-    const { data: users, isLoading } = useQuery<AppUser[], Error>({
+    const { data: users, isLoading, isError, error, refetch } = useQuery<AppUser[], Error>({
         queryKey: ['users-list', school?.id, isSuperAdmin],
         queryFn: async () => {
             if (!isSuperAdmin && !school?.id) return [];
@@ -252,8 +288,8 @@ export function UserManagementPage() {
                 query = query.eq('schoolId', school.id);
             }
 
-            const { data, error } = await query;
-            if (error) throw new Error(error.message);
+            const { data, error: fetchError } = await query;
+            if (fetchError) throw new Error(fetchError.message);
 
             return (data as AppUser[]) || [];
         },
@@ -280,7 +316,12 @@ export function UserManagementPage() {
         currentPage * ITEMS_PER_PAGE
     );
 
-    // Generator Custom Nomor Halaman (Contoh: 1 2 3 4 5)
+    useEffect(() => {
+        if (totalPages > 0 && currentPage > totalPages) {
+            setCurrentPage(totalPages);
+        }
+    }, [totalPages, currentPage]);
+
     const getPageNumbers = () => {
         const pages = [];
         const maxVisible = 5;
@@ -308,7 +349,6 @@ export function UserManagementPage() {
         defaultValues: { fullName: '', role: 'GURU' }
     });
 
-    // Sinkronisasi data user yang dipilih ke form edit
     useEffect(() => {
         if (userToEdit) {
             editUserForm.reset({
@@ -348,7 +388,7 @@ export function UserManagementPage() {
                                     <h3 className="text-xl font-bold">{t.addTitle}</h3>
                                     <p className="text-muted-foreground text-sm">{t.addDesc}</p>
                                 </div>
-                                <Button variant="ghost" size="icon" onClick={() => setIsAddUserModalOpen(false)}><X className="w-5 h-5" /></Button>
+                                <Button variant="ghost" size="icon" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}><X className="w-5 h-5" /></Button>
                             </div>
 
                             <Form {...addUserForm}>
@@ -364,7 +404,7 @@ export function UserManagementPage() {
                                             <FormLabel>{t.fRole}</FormLabel>
                                             <Select value={field.value} onValueChange={field.onChange}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
-                                                <SelectContent position="popper" side="bottom" className="max-h-[200px] overflow-y-auto z-[9999]">
+                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto z-9999">
                                                     <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
                                                     <SelectItem value="ADMIN">Admin IT</SelectItem>
                                                     <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
@@ -397,7 +437,7 @@ export function UserManagementPage() {
                                     )} />
 
                                     <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
-                                        <Button type="button" variant="outline" onClick={() => setIsAddUserModalOpen(false)} disabled={addUserMutation.isPending}>{t.btnCancel}</Button>
+                                        <Button type="button" variant="outline" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }} disabled={addUserMutation.isPending}>{t.btnCancel}</Button>
                                         <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={addUserMutation.isPending}>
                                             {addUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />} {t.btnSave}
                                         </Button>
@@ -421,7 +461,7 @@ export function UserManagementPage() {
                                     <h3 className="text-xl font-bold">{t.editTitle}</h3>
                                     <p className="text-muted-foreground text-sm">{t.editDesc}</p>
                                 </div>
-                                <Button variant="ghost" size="icon" onClick={() => setUserToEdit(null)}><X className="w-5 h-5" /></Button>
+                                <Button variant="ghost" size="icon" onClick={() => { setUserToEdit(null); editUserForm.reset(); }}><X className="w-5 h-5" /></Button>
                             </div>
 
                             <Form {...editUserForm}>
@@ -438,7 +478,7 @@ export function UserManagementPage() {
                                             <FormLabel>{t.fRole}</FormLabel>
                                             <Select value={field.value} onValueChange={field.onChange} disabled={!isSuperAdmin}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
-                                                <SelectContent position="popper" side="bottom" className="max-h-[200px] overflow-y-auto z-[9999]">
+                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto z-9999">
                                                     <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
                                                     <SelectItem value="ADMIN">Admin IT</SelectItem>
                                                     <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
@@ -457,7 +497,7 @@ export function UserManagementPage() {
                                     )} />
 
                                     <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
-                                        <Button type="button" variant="outline" onClick={() => setUserToEdit(null)} disabled={editUserMutation.isPending}>{t.btnCancel}</Button>
+                                        <Button type="button" variant="outline" onClick={() => { setUserToEdit(null); editUserForm.reset(); }} disabled={editUserMutation.isPending}>{t.btnCancel}</Button>
                                         <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={editUserMutation.isPending}>
                                             {editUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Edit className="w-4 h-4 mr-2" />} {t.btnSave}
                                         </Button>
@@ -480,7 +520,7 @@ export function UserManagementPage() {
                                 <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center border border-blue-200 dark:border-blue-800">
                                     <KeyRound className="w-6 h-6 text-blue-600 dark:text-blue-400" />
                                 </div>
-                                <Button variant="ghost" size="icon" onClick={() => setUserToReset(null)}><X className="w-5 h-5" /></Button>
+                                <Button variant="ghost" size="icon" onClick={() => { setUserToReset(null); resetPassForm.reset(); setShowResetPassword(false); }}><X className="w-5 h-5" /></Button>
                             </div>
 
                             <h3 className="text-xl font-bold mb-1">{t.resetTitle}</h3>
@@ -503,13 +543,51 @@ export function UserManagementPage() {
                                         </FormItem>
                                     )} />
                                     <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
-                                        <Button type="button" variant="outline" onClick={() => setUserToReset(null)} disabled={resetPasswordMutation.isPending}>{t.btnCancel}</Button>
+                                        <Button type="button" variant="outline" onClick={() => { setUserToReset(null); resetPassForm.reset(); setShowResetPassword(false); }} disabled={resetPasswordMutation.isPending}>{t.btnCancel}</Button>
                                         <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={resetPasswordMutation.isPending}>
                                             {resetPasswordMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />} {t.btnSave}
                                         </Button>
                                     </div>
                                 </form>
                             </Form>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
+            {/* =================================================================== */}
+            {/* MODAL: DELETE CONFIRMATION */}
+            {/* =================================================================== */}
+            <AnimatePresence>
+                {userToDelete && isSuperAdmin && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card text-card-foreground rounded-2xl shadow-2xl border border-border max-w-sm w-full p-6 text-center">
+                            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center border border-red-200 dark:border-red-800 mx-auto mb-4">
+                                <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
+                            </div>
+
+                            <h3 className="text-xl font-bold mb-2">{t.deleteTitle}</h3>
+                            <p className="text-muted-foreground text-sm mb-1">
+                                {t.deleteDesc}
+                            </p>
+                            <p className="font-semibold text-foreground mb-6">
+                                {userToDelete.fullName} ({userToDelete.email})
+                            </p>
+
+                            <div className="flex justify-center gap-3 pt-4 border-t border-border">
+                                <Button type="button" variant="outline" onClick={() => setUserToDelete(null)} disabled={deleteUserMutation.isPending}>
+                                    {t.btnCancel}
+                                </Button>
+                                <Button
+                                    type="button"
+                                    className="bg-red-600 hover:bg-red-700 text-white"
+                                    onClick={() => deleteUserMutation.mutate(userToDelete.id)}
+                                    disabled={deleteUserMutation.isPending}
+                                >
+                                    {deleteUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Ban className="w-4 h-4 mr-2" />}
+                                    {t.btnDelete}
+                                </Button>
+                            </div>
                         </motion.div>
                     </div>
                 )}
@@ -570,7 +648,25 @@ export function UserManagementPage() {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                            {isLoading ? (
+                            {isError ? (
+                                <tr>
+                                    <td colSpan={5} className="p-8 text-center text-red-500">
+                                        <AlertCircle className="w-8 h-8 mx-auto mb-3 opacity-80" />
+                                        <p className="font-medium">Gagal memuat data pengguna.</p>
+                                        <p className="text-sm mt-1 mb-4 opacity-80">
+                                            {error?.message || 'Terjadi kesalahan saat menghubungi server.'}
+                                        </p>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => refetch()}
+                                            className="border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
+                                        >
+                                            Coba Lagi
+                                        </Button>
+                                    </td>
+                                </tr>
+                            ) : isLoading ? (
                                 <tr>
                                     <td colSpan={5} className="p-8 text-center">
                                         <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
@@ -627,7 +723,6 @@ export function UserManagementPage() {
                                                 <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground border-border">
                                                     <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Aksi Akun</DropdownMenuLabel>
 
-                                                    {/* KLIK EDIT PROFIL TERHUBUNG KE FUNGSI setUserToEdit */}
                                                     <DropdownMenuItem className="cursor-pointer" onClick={() => setUserToEdit(user)}>
                                                         <Edit className="w-4 h-4 mr-2" /> Edit Profil
                                                     </DropdownMenuItem>
@@ -647,6 +742,18 @@ export function UserManagementPage() {
                                                             </DropdownMenuItem>
                                                         </>
                                                     )}
+                                                    {/* Letakkan di bawah tombol Blokir Akses */}
+                                                    {isSuperAdmin && currentUser?.id !== user.id && (
+                                                        <>
+                                                            <DropdownMenuSeparator className="bg-border" />
+                                                            <DropdownMenuItem
+                                                                className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30"
+                                                                onClick={() => setUserToDelete(user)}
+                                                            >
+                                                                <Ban className="w-4 h-4 mr-2" /> Hapus Akun
+                                                            </DropdownMenuItem>
+                                                        </>
+                                                    )}
                                                 </DropdownMenuContent>
                                             </DropdownMenu>
                                         </td>
@@ -658,7 +765,7 @@ export function UserManagementPage() {
                 </div>
 
                 {/* =================================================================== */}
-                {/* PAGINATION CONTROLS (AWAL, AKHIR & NOMOR HALAMAN CUSTOM) */}
+                {/* PAGINATION CONTROLS */}
                 {/* =================================================================== */}
                 {filteredUsers.length > 0 && (
                     <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
@@ -667,17 +774,14 @@ export function UserManagementPage() {
                         </span>
 
                         <div className="flex items-center gap-1.5">
-                            {/* Tombol Halaman Awal */}
                             <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
                                 <ChevronsLeft className="w-4 h-4" />
                             </Button>
 
-                            {/* Tombol Sebelumnya */}
                             <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
                                 <ChevronLeft className="w-4 h-4" />
                             </Button>
 
-                            {/* Custom Nomor Halaman Dinamis */}
                             {getPageNumbers().map((pageNum) => (
                                 <Button
                                     key={pageNum}
@@ -690,12 +794,10 @@ export function UserManagementPage() {
                                 </Button>
                             ))}
 
-                            {/* Tombol Selanjutnya */}
                             <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
                                 <ChevronRight className="w-4 h-4" />
                             </Button>
 
-                            {/* Tombol Halaman Akhir */}
                             <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
                                 <ChevronsRight className="w-4 h-4" />
                             </Button>
