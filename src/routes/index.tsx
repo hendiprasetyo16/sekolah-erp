@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'; // <--- TAMBAH useLocation
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { MainLayout } from '@/components/layouts/MainLayout';
 import { LoginPage } from '@/modules/auth/pages/LoginPage';
 import { AdminDashboard } from '@/modules/dashboard/pages/AdminDashboard';
@@ -23,9 +23,10 @@ import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage'
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
 import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
-
-// 1. IMPORT HALAMAN FORCE CHANGE PASSWORD
 import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswordPage';
+
+// 1. IMPORT HALAMAN PROFILE PAGE BARU
+import { ProfilePage } from '@/modules/profile/pages/ProfilePage';
 
 // ============================================================================
 // KOMPONEN PENCEGAT RUTE (SATPAM APLIKASI)
@@ -109,6 +110,11 @@ export function AppRouter() {
 
           {/* User Management */}
           <Route path="/admin/users" element={<UserManagementPage />} />
+
+          {/* ========================================= */}
+          {/* RUTE PROFIL PENGGUNA BARU DISISIPKAN DISINI */}
+          {/* ========================================= */}
+          <Route path="/profile" element={<ProfilePage />} />
 
           {/* Attendance */}
           <Route path="/attendance" element={<AttendanceDashboardPage />} />
