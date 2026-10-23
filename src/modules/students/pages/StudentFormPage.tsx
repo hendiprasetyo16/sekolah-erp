@@ -37,8 +37,11 @@ const studentSchema = z.object({
   rw: z.string().optional(),
   kelurahan: z.string().optional(),
   kecamatan: z.string().optional(),
-  city: z.string().min(3, 'Kota wajib diisi'),
-  province: z.string().min(3, 'Provinsi wajib diisi'),
+  //city: z.string().min(3, 'Kota wajib diisi'),
+  //province: z.string().min(3, 'Provinsi wajib diisi'),
+  // Karena saat import bisa saja kita isi '-', min character harus 1, bukan 3
+  city: z.string().min(1, 'Kota wajib diisi'),
+  province: z.string().min(1, 'Provinsi wajib diisi'),
   postalCode: z.string().optional(),
   phone: z.string().optional(),
   email: z.string().email('Email tidak valid').optional().or(z.literal('')),
@@ -149,11 +152,16 @@ export function StudentFormPage() {
   useEffect(() => {
     if (student?.data) {
       const d = student.data as unknown as Record<string, unknown>;
-      const parentsData = (d.parents as StudentParent[]) || [];
+
+      // PERBAIKAN: Tangkap properti student_parents dan student_economics
+      const parentsData = ((d.parents || d.student_parents) as StudentParent[]) || [];
+      const ecoRaw = d.economic || d.student_economics;
+      const eco = ((Array.isArray(ecoRaw) ? ecoRaw[0] : ecoRaw) as Record<string, unknown>) || {};
+
       const ayah = parentsData.find((p) => p.relation === 'AYAH');
       const ibu = parentsData.find((p) => p.relation === 'IBU');
       const wali = parentsData.find((p) => p.relation === 'WALI');
-      const eco = (d.economic as Record<string, unknown>) || {};
+      //const eco = (d.economic as Record<string, unknown>) || {};
 
       form.reset({
         nis: (d.nis as string) || '', nisn: (d.nisn as string) || '', nik: (d.nik as string) || '', noKk: (d.noKk as string) || '', fullName: (d.fullName as string) || '',

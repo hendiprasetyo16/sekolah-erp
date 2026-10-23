@@ -403,8 +403,12 @@ export function StudentListPage() {
             rw: String(row['rw'] || ''),
             kelurahan: String(row['kelurahan'] || ''), // <-- PERBAIKAN: ubah dari village ke kelurahan
             kecamatan: String(row['kecamatan'] || ''), // <-- PERBAIKAN: ubah dari district ke kecamatan
-            city: String(row['kabupaten/kota'] || row['kota'] || ''),
-            province: String(row['provinsi'] || ''),
+            //city: String(row['kabupaten/kota'] || row['kota'] || ''),
+            //province: String(row['provinsi'] || ''),
+            // PERBAIKAN: Ambil dari profil sekolah jika kolom di Dapodik tidak ada
+            city: String(row['kabupaten/kota'] || row['kota'] || school?.city || '-'),
+            province: String(row['provinsi'] || school?.province || '-'),
+
             postalCode: String(row['kode pos'] || ''),
             phone: String(row['hp'] || row['telepon'] || ''),
             email: String(row['e-mail'] || row['email'] || ''),

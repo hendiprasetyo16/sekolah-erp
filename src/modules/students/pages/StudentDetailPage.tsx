@@ -71,6 +71,11 @@ export function StudentDetailPage() {
 
   const student = studentResponse?.data as unknown as ExtendedStudentData;
 
+  // --- TAMBAHKAN 3 BARIS INI UNTUK MENANGKAP STRUKTUR SUPABASE ---
+  const parentsList = student?.parents || (student as any)?.student_parents || [];
+  const rawEco = student?.economic || (student as any)?.student_economics;
+  const ecoData = (Array.isArray(rawEco) ? rawEco[0] : rawEco) || {};
+
   if (isLoading) {
     return (
       <div className="flex h-[60vh] items-center justify-center text-muted-foreground">
@@ -289,13 +294,21 @@ export function StudentDetailPage() {
         <TabsContent value="orangtua" className="mt-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {['AYAH', 'IBU', 'WALI'].map((relation) => {
-              const parent = student.parents?.find(p => p.relation === relation);
+              // PERBAIKAN: Gunakan parentsList
+              const parent = parentsList.find((p: any) => p.relation === relation);
               if (relation === 'WALI' && !parent) return null;
 
               const isFather = relation === 'AYAH';
               const titleID = relation === 'AYAH' ? 'Data Ayah' : (relation === 'IBU' ? 'Data Ibu' : 'Data Wali');
               const titleEN = relation === 'AYAH' ? 'Father Data' : (relation === 'IBU' ? 'Mother Data' : 'Guardian Data');
 
+              {
+                (!parentsList || parentsList.length === 0) && (
+                  <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
+                    {locale === 'id' ? 'Data orang tua/wali belum dilengkapi.' : 'Parent/guardian data has not been provided yet.'}
+                  </div>
+                )
+              }
               return (
                 <Card key={relation} className="shadow-sm">
                   <CardHeader className="bg-muted/20 border-b border-border pb-4">
@@ -325,7 +338,7 @@ export function StudentDetailPage() {
               );
             })}
 
-            {(!student.parents || student.parents.length === 0) && (
+            {(!parentsList || parentsList.length === 0) && (
               <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
                 {locale === 'id' ? 'Data orang tua/wali belum dilengkapi.' : 'Parent/guardian data has not been provided yet.'}
               </div>
@@ -348,31 +361,31 @@ export function StudentDetailPage() {
                 <dl className="divide-y divide-border">
                   <div className="grid grid-cols-2 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima KIP' : 'Has KIP'}</dt>
-                    <dd className="text-foreground font-bold">{formatBool(student.economic?.hasKip)}</dd>
+                    <dd className="text-foreground font-bold">{formatBool(ecoData?.hasKip)}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Nomor KIP' : 'KIP Number'}</dt>
-                    <dd className="text-foreground font-medium">{student.economic?.kipNumber || '-'}</dd>
+                    <dd className="text-foreground font-medium">{ecoData?.kipNumber || '-'}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Nama di KIP' : 'Name on KIP'}</dt>
-                    <dd className="text-foreground font-medium">{student.economic?.namaKip || '-'}</dd>
+                    <dd className="text-foreground font-medium">{ecoData?.namaKip || '-'}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Usulan Layak PIP' : 'Eligible for PIP'}</dt>
-                    <dd className="text-foreground font-bold">{formatBool(student.economic?.layakPip)}</dd>
+                    <dd className="text-foreground font-bold">{formatBool(ecoData?.layakPip)}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Desil DTKS / P3KE' : 'DTKS / P3KE Decile'}</dt>
                     <dd className="text-foreground font-medium">
-                      {student.economic?.desil ? (
-                        student.economic.desil <= 4 ? (
+                      {ecoData?.desil ? (
+                        ecoData.desil <= 4 ? (
                           <Badge className="bg-emerald-600 text-white hover:bg-emerald-700">
-                            Desil {student.economic.desil} ({locale === 'id' ? 'Prioritas PIP' : 'PIP Priority'})
+                            Desil {ecoData.desil} ({locale === 'id' ? 'Prioritas PIP' : 'PIP Priority'})
                           </Badge>
                         ) : (
                           <Badge variant="outline">
-                            Desil {student.economic.desil}
+                            Desil {ecoData.desil}
                           </Badge>
                         )
                       ) : (
@@ -382,7 +395,7 @@ export function StudentDetailPage() {
                   </div>
                   <div className="flex flex-col px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium mb-1">{locale === 'id' ? 'Alasan Layak PIP' : 'Reason for PIP'}</dt>
-                    <dd className="text-foreground font-medium">{student.economic?.alasanLayakPip || '-'}</dd>
+                    <dd className="text-foreground font-medium">{ecoData?.alasanLayakPip || '-'}</dd>
                   </div>
                 </dl>
               </CardContent>
@@ -400,13 +413,13 @@ export function StudentDetailPage() {
                   <div className="flex justify-between px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima PKH' : 'Has PKH'}</dt>
                     <dd className="text-foreground font-bold">
-                      {student.economic?.hasPkh ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
+                      {ecoData?.hasPkh ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
                     </dd>
                   </div>
                   <div className="flex justify-between px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Terdaftar DTKS' : 'Registered in DTKS'}</dt>
                     <dd className="text-foreground font-bold">
-                      {student.economic?.isDtks ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
+                      {ecoData?.isDtks ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
                     </dd>
                   </div>
                 </dl>
