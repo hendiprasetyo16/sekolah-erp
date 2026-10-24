@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CheckCircle, XCircle, Clock, Users, Scan, RotateCcw, Wifi, WifiOff, School } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Users, Scan, RotateCcw, Wifi, WifiOff, School, MapPin } from 'lucide-react';
 import { attendanceService } from '../services/attendance.service';
 import { BarcodeScanner } from '../components/BarcodeScanner';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { AttendanceMap } from '@/components/map/AttendanceMap'; // Import komponen peta
 
 type KioskState = 'idle' | 'scanning' | 'found' | 'success' | 'already' | 'error';
 
@@ -25,6 +26,9 @@ export function StudentKioskPage() {
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [recentList, setRecentList] = useState<Array<{ name: string; status: string; time: string }>>([]);
   const [autoResetTimer, setAutoResetTimer] = useState<ReturnType<typeof setTimeout> | null>(null);
+
+  // State baru untuk menyimpan koordinat sekolah
+  const [schoolCoords, setSchoolCoords] = useState<{ latitude: number; longitude: number; radius: number } | null>(null);
 
   const today = new Date().toISOString().split('T')[0];
   const timeNow = new Date();
@@ -54,6 +58,21 @@ export function StudentKioskPage() {
       // Abaikan error statistik
     }
   }, [school?.id, today]);
+
+  // Mengambil koordinat lokasi sekolah saat komponen dimuat
+  useEffect(() => {
+    if (school?.id) {
+      attendanceService.getSchoolCoordinates(school.id).then((coords) => {
+        if (coords && coords.latitude && coords.longitude) {
+          setSchoolCoords({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+            radius: coords.attendanceRadiusMeters || 200
+          });
+        }
+      }).catch(console.error);
+    }
+  }, [school?.id]);
 
   useEffect(() => {
     loadStats();
@@ -167,6 +186,7 @@ export function StudentKioskPage() {
 
       <div className="kiosk-body">
         <div className="kiosk-sidebar">
+
           <div className="kiosk-stat-card">
             <div className="kiosk-stat-header">
               <Users size={20} />
@@ -188,8 +208,28 @@ export function StudentKioskPage() {
             </div>
           </div>
 
+          {/* === KARTU PETA LOKASI KIOSK === */}
+          {schoolCoords && (
+            <div className="kiosk-stat-card" style={{ marginTop: '1rem' }}>
+              <div className="kiosk-stat-header" style={{ marginBottom: '10px' }}>
+                <MapPin size={20} />
+                <span>Area Absensi Sekolah</span>
+              </div>
+              <div style={{ borderRadius: '0.5rem', overflow: 'hidden' }}>
+                <AttendanceMap
+                  schoolLat={schoolCoords.latitude}
+                  schoolLng={schoolCoords.longitude}
+                  userLat={null} // Kiosk sifatnya statis, tidak perlu melacak user
+                  userLng={null}
+                  radiusMeters={schoolCoords.radius}
+                />
+              </div>
+            </div>
+          )}
+          {/* ================================= */}
+
           {recentList.length > 0 && (
-            <div className="kiosk-recent">
+            <div className="kiosk-recent" style={{ marginTop: '1rem' }}>
               <h3 className="kiosk-recent-title">Absen Terakhir</h3>
               <div className="kiosk-recent-list">
                 {recentList.map((item, i) => (

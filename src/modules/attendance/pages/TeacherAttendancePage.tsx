@@ -8,6 +8,7 @@ import {
 import { attendanceService } from '../services/attendance.service';
 import { getCurrentPosition, calculateDistance } from '../services/gps.utils';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { AttendanceMap } from '@/components/map/AttendanceMap'; // Import komponen peta
 
 type GpsStep = 'init' | 'loading' | 'ready' | 'mock_detected' | 'out_of_range' | 'submitting' | 'success' | 'error';
 
@@ -250,6 +251,20 @@ export function TeacherAttendancePage() {
         {!todayStatus?.checkInTime && (
           <div className="attendance-gps-card">
             <h2 className="card-section-title">Check-In dengan GPS</h2>
+
+            {/* === KARTU PETA === */}
+            {schoolCoords && (
+              <div style={{ marginBottom: '1.5rem', borderRadius: '0.75rem', overflow: 'hidden', border: '1px solid var(--border)' }}>
+                <AttendanceMap
+                  schoolLat={schoolCoords.latitude}
+                  schoolLng={schoolCoords.longitude}
+                  userLat={gpsState.lat} // Titik pengguna akan muncul saat GPS sudah di-request
+                  userLng={gpsState.lng}
+                  radiusMeters={schoolCoords.radius}
+                />
+              </div>
+            )}
+            {/* ================== */}
 
             <AnimatePresence mode="wait">
               {step === 'init' && (

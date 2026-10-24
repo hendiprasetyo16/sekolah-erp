@@ -1,9 +1,12 @@
 import { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
+// Import modul pencarian
+import { GeoSearchControl, OpenStreetMapProvider } from 'leaflet-geosearch';
+import 'leaflet-geosearch/dist/geosearch.css';
 
-// Memperbaiki masalah ikon marker default Leaflet yang sering hilang di React/Vite
+// Memperbaiki masalah ikon marker default Leaflet
 delete (L.Icon.Default.prototype as any)._getIconUrl;
 L.Icon.Default.mergeOptions({
     iconRetinaUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-icon-2x.png',
@@ -17,12 +20,49 @@ interface LocationPickerProps {
     onChange: (lat: number, lng: number) => void;
 }
 
+// Sub-komponen untuk fitur pencarian
+function SearchField({ onChange, setPosition }: any) {
+    const map = useMap();
+
+    useEffect(() => {
+        const provider = new OpenStreetMapProvider();
+        // @ts-ignore - Mengabaikan error tipe TypeScript bawaan library
+        const searchControl = new GeoSearchControl({
+            provider: provider,
+            style: 'bar',
+            showMarker: false, // Kita sembunyikan marker bawaan pencarian karena kita pakai marker sendiri
+            showPopup: false,
+            autoClose: true,
+            retainZoomLevel: false,
+            animateZoom: true,
+            keepResult: true,
+            searchLabel: 'Ketik nama jalan atau kota...',
+        });
+
+        map.addControl(searchControl);
+
+        // Mendengarkan saat pengguna memilih hasil pencarian
+        map.on('geosearch/showlocation', (result: any) => {
+            const lat = result.location.y;
+            const lng = result.location.x;
+            setPosition(L.latLng(lat, lng));
+            onChange(lat, lng);
+        });
+
+        return () => {
+            map.removeControl(searchControl);
+        };
+    }, [map, onChange, setPosition]);
+
+    return null;
+}
+
 // Sub-komponen untuk menangani event klik pada peta
 function ClickableMap({ position, setPosition, onChange }: any) {
     useMapEvents({
         click(e) {
-            setPosition(e.latlng); // Pindahkan pin marker ke titik yang diklik
-            onChange(e.latlng.lat, e.latlng.lng); // Kirim koordinat ke form
+            setPosition(e.latlng);
+            onChange(e.latlng.lat, e.latlng.lng);
         },
     });
 
@@ -30,14 +70,11 @@ function ClickableMap({ position, setPosition, onChange }: any) {
 }
 
 export function LocationPickerMap({ latitude, longitude, onChange }: LocationPickerProps) {
-    // Posisi default: Tengah pulau Jawa / Indonesia jika belum ada data
     const defaultCenter = { lat: -7.4923, lng: 110.0093 };
-
     const [position, setPosition] = useState<L.LatLng | null>(
         latitude && longitude ? L.latLng(latitude, longitude) : null
     );
 
-    // Perbarui pin di peta jika user mengetik manual di input form
     useEffect(() => {
         if (latitude && longitude) {
             setPosition(L.latLng(latitude, longitude));
@@ -45,16 +82,17 @@ export function LocationPickerMap({ latitude, longitude, onChange }: LocationPic
     }, [latitude, longitude]);
 
     return (
-        <div className="h-75 w-full rounded-xl overflow-hidden border border-border z-10 relative">
+        <div className="h-87.5 w-full rounded-xl overflow-hidden border border-border z-10 relative">
             <MapContainer
                 center={position || defaultCenter}
                 zoom={position ? 16 : 6}
                 style={{ height: '100%', width: '100%', zIndex: 10 }}
             >
                 <TileLayer
-                    attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                    attribution='&copy; OpenStreetMap'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
+                <SearchField onChange={onChange} setPosition={setPosition} />
                 <ClickableMap position={position} setPosition={setPosition} onChange={onChange} />
             </MapContainer>
         </div>

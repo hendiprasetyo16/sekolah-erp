@@ -21,7 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 import { ClassListPage } from './ClassListPage';
 import { academicService } from '../services/academic.service';
-import { LocationPickerMap } from '@/components/ui/LocationPickerMap'; // Import komponen peta
+import { LocationPickerMap } from '@/components/map/LocationPickerMap'; // Import komponen peta
 
 // Bilingual Zod Schema
 const schoolSchema = z.object({
