@@ -16,18 +16,6 @@ interface FoundStudent {
   className?: string;
 }
 
-const STATUS_CONFIG = {
-  HADIR: { label: 'HADIR', color: '#10B981', bg: 'rgba(16,185,129,0.15)' },
-  TERLAMBAT: { label: 'TERLAMBAT', color: '#F59E0B', bg: 'rgba(245,158,11,0.15)' },
-};
-
-/**
- * Halaman Kiosk Absensi Siswa - Dirancang untuk:
- * - Layar monitor touchscreen di pintu masuk
- * - Tablet / HP yang dipasang di dinding
- * - Scan barcode / QR kartu pelajar
- * - Input manual NISN / NIS
- */
 export function StudentKioskPage() {
   const { school } = useAuthStore();
   const [kioskState, setKioskState] = useState<KioskState>('idle');
@@ -42,7 +30,6 @@ export function StudentKioskPage() {
   const timeNow = new Date();
   const isLate = timeNow.getHours() > 7 || (timeNow.getHours() === 7 && timeNow.getMinutes() > 30);
 
-  // Online/offline monitor
   useEffect(() => {
     const handleOnline = () => setIsOnline(true);
     const handleOffline = () => setIsOnline(false);
@@ -54,7 +41,6 @@ export function StudentKioskPage() {
     };
   }, []);
 
-  // Muat statistik hari ini
   const loadStats = useCallback(async () => {
     if (!school?.id) return;
     try {
@@ -98,16 +84,15 @@ export function StudentKioskPage() {
 
         setFoundStudent({
           id: student.id,
-          fullName: student.full_name,
+          fullName: student.fullName,
           nisn: student.nisn,
           nis: student.nis ?? undefined,
-          photoUrl: student.photo_url ?? undefined,
+          photoUrl: student.photoUrl ?? undefined,
           className: (student as any).classes?.name,
         });
         setKioskState('found');
 
-        // Auto check-in setelah 1.5 detik (kiosk auto-confirm)
-        setTimeout(() => performCheckIn(student.id, student.full_name), 1500);
+        setTimeout(() => performCheckIn(student.id, student.fullName), 1500);
       } catch {
         setResultMessage('Terjadi kesalahan. Periksa koneksi internet.');
         setKioskState('error');
@@ -115,7 +100,6 @@ export function StudentKioskPage() {
         setAutoResetTimer(t);
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [school?.id, resetToIdle]
   );
 
@@ -132,19 +116,16 @@ export function StudentKioskPage() {
         });
 
         if (!result.success) {
-          // Sudah absen
           setResultMessage(`${studentName} sudah absen hari ini.`);
           setKioskState('already');
         } else {
           setResultMessage(isLate ? `${studentName} - TERLAMBAT` : `${studentName} - HADIR`);
           setKioskState('success');
-          // Update statistik lokal
           setTodayStats((prev) => ({
             ...prev,
             present: isLate ? prev.present : prev.present + 1,
             late: isLate ? prev.late + 1 : prev.late,
           }));
-          // Tambah ke recent list
           const now = new Date();
           const timeStr = `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`;
           setRecentList((prev) => [{ name: studentName, status, time: timeStr }, ...prev.slice(0, 9)]);
@@ -167,7 +148,6 @@ export function StudentKioskPage() {
 
   return (
     <div className="kiosk-page">
-      {/* Header kiosk */}
       <div className="kiosk-header">
         <div className="kiosk-school-info">
           <School size={28} className="kiosk-school-icon" />
@@ -186,7 +166,6 @@ export function StudentKioskPage() {
       </div>
 
       <div className="kiosk-body">
-        {/* Panel kiri: statistik + daftar terbaru */}
         <div className="kiosk-sidebar">
           <div className="kiosk-stat-card">
             <div className="kiosk-stat-header">
@@ -229,7 +208,6 @@ export function StudentKioskPage() {
           )}
         </div>
 
-        {/* Panel tengah: area absen utama */}
         <div className="kiosk-main">
           <AnimatePresence mode="wait">
             {kioskState === 'idle' && (

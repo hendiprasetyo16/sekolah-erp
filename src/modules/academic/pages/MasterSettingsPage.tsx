@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 import { ClassListPage } from './ClassListPage';
 import { academicService } from '../services/academic.service';
+import { LocationPickerMap } from '@/components/ui/LocationPickerMap'; // Import komponen peta
 
 // Bilingual Zod Schema
 const schoolSchema = z.object({
@@ -33,6 +34,10 @@ const schoolSchema = z.object({
     province: z.string().min(3, 'Provinsi wajib diisi / Province is required'),
     phone: z.string().optional(),
     email: z.string().email('Email tidak valid / Invalid email').optional().or(z.literal('')),
+    // Konfigurasi GPS: .default(200) dihapus dari Zod agar tidak bentrok dengan React Hook Form
+    latitude: z.coerce.number().optional().nullable(),
+    longitude: z.coerce.number().optional().nullable(),
+    attendanceRadiusMeters: z.coerce.number().min(10, 'Radius minimal 10 meter'),
 });
 
 type SchoolFormValues = z.infer<typeof schoolSchema>;
@@ -72,6 +77,10 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
             province: schoolData?.province ?? '',
             phone: schoolData?.phone ?? '',
             email: schoolData?.email ?? '',
+            // Default value untuk GPS akan diterapkan dengan aman di sini:
+            latitude: schoolData?.latitude ?? null,
+            longitude: schoolData?.longitude ?? null,
+            attendanceRadiusMeters: schoolData?.attendanceRadiusMeters ?? 200,
         }
     });
 
@@ -179,6 +188,56 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                     </div>
                 </div>
 
+                <div className="space-y-4 pt-4 border-t border-border">
+                    <h4 className="font-medium text-emerald-600">Pengaturan Lokasi GPS (Absensi)</h4>
+                    <p className="text-sm text-muted-foreground mb-4">
+                        Klik pada peta di bawah ini untuk menentukan titik koordinat sekolah secara otomatis, atau ketik manual pada kotak di bawah.
+                    </p>
+
+                    <div className="mb-6">
+                        <LocationPickerMap
+                            latitude={form.watch('latitude') ?? null}
+                            longitude={form.watch('longitude') ?? null}
+                            onChange={(lat, lng) => {
+                                form.setValue('latitude', lat, { shouldValidate: true, shouldDirty: true });
+                                form.setValue('longitude', lng, { shouldValidate: true, shouldDirty: true });
+                            }}
+                        />
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <FormField control={form.control} name="latitude" render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Latitude (Garis Lintang)</FormLabel>
+                                <FormControl>
+                                    <Input type="number" step="any" placeholder="Klik dari peta..." {...field} value={field.value ?? ''} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )} />
+
+                        <FormField control={form.control} name="longitude" render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Longitude (Garis Bujur)</FormLabel>
+                                <FormControl>
+                                    <Input type="number" step="any" placeholder="Klik dari peta..." {...field} value={field.value ?? ''} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )} />
+
+                        <FormField control={form.control} name="attendanceRadiusMeters" render={({ field }) => (
+                            <FormItem>
+                                <FormLabel>Radius Toleransi (Meter)</FormLabel>
+                                <FormControl>
+                                    <Input type="number" placeholder="Contoh: 200" {...field} />
+                                </FormControl>
+                                <FormMessage />
+                            </FormItem>
+                        )} />
+                    </div>
+                </div>
+
                 <div className="flex justify-end pt-6">
                     <Button type="submit" disabled={saveSchoolMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white">
                         {saveSchoolMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
@@ -202,7 +261,6 @@ export function MasterSettingsPage() {
     const [activeTab, setActiveTab] = useState(location.state?.tab || 'profil');
     const [ayToDelete, setAyToDelete] = useState<{ id: string; name: string } | null>(null);
 
-    // Kamus Halaman Utama Master
     const t = {
         title: locale === 'id' ? 'Data Master Sekolah' : 'School Master Data',
         subtitle: locale === 'id' ? 'Pengaturan terpusat untuk Profil Institusi, Tahun Ajaran, dan Kelas.' : 'Centralized settings for Institution Profile, Academic Years, and Classes.',

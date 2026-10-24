@@ -2,16 +2,13 @@ import { supabase } from '@/services/supabase.client';
 import type { StudentAttendance, TeacherAttendance, AttendanceSummary } from '../types/attendance.types';
 
 // ============================================================
-// ATTENDANCE SERVICE - Semua operasi ke tabel Supabase
+// ATTENDANCE SERVICE - Disesuaikan dengan DB camelCase
 // ============================================================
 
 export const attendanceService = {
 
   // ---- STUDENT ATTENDANCE ----
 
-  /**
-   * Absen mandiri siswa (self check-in via kiosk/HP/barcode)
-   */
   async studentCheckIn(payload: {
     schoolId: string;
     studentId: string;
@@ -20,12 +17,11 @@ export const attendanceService = {
     notes?: string;
     recordedBy?: string;
   }) {
-    // Cek apakah sudah absen hari ini
     const { data: existing } = await supabase
       .from('attendances')
       .select('id, status')
-      .eq('school_id', payload.schoolId)
-      .eq('student_id', payload.studentId)
+      .eq('schoolId', payload.schoolId)
+      .eq('studentId', payload.studentId)
       .eq('date', payload.date)
       .eq('type', 'SISWA')
       .maybeSingle();
@@ -37,14 +33,14 @@ export const attendanceService = {
     const { data, error } = await supabase
       .from('attendances')
       .insert({
-        school_id: payload.schoolId,
-        student_id: payload.studentId,
+        schoolId: payload.schoolId,
+        studentId: payload.studentId,
         date: payload.date,
         type: 'SISWA',
         status: payload.status,
         notes: payload.notes ?? null,
-        recorded_by: payload.recordedBy ?? null,
-        check_in_time: new Date().toISOString(),
+        recordedBy: payload.recordedBy ?? null,
+        checkInTime: new Date().toISOString(),
       })
       .select()
       .single();
@@ -53,9 +49,6 @@ export const attendanceService = {
     return { success: true, message: 'Absen berhasil dicatat.', data };
   },
 
-  /**
-   * Ambil data absen siswa dengan filter
-   */
   async getStudentAttendances(params: {
     schoolId: string;
     date?: string;
@@ -71,39 +64,39 @@ export const attendanceService = {
     let query = supabase
       .from('attendances')
       .select(`
-        id, school_id, student_id, date, status, notes, recorded_by, created_at, check_in_time,
-        students!inner(full_name, nisn, nis, photo_url, class_id,
+        id, schoolId, studentId, date, status, notes, recordedBy, createdAt, checkInTime,
+        students!inner(fullName, nisn, nis, photoUrl, classId,
           classes(name)
         )
       `, { count: 'exact' })
-      .eq('school_id', schoolId)
+      .eq('schoolId', schoolId)
       .eq('type', 'SISWA')
       .range(from, to)
       .order('date', { ascending: false });
 
     if (date) query = query.eq('date', date);
-    if (studentId) query = query.eq('student_id', studentId);
-    if (classId) query = query.eq('students.class_id', classId);
+    if (studentId) query = query.eq('studentId', studentId);
+    if (classId) query = query.eq('students.classId', classId);
 
     const { data, error, count } = await query;
     if (error) throw error;
 
     const mapped: StudentAttendance[] = (data ?? []).map((row: any) => ({
       id: row.id,
-      schoolId: row.school_id,
-      studentId: row.student_id,
+      schoolId: row.schoolId,
+      studentId: row.studentId,
       date: row.date,
       status: row.status,
       notes: row.notes,
-      recordedBy: row.recorded_by,
-      createdAt: row.created_at,
-      time: row.check_in_time,
+      recordedBy: row.recordedBy,
+      createdAt: row.createdAt,
+      time: row.checkInTime,
       student: row.students
         ? {
-            fullName: row.students.full_name,
+            fullName: row.students.fullName,
             nisn: row.students.nisn,
             nis: row.students.nis,
-            photoUrl: row.students.photo_url,
+            photoUrl: row.students.photoUrl,
             classes: row.students.classes ? { name: row.students.classes.name } : undefined,
           }
         : undefined,
@@ -112,9 +105,6 @@ export const attendanceService = {
     return { data: mapped, total: count ?? 0 };
   },
 
-  /**
-   * Admin: Input absen siswa per kelas (bulk)
-   */
   async bulkStudentAttendance(payload: {
     schoolId: string;
     date: string;
@@ -126,19 +116,19 @@ export const attendanceService = {
     recordedBy: string;
   }) {
     const rows = payload.records.map((r) => ({
-      school_id: payload.schoolId,
-      student_id: r.studentId,
+      schoolId: payload.schoolId,
+      studentId: r.studentId,
       date: payload.date,
       type: 'SISWA',
       status: r.status,
       notes: r.notes ?? null,
-      recorded_by: payload.recordedBy,
-      check_in_time: new Date().toISOString(),
+      recordedBy: payload.recordedBy,
+      checkInTime: new Date().toISOString(),
     }));
 
     const { data, error } = await supabase
       .from('attendances')
-      .upsert(rows, { onConflict: 'school_id,student_id,date,type' })
+      .upsert(rows, { onConflict: 'schoolId,studentId,date,type' })
       .select();
 
     if (error) throw error;
@@ -147,9 +137,6 @@ export const attendanceService = {
 
   // ---- TEACHER ATTENDANCE ----
 
-  /**
-   * Guru check-in dengan validasi GPS (anti fake GPS)
-   */
   async teacherCheckIn(payload: {
     schoolId: string;
     teacherId: string;
@@ -162,7 +149,6 @@ export const attendanceService = {
     checkInSelfieUrl?: string;
     notes?: string;
   }) {
-    // Tolak jika terdeteksi fake GPS
     if (payload.isMockGps) {
       return {
         success: false,
@@ -170,7 +156,6 @@ export const attendanceService = {
       };
     }
 
-    // Tolak jika di luar radius sekolah
     if (!payload.isWithinRadius) {
       return {
         success: false,
@@ -178,22 +163,20 @@ export const attendanceService = {
       };
     }
 
-    // Cek sudah check-in belum
     const { data: existing } = await supabase
       .from('attendances')
-      .select('id, check_in_time, check_out_time, status')
-      .eq('school_id', payload.schoolId)
-      .eq('teacher_id', payload.teacherId)
+      .select('id, checkInTime, checkOutTime, status')
+      .eq('schoolId', payload.schoolId)
+      .eq('teacherId', payload.teacherId)
       .eq('date', payload.date)
       .eq('type', 'GURU')
       .maybeSingle();
 
-    if (existing?.check_in_time) {
+    if (existing?.checkInTime) {
       return { success: false, message: 'Anda sudah melakukan check-in hari ini.', data: existing };
     }
 
     const now = new Date();
-    // Tentukan status: TERLAMBAT jika lewat jam 07:30
     const checkInHour = now.getHours();
     const checkInMinute = now.getMinutes();
     const isLate = checkInHour > 7 || (checkInHour === 7 && checkInMinute > 30);
@@ -202,17 +185,17 @@ export const attendanceService = {
     const { data, error } = await supabase
       .from('attendances')
       .insert({
-        school_id: payload.schoolId,
-        teacher_id: payload.teacherId,
+        schoolId: payload.schoolId,
+        teacherId: payload.teacherId,
         date: payload.date,
         type: 'GURU',
         status,
-        check_in_time: now.toISOString(),
-        check_in_lat: payload.checkInLat,
-        check_in_lng: payload.checkInLng,
-        check_in_distance: payload.checkInDistance,
-        is_check_in_mock: false,
-        check_in_selfie_url: payload.checkInSelfieUrl ?? null,
+        checkInTime: now.toISOString(),
+        checkInLat: payload.checkInLat,
+        checkInLng: payload.checkInLng,
+        checkInDistance: payload.checkInDistance,
+        isCheckInMock: false,
+        checkInSelfieUrl: payload.checkInSelfieUrl ?? null,
         notes: payload.notes ?? null,
       })
       .select()
@@ -226,9 +209,6 @@ export const attendanceService = {
     };
   },
 
-  /**
-   * Guru check-out
-   */
   async teacherCheckOut(payload: {
     schoolId: string;
     teacherId: string;
@@ -246,9 +226,9 @@ export const attendanceService = {
 
     const { data, error } = await supabase
       .from('attendances')
-      .update({ check_out_time: new Date().toISOString() })
-      .eq('school_id', payload.schoolId)
-      .eq('teacher_id', payload.teacherId)
+      .update({ checkOutTime: new Date().toISOString() })
+      .eq('schoolId', payload.schoolId)
+      .eq('teacherId', payload.teacherId)
       .eq('date', payload.date)
       .eq('type', 'GURU')
       .select()
@@ -258,9 +238,6 @@ export const attendanceService = {
     return { success: true, message: 'Check-out berhasil. Sampai jumpa!', data };
   },
 
-  /**
-   * Ambil data absen guru
-   */
   async getTeacherAttendances(params: {
     schoolId: string;
     date?: string;
@@ -275,43 +252,43 @@ export const attendanceService = {
     let query = supabase
       .from('attendances')
       .select(`
-        id, school_id, teacher_id, date, status, check_in_time, check_out_time,
-        check_in_lat, check_in_lng, check_in_distance, is_check_in_mock, check_in_selfie_url, notes, created_at,
-        teachers!inner(full_name, nip, nuptk, position, photo_url)
+        id, schoolId, teacherId, date, status, checkInTime, checkOutTime,
+        checkInLat, checkInLng, checkInDistance, isCheckInMock, checkInSelfieUrl, notes, createdAt,
+        teachers!inner(fullName, nip, nuptk, position, photoUrl)
       `, { count: 'exact' })
-      .eq('school_id', schoolId)
+      .eq('schoolId', schoolId)
       .eq('type', 'GURU')
       .range(from, to)
       .order('date', { ascending: false });
 
     if (date) query = query.eq('date', date);
-    if (teacherId) query = query.eq('teacher_id', teacherId);
+    if (teacherId) query = query.eq('teacherId', teacherId);
 
     const { data, error, count } = await query;
     if (error) throw error;
 
     const mapped: TeacherAttendance[] = (data ?? []).map((row: any) => ({
       id: row.id,
-      schoolId: row.school_id,
-      teacherId: row.teacher_id,
+      schoolId: row.schoolId,
+      teacherId: row.teacherId,
       date: row.date,
       status: row.status,
-      checkInTime: row.check_in_time,
-      checkOutTime: row.check_out_time,
-      checkInLat: row.check_in_lat,
-      checkInLng: row.check_in_lng,
-      checkInDistance: row.check_in_distance,
-      isCheckInMock: row.is_check_in_mock,
-      checkInSelfieUrl: row.check_in_selfie_url,
+      checkInTime: row.checkInTime,
+      checkOutTime: row.checkOutTime,
+      checkInLat: row.checkInLat,
+      checkInLng: row.checkInLng,
+      checkInDistance: row.checkInDistance,
+      isCheckInMock: row.isCheckInMock,
+      checkInSelfieUrl: row.checkInSelfieUrl,
       notes: row.notes,
-      createdAt: row.created_at,
+      createdAt: row.createdAt,
       teacher: row.teachers
         ? {
-            fullName: row.teachers.full_name,
+            fullName: row.teachers.fullName,
             nip: row.teachers.nip,
             nuptk: row.teachers.nuptk,
             position: row.teachers.position,
-            photoUrl: row.teachers.photo_url,
+            photoUrl: row.teachers.photoUrl,
           }
         : undefined,
     }));
@@ -325,7 +302,7 @@ export const attendanceService = {
     const { data, error } = await supabase
       .from('attendances')
       .select('type, status')
-      .eq('school_id', schoolId)
+      .eq('schoolId', schoolId)
       .eq('date', date);
 
     if (error) throw error;
@@ -352,14 +329,11 @@ export const attendanceService = {
     };
   },
 
-  /**
-   * Cari siswa berdasarkan NISN atau NIS (untuk kiosk/barcode)
-   */
   async findStudentByNisOrNisn(schoolId: string, code: string) {
     const { data, error } = await supabase
       .from('students')
-      .select('id, full_name, nisn, nis, photo_url, classes(name)')
-      .eq('school_id', schoolId)
+      .select('id, fullName, nisn, nis, photoUrl, classes(name)')
+      .eq('schoolId', schoolId)
       .or(`nisn.eq.${code},nis.eq.${code}`)
       .eq('status', 'AKTIF')
       .maybeSingle();
@@ -368,13 +342,10 @@ export const attendanceService = {
     return data;
   },
 
-  /**
-   * Ambil koordinat sekolah dari tabel schools
-   */
   async getSchoolCoordinates(schoolId: string) {
     const { data, error } = await supabase
       .from('schools')
-      .select('latitude, longitude, attendance_radius_meters')
+      .select('latitude, longitude, attendanceRadiusMeters')
       .eq('id', schoolId)
       .single();
 
@@ -382,18 +353,15 @@ export const attendanceService = {
     return data;
   },
 
-  /**
-   * Cek status absen guru hari ini
-   */
   async getTeacherTodayStatus(schoolId: string, teacherId: string, date: string) {
     const { data } = await supabase
       .from('attendances')
-      .select('id, status, check_in_time, check_out_time')
-      .eq('school_id', schoolId)
-      .eq('teacher_id', teacherId)
+      .select('id, status, checkInTime, checkOutTime')
+      .eq('schoolId', schoolId)
+      .eq('teacherId', teacherId)
       .eq('date', date)
       .eq('type', 'GURU')
       .maybeSingle();
     return data;
-  },
+  }
 };

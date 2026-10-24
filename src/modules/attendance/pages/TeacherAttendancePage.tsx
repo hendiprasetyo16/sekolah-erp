@@ -27,11 +27,8 @@ interface TodayStatus {
   checkOutTime: string | null;
 }
 
-const DEFAULT_RADIUS = 200; // meter, override dari settings sekolah
+const DEFAULT_RADIUS = 200;
 
-/**
- * Halaman Absensi Guru Berbasis GPS dengan Anti-Fake GPS
- */
 export function TeacherAttendancePage() {
   const { user, school } = useAuthStore();
   const [step, setStep] = useState<GpsStep>('init');
@@ -47,7 +44,6 @@ export function TeacherAttendancePage() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  // Muat koordinat sekolah dan status hari ini
   useEffect(() => {
     if (!school?.id || !user?.id) return;
     (async () => {
@@ -60,15 +56,15 @@ export function TeacherAttendancePage() {
           setSchoolCoords({
             latitude: coords.latitude ?? -6.2,
             longitude: coords.longitude ?? 106.8,
-            radius: coords.attendance_radius_meters ?? DEFAULT_RADIUS,
+            radius: coords.attendanceRadiusMeters ?? DEFAULT_RADIUS,
           });
         }
         if (status) {
           setTodayStatus({
             id: status.id,
             status: status.status,
-            checkInTime: status.check_in_time,
-            checkOutTime: status.check_out_time,
+            checkInTime: status.checkInTime,
+            checkOutTime: status.checkOutTime,
           });
         }
       } catch {
@@ -138,7 +134,7 @@ export function TeacherAttendancePage() {
         setTodayStatus({
           id: (result.data as any).id,
           status: (result.data as any).status,
-          checkInTime: (result.data as any).check_in_time,
+          checkInTime: (result.data as any).checkInTime,
           checkOutTime: null,
         });
       } else {
@@ -155,7 +151,6 @@ export function TeacherAttendancePage() {
     if (!school?.id || !user?.id) return;
     setIsCheckingOut(true);
     try {
-      // Re-check GPS untuk checkout
       const pos = await getCurrentPosition();
       const result = await attendanceService.teacherCheckOut({
         schoolId: school.id,
@@ -193,7 +188,6 @@ export function TeacherAttendancePage() {
 
   return (
     <div className="page-container">
-      {/* Header */}
       <div className="page-header">
         <div>
           <h1 className="page-title">Absensi Saya</h1>
@@ -204,7 +198,6 @@ export function TeacherAttendancePage() {
       </div>
 
       <div className="attendance-grid">
-        {/* Kartu Status Hari Ini */}
         <div className="attendance-status-card">
           <h2 className="card-section-title">Status Absen Hari Ini</h2>
           {todayStatus ? (
@@ -254,7 +247,6 @@ export function TeacherAttendancePage() {
           )}
         </div>
 
-        {/* Panel GPS Check-In */}
         {!todayStatus?.checkInTime && (
           <div className="attendance-gps-card">
             <h2 className="card-section-title">Check-In dengan GPS</h2>
@@ -405,7 +397,6 @@ export function TeacherAttendancePage() {
           </div>
         )}
 
-        {/* Info panduan */}
         <div className="attendance-info-card">
           <h3 className="card-section-title">Panduan Absensi GPS</h3>
           <ul className="attendance-guide-list">
