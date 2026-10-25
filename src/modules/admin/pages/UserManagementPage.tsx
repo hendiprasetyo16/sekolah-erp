@@ -156,8 +156,10 @@ export function UserManagementPage() {
             if (data?.error) throw new Error(data.error);
             return data;
         },
-        onSuccess: () => {
-            toast.success(`Berhasil memproses pembuatan akun masal!`, { description: 'Seluruh data import telah dibuatkan akses login.' });
+        onSuccess: (data) => {
+            // PERBAIKAN: Menampilkan pesan notifikasi langsung dari respons Edge Function
+            // yang sudah kita modifikasi (akan memberi tahu jika harus diklik ulang/isTruncated)
+            toast.success(`Info Sinkronisasi`, { description: data.message });
             setIsGenerateAllModalOpen(false);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
@@ -190,8 +192,9 @@ export function UserManagementPage() {
             if (data?.error) throw new Error(data.error);
             return data;
         },
-        onSuccess: () => {
-            toast.success(`Seluruh akun pada kelompok ini berhasil dibersihkan!`);
+        onSuccess: (data) => {
+            // PERBAIKAN: Support respon dinamis jika menggunakan sistem Chunking/Batching
+            toast.success(`Info Penghapusan`, { description: data.message || "Berhasil dibersihkan!" });
             setIsDeleteAllModalOpen(false);
             setSelectedUserIds([]);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
