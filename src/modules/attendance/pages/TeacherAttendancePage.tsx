@@ -3,14 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   MapPin, Shield, ShieldAlert, Clock, CheckCircle,
   XCircle, LogIn, LogOut, AlertTriangle, Navigation,
-  Loader2, RefreshCw, Info
+  Loader2, RefreshCw, Info, UserX
 } from 'lucide-react';
 import { attendanceService } from '../services/attendance.service';
 import { getCurrentPosition, calculateDistance } from '../services/gps.utils';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { AttendanceMap } from '@/components/map/AttendanceMap'; // Import komponen peta
+import { AttendanceMap } from '@/components/map/AttendanceMap';
 
-type GpsStep = 'init' | 'loading' | 'ready' | 'mock_detected' | 'out_of_range' | 'submitting' | 'success' | 'error';
+type GpsStep = 'init' | 'loading' | 'ready' | 'mock_detected' | 'out_of_range' | 'submitting' | 'success' | 'error' | 'unauthorized';
 
 interface GpsState {
   lat: number | null;
@@ -32,7 +32,8 @@ const DEFAULT_RADIUS = 200;
 
 export function TeacherAttendancePage() {
   const { user, school } = useAuthStore();
-  const [step, setStep] = useState<GpsStep>('init');
+  const [step, setStep] = useState<GpsStep>('loading');
+  const [validTeacherId, setValidTeacherId] = useState<string | null>(null);
   const [gpsState, setGpsState] = useState<GpsState>({
     lat: null, lng: null, accuracy: null,
     distance: null, isMock: false, isWithinRadius: false,
@@ -45,14 +46,27 @@ export function TeacherAttendancePage() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  // Inisialisasi awal: Cek Profil Guru & Koordinat
   useEffect(() => {
     if (!school?.id || !user?.id) return;
     (async () => {
       try {
+        // 1. Validasi user terdaftar sebagai guru menggunakan NAMA LENGKAP dan ID SEKOLAH
+        const teacherProfile = await attendanceService.getTeacherProfile(school.id, user.fullName || '');
+
+        if (!teacherProfile) {
+          setStep('unauthorized');
+          return;
+        }
+
+        setValidTeacherId(teacherProfile.id);
+
+        // 2. Ambil data sekolah & absensi hari ini menggunakan ID Guru (teacherProfile.id)
         const [coords, status] = await Promise.all([
           attendanceService.getSchoolCoordinates(school.id),
-          attendanceService.getTeacherTodayStatus(school.id, user.id, today),
+          attendanceService.getTeacherTodayStatus(school.id, teacherProfile.id, today),
         ]);
+
         if (coords) {
           setSchoolCoords({
             latitude: coords.latitude ?? -6.2,
@@ -60,6 +74,7 @@ export function TeacherAttendancePage() {
             radius: coords.attendanceRadiusMeters ?? DEFAULT_RADIUS,
           });
         }
+
         if (status) {
           setTodayStatus({
             id: status.id,
@@ -68,11 +83,14 @@ export function TeacherAttendancePage() {
             checkOutTime: status.checkOutTime,
           });
         }
-      } catch {
-        // Koordinat sekolah belum diset
+
+        setStep('init');
+      } catch (error) {
+        setStep('error');
+        setResultMessage('Gagal memuat data awal. Pastikan koneksi internet stabil.');
       }
     })();
-  }, [school?.id, user?.id, today]);
+  }, [school?.id, user?.id, user?.fullName, today]);
 
   const requestGps = useCallback(async () => {
     setStep('loading');
@@ -97,7 +115,7 @@ export function TeacherAttendancePage() {
         accuracy: pos.accuracy,
         distance,
         isMock: pos.isMock,
-        isWithinRadius: isWithinRadius,
+        isWithinRadius,
       });
 
       if (pos.isMock) {
@@ -114,13 +132,13 @@ export function TeacherAttendancePage() {
   }, [schoolCoords]);
 
   const handleCheckIn = useCallback(async () => {
-    if (!school?.id || !user?.id || !gpsState.lat || !gpsState.lng) return;
+    if (!school?.id || !validTeacherId || !gpsState.lat || !gpsState.lng) return;
     setStep('submitting');
 
     try {
       const result = await attendanceService.teacherCheckIn({
         schoolId: school.id,
-        teacherId: user.id,
+        teacherId: validTeacherId,
         date: today,
         checkInLat: gpsState.lat,
         checkInLng: gpsState.lng,
@@ -143,19 +161,19 @@ export function TeacherAttendancePage() {
         setStep('error');
       }
     } catch (err: any) {
-      setResultMessage(err.message ?? 'Terjadi kesalahan saat menyimpan absen.');
+      setResultMessage(err.message ?? 'Terjadi kesalahan saat menyimpan absen. Cek koneksi.');
       setStep('error');
     }
-  }, [school?.id, user?.id, gpsState, today]);
+  }, [school?.id, validTeacherId, gpsState, today]);
 
   const handleCheckOut = useCallback(async () => {
-    if (!school?.id || !user?.id) return;
+    if (!school?.id || !validTeacherId) return;
     setIsCheckingOut(true);
     try {
       const pos = await getCurrentPosition();
       const result = await attendanceService.teacherCheckOut({
         schoolId: school.id,
-        teacherId: user.id,
+        teacherId: validTeacherId,
         date: today,
         checkOutLat: pos.latitude,
         checkOutLng: pos.longitude,
@@ -169,10 +187,10 @@ export function TeacherAttendancePage() {
         setResultMessage(result.message);
       }
     } catch (err: any) {
-      setResultMessage(err.message ?? 'Gagal melakukan check-out.');
+      setResultMessage(err.message ?? 'Gagal melakukan check-out. Pastikan GPS aktif.');
     }
     setIsCheckingOut(false);
-  }, [school?.id, user?.id, today]);
+  }, [school?.id, validTeacherId, today]);
 
   const formatTime = (isoString: string | null) => {
     if (!isoString) return '--:--';
@@ -186,6 +204,19 @@ export function TeacherAttendancePage() {
     SAKIT: '#8B5CF6',
     ALPA: '#EF4444',
   };
+
+  // Tampilan jika user bukan guru
+  if (step === 'unauthorized') {
+    return (
+      <div className="page-container flex items-center justify-center min-h-[60vh]">
+        <div className="text-center max-w-md">
+          <UserX size={64} className="text-red-400 mx-auto mb-4" />
+          <h2 className="text-xl font-bold mb-2">Akses Ditolak</h2>
+          <p className="text-muted-foreground">Akun Anda belum terdaftar sebagai data Guru di dalam sistem. Hubungi administrator sekolah untuk memverifikasi profil Anda.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="page-container">
@@ -233,7 +264,7 @@ export function TeacherAttendancePage() {
                   disabled={isCheckingOut}
                 >
                   {isCheckingOut ? <Loader2 size={16} className="spin" /> : <LogOut size={16} />}
-                  {isCheckingOut ? 'Memproses...' : 'Check-Out Sekarang'}
+                  {isCheckingOut ? 'Memproses Lokasi...' : 'Check-Out Sekarang'}
                 </button>
               )}
               {resultMessage && (
@@ -252,47 +283,28 @@ export function TeacherAttendancePage() {
           <div className="attendance-gps-card">
             <h2 className="card-section-title">Check-In dengan GPS</h2>
 
-            {/* === KARTU PETA === */}
             {schoolCoords && (
               <div style={{ marginBottom: '1.5rem', borderRadius: '0.75rem', overflow: 'hidden', border: '1px solid var(--border)' }}>
                 <AttendanceMap
                   schoolLat={schoolCoords.latitude}
                   schoolLng={schoolCoords.longitude}
-                  userLat={gpsState.lat} // Titik pengguna akan muncul saat GPS sudah di-request
+                  userLat={gpsState.lat}
                   userLng={gpsState.lng}
                   radiusMeters={schoolCoords.radius}
                 />
               </div>
             )}
-            {/* ================== */}
 
             <AnimatePresence mode="wait">
               {step === 'init' && (
-                <motion.div
-                  key="init"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="gps-init-state"
-                >
-                  <div className="gps-icon-wrapper">
-                    <Navigation size={48} />
-                  </div>
-                  <p className="gps-desc">
-                    Sistem akan memverifikasi lokasi Anda untuk memastikan Anda berada di area sekolah.
-                  </p>
+                <motion.div key="init" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="gps-init-state">
+                  <div className="gps-icon-wrapper"><Navigation size={48} /></div>
+                  <p className="gps-desc">Sistem akan memverifikasi lokasi Anda untuk memastikan Anda berada di area sekolah.</p>
                   {!schoolCoords && (
-                    <div className="gps-warning-box">
-                      <AlertTriangle size={14} />
-                      Koordinat sekolah belum dikonfigurasi. Hubungi admin.
-                    </div>
+                    <div className="gps-warning-box"><AlertTriangle size={14} /> Koordinat sekolah belum dikonfigurasi. Hubungi admin.</div>
                   )}
-                  <button
-                    className="btn-primary w-full"
-                    onClick={requestGps}
-                    disabled={!schoolCoords}
-                  >
-                    <MapPin size={16} />
-                    Mulai Deteksi GPS
+                  <button className="btn-primary w-full" onClick={requestGps} disabled={!schoolCoords}>
+                    <MapPin size={16} /> Mulai Deteksi GPS
                   </button>
                 </motion.div>
               )}
@@ -300,8 +312,8 @@ export function TeacherAttendancePage() {
               {step === 'loading' && (
                 <motion.div key="loading" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="gps-loading-state">
                   <Loader2 size={48} className="spin text-primary" />
-                  <p>Mendapatkan lokasi GPS...</p>
-                  <p className="text-sm opacity-60">Pastikan GPS aktif dan berada di tempat terbuka</p>
+                  <p>Mendapatkan lokasi akurat...</p>
+                  <p className="text-sm opacity-60">Pastikan GPS aktif dan berada di tempat terbuka (outdoor)</p>
                 </motion.div>
               )}
 
@@ -309,18 +321,8 @@ export function TeacherAttendancePage() {
                 <motion.div key="mock" initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="gps-error-state danger">
                   <ShieldAlert size={64} className="text-red-400" />
                   <h3 className="gps-error-title">⚠️ GPS Palsu Terdeteksi!</h3>
-                  <p className="gps-error-desc">
-                    Sistem mendeteksi penggunaan aplikasi pemalsu lokasi (Mock GPS / Fake GPS).
-                    Absensi tidak dapat dilakukan.
-                  </p>
-                  <div className="gps-info-box">
-                    <Info size={14} />
-                    <span>Harap matikan semua aplikasi VPN, pemalsu GPS, atau developer mode location sebelum mencoba lagi.</span>
-                  </div>
-                  <button className="btn-danger w-full" onClick={requestGps}>
-                    <RefreshCw size={16} />
-                    Coba Lagi
-                  </button>
+                  <p className="gps-error-desc">Matikan aplikasi pemalsu lokasi (Fake GPS / VPN) atau Mode Pengembang (Developer Options) sebelum mencoba lagi.</p>
+                  <button className="btn-danger w-full" onClick={requestGps}><RefreshCw size={16} /> Coba Lagi</button>
                 </motion.div>
               )}
 
@@ -329,53 +331,32 @@ export function TeacherAttendancePage() {
                   <MapPin size={64} className="text-yellow-400" />
                   <h3 className="gps-error-title">Di Luar Area Sekolah</h3>
                   <p className="gps-error-desc">
-                    Anda berada <strong>{Math.round(gpsState.distance ?? 0)} meter</strong> dari sekolah.
-                    Radius yang diizinkan: <strong>{schoolCoords?.radius ?? DEFAULT_RADIUS} meter</strong>.
+                    Jarak Anda: <strong>{Math.round(gpsState.distance ?? 0)} m</strong>.<br />
+                    Radius diizinkan: <strong>{schoolCoords?.radius ?? DEFAULT_RADIUS} m</strong>.
                   </p>
-                  <div className="gps-coords-display">
-                    <span>📍 {gpsState.lat?.toFixed(6)}, {gpsState.lng?.toFixed(6)}</span>
-                    <span>Akurasi: ±{Math.round(gpsState.accuracy ?? 0)}m</span>
-                  </div>
-                  <button className="btn-warning w-full" onClick={requestGps}>
-                    <RefreshCw size={16} />
-                    Refresh GPS
-                  </button>
+                  <button className="btn-warning w-full" onClick={requestGps}><RefreshCw size={16} /> Deteksi Ulang GPS</button>
                 </motion.div>
               )}
 
               {step === 'ready' && (
                 <motion.div key="ready" initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="gps-ready-state">
                   <Shield size={64} className="text-green-400" />
-                  <h3 className="gps-ready-title">Lokasi Terverifikasi ✓</h3>
+                  <h3 className="gps-ready-title">Lokasi Sangat Akurat ✓</h3>
                   <div className="gps-details">
-                    <div className="gps-detail-item">
-                      <MapPin size={14} />
-                      <span>{gpsState.lat?.toFixed(6)}, {gpsState.lng?.toFixed(6)}</span>
-                    </div>
                     <div className="gps-detail-item success">
                       <CheckCircle size={14} />
-                      <span>
-                        {gpsState.distance !== null
-                          ? `${Math.round(gpsState.distance)} meter dari sekolah`
-                          : 'Dalam area sekolah'}
-                      </span>
+                      <span>{Math.round(gpsState.distance ?? 0)} meter dari titik tengah sekolah</span>
                     </div>
                     <div className="gps-detail-item">
                       <Info size={14} />
-                      <span>Akurasi GPS: ±{Math.round(gpsState.accuracy ?? 0)} meter</span>
-                    </div>
-                    <div className="gps-detail-item success">
-                      <Shield size={14} />
-                      <span>GPS Asli Terverifikasi</span>
+                      <span>Akurasi GPS: sangat presisi (±{Math.round(gpsState.accuracy ?? 0)} m)</span>
                     </div>
                   </div>
                   <button className="btn-success w-full" onClick={handleCheckIn}>
-                    <LogIn size={16} />
-                    Check-In Sekarang
+                    <LogIn size={16} /> Check-In Sekarang
                   </button>
                   <button className="btn-ghost w-full mt-2" onClick={requestGps}>
-                    <RefreshCw size={14} />
-                    Refresh GPS
+                    <RefreshCw size={14} /> Perbarui Lokasi
                   </button>
                 </motion.div>
               )}
@@ -383,16 +364,14 @@ export function TeacherAttendancePage() {
               {step === 'submitting' && (
                 <motion.div key="submitting" initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="gps-loading-state">
                   <Loader2 size={48} className="spin text-primary" />
-                  <p>Menyimpan absensi...</p>
+                  <p>Menyimpan data ke server...</p>
                 </motion.div>
               )}
 
               {step === 'success' && (
                 <motion.div key="success" initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="gps-success-state">
-                  <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 200 }}>
-                    <CheckCircle size={80} className="text-green-400" />
-                  </motion.div>
-                  <h3 className="gps-success-title">Check-In Berhasil!</h3>
+                  <CheckCircle size={80} className="text-green-400" />
+                  <h3 className="gps-success-title">Berhasil!</h3>
                   <p className="gps-success-msg">{resultMessage}</p>
                 </motion.div>
               )}
@@ -400,12 +379,9 @@ export function TeacherAttendancePage() {
               {step === 'error' && (
                 <motion.div key="err" initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} className="gps-error-state danger">
                   <XCircle size={64} className="text-red-400" />
-                  <h3 className="gps-error-title">Gagal</h3>
+                  <h3 className="gps-error-title">Gagal Mendapatkan Lokasi</h3>
                   <p className="gps-error-desc">{gpsError ?? resultMessage}</p>
-                  <button className="btn-danger w-full" onClick={requestGps}>
-                    <RefreshCw size={16} />
-                    Coba Lagi
-                  </button>
+                  <button className="btn-danger w-full" onClick={requestGps}><RefreshCw size={16} /> Coba Lagi</button>
                 </motion.div>
               )}
             </AnimatePresence>
@@ -413,14 +389,11 @@ export function TeacherAttendancePage() {
         )}
 
         <div className="attendance-info-card">
-          <h3 className="card-section-title">Panduan Absensi GPS</h3>
+          <h3 className="card-section-title">Panduan Absensi Profesional</h3>
           <ul className="attendance-guide-list">
-            <li><span className="guide-icon">📍</span> Pastikan GPS/Lokasi aktif di HP Anda</li>
-            <li><span className="guide-icon">🚫</span> Jangan gunakan aplikasi pemalsu GPS (Fake GPS, VPN)</li>
-            <li><span className="guide-icon">🌐</span> Buka halaman di tempat terbuka untuk sinyal GPS terbaik</li>
-            <li><span className="guide-icon">⏰</span> Check-in sebelum 07:30 untuk status HADIR</li>
-            <li><span className="guide-icon">📱</span> Bisa diakses dari HP, tablet, atau komputer</li>
-            <li><span className="guide-icon">🔒</span> Data GPS disimpan untuk verifikasi admin</li>
+            <li><span className="guide-icon">📍</span> <b>Pastikan GPS Aktif:</b> Nyalakan pengaturan Lokasi di HP Anda dengan mode Akurasi Tinggi.</li>
+            <li><span className="guide-icon">🌐</span> <b>Posisi di Luar Ruangan:</b> Jika gagal, keluar dari gedung sebentar agar HP langsung terhubung ke satelit.</li>
+            <li><span className="guide-icon">🚫</span> <b>Larangan:</b> Dilarang menggunakan VPN atau Fake GPS. Sistem memiliki pendeteksi keamanan bawaan.</li>
           </ul>
         </div>
       </div>

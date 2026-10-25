@@ -80,6 +80,12 @@ export function getCurrentPosition(
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        // Terapkan batas toleransi akurasi maksimal 65 meter
+        if (position.coords.accuracy > 65) {
+          reject(new Error(`Akurasi GPS terlalu rendah (±${Math.round(position.coords.accuracy)}m). Harap pergi ke area terbuka agar sinyal satelit lebih kuat.`));
+          return;
+        }
+
         const isMock = detectMockGps(position);
         resolve({
           latitude: position.coords.latitude,
@@ -94,21 +100,21 @@ export function getCurrentPosition(
         let message = 'Gagal mendapatkan lokasi GPS.';
         switch (error.code) {
           case error.PERMISSION_DENIED:
-            message = 'Izin GPS ditolak. Aktifkan lokasi di pengaturan browser Anda.';
+            message = 'Izin GPS ditolak. Aktifkan izin lokasi (Location/GPS) di pengaturan browser atau HP Anda.';
             break;
           case error.POSITION_UNAVAILABLE:
-            message = 'Lokasi tidak tersedia. Pastikan GPS aktif.';
+            message = 'Lokasi tidak tersedia. Pastikan GPS HP Anda menyala.';
             break;
           case error.TIMEOUT:
-            message = 'Timeout GPS. Coba lagi di tempat terbuka.';
+            message = 'Waktu pencarian GPS habis. Coba lagi di tempat terbuka (luar ruangan).';
             break;
         }
         reject(new Error(message));
       },
       {
-        enableHighAccuracy: true,
-        timeout: 15000,
-        maximumAge: 0,
+        enableHighAccuracy: true, // Memaksa HP menggunakan chip GPS asli
+        timeout: 20000,           // Memberi waktu lebih lama (20 detik) untuk HP mengunci satelit
+        maximumAge: 0,            // Melarang browser menggunakan cache lokasi lama
         ...options,
       }
     );

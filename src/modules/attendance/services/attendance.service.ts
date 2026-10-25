@@ -342,6 +342,19 @@ export const attendanceService = {
     return data;
   },
 
+// Ganti fungsi getTeacherProfileByUserId menjadi ini:
+  async getTeacherProfile(schoolId: string, fullName: string) {
+    const { data, error } = await supabase
+      .from('teachers')
+      .select('id, fullName')
+      .eq('schoolId', schoolId)
+      .eq('fullName', fullName)
+      .maybeSingle();
+
+    if (error) throw error;
+    return data;
+  },
+
   async getSchoolCoordinates(schoolId: string) {
     const { data, error } = await supabase
       .from('schools')
