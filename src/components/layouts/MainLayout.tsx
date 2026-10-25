@@ -1,4 +1,4 @@
-import { Outlet, useLocation } from 'react-router-dom'; // 👈 Tambahkan useLocation
+import { Outlet, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
@@ -8,26 +8,25 @@ import { TenantSelector } from '@/modules/auth/components/TenantSelector';
 
 export function MainLayout() {
   const { sidebarCollapsed } = useUIStore();
-  const location = useLocation(); // 👈 Ambil rute saat ini
+  const location = useLocation();
 
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
-  // 👈 Cek apakah user sedang menuju halaman pembuatan sekolah
   const isMasterDataPage = location.pathname === '/academic/master-data';
 
-  // INTERCEPTOR: Jika Super Admin, belum pilih sekolah, DAN BUKAN sedang di halaman buat sekolah
   if (isSuperAdmin && !school && !isMasterDataPage) {
     return <TenantSelector />;
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="hidden lg:block">
-        <Sidebar />
-      </div>
+    // Tambahkan class "relative" di sini
+    <div className="min-h-screen bg-background relative">
+
+      {/* KELUARKAN SIDEBAR: Hapus div hidden pembungkus sebelumnya */}
+      <Sidebar />
 
       <motion.div
         initial={false}

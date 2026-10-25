@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, GraduationCap, Calendar, Wallet,
   Package, FileText, Award, BarChart3, Settings, ChevronLeft,
   ChevronRight, School, ChevronDown, BookOpen, CreditCard, Receipt,
-  Building2, CalendarDays, ShieldCheck, ClipboardCheck, UserCheck
+  Building2, ShieldCheck, ClipboardCheck, UserCheck
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
@@ -14,7 +14,6 @@ import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { Module } from '@/types/permission.types';
 
-// 1. TAMBAH PROPERTI 'allowedRoles' UNTUK KONTROL AKSES SPESIFIK
 interface NavItem {
   label: string;
   icon: React.ReactNode;
@@ -32,7 +31,8 @@ interface NavGroup {
 
 export function Sidebar() {
   const { t, locale } = useTranslation();
-  const { sidebarCollapsed, setSidebarCollapsed } = useUIStore();
+  // 1. PANGGIL sidebarOpen & setSidebarOpen DARI STORE
+  const { sidebarCollapsed, setSidebarCollapsed, sidebarOpen, setSidebarOpen } = useUIStore();
   const { hasAnyPermission } = usePermission();
   const location = useLocation();
 
@@ -41,13 +41,23 @@ export function Sidebar() {
 
   const schoolName = school?.name;
 
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management', 'attendance']);
 
   const toggleGroup = (groupId: string) => {
     setExpandedGroups(prev =>
       prev.includes(groupId) ? prev.filter(g => g !== groupId) : [...prev, groupId]
     );
   };
+
+  // 2. FUNGSI MENUTUP SIDEBAR OTOMATIS SAAT MENU DIKLIK DI HP
+  const handleLinkClick = () => {
+    if (window.innerWidth < 1024) {
+      setSidebarOpen(false);
+    }
+  };
+
+  const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'];
+  const guruRoles = [...adminRoles, 'GURU'];
 
   const navGroups: NavGroup[] = [
     {
@@ -61,70 +71,44 @@ export function Sidebar() {
       id: 'academic',
       title: t('sidebar.academic'),
       items: [
-        // DIBATASI: Hanya role ini yang bisa melihat menu Data Master
-        {
-          label: t('sidebar.masterData'),
-          icon: <Building2 size={20} />,
-          href: '/academic/master-data',
-          module: 'academic',
-          allowedRoles: ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH']
-        },
-        { label: t('sidebar.students'), icon: <Users size={20} />, href: '/students', module: 'students' },
-        { label: t('sidebar.teachers'), icon: <GraduationCap size={20} />, href: '/teachers', module: 'teachers' },
-        { label: t('sidebar.schedules'), icon: <Calendar size={20} />, href: '/schedules', module: 'schedules' },
+        { label: t('sidebar.masterData'), icon: <Building2 size={20} />, href: '/academic/master-data', allowedRoles: adminRoles },
+        { label: t('sidebar.students'), icon: <Users size={20} />, href: '/students', allowedRoles: guruRoles },
+        { label: t('sidebar.teachers'), icon: <GraduationCap size={20} />, href: '/teachers', allowedRoles: guruRoles },
+        { label: t('sidebar.schedules'), icon: <Calendar size={20} />, href: '/schedules', allowedRoles: guruRoles },
       ],
     },
     {
       id: 'attendance',
       title: locale === 'id' ? 'Absensi' : 'Attendance',
       items: [
-        {
-          label: locale === 'id' ? 'Rekap Absensi' : 'Attendance Report',
-          icon: <ClipboardCheck size={20} />,
-          href: '/attendance',
-          module: 'attendance' as Module,
-        },
-        {
-          label: locale === 'id' ? 'Absen Saya (GPS)' : 'My Attendance (GPS)',
-          icon: <UserCheck size={20} />,
-          href: '/attendance/teacher',
-        },
+        { label: locale === 'id' ? 'Rekap Absensi' : 'Attendance Report', icon: <ClipboardCheck size={20} />, href: '/attendance', allowedRoles: adminRoles },
+        { label: locale === 'id' ? 'Absen Saya (GPS)' : 'My Attendance (GPS)', icon: <UserCheck size={20} />, href: '/attendance/teacher' },
       ],
     },
     {
       id: 'management',
       title: t('sidebar.management'),
       items: [
-        { label: t('sidebar.finance'), icon: <Wallet size={20} />, href: '/finance', module: 'finance' },
-        { label: t('sidebar.feeMaster'), icon: <FileText size={20} />, href: '/finance/fee-templates', module: 'finance' },
-        { label: t('sidebar.studentBills'), icon: <CreditCard size={20} />, href: '/finance/bills', module: 'finance', badge: 15 },
-        { label: t('sidebar.payments'), icon: <Receipt size={20} />, href: '/finance/payments', module: 'finance' },
-        { label: t('sidebar.inventory'), icon: <Package size={20} />, href: '/inventory', module: 'inventory' },
-        { label: t('sidebar.administration'), icon: <BookOpen size={20} />, href: '/admin', module: 'administration', badge: 5 },
-        { label: t('sidebar.scholarships'), icon: <Award size={20} />, href: '/scholarships', module: 'scholarships' },
+        { label: t('sidebar.finance'), icon: <Wallet size={20} />, href: '/finance', allowedRoles: adminRoles },
+        { label: t('sidebar.feeMaster'), icon: <FileText size={20} />, href: '/finance/fee-templates', allowedRoles: adminRoles },
+        { label: t('sidebar.studentBills'), icon: <CreditCard size={20} />, href: '/finance/bills', badge: 15, allowedRoles: adminRoles },
+        { label: t('sidebar.payments'), icon: <Receipt size={20} />, href: '/finance/payments', allowedRoles: adminRoles },
+        { label: t('sidebar.inventory'), icon: <Package size={20} />, href: '/inventory', allowedRoles: adminRoles },
+        { label: t('sidebar.administration'), icon: <BookOpen size={20} />, href: '/admin', badge: 5, allowedRoles: adminRoles },
+        { label: t('sidebar.scholarships'), icon: <Award size={20} />, href: '/scholarships', allowedRoles: adminRoles },
       ],
     },
     {
       id: 'reports',
-      title: '', // Tanpa judul grup
+      title: '',
       items: [
-        { label: t('sidebar.reports'), icon: <BarChart3 size={20} />, href: '/reports', module: 'reports' },
-
-        // DIBATASI: Hanya Admin yang bisa mengelola User
-        {
-          label: locale === 'id' ? 'Akses Pengguna' : 'User Access',
-          icon: <ShieldCheck size={20} />,
-          href: '/admin/users',
-          module: 'administration',
-          allowedRoles: ['SUPER_ADMIN', 'ADMIN']
-        },
-
-        { label: t('sidebar.settings'), icon: <Settings size={20} />, href: '/settings', module: 'settings' },
+        { label: t('sidebar.reports'), icon: <BarChart3 size={20} />, href: '/reports', allowedRoles: adminRoles },
+        { label: locale === 'id' ? 'Akses Pengguna' : 'User Access', icon: <ShieldCheck size={20} />, href: '/admin/users', allowedRoles: ['SUPER_ADMIN', 'ADMIN'] },
+        { label: t('sidebar.settings'), icon: <Settings size={20} />, href: '/settings', allowedRoles: adminRoles },
       ],
     },
   ];
 
-  // 2. LOGIKA FILTERING MENU (Berlaku juga untuk role validation)
   const filteredGroups = navGroups.map(group => ({
     ...group,
     items: group.items.filter(item => {
@@ -135,143 +119,160 @@ export function Sidebar() {
   })).filter(group => group.items.length > 0);
 
   return (
-    <motion.aside
-      initial={false}
-      animate={{ width: sidebarCollapsed ? 72 : 280 }}
-      transition={{ duration: 0.2, ease: 'easeInOut' }}
-      className={cn(
-        'fixed left-0 top-0 bottom-0 z-40 flex flex-col border-r border-border/50',
-        'bg-sidebar/95 backdrop-blur-xl',
-      )}
-    >
-      <div className={cn("flex items-center h-16 border-b border-border/50 transition-all", sidebarCollapsed ? "justify-center px-0" : "px-4 gap-3")}>
-        <div className="shrink-0 w-9 h-9 rounded-lg bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-          <School size={20} className="text-white" />
-        </div>
-        <AnimatePresence>
-          {!sidebarCollapsed && (
-            <motion.div
-              initial={{ opacity: 0, width: 0 }}
-              animate={{ opacity: 1, width: 'auto' }}
-              exit={{ opacity: 0, width: 0 }}
-              transition={{ duration: 0.2 }}
-              className="flex-1 overflow-hidden"
-            >
-              <h1 className="font-bold text-sm text-foreground">SekolahERP</h1>
-              <p className="text-xs text-muted-foreground truncate w-full" title={schoolName || 'Belum ada data'}>
-                {schoolName || '-'}
-              </p>
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </div>
+    <>
+      {/* 3. LATAR BELAKANG GELAP (BACKDROP) UNTUK TAMPILAN HP */}
+      <AnimatePresence>
+        {sidebarOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setSidebarOpen(false)}
+            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
+          />
+        )}
+      </AnimatePresence>
 
-      {/* 3. PERBAIKAN SCROLLBAR DI SINI */}
-      {/* Menghapus 'hide-scrollbar' dan menambahkan scrollbar styling custom agar rapi dan bisa ditarik/diklik */}
-      <nav className={cn(
-        "flex-1 overflow-y-auto overflow-x-hidden py-4",
-        "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/40",
-        sidebarCollapsed ? "px-2" : "px-4"
-      )}>
-        {filteredGroups.map((group) => (
-          <div key={group.id} className={cn("mb-4", sidebarCollapsed && "mb-2")}>
-            {group.title && group.title !== 'main' && !sidebarCollapsed && (
-              <button
-                onClick={() => toggleGroup(group.id)}
-                className="flex items-center justify-between w-full px-2 mb-1"
-              >
-                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                  {group.title}
-                </span>
-                <ChevronDown
-                  size={14}
-                  className={cn(
-                    'text-muted-foreground transition-transform',
-                    expandedGroups.includes(group.id) && 'rotate-180'
-                  )}
-                />
-              </button>
-            )}
-
-            <AnimatePresence initial={false}>
-              {(group.title === 'main' || !group.title || sidebarCollapsed || expandedGroups.includes(group.id)) && (
-                <motion.div
-                  initial={{ height: 0, opacity: 0 }}
-                  animate={{ height: 'auto', opacity: 1 }}
-                  exit={{ height: 0, opacity: 0 }}
-                  transition={{ duration: 0.2 }}
-                  className={cn("space-y-1 overflow-hidden", sidebarCollapsed && "flex flex-col items-center")}
-                >
-                  {group.items.map((item) => {
-                    const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + '/');
-
-                    return (
-                      <NavLink
-                        key={item.href}
-                        to={item.href}
-                        title={sidebarCollapsed ? item.label : undefined}
-                        className={cn(
-                          'flex items-center rounded-lg transition-all duration-200 group relative',
-                          sidebarCollapsed ? 'justify-center w-10 h-10 mx-auto' : 'px-3 py-2.5 gap-3 w-full',
-                          isActive
-                            ? 'bg-primary/10 text-primary font-medium'
-                            : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
-                        )}
-                      >
-                        <span className={cn(
-                          'shrink-0 transition-colors',
-                          isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-primary'
-                        )}>
-                          {item.icon}
-                        </span>
-
-                        <AnimatePresence>
-                          {!sidebarCollapsed && (
-                            <motion.span
-                              initial={{ opacity: 0, width: 0 }}
-                              animate={{ opacity: 1, width: 'auto' }}
-                              exit={{ opacity: 0, width: 0 }}
-                              className="flex-1 truncate text-sm"
-                            >
-                              {item.label}
-                            </motion.span>
-                          )}
-                        </AnimatePresence>
-
-                        {!sidebarCollapsed && item.badge && (
-                          <span className="shrink-0 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full font-medium">
-                            {item.badge}
-                          </span>
-                        )}
-                        {sidebarCollapsed && item.badge && (
-                          <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-primary rounded-full ring-2 ring-background" />
-                        )}
-                      </NavLink>
-                    );
-                  })}
-                </motion.div>
-              )}
-            </AnimatePresence>
+      <motion.aside
+        initial={false}
+        animate={{ width: sidebarCollapsed ? 72 : 280 }}
+        transition={{ duration: 0.2, ease: 'easeInOut' }}
+        className={cn(
+          'fixed left-0 top-0 bottom-0 z-50 flex flex-col border-r border-border/50',
+          'bg-sidebar/95 backdrop-blur-xl',
+          // 4. EFEK SLIDE IN/OUT BERDASARKAN STATUS sidebarOpen
+          'transition-transform duration-300 lg:translate-x-0',
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        )}
+      >
+        <div className={cn("flex items-center h-16 border-b border-border/50 transition-all", sidebarCollapsed ? "justify-center px-0" : "px-4 gap-3")}>
+          <div className="shrink-0 w-9 h-9 rounded-lg bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+            <School size={20} className="text-white" />
           </div>
-        ))}
-      </nav>
+          <AnimatePresence>
+            {!sidebarCollapsed && (
+              <motion.div
+                initial={{ opacity: 0, width: 0 }}
+                animate={{ opacity: 1, width: 'auto' }}
+                exit={{ opacity: 0, width: 0 }}
+                transition={{ duration: 0.2 }}
+                className="flex-1 overflow-hidden"
+              >
+                <h1 className="font-bold text-sm text-foreground">SekolahERP</h1>
+                <p className="text-xs text-muted-foreground truncate w-full" title={schoolName || 'Belum ada data'}>
+                  {schoolName || '-'}
+                </p>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-      <div className="border-t border-border/50 p-3">
-        <button
-          onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-          className={cn(
-            "flex items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all text-sm py-2",
-            sidebarCollapsed ? "justify-center w-full" : "w-full justify-center gap-2"
-          )}
-        >
-          {sidebarCollapsed ? <ChevronRight size={18} /> : (
-            <>
-              <ChevronLeft size={18} />
-              <span className="font-medium">{t('sidebar.collapse')}</span>
-            </>
-          )}
-        </button>
-      </div>
-    </motion.aside>
+        <nav className={cn(
+          "flex-1 overflow-y-auto overflow-x-hidden py-4",
+          "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/40",
+          sidebarCollapsed ? "px-2" : "px-4"
+        )}>
+          {filteredGroups.map((group) => (
+            <div key={group.id} className={cn("mb-4", sidebarCollapsed && "mb-2")}>
+              {group.title && group.title !== 'main' && !sidebarCollapsed && (
+                <button
+                  onClick={() => toggleGroup(group.id)}
+                  className="flex items-center justify-between w-full px-2 mb-1"
+                >
+                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+                    {group.title}
+                  </span>
+                  <ChevronDown
+                    size={14}
+                    className={cn(
+                      'text-muted-foreground transition-transform',
+                      expandedGroups.includes(group.id) && 'rotate-180'
+                    )}
+                  />
+                </button>
+              )}
+
+              <AnimatePresence initial={false}>
+                {(group.title === 'main' || !group.title || sidebarCollapsed || expandedGroups.includes(group.id)) && (
+                  <motion.div
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className={cn("space-y-1 overflow-hidden", sidebarCollapsed && "flex flex-col items-center")}
+                  >
+                    {group.items.map((item) => {
+                      const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + '/');
+
+                      return (
+                        <NavLink
+                          key={item.href}
+                          to={item.href}
+                          onClick={handleLinkClick} // PANGGIL FUNGSI TUTUP SAAT DIKLIK
+                          title={sidebarCollapsed ? item.label : undefined}
+                          className={cn(
+                            'flex items-center rounded-lg transition-all duration-200 group relative',
+                            sidebarCollapsed ? 'justify-center w-10 h-10 mx-auto' : 'px-3 py-2.5 gap-3 w-full',
+                            isActive
+                              ? 'bg-primary/10 text-primary font-medium'
+                              : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                          )}
+                        >
+                          <span className={cn(
+                            'shrink-0 transition-colors',
+                            isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-primary'
+                          )}>
+                            {item.icon}
+                          </span>
+
+                          <AnimatePresence>
+                            {!sidebarCollapsed && (
+                              <motion.span
+                                initial={{ opacity: 0, width: 0 }}
+                                animate={{ opacity: 1, width: 'auto' }}
+                                exit={{ opacity: 0, width: 0 }}
+                                className="flex-1 truncate text-sm"
+                              >
+                                {item.label}
+                              </motion.span>
+                            )}
+                          </AnimatePresence>
+
+                          {!sidebarCollapsed && item.badge && (
+                            <span className="shrink-0 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full font-medium">
+                              {item.badge}
+                            </span>
+                          )}
+                          {sidebarCollapsed && item.badge && (
+                            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-primary rounded-full ring-2 ring-background" />
+                          )}
+                        </NavLink>
+                      );
+                    })}
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </div>
+          ))}
+        </nav>
+
+        <div className="border-t border-border/50 p-3 hidden lg:block">
+          <button
+            onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            className={cn(
+              "flex items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all text-sm py-2",
+              sidebarCollapsed ? "justify-center w-full" : "w-full justify-center gap-2"
+            )}
+          >
+            {sidebarCollapsed ? <ChevronRight size={18} /> : (
+              <>
+                <ChevronLeft size={18} />
+                <span className="font-medium">{t('sidebar.collapse')}</span>
+              </>
+            )}
+          </button>
+        </div>
+      </motion.aside>
+    </>
   );
 }
