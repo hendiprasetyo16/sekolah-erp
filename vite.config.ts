@@ -3,7 +3,7 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import path from 'path'
-import { VitePWA } from 'vite-plugin-pwa' // Tambahkan import ini
+import { VitePWA } from 'vite-plugin-pwa'
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -13,6 +13,10 @@ export default defineConfig({
     // Tambahkan plugin PWA agar aplikasi mendukung standard native
     VitePWA({
       registerType: 'autoUpdate',
+      // MENAMBAHKAN WORKBOX UNTUK MENGATASI ERROR FILE SIZE DI VERCEL
+      workbox: {
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // Limit dinaikkan ke 5MB
+      },
       manifest: {
         name: 'SekolahERP',
         short_name: 'SekolahERP',
@@ -46,4 +50,16 @@ export default defineConfig({
     port: 3000,
     open: true,
   },
+  // MENAMBAHKAN KONFIGURASI BUILD UNTUK MEMECAH CHUNK JS
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (id.includes('node_modules')) {
+            return 'vendor'; // Memisahkan library pihak ketiga agar ukuran index.js tidak membengkak
+          }
+        }
+      }
+    }
+  }
 })
