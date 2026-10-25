@@ -220,10 +220,12 @@ export function AdminDashboard() {
   const quickActions = [
     { id: '1', icon: UserPlus, label: locale === 'id' ? 'Tambah Siswa' : 'Add Student', color: 'indigo', path: '/students/new', allowed: isManager },
     { id: '2', icon: CreditCard, label: locale === 'id' ? 'Terima SPP' : 'Receive Fee', color: 'emerald', path: '/finance', allowed: isManager },
-    { id: '3', icon: ClipboardCheck, label: locale === 'id' ? 'Absensi' : 'Attendance', color: 'amber', path: '/', allowed: true }, // Semua role bisa
-    { id: '4', icon: FileText, label: locale === 'id' ? 'Cetak Surat' : 'Print Letter', color: 'violet', path: '/', allowed: isManager || isTeacher },
-    { id: '5', icon: Calendar, label: locale === 'id' ? 'Jadwal' : 'Schedule', color: 'cyan', path: '/', allowed: true }, // Semua role bisa
-    { id: '6', icon: BarChart3, label: locale === 'id' ? 'Laporan' : 'Reports', color: 'rose', path: '/', allowed: isManager },
+
+    // PERBAIKAN: Ubah path '/' menjadi rute halaman yang sebenarnya
+    { id: '3', icon: ClipboardCheck, label: locale === 'id' ? 'Absensi' : 'Attendance', color: 'amber', path: '/attendance', allowed: true },
+    { id: '4', icon: FileText, label: locale === 'id' ? 'Cetak Surat' : 'Print Letter', color: 'violet', path: '/letters', allowed: isManager || isTeacher },
+    { id: '5', icon: Calendar, label: locale === 'id' ? 'Jadwal' : 'Schedule', color: 'cyan', path: '/schedules', allowed: true },
+    { id: '6', icon: BarChart3, label: locale === 'id' ? 'Laporan' : 'Reports', color: 'rose', path: '/reports', allowed: isManager },
   ].filter(action => action.allowed);
 
   return (
