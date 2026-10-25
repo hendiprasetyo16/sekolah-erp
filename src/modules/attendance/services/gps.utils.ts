@@ -80,8 +80,12 @@ export function getCurrentPosition(
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
+        // [FITUR BARU] Cek apakah aplikasi sedang dijalankan di komputer lokal (tahap pembuatan)
+        const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+
         // Terapkan batas toleransi akurasi maksimal 65 meter
-        if (position.coords.accuracy > 65) {
+        // Aturan ini akan DIABAIKAN jika kamu sedang testing di 'localhost'
+        if (!isDevelopment && position.coords.accuracy > 65) {
           reject(new Error(`Akurasi GPS terlalu rendah (±${Math.round(position.coords.accuracy)}m). Harap pergi ke area terbuka agar sinyal satelit lebih kuat.`));
           return;
         }
@@ -112,9 +116,9 @@ export function getCurrentPosition(
         reject(new Error(message));
       },
       {
-        enableHighAccuracy: true, // Memaksa HP menggunakan chip GPS asli
-        timeout: 20000,           // Memberi waktu lebih lama (20 detik) untuk HP mengunci satelit
-        maximumAge: 0,            // Melarang browser menggunakan cache lokasi lama
+        enableHighAccuracy: true, 
+        timeout: 20000,           
+        maximumAge: 0,            
         ...options,
       }
     );
