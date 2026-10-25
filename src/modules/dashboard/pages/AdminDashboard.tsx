@@ -101,20 +101,23 @@ function StatCard({
 
 export function AdminDashboard() {
   const { t, locale } = useTranslation();
-  const { user } = useAuthStore();
 
-  // 1. FETCH DATA SISWA 
+  // 1. AMBIL PROFIL PENGGUNA DAN TENTUKAN PERANNYA (RBAC)
+  const { user } = useAuthStore();
+  const isManager = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'].includes(user?.role || '');
+  const isTeacher = user?.role === 'GURU';
+
+  // 2. FETCH DATA SISWA 
   const { data: studentsData = [] } = useQuery({
     queryKey: ['dashboard-students-data'],
     queryFn: async () => {
-      // HANYA ambil data yang ada di tabel students (jangan panggil economic di sini)
       const { data, error } = await supabase.from('students').select('id, gender, status');
       if (error) return [];
       return data as { id: string; gender: 'L' | 'P'; status: string }[];
     }
   });
 
-  // 2. FETCH DATA PIP (Dari tabel student_economics: KIP, Layak PIP, atau Desil 1-4)
+  // 3. FETCH DATA PIP
   const { data: pipCount = 0 } = useQuery({
     queryKey: ['dashboard-pip-count'],
     queryFn: async () => {
@@ -133,7 +136,7 @@ export function AdminDashboard() {
     }
   });
 
-  // 3. FETCH DATA GURU
+  // 4. FETCH DATA GURU
   const { data: teachersCount = 0 } = useQuery({
     queryKey: ['dashboard-teachers-count'],
     queryFn: async () => {
@@ -143,9 +146,10 @@ export function AdminDashboard() {
     }
   });
 
-  // 4. FETCH DATA KEUANGAN REAL-TIME
+  // 5. FETCH DATA KEUANGAN REAL-TIME (HANYA JIKA MANAJER)
   const { data: financeData } = useQuery({
     queryKey: ['dashboard-finance-data'],
+    enabled: isManager, // Query ini tidak akan dijalankan untuk Guru/Siswa
     queryFn: async () => {
       const [incomeRes, billsRes] = await Promise.all([
         supabase.from('payment_transactions').select('amount, paymentDate').eq('status', 'BERHASIL'),
@@ -212,14 +216,15 @@ export function AdminDashboard() {
     ];
   }, [studentsData, locale]);
 
+  // 6. FILTER QUICK ACTIONS BERDASARKAN ROLE
   const quickActions = [
-    { id: '1', icon: UserPlus, label: locale === 'id' ? 'Tambah Siswa' : 'Add Student', color: 'indigo', path: '/students/new' },
-    { id: '2', icon: CreditCard, label: locale === 'id' ? 'Terima SPP' : 'Receive Fee', color: 'emerald', path: '/finance' },
-    { id: '3', icon: ClipboardCheck, label: locale === 'id' ? 'Absensi' : 'Attendance', color: 'amber', path: '/' },
-    { id: '4', icon: FileText, label: locale === 'id' ? 'Cetak Surat' : 'Print Letter', color: 'violet', path: '/' },
-    { id: '5', icon: Calendar, label: locale === 'id' ? 'Jadwal' : 'Schedule', color: 'cyan', path: '/' },
-    { id: '6', icon: BarChart3, label: locale === 'id' ? 'Laporan' : 'Reports', color: 'rose', path: '/' },
-  ];
+    { id: '1', icon: UserPlus, label: locale === 'id' ? 'Tambah Siswa' : 'Add Student', color: 'indigo', path: '/students/new', allowed: isManager },
+    { id: '2', icon: CreditCard, label: locale === 'id' ? 'Terima SPP' : 'Receive Fee', color: 'emerald', path: '/finance', allowed: isManager },
+    { id: '3', icon: ClipboardCheck, label: locale === 'id' ? 'Absensi' : 'Attendance', color: 'amber', path: '/', allowed: true }, // Semua role bisa
+    { id: '4', icon: FileText, label: locale === 'id' ? 'Cetak Surat' : 'Print Letter', color: 'violet', path: '/', allowed: isManager || isTeacher },
+    { id: '5', icon: Calendar, label: locale === 'id' ? 'Jadwal' : 'Schedule', color: 'cyan', path: '/', allowed: true }, // Semua role bisa
+    { id: '6', icon: BarChart3, label: locale === 'id' ? 'Laporan' : 'Reports', color: 'rose', path: '/', allowed: isManager },
+  ].filter(action => action.allowed);
 
   return (
     <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
@@ -230,10 +235,10 @@ export function AdminDashboard() {
         <div className="relative z-10 flex items-center justify-between">
           <div>
             <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">
-              {t('dashboard.welcome', { name: user?.fullName?.split(' ')[0] || 'Admin' })} 👋
+              {t('dashboard.welcome', { name: user?.fullName?.split(' ')[0] || 'User' })} 👋
             </h1>
             <p className="text-white/70 text-sm lg:text-base">
-              {locale === 'id' ? 'Berikut ringkasan data sekolah Anda hari ini.' : "Here's your school data summary for today."}
+              {locale === 'id' ? 'Berikut ringkasan data sekolah hari ini.' : "Here's the school data summary for today."}
             </p>
           </div>
           <div className="hidden lg:flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-xl px-4 py-3 border border-white/20">
@@ -246,12 +251,18 @@ export function AdminDashboard() {
         </div>
       </motion.div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Stats Grid - Menyesuaikan Kolom Berdasarkan Hak Akses */}
+      <div className={cn("grid grid-cols-1 sm:grid-cols-2 gap-4", isManager ? "lg:grid-cols-4" : "lg:grid-cols-2")}>
         <StatCard title={t('dashboard.totalStudents')} value={totalStudents} change={+2.4} icon={Users} gradient="stat-gradient-indigo" />
         <StatCard title={t('dashboard.totalTeachers')} value={teachersCount} change={0} icon={GraduationCap} gradient="stat-gradient-emerald" />
-        <StatCard title={t('dashboard.monthlyRevenue')} value={monthlyRevenue} change={0} icon={Wallet} gradient="stat-gradient-violet" format="currency" />
-        <StatCard title={t('dashboard.pendingPayments')} value={pendingPayments} change={0} icon={AlertTriangle} gradient="stat-gradient-amber" format="currency" />
+
+        {/* HANYA TAMPIL UNTUK MANAJER */}
+        {isManager && (
+          <>
+            <StatCard title={t('dashboard.monthlyRevenue')} value={monthlyRevenue} change={0} icon={Wallet} gradient="stat-gradient-violet" format="currency" />
+            <StatCard title={t('dashboard.pendingPayments')} value={pendingPayments} change={0} icon={AlertTriangle} gradient="stat-gradient-amber" format="currency" />
+          </>
+        )}
       </div>
 
       {/* Secondary Stats */}
@@ -273,42 +284,47 @@ export function AdminDashboard() {
       </div>
 
       {/* Charts Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-        <motion.div variants={item} className="lg:col-span-2 glass-card p-5">
-          <div className="flex items-center justify-between mb-5">
-            <h3 className="text-sm font-semibold text-foreground">{t('dashboard.revenueChart')}</h3>
-            <div className="flex items-center gap-4 text-xs">
-              <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-indigo-500" /><span className="text-muted-foreground">{locale === 'id' ? 'Pemasukan' : 'Income'}</span></div>
-              <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-purple-400" /><span className="text-muted-foreground">{locale === 'id' ? 'Pengeluaran' : 'Expense'}</span></div>
-            </div>
-          </div>
-          <div className="relative w-full h-70">
-            {revenueChartData.length === 0 || revenueChartData.every(d => d.pemasukan === 0) ? (
-              <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-lg">
-                <div className="text-center bg-card/90 p-4 rounded-xl border border-border/50 shadow-lg">
-                  <Wallet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                  <p className="text-sm font-medium text-foreground">{locale === 'id' ? 'Belum Ada Transaksi Pembayaran' : 'No Payment Transactions Yet'}</p>
-                  <p className="text-xs text-muted-foreground mt-1 max-w-55">{locale === 'id' ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat di Supabase.' : 'Chart will populate automatically as student payments are recorded.'}</p>
-                </div>
-              </div>
-            ) : null}
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={revenueChartData} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
-                <defs>
-                  <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} /></linearGradient>
-                  <linearGradient id="gradExpense" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#a855f7" stopOpacity={0.2} /><stop offset="95%" stopColor="#a855f7" stopOpacity={0} /></linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#71717a' }} axisLine={false} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} width={45} />
-                <RechartsTooltip content={<CustomTooltip />} />
-                <Area type="monotone" dataKey="pemasukan" stroke="#6366f1" fill="url(#gradIncome)" strokeWidth={2.5} />
-                <Area type="monotone" dataKey="pengeluaran" stroke="#a855f7" fill="url(#gradExpense)" strokeWidth={2} strokeDasharray="5 5" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </motion.div>
+      <div className={cn("grid gap-4", isManager ? "grid-cols-1 lg:grid-cols-3" : "grid-cols-1 lg:grid-cols-2")}>
 
+        {/* GRAFIK KEUANGAN: HANYA TAMPIL UNTUK MANAJER */}
+        {isManager && (
+          <motion.div variants={item} className="lg:col-span-2 glass-card p-5">
+            <div className="flex items-center justify-between mb-5">
+              <h3 className="text-sm font-semibold text-foreground">{t('dashboard.revenueChart')}</h3>
+              <div className="flex items-center gap-4 text-xs">
+                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-indigo-500" /><span className="text-muted-foreground">{locale === 'id' ? 'Pemasukan' : 'Income'}</span></div>
+                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-purple-400" /><span className="text-muted-foreground">{locale === 'id' ? 'Pengeluaran' : 'Expense'}</span></div>
+              </div>
+            </div>
+            <div className="relative w-full h-70">
+              {revenueChartData.length === 0 || revenueChartData.every(d => d.pemasukan === 0) ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-lg">
+                  <div className="text-center bg-card/90 p-4 rounded-xl border border-border/50 shadow-lg">
+                    <Wallet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm font-medium text-foreground">{locale === 'id' ? 'Belum Ada Transaksi Pembayaran' : 'No Payment Transactions Yet'}</p>
+                    <p className="text-xs text-muted-foreground mt-1 max-w-55">{locale === 'id' ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat di Supabase.' : 'Chart will populate automatically as student payments are recorded.'}</p>
+                  </div>
+                </div>
+              ) : null}
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={revenueChartData} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                  <defs>
+                    <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} /></linearGradient>
+                    <linearGradient id="gradExpense" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#a855f7" stopOpacity={0.2} /><stop offset="95%" stopColor="#a855f7" stopOpacity={0} /></linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
+                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#71717a' }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} width={45} />
+                  <RechartsTooltip content={<CustomTooltip />} />
+                  <Area type="monotone" dataKey="pemasukan" stroke="#6366f1" fill="url(#gradIncome)" strokeWidth={2.5} />
+                  <Area type="monotone" dataKey="pengeluaran" stroke="#a855f7" fill="url(#gradExpense)" strokeWidth={2} strokeDasharray="5 5" />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+          </motion.div>
+        )}
+
+        {/* GRAFIK DISTRIBUSI SISWA: TAMPIL UNTUK SEMUA */}
         <motion.div variants={item} className="glass-card p-5">
           <h3 className="text-sm font-semibold text-foreground mb-4">{t('dashboard.studentDistribution')}</h3>
           <ResponsiveContainer width="100%" height={200}>
@@ -334,23 +350,25 @@ export function AdminDashboard() {
         </motion.div>
       </div>
 
-      {/* Quick Actions */}
-      <motion.div variants={item} className="glass-card p-5">
-        <h3 className="text-sm font-semibold text-foreground mb-4">{t('dashboard.quickActions')}</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {quickActions.map((action) => (
-            <Link
-              key={action.id} to={action.path}
-              className={cn('flex flex-col items-center gap-2.5 p-4 rounded-xl border border-border/50 bg-muted/20 hover:bg-muted/40 transition-all duration-200 hover:scale-105 hover:shadow-lg group cursor-pointer')}
-            >
-              <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110', action.color === 'indigo' && 'bg-indigo-500/10 text-indigo-400', action.color === 'emerald' && 'bg-emerald-500/10 text-emerald-400', action.color === 'amber' && 'bg-amber-500/10 text-amber-400', action.color === 'violet' && 'bg-violet-500/10 text-violet-400', action.color === 'cyan' && 'bg-cyan-500/10 text-cyan-400', action.color === 'rose' && 'bg-rose-500/10 text-rose-400')}>
-                <action.icon size={20} />
-              </div>
-              <span className="text-xs font-medium text-foreground text-center">{action.label}</span>
-            </Link>
-          ))}
-        </div>
-      </motion.div>
+      {/* Quick Actions Terfilter */}
+      {quickActions.length > 0 && (
+        <motion.div variants={item} className="glass-card p-5">
+          <h3 className="text-sm font-semibold text-foreground mb-4">{t('dashboard.quickActions')}</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            {quickActions.map((action) => (
+              <Link
+                key={action.id} to={action.path}
+                className={cn('flex flex-col items-center gap-2.5 p-4 rounded-xl border border-border/50 bg-muted/20 hover:bg-muted/40 transition-all duration-200 hover:scale-105 hover:shadow-lg group cursor-pointer')}
+              >
+                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110', action.color === 'indigo' && 'bg-indigo-500/10 text-indigo-400', action.color === 'emerald' && 'bg-emerald-500/10 text-emerald-400', action.color === 'amber' && 'bg-amber-500/10 text-amber-400', action.color === 'violet' && 'bg-violet-500/10 text-violet-400', action.color === 'cyan' && 'bg-cyan-500/10 text-cyan-400', action.color === 'rose' && 'bg-rose-500/10 text-rose-400')}>
+                  <action.icon size={20} />
+                </div>
+                <span className="text-xs font-medium text-foreground text-center">{action.label}</span>
+              </Link>
+            ))}
+          </div>
+        </motion.div>
+      )}
     </motion.div>
   );
 }

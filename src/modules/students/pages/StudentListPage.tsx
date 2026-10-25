@@ -26,7 +26,7 @@ interface ImportParent {
   fullName: string;
   nik: string;
   occupation: string;
-  monthlyIncome: string | null; // <-- Tepat! Sudah diubah ke string
+  monthlyIncome: string | null;
   education: string;
   isAlive: boolean;
   schoolId: string;
@@ -102,7 +102,13 @@ type ExcelRow = Record<string, string | number | boolean>;
 export function StudentListPage() {
   const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
-  const { school } = useAuthStore();
+
+  // 1. AMBIL DATA USER DARI STORE UNTUK MENGECEK ROLE
+  const { school, user } = useAuthStore();
+
+  // 2. BUAT LOGIKA BATASAN AKSES (RBAC)
+  const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
+  const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('all');
@@ -673,6 +679,7 @@ export function StudentListPage() {
       <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls, .csv" className="hidden" />
 
       {/* --- IMPORT WIZARD MODAL --- */}
+      {/* ... (Modal logic tidak perlu diubah, biarkan seperti semula) ... */}
       <AnimatePresence>
         {wizardState !== 'idle' && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -838,27 +845,37 @@ export function StudentListPage() {
           <h1 className="text-2xl font-bold text-foreground">{t('students.title')}</h1>
           <p className="text-sm text-muted-foreground mt-1">{locale === 'id' ? `Total ${meta?.total || 0} siswa terdaftar` : `${meta?.total || 0} students registered`}</p>
         </div>
+
+        {/* 3. TAMPILKAN TOMBOL AKSI HANYA UNTUK ROLE TERTENTU (KECUALI TOMBOL EXPORT) */}
         <div className="flex flex-wrap items-center gap-2">
-          {selectedRows.length > 0 && (
+          {selectedRows.length > 0 && canManageData && (
             <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} onClick={() => setIsBulkDeleting(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-bold hover:bg-red-500/20 transition-colors shadow-sm">
               <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? `Hapus Terpilih (${selectedRows.length})` : `Delete Selected (${selectedRows.length})`}</span>
             </motion.button>
           )}
 
-          {(meta?.total || 0) > 0 && (
+          {(meta?.total || 0) > 0 && canManageData && (
             <button onClick={() => setIsDeletingAll(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm">
               <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? 'Kosongkan Data' : 'Wipe Data'}</span>
             </button>
           )}
 
-          <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">           <Upload size={16} /> <span className="hidden sm:inline">Import Verval PD</span>
-          </button>
+          {canManageData && (
+            <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
+              <Upload size={16} /> <span className="hidden sm:inline">Import Verval PD</span>
+            </button>
+          )}
+
+          {/* Tombol Export Data dibiarkan agar Guru tetap bisa mencetak data */}
           <button onClick={handleExport} disabled={isExporting} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} <span className="hidden sm:inline">Export Data</span>
           </button>
-          <Link to="/students/new" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md">
-            <Plus size={16} /> <span>{locale === 'id' ? 'Tambah Siswa' : 'Add Student'}</span>
-          </Link>
+
+          {canManageData && (
+            <Link to="/students/new" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md">
+              <Plus size={16} /> <span>{locale === 'id' ? 'Tambah Siswa' : 'Add Student'}</span>
+            </Link>
+          )}
         </div>
       </div>
 
@@ -884,7 +901,10 @@ export function StudentListPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-border/50 bg-muted/30">
-                <th className="p-4 w-12"><input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" /></th>
+                {/* 4. SEMBUNYIKAN CHECKBOX MASSAL JIKA BUKAN ADMIN */}
+                {canManageData && (
+                  <th className="p-4 w-12"><input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" /></th>
+                )}
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">No</th>
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">NISN / NIPD</th>
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{locale === 'id' ? 'Siswa' : 'Student'}</th>
@@ -895,15 +915,18 @@ export function StudentListPage() {
             </thead>
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">{locale === 'id' ? 'Memuat...' : 'Loading...'}</p></td></tr>
+                <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">{locale === 'id' ? 'Memuat...' : 'Loading...'}</p></td></tr>
               ) : students.length === 0 ? (
-                <tr><td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">{locale === 'id' ? 'Tidak ada data.' : 'No data available.'}</td></tr>
+                <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center text-muted-foreground">{locale === 'id' ? 'Tidak ada data.' : 'No data available.'}</td></tr>
               ) : (
                 students.map((student, idx) => {
                   const statusConf = getStatusConfig(student.status);
                   return (
                     <motion.tr key={student.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={cn("hover:bg-muted/30 transition-colors", selectedRows.includes(student.id) && "bg-emerald-500/5")}>
-                      <td className="p-4"><input type="checkbox" checked={selectedRows.includes(student.id)} onChange={() => toggleRow(student.id)} className="w-4 h-4 rounded border-border accent-emerald-600" /></td>
+                      {/* 5. SEMBUNYIKAN CHECKBOX MASSAL JIKA BUKAN ADMIN */}
+                      {canManageData && (
+                        <td className="p-4"><input type="checkbox" checked={selectedRows.includes(student.id)} onChange={() => toggleRow(student.id)} className="w-4 h-4 rounded border-border accent-emerald-600" /></td>
+                      )}
                       <td className="px-4 py-3 text-sm font-medium text-muted-foreground">{(currentPage - 1) * pageSize + idx + 1}</td>
                       <td className="px-4 py-3"><div className="flex flex-col"><span className="text-sm font-bold text-foreground">{student.nisn}</span><span className="text-xs font-mono text-muted-foreground">{student.nis}</span></div></td>
                       <td className="px-4 py-3"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs flex items-center justify-center">{student.fullName.charAt(0)}</div><div><p className="text-sm font-medium">{student.fullName}</p><p className="text-xs text-muted-foreground">{student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female')}</p></div></div></td>
@@ -912,8 +935,13 @@ export function StudentListPage() {
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
                           <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"><Eye className="h-4 w-4" /></Link>
-                          <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"><Edit className="h-4 w-4" /></Link>
-                          <button onClick={() => setStudentToDelete({ id: student.id, name: student.fullName })} className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 className="h-4 w-4" /></button>
+                          {/* 6. SEMBUNYIKAN ICON EDIT DAN HAPUS JIKA BUKAN ADMIN */}
+                          {canManageData && (
+                            <>
+                              <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"><Edit className="h-4 w-4" /></Link>
+                              <button onClick={() => setStudentToDelete({ id: student.id, name: student.fullName })} className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 className="h-4 w-4" /></button>
+                            </>
+                          )}
                         </div>
                       </td>
                     </motion.tr>
