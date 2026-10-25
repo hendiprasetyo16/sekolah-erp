@@ -22,11 +22,11 @@ serve(async (req: Request) => {
     let masterData = [];
     
     if (targetGroup === 'staff') {
-        // Ambil nip dan nuptk untuk dijadikan username
-        const { data } = await supabaseAdmin.from('teachers').select('id, email, fullName, nip, nuptk').eq('schoolId', schoolId);
+        // PERBAIKAN: Ambil juga nik sebagai cadangan
+        const { data } = await supabaseAdmin.from('teachers').select('id, email, fullName, nip, nuptk, nik').eq('schoolId', schoolId);
         masterData = (data || []).map(t => {
-            // Prioritas Username: NIP -> NUPTK -> Potongan ID
-            const username = t.nip || t.nuptk || t.id.substring(0,8);
+            // LOGIKA WATERFALL GURU: NIP -> NUPTK -> NIK
+            const username = t.nip || t.nuptk || t.nik || t.id.substring(0,8);
             return { 
                 id: t.id, 
                 email: t.email || `${username}@sistem.local`, 
@@ -35,10 +35,11 @@ serve(async (req: Request) => {
             }
         });
     } else if (targetGroup === 'siswa') {
-        // Ambil nisn
-        const { data } = await supabaseAdmin.from('students').select('id, email, fullName, nisn').eq('schoolId', schoolId);
+        // PERBAIKAN: Ambil nisn, nipd, dan nik dari tabel students
+        const { data } = await supabaseAdmin.from('students').select('id, email, fullName, nisn, nipd, nik').eq('schoolId', schoolId);
         masterData = (data || []).map(s => {
-            const username = s.nisn || s.id.substring(0,8);
+            // LOGIKA WATERFALL SISWA: NISN -> NIPD -> NIK
+            const username = s.nisn || s.nipd || s.nik || s.id.substring(0,8);
             return { 
                 id: s.id, 
                 email: s.email || `${username}@sistem.local`, 
@@ -47,18 +48,18 @@ serve(async (req: Request) => {
             }
         });
     } else if (targetGroup === 'orangtua') {
-        // Relasi (Join) ke tabel students untuk mengambil NISN anak
+        // PERBAIKAN: Relasi mengambil nisn, nipd, dan nik anak
         const { data } = await supabaseAdmin.from('student_parents').select(`
             id, email, fullName, 
-            students ( nisn )
+            students ( nisn, nipd, nik )
         `).eq('schoolId', schoolId);
         
         masterData = (data || []).map(p => {
-            // Username Wali: W-[NISN Anak]
-            const childNisn = p.students?.nisn || p.id.substring(0,8);
+            // LOGIKA WATERFALL ORANG TUA: NISN Anak -> NIPD Anak -> NIK Anak
+            const childId = p.students?.nisn || p.students?.nipd || p.students?.nik || p.id.substring(0,8);
             return { 
                 id: p.id, 
-                email: p.email || `W-${childNisn}@sistem.local`, 
+                email: p.email || `W-${childId}@sistem.local`, 
                 fullName: p.fullName, 
                 role: 'ORANG_TUA' 
             }
@@ -72,8 +73,12 @@ serve(async (req: Request) => {
 
     for (const person of masterData) {
         try {
+            // AMAN DARI SPASI: Hilangkan spasi berlebih pada Username/Email 
+            // (Mencegah error login jika admin Excel mengetik "1234 5678")
+            const cleanEmail = person.email.toLowerCase().replace(/\s+/g, '');
+
             const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
-                email: person.email.toLowerCase(), // Pastikan huruf kecil
+                email: cleanEmail,
                 password: defaultPassword,
                 email_confirm: true,
                 user_metadata: { full_name: person.fullName }
@@ -91,7 +96,7 @@ serve(async (req: Request) => {
                 await supabaseAdmin.from('users').insert({
                     id: userId,
                     schoolId: schoolId,
-                    email: person.email.toLowerCase(),
+                    email: cleanEmail,
                     fullName: person.fullName,
                     role: person.role,
                     isActive: true
