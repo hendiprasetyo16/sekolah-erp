@@ -13,6 +13,8 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
+// 1. IMPORT USEAUTHSTORE UNTUK MENGAMBIL ROLE PENGGUNA
+import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { StudentParent, StudentEconomic } from '../types/student.types';
 
 // Definisi Strict Type lokal untuk menangkap field tambahan Dapodik
@@ -64,6 +66,11 @@ export function StudentDetailPage() {
   const navigate = useNavigate();
   const { locale } = useTranslation();
 
+  // 2. AMBIL DATA USER DAN BUAT LOGIKA IZIN (RBAC)
+  const { user } = useAuthStore();
+  const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
+  const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
+
   const { data: studentResponse, isLoading, isError } = useQuery({
     queryKey: ['student', id],
     queryFn: () => studentService.getById(id!),
@@ -71,7 +78,6 @@ export function StudentDetailPage() {
 
   const student = studentResponse?.data as unknown as ExtendedStudentData;
 
-  // --- VARIABEL PEMBANTU UNTUK STRUKTUR SUPABASE ---
   const parentsList = student?.parents || (student as any)?.student_parents || [];
   const rawEco = student?.economic || (student as any)?.student_economics;
   const ecoData = (Array.isArray(rawEco) ? rawEco[0] : rawEco) || {};
@@ -117,16 +123,10 @@ export function StudentDetailPage() {
 
   const formatCurrency = (amount?: number | string) => {
     if (!amount) return '-';
-
-    // Coba konversi nilai menjadi tipe angka murni
     const num = Number(amount);
-
-    // Jika hasilnya NaN (Not a Number), berarti data mengandung teks huruf/simbol
     if (isNaN(num)) {
-      return String(amount); // Kembalikan teks aslinya apa adanya
+      return String(amount);
     }
-
-    // Jika sukses menjadi angka murni, format ke bentuk Rupiah secara otomatis
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: 'IDR',
@@ -151,12 +151,16 @@ export function StudentDetailPage() {
             {locale === 'id' ? 'Detail Siswa' : 'Student Detail'}
           </h1>
         </div>
-        <Button asChild className="bg-emerald-600 hover:bg-emerald-700 text-white">
-          <Link to={`/students/${id}/edit`}>
-            <Edit className="mr-2 h-4 w-4" />
-            {locale === 'id' ? 'Edit Data' : 'Edit Data'}
-          </Link>
-        </Button>
+
+        {/* 3. SEMBUNYIKAN TOMBOL EDIT DARI GURU/SISWA/ORTU */}
+        {canManageData && (
+          <Button asChild className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <Link to={`/students/${id}/edit`}>
+              <Edit className="mr-2 h-4 w-4" />
+              {locale === 'id' ? 'Edit Data' : 'Edit Data'}
+            </Link>
+          </Button>
+        )}
       </div>
 
       {/* Profile Overview Card */}
@@ -308,7 +312,6 @@ export function StudentDetailPage() {
         <TabsContent value="orangtua" className="mt-6">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {['AYAH', 'IBU', 'WALI'].map((relation) => {
-              // PERBAIKAN: Gunakan parentsList
               const parent = parentsList.find((p: any) => p.relation === relation);
               if (relation === 'WALI' && !parent) return null;
 
@@ -345,7 +348,6 @@ export function StudentDetailPage() {
               );
             })}
 
-            {/* PERBAIKAN: Gunakan parentsList untuk logika kosong */}
             {(!parentsList || parentsList.length === 0) && (
               <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
                 {locale === 'id' ? 'Data orang tua/wali belum dilengkapi.' : 'Parent/guardian data has not been provided yet.'}

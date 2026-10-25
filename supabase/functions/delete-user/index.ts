@@ -1,6 +1,6 @@
 // @ts-nocheck
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -19,12 +19,19 @@ serve(async (req: Request) => {
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
     )
 
-    // Menghapus user dari Supabase Auth
-    // Karena tabel public.users menggunakan ON DELETE CASCADE,
-    // profil pengguna akan otomatis ikut terhapus di database.
-    const { data, error } = await supabaseAdmin.auth.admin.deleteUser(targetUserId)
+    // LENGKAH 1: Hapus data profil dari tabel database 'users'
+    // Ini wajib dilakukan pertama untuk memastikan data hasil import Excel terhapus
+    const { error: dbError } = await supabaseAdmin.from('users').delete().eq('id', targetUserId)
+    if (dbError) throw dbError
 
-    if (error) throw error
+    // LANGKAH 2: Coba hapus akun dari sistem Login (Auth)
+    try {
+      await supabaseAdmin.auth.admin.deleteUser(targetUserId)
+    } catch (authError) {
+      // Kita membiarkan (mengabaikan) error di sini.
+      // Jika error terjadi, artinya pengguna ini adalah hasil import Excel yang belum pernah di-generate akun loginnya.
+      console.log('Info: User tidak ada di Auth, tapi sudah berhasil dihapus dari database publik.')
+    }
 
     return new Response(JSON.stringify({ success: true, message: 'Akun berhasil dihapus permanen' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },

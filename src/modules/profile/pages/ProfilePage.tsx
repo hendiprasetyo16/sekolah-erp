@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
-    User, Mail, ShieldCheck, KeyRound, Save, Loader2, Building2
+    User, Mail, ShieldCheck, KeyRound, Save, Loader2, Building2,
+    Phone, MapPin, CreditCard
 } from 'lucide-react';
 
 import { supabase } from '@/services/supabase.client';
@@ -47,8 +48,6 @@ export function ProfilePage() {
         tabSecurity: locale === 'id' ? 'Keamanan' : 'Security',
         fName: locale === 'id' ? 'Nama Lengkap' : 'Full Name',
         fEmail: 'Email',
-        fRole: locale === 'id' ? 'Peran (Role)' : 'Role',
-        fSchool: locale === 'id' ? 'Institusi' : 'Institution',
         newPass: locale === 'id' ? 'Kata Sandi Baru' : 'New Password',
         confirmPass: locale === 'id' ? 'Konfirmasi Kata Sandi' : 'Confirm Password',
         btnSave: locale === 'id' ? 'Simpan Perubahan' : 'Save Changes',
@@ -66,7 +65,41 @@ export function ProfilePage() {
         defaultValues: { newPassword: '', confirmPassword: '' }
     });
 
-    // Mutasi untuk memperbarui nama di public.users
+    // --- QUERY: Ambil Data Detail ---
+    const { data: detailData, isLoading: detailLoading } = useQuery({
+        queryKey: ['user-detail', user?.id, user?.role],
+        queryFn: async () => {
+            if (!user) return null;
+
+            let tableName = '';
+            if (user.role === 'SISWA') tableName = 'students';
+            else if (['GURU', 'WALI_KELAS', 'STAFF_TU', 'STAFF_SARPRAS'].includes(user.role)) tableName = 'teachers';
+            else if (user.role === 'ORANG_TUA') tableName = 'student_parents';
+
+            if (!tableName) return null;
+
+            let { data } = await supabase
+                .from(tableName)
+                .select('*')
+                .eq('email', user.email)
+                .maybeSingle();
+
+            if (!data && user.schoolId) {
+                const { data: fallbackData } = await supabase
+                    .from(tableName)
+                    .select('*')
+                    .eq('schoolId', user.schoolId)
+                    .eq('fullName', user.fullName)
+                    .maybeSingle();
+                data = fallbackData;
+            }
+
+            return data;
+        },
+        enabled: !!user,
+    });
+
+    // --- MUTATIONS ---
     const updateProfileMutation = useMutation({
         mutationFn: async (data: ProfileFormValues) => {
             if (!user) throw new Error("User not found");
@@ -76,14 +109,12 @@ export function ProfilePage() {
                 .eq('id', user.id);
             if (error) throw new Error(error.message);
 
-            // Update state lokal agar header langsung berubah
             useAuthStore.setState({ user: { ...user, fullName: data.fullName } });
         },
         onSuccess: () => toast.success(t.updateSuccess),
         onError: (error: Error) => toast.error(error.message)
     });
 
-    // Mutasi untuk mengubah kata sandi milik sendiri (menggunakan anon key + session aktif)
     const updatePasswordMutation = useMutation({
         mutationFn: async (data: PasswordFormValues) => {
             const { error } = await supabase.auth.updateUser({
@@ -105,28 +136,78 @@ export function ProfilePage() {
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="max-w-4xl mx-auto space-y-6">
 
-            {/* HEADER PROFIL */}
-            <div className="bg-card text-card-foreground border border-border rounded-xl p-6 shadow-sm flex flex-col md:flex-row items-center md:items-start gap-6 relative overflow-hidden">
-                <div className="absolute top-0 left-0 w-full h-24 bg-linear-to-r from-primary/20 via-primary/5 to-transparent z-0"></div>
+            {/* HEADER PROFIL ELEGAN & MINIMALIS */}
+            <div className="bg-card text-card-foreground border border-border rounded-xl shadow-sm relative overflow-hidden">
 
-                <div className="z-10 w-24 h-24 rounded-full bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-3xl font-bold shadow-lg shrink-0 border-4 border-background">
-                    {getInitials(user.fullName)}
-                </div>
+                {/* Aksen warna halus di bagian atas (mengikuti tema warna primary aplikasi) */}
+                <div className="absolute top-0 left-0 right-0 h-24 bg-linear-to-r from-primary/10 via-primary/5 to-transparent dark:from-primary/20 dark:via-primary/10"></div>
 
-                <div className="z-10 text-center md:text-left flex-1 mt-2">
-                    <h1 className="text-2xl font-bold">{user.fullName}</h1>
-                    <div className="flex flex-wrap items-center justify-center md:justify-start gap-3 mt-2 text-sm text-muted-foreground">
-                        <span className="flex items-center gap-1.5"><Mail size={16} /> {user.email}</span>
-                        <span className="hidden md:inline">•</span>
-                        <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-primary/10 text-primary font-medium">
-                            <ShieldCheck size={16} /> {formatRoleName(user.role)}
-                        </span>
-                        {school && (
-                            <>
-                                <span className="hidden md:inline">•</span>
-                                <span className="flex items-center gap-1.5"><Building2 size={16} /> {school.name}</span>
-                            </>
-                        )}
+                <div className="relative p-6 md:p-8 flex flex-col md:flex-row items-center md:items-start gap-6">
+
+                    {/* Avatar Modern */}
+                    <div className="w-24 h-24 rounded-full bg-primary flex items-center justify-center text-primary-foreground text-3xl font-bold shadow-md shrink-0 border-4 border-background z-10">
+                        {getInitials(user.fullName)}
+                    </div>
+
+                    <div className="text-center md:text-left flex-1 mt-2 z-10">
+                        <h1 className="text-2xl font-bold tracking-tight text-foreground">{user.fullName}</h1>
+
+                        <div className="flex flex-col gap-2.5 mt-3">
+                            {/* Baris 1: Informasi Utama */}
+                            <div className="flex flex-wrap items-center justify-center md:justify-start gap-3 text-sm text-muted-foreground">
+                                <span className="flex items-center gap-1.5" title="Email">
+                                    <Mail size={16} /> {user.email}
+                                </span>
+                                <span className="hidden md:inline text-border">•</span>
+
+                                <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-primary/10 text-primary font-medium" title="Peran/Role">
+                                    <ShieldCheck size={16} /> {formatRoleName(user.role)}
+                                </span>
+
+                                {!detailLoading && detailData && (
+                                    <>
+                                        {detailData.nip ? (
+                                            <>
+                                                <span className="hidden md:inline text-border">•</span>
+                                                <span className="flex items-center gap-1.5 text-foreground" title="NIP"><CreditCard size={16} className="text-muted-foreground" /> {detailData.nip}</span>
+                                            </>
+                                        ) : detailData.nuptk ? (
+                                            <>
+                                                <span className="hidden md:inline text-border">•</span>
+                                                <span className="flex items-center gap-1.5 text-foreground" title="NUPTK"><CreditCard size={16} className="text-muted-foreground" /> {detailData.nuptk}</span>
+                                            </>
+                                        ) : detailData.nisn ? (
+                                            <>
+                                                <span className="hidden md:inline text-border">•</span>
+                                                <span className="flex items-center gap-1.5 text-foreground" title="NISN"><CreditCard size={16} className="text-muted-foreground" /> {detailData.nisn}</span>
+                                            </>
+                                        ) : null}
+
+                                        {detailData.phone && (
+                                            <>
+                                                <span className="hidden md:inline text-border">•</span>
+                                                <span className="flex items-center gap-1.5 text-foreground" title="Nomor Handphone"><Phone size={16} className="text-muted-foreground" /> {detailData.phone}</span>
+                                            </>
+                                        )}
+                                    </>
+                                )}
+
+                                {school && (
+                                    <>
+                                        <span className="hidden md:inline text-border">•</span>
+                                        <span className="flex items-center gap-1.5" title="Institusi"><Building2 size={16} className="text-muted-foreground" /> {school.name}</span>
+                                    </>
+                                )}
+                            </div>
+
+                            {/* Baris 2: Alamat (jika ada) */}
+                            {!detailLoading && detailData?.address && (
+                                <div className="flex items-start justify-center md:justify-start gap-1.5 text-sm text-foreground/90 max-w-2xl mt-1" title="Alamat">
+                                    <MapPin size={16} className="shrink-0 mt-0.5 text-muted-foreground" />
+                                    <span className="text-left leading-relaxed">{detailData.address}</span>
+                                </div>
+                            )}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -142,7 +223,7 @@ export function ProfilePage() {
                     </div>
 
                     <div className="p-6">
-                        <TabsContent value="profil" className="m-0 space-y-6 outline-none">
+                        <TabsContent value="profil" className="m-0 outline-none">
                             <div className="max-w-xl">
                                 <h3 className="text-lg font-semibold mb-1">{t.tabProfile}</h3>
                                 <p className="text-sm text-muted-foreground mb-6">{t.subtitle}</p>
@@ -152,7 +233,7 @@ export function ProfilePage() {
                                         <div className="space-y-2">
                                             <FormLabel>{t.fEmail}</FormLabel>
                                             <Input value={user.email} disabled className="bg-muted text-muted-foreground cursor-not-allowed" />
-                                            <p className="text-xs text-muted-foreground">Email tidak dapat diubah karena terkait dengan kredensial sistem.</p>
+                                            <p className="text-xs text-muted-foreground">Email terikat dengan kredensial sistem dan tidak dapat diubah di sini.</p>
                                         </div>
                                         <FormField control={profileForm.control} name="fullName" render={({ field }) => (
                                             <FormItem>
@@ -161,8 +242,8 @@ export function ProfilePage() {
                                                 <FormMessage />
                                             </FormItem>
                                         )} />
-                                        <div className="pt-4 border-t border-border flex justify-end">
-                                            <Button type="submit" disabled={updateProfileMutation.isPending} className="bg-primary hover:bg-primary/90 text-primary-foreground shadow-md">
+                                        <div className="pt-2 flex justify-end">
+                                            <Button type="submit" disabled={updateProfileMutation.isPending} className="bg-primary hover:bg-primary/90">
                                                 {updateProfileMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
                                                 {t.btnSave}
                                             </Button>

@@ -8,13 +8,12 @@ import {
     Users, ShieldCheck, UserCog, GraduationCap, Users2,
     Search, Plus, MoreVertical, Edit, KeyRound, Ban, CheckCircle2,
     Loader2, AlertCircle, X, Eye, EyeOff, ChevronLeft, ChevronRight,
-    ChevronsLeft, ChevronsRight
+    ChevronsLeft, ChevronsRight, UserPlus, Trash2, DatabaseZap, ChevronDown
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { useTranslation } from '@/hooks/useTranslation';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -25,7 +24,6 @@ import {
     DropdownMenu,
     DropdownMenuContent,
     DropdownMenuItem,
-    DropdownMenuLabel,
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
@@ -55,29 +53,29 @@ export interface AppUser {
 // 2. ZOD SCHEMAS
 // ============================================================================
 const createUserSchema = z.object({
-    fullName: z.string().min(3, 'Nama minimal 3 karakter / Name min 3 chars'),
-    email: z.string().email('Format email tidak valid / Invalid email format'),
-    password: z.string().min(6, 'Password minimal 6 karakter / Password min 6 chars'),
+    fullName: z.string().min(3, 'Nama minimal 3 karakter'),
+    email: z.string().email('Format email tidak valid'),
+    password: z.string().min(6, 'Password minimal 6 karakter'),
     role: z.enum([
         'SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
         'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS',
         'ORANG_TUA', 'SISWA'
-    ], { required_error: 'Pilih role / Select a role' }),
+    ], { required_error: 'Pilih role' }),
 });
 type CreateUserFormValues = z.infer<typeof createUserSchema>;
 
 const editUserSchema = z.object({
-    fullName: z.string().min(3, 'Nama minimal 3 karakter / Name min 3 chars'),
+    fullName: z.string().min(3, 'Nama minimal 3 karakter'),
     role: z.enum([
         'SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
         'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS',
         'ORANG_TUA', 'SISWA'
-    ], { required_error: 'Pilih role / Select a role' }),
+    ], { required_error: 'Pilih role' }),
 });
 type EditUserFormValues = z.infer<typeof editUserSchema>;
 
 const resetPasswordSchema = z.object({
-    newPassword: z.string().min(6, 'Password minimal 6 karakter / Password min 6 chars'),
+    newPassword: z.string().min(6, 'Password minimal 6 karakter'),
 });
 type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
 
@@ -85,7 +83,6 @@ type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
 // 3. MAIN COMPONENT
 // ============================================================================
 export function UserManagementPage() {
-    const { locale } = useTranslation();
     const { school, user: currentUser } = useAuthStore();
     const queryClient = useQueryClient();
 
@@ -95,180 +92,175 @@ export function UserManagementPage() {
     const [activeTab, setActiveTab] = useState<string>('semua');
     const [searchQuery, setSearchQuery] = useState<string>('');
 
-    // State Pagination
+    // State Pagination & Selection
     const [currentPage, setCurrentPage] = useState<number>(1);
+    const [pageInput, setPageInput] = useState<string>('1');
     const ITEMS_PER_PAGE = 10;
+    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
 
     useEffect(() => {
         setCurrentPage(1);
+        setPageInput('1');
+        setSelectedUserIds([]);
     }, [searchQuery, activeTab]);
 
-    // State Modal & Visibilitas Password
+    useEffect(() => {
+        setPageInput(currentPage.toString());
+    }, [currentPage]);
+
+    // State Modals (Individual Actions)
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState<boolean>(false);
     const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
-    const [userToDelete, setUserToDelete] = useState<AppUser | null>(null); // Tambahkan baris ini
+    const [userToDelete, setUserToDelete] = useState<AppUser | null>(null);
+
+    // State Modals (Bulk Actions)
+    const [isGenerateSelectedModalOpen, setIsGenerateSelectedModalOpen] = useState<boolean>(false);
+    const [isGenerateAllModalOpen, setIsGenerateAllModalOpen] = useState<boolean>(false);
+    const [isDeleteSelectedModalOpen, setIsDeleteSelectedModalOpen] = useState<boolean>(false);
+    const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState<boolean>(false);
+
     const [showAddPassword, setShowAddPassword] = useState<boolean>(false);
     const [showResetPassword, setShowResetPassword] = useState<boolean>(false);
-    const t = {
-        title: locale === 'id' ? 'Manajemen Pengguna' : 'User Management',
-        subtitle: locale === 'id' ? 'Kelola akses login, role, dan keamanan akun.' : 'Manage login access, roles, and account security.',
-        searchPlaceholder: locale === 'id' ? 'Cari nama atau email...' : 'Search name or email...',
-        btnAdd: locale === 'id' ? 'Tambah Pengguna' : 'Add User',
-        tabAll: locale === 'id' ? 'Semua' : 'All',
-        tabManagement: locale === 'id' ? 'Manajemen & Admin' : 'Management & Admin',
-        tabStaff: locale === 'id' ? 'Guru & Staff' : 'Teachers & Staff',
-        tabStudent: locale === 'id' ? 'Siswa' : 'Students',
-        tabParent: locale === 'id' ? 'Orang Tua' : 'Parents',
-
-        thNo: 'No.',
-        thName: locale === 'id' ? 'Pengguna' : 'User',
-        thRole: 'Role',
-        thStatus: 'Status',
-        thAction: locale === 'id' ? 'Aksi' : 'Action',
-
-        statusActive: locale === 'id' ? 'Aktif' : 'Active',
-        statusBlocked: locale === 'id' ? 'Diblokir' : 'Blocked',
-        empty: locale === 'id' ? 'Tidak ada pengguna yang ditemukan.' : 'No users found.',
-
-        pageInfo: locale === 'id' ? 'Menampilkan' : 'Showing',
-        pageOf: locale === 'id' ? 'dari' : 'of',
-        pageUsers: locale === 'id' ? 'pengguna' : 'users',
-
-        addTitle: locale === 'id' ? 'Tambah Pengguna Baru' : 'Add New User',
-        addDesc: locale === 'id' ? 'Buat akun untuk memberi hak akses ke sistem.' : 'Create an account to grant system access.',
-        editTitle: locale === 'id' ? 'Edit Profil Pengguna' : 'Edit User Profile',
-        editDesc: locale === 'id' ? 'Perbarui nama atau role pengguna ini.' : 'Update this user name or role.',
-        fName: locale === 'id' ? 'Nama Lengkap' : 'Full Name',
-        fEmail: 'Email',
-        fRole: locale === 'id' ? 'Peran (Role)' : 'Role',
-        fPass: locale === 'id' ? 'Kata Sandi Sementara' : 'Temporary Password',
-        btnCancel: locale === 'id' ? 'Batal' : 'Cancel',
-        btnSave: locale === 'id' ? 'Simpan' : 'Save',
-
-        resetTitle: locale === 'id' ? 'Reset Kata Sandi' : 'Reset Password',
-        resetDesc: locale === 'id' ? 'Atur ulang kata sandi untuk akun:' : 'Reset password for account:',
-        newPass: locale === 'id' ? 'Kata Sandi Baru' : 'New Password',
-
-        // Tambahkan 3 baris ini
-        deleteTitle: locale === 'id' ? 'Hapus Pengguna' : 'Delete User',
-        deleteDesc: locale === 'id' ? 'Apakah Anda yakin ingin menghapus akun ini secara permanen? Data yang dihapus tidak dapat dipulihkan.' : 'Are you sure you want to permanently delete this account? This action cannot be undone.',
-        btnDelete: locale === 'id' ? 'Ya, Hapus' : 'Yes, Delete',
-
-        toastAddSuccess: locale === 'id' ? 'Pengguna berhasil ditambahkan!' : 'User added successfully!',
-        toastEditSuccess: locale === 'id' ? 'Profil berhasil diperbarui!' : 'Profile updated successfully!',
-        toastResetSuccess: locale === 'id' ? 'Kata sandi berhasil di-reset!' : 'Password reset successfully!',
-        toastBlockSuccess: locale === 'id' ? 'Status akun berhasil diubah!' : 'Account status changed!',
-    };
 
     // ========================================================================
-    // MUTATIONS
+    // MUTATIONS (API CALLS)
     // ========================================================================
-    const addUserMutation = useMutation({
-        mutationFn: async (payload: CreateUserFormValues) => {
-            const { data, error } = await supabase.functions.invoke('create-user', {
-                body: {
-                    email: payload.email,
-                    fullName: payload.fullName,
-                    password: payload.password,
-                    role: payload.role,
-                    schoolId: school?.id
-                }
+
+    const generateSelectedMutation = useMutation({
+        mutationFn: async (usersTarget: AppUser[]) => {
+            const defaultPassword = 'Password123!';
+            const promises = usersTarget.map(user =>
+                supabase.functions.invoke('create-user', {
+                    body: { email: user.email, password: defaultPassword, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id }
+                })
+            );
+            await Promise.all(promises);
+            return usersTarget.length;
+        },
+        onSuccess: (count) => {
+            toast.success(`${count} Akun terpilih berhasil di-generate!`, { description: 'Password bawaan: Password123!' });
+            setIsGenerateSelectedModalOpen(false);
+            setSelectedUserIds([]);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
+    const generateBulkMasterMutation = useMutation({
+        mutationFn: async (targetGroup: string) => {
+            const { data, error } = await supabase.functions.invoke('generate-accounts-from-master', {
+                body: { targetGroup, schoolId: school?.id }
             });
-
-            if (error) throw new Error(error.message || 'Gagal terhubung ke server.');
+            if (error) throw new Error(error.message);
             if (data?.error) throw new Error(data.error);
             return data;
         },
         onSuccess: () => {
-            toast.success(t.toastAddSuccess);
+            toast.success(`Berhasil memproses pembuatan akun masal!`, { description: 'Seluruh data import telah dibuatkan akses login.' });
+            setIsGenerateAllModalOpen(false);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
+    const deleteSelectedMutation = useMutation({
+        mutationFn: async (userIds: string[]) => {
+            const promises = userIds.map(id =>
+                supabase.functions.invoke('delete-user', { body: { targetUserId: id } })
+            );
+            await Promise.all(promises);
+            return userIds.length;
+        },
+        onSuccess: (count) => {
+            toast.success(`${count} Pengguna terpilih berhasil dihapus!`);
+            setIsDeleteSelectedModalOpen(false);
+            setSelectedUserIds([]);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
+    const deleteAllBulkMutation = useMutation({
+        mutationFn: async (targetGroup: string) => {
+            const { data, error } = await supabase.functions.invoke('delete-users-by-role', {
+                body: { targetGroup, schoolId: school?.id }
+            });
+            if (error) throw new Error(error.message);
+            if (data?.error) throw new Error(data.error);
+            return data;
+        },
+        onSuccess: () => {
+            toast.success(`Seluruh akun pada kelompok ini berhasil dibersihkan!`);
+            setIsDeleteAllModalOpen(false);
+            setSelectedUserIds([]);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
+    const addUserMutation = useMutation({
+        mutationFn: async (payload: CreateUserFormValues) => {
+            const { data, error } = await supabase.functions.invoke('create-user', { body: { ...payload, schoolId: school?.id } });
+            if (error) throw new Error(error.message);
+            if (data?.error) throw new Error(data.error);
+            return data;
+        },
+        onSuccess: () => {
+            toast.success("Pengguna baru berhasil ditambahkan!");
             setIsAddUserModalOpen(false);
             addUserForm.reset();
             setShowAddPassword(false);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
+        }
     });
 
     const editUserMutation = useMutation({
         mutationFn: async (payload: { id: string, data: EditUserFormValues }) => {
-            const { data, error } = await supabase
-                .from('users')
-                .update({ fullName: payload.data.fullName, role: payload.data.role })
-                .eq('id', payload.id)
-                .select();
-
-            if (error) throw new Error(error.message);
-            if (!data || data.length === 0) {
-                throw new Error('Gagal memperbarui profil. Anda mungkin tidak memiliki hak akses (RLS).');
-            }
+            const { data, error } = await supabase.from('users').update({ fullName: payload.data.fullName, role: payload.data.role }).eq('id', payload.id).select();
+            if (error || !data) throw new Error(error?.message || "Gagal perbarui profil");
         },
         onSuccess: () => {
-            toast.success(t.toastEditSuccess);
+            toast.success("Profil berhasil diperbarui!");
             setUserToEdit(null);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
+        }
     });
 
     const resetPasswordMutation = useMutation({
         mutationFn: async (payload: { userId: string, newPass: string }) => {
-            const { data, error } = await supabase.functions.invoke('reset-password', {
-                body: {
-                    targetUserId: payload.userId,
-                    newPassword: payload.newPass
-                }
-            });
-
-            if (error) throw new Error(error.message || 'Gagal terhubung ke server.');
-            if (data?.error) throw new Error(data.error);
-            return data;
+            const { data, error } = await supabase.functions.invoke('reset-password', { body: { targetUserId: payload.userId, newPassword: payload.newPass } });
+            if (error || data?.error) throw new Error(error?.message || data?.error);
         },
         onSuccess: () => {
-            toast.success(t.toastResetSuccess);
+            toast.success("Password berhasil di-reset!");
             setUserToReset(null);
             resetPassForm.reset();
             setShowResetPassword(false);
-        },
-        onError: (error: Error) => toast.error(error.message)
+        }
     });
 
     const toggleStatusMutation = useMutation({
         mutationFn: async (payload: { userId: string, currentStatus: boolean }) => {
-            const { data, error } = await supabase
-                .from('users')
-                .update({ isActive: !payload.currentStatus })
-                .eq('id', payload.userId)
-                .select();
-
+            const { error } = await supabase.from('users').update({ isActive: !payload.currentStatus }).eq('id', payload.userId);
             if (error) throw new Error(error.message);
-            if (!data || data.length === 0) {
-                throw new Error('Gagal merubah status. Anda mungkin tidak memiliki hak akses (RLS).');
-            }
         },
         onSuccess: () => {
-            toast.success(t.toastBlockSuccess);
+            toast.success("Status akun berhasil diubah!");
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
+        }
     });
 
     const deleteUserMutation = useMutation({
         mutationFn: async (userId: string) => {
-            const { data, error } = await supabase.functions.invoke('delete-user', {
-                body: { targetUserId: userId }
-            });
-
-            if (error) throw new Error(error.message || 'Gagal terhubung ke server.');
-            if (data?.error) throw new Error(data.error);
-            return data;
+            const { data, error } = await supabase.functions.invoke('delete-user', { body: { targetUserId: userId } });
+            if (error || data?.error) throw new Error(error?.message || data?.error);
         },
         onSuccess: () => {
             toast.success("Pengguna berhasil dihapus secara permanen!");
-            setUserToDelete(null); // Tutup modal setelah berhasil
+            setUserToDelete(null);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
+        }
     });
 
     // ========================================================================
@@ -278,133 +270,104 @@ export function UserManagementPage() {
         queryKey: ['users-list', school?.id, isSuperAdmin],
         queryFn: async () => {
             if (!isSuperAdmin && !school?.id) return [];
-
-            let query = supabase
-                .from('users')
-                .select('*')
-                .order('createdAt', { ascending: false });
-
-            if (!isSuperAdmin && school) {
-                query = query.eq('schoolId', school.id);
-            }
-
+            let query = supabase.from('users').select('*').order('createdAt', { ascending: false });
+            if (!isSuperAdmin && school) query = query.eq('schoolId', school.id);
             const { data, error: fetchError } = await query;
             if (fetchError) throw new Error(fetchError.message);
-
             return (data as AppUser[]) || [];
         },
         enabled: isSuperAdmin || !!school?.id,
     });
 
     const filteredUsers: AppUser[] = (users || []).filter((user: AppUser) => {
-        const matchesSearch = user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-            user.email.toLowerCase().includes(searchQuery.toLowerCase());
-
+        const matchesSearch = user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) || user.email.toLowerCase().includes(searchQuery.toLowerCase());
         let matchesTab = true;
         if (activeTab === 'manajemen') matchesTab = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(user.role);
         else if (activeTab === 'staff') matchesTab = ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(user.role);
         else if (activeTab === 'siswa') matchesTab = user.role === 'SISWA';
         else if (activeTab === 'orangtua') matchesTab = user.role === 'ORANG_TUA';
-
         return matchesSearch && matchesTab;
     });
 
-    // Pagination Logic
+    // ========================================================================
+    // PAGINATION LOGIC
+    // ========================================================================
     const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
-    const paginatedUsers = filteredUsers.slice(
-        (currentPage - 1) * ITEMS_PER_PAGE,
-        currentPage * ITEMS_PER_PAGE
-    );
-
-    useEffect(() => {
-        if (totalPages > 0 && currentPage > totalPages) {
-            setCurrentPage(totalPages);
-        }
-    }, [totalPages, currentPage]);
+    const paginatedUsers = filteredUsers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
     const getPageNumbers = () => {
         const pages = [];
-        const maxVisible = 5;
-        let start = Math.max(1, currentPage - Math.floor(maxVisible / 2));
-        let end = Math.min(totalPages, start + maxVisible - 1);
-
-        if (end - start + 1 < maxVisible) {
-            start = Math.max(1, end - maxVisible + 1);
-        }
-
+        let start = Math.max(1, currentPage - 2);
+        let end = Math.min(totalPages, start + 4);
+        if (end - start < 4) start = Math.max(1, end - 4);
         for (let i = start; i <= end; i++) pages.push(i);
         return pages;
     };
 
-    // ========================================================================
-    // FORMS
-    // ========================================================================
-    const addUserForm = useForm<CreateUserFormValues>({
-        resolver: zodResolver(createUserSchema),
-        defaultValues: { fullName: '', email: '', password: '', role: 'GURU' }
-    });
+    // Fungsi submit halaman manual (Tekan Enter / Klik di luar)
+    const handleManualPageSubmit = (e?: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e && e.key !== 'Enter') return;
 
-    const editUserForm = useForm<EditUserFormValues>({
-        resolver: zodResolver(editUserSchema),
-        defaultValues: { fullName: '', role: 'GURU' }
-    });
+        let targetPage = parseInt(pageInput, 10);
+        if (isNaN(targetPage) || targetPage < 1) targetPage = 1;
+        if (targetPage > totalPages && totalPages > 0) targetPage = totalPages;
+
+        setCurrentPage(targetPage);
+        setPageInput(targetPage.toString());
+    };
+
+    const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.checked) setSelectedUserIds(paginatedUsers.map(u => u.id));
+        else setSelectedUserIds([]);
+    };
+
+    const handleToggleSelect = (userId: string) => {
+        setSelectedUserIds(prev => prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]);
+    };
+
+    // Forms Init
+    const addUserForm = useForm<CreateUserFormValues>({ resolver: zodResolver(createUserSchema), defaultValues: { fullName: '', email: '', password: '', role: 'GURU' } });
+    const editUserForm = useForm<EditUserFormValues>({ resolver: zodResolver(editUserSchema), defaultValues: { fullName: '', role: 'GURU' } });
+    const resetPassForm = useForm<ResetPasswordFormValues>({ resolver: zodResolver(resetPasswordSchema), defaultValues: { newPassword: '' } });
 
     useEffect(() => {
-        if (userToEdit) {
-            editUserForm.reset({
-                fullName: userToEdit.fullName,
-                role: userToEdit.role,
-            });
-        }
+        if (userToEdit) editUserForm.reset({ fullName: userToEdit.fullName, role: userToEdit.role });
     }, [userToEdit, editUserForm]);
 
-    const resetPassForm = useForm<ResetPasswordFormValues>({
-        resolver: zodResolver(resetPasswordSchema),
-        defaultValues: { newPassword: '' }
-    });
-
     const formatRoleName = (role: AppUserRole): string => role.replace(/_/g, ' ').replace(/\w\S*/g, (txt) => txt.charAt(0).toUpperCase() + txt.substr(1).toLowerCase());
-
     const getRoleBadgeColor = (role: AppUserRole): string => {
-        if (['SUPER_ADMIN'].includes(role)) return 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400 border-rose-200';
-        if (['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(role)) return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 border-purple-200';
-        if (['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(role)) return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400 border-blue-200';
-        if (role === 'SISWA') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400 border-emerald-200';
-        return 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300 border-slate-200';
+        if (['SUPER_ADMIN'].includes(role)) return 'bg-rose-100 text-rose-700 border-rose-200';
+        if (['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(role)) return 'bg-purple-100 text-purple-700 border-purple-200';
+        if (['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(role)) return 'bg-blue-100 text-blue-700 border-blue-200';
+        if (role === 'SISWA') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+        return 'bg-slate-100 text-slate-700 border-slate-200';
     };
 
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 relative">
 
-            {/* =================================================================== */}
-            {/* MODAL: ADD USER */}
-            {/* =================================================================== */}
+            {/* ============================== */}
+            {/* 1. MODALS */}
+            {/* ============================== */}
             <AnimatePresence>
+                {/* Modal Tambah Pengguna */}
                 {isAddUserModalOpen && isSuperAdmin && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card text-card-foreground rounded-2xl shadow-2xl border border-border max-w-md w-full p-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div>
-                                    <h3 className="text-xl font-bold">{t.addTitle}</h3>
-                                    <p className="text-muted-foreground text-sm">{t.addDesc}</p>
-                                </div>
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-md w-full p-6">
+                            <div className="flex justify-between mb-4">
+                                <div><h3 className="text-xl font-bold">Tambah Pengguna Baru</h3><p className="text-muted-foreground text-sm">Buat akun untuk memberi hak akses ke sistem.</p></div>
                                 <Button variant="ghost" size="icon" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}><X className="w-5 h-5" /></Button>
                             </div>
-
                             <Form {...addUserForm}>
                                 <form onSubmit={addUserForm.handleSubmit((data) => addUserMutation.mutate(data))} className="space-y-4">
-                                    <FormField control={addUserForm.control} name="fullName" render={({ field }) => (
-                                        <FormItem><FormLabel>{t.fName}</FormLabel><FormControl><Input placeholder="John Doe" {...field} /></FormControl><FormMessage /></FormItem>
-                                    )} />
-                                    <FormField control={addUserForm.control} name="email" render={({ field }) => (
-                                        <FormItem><FormLabel>{t.fEmail}</FormLabel><FormControl><Input type="email" placeholder="john@sekolah.com" {...field} /></FormControl><FormMessage /></FormItem>
-                                    )} />
+                                    <FormField control={addUserForm.control} name="fullName" render={({ field }) => (<FormItem><FormLabel>Nama Lengkap</FormLabel><FormControl><Input placeholder="John Doe" {...field} /></FormControl><FormMessage /></FormItem>)} />
+                                    <FormField control={addUserForm.control} name="email" render={({ field }) => (<FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" placeholder="john@sekolah.com" {...field} /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={addUserForm.control} name="role" render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>{t.fRole}</FormLabel>
+                                            <FormLabel>Role</FormLabel>
                                             <Select value={field.value} onValueChange={field.onChange}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
-                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto z-9999">
+                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto">
                                                     <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
                                                     <SelectItem value="ADMIN">Admin IT</SelectItem>
                                                     <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
@@ -423,62 +386,44 @@ export function UserManagementPage() {
                                     )} />
                                     <FormField control={addUserForm.control} name="password" render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>{t.fPass}</FormLabel>
+                                            <FormLabel>Password</FormLabel>
                                             <FormControl>
                                                 <div className="relative flex items-center">
                                                     <Input type={showAddPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
-                                                    <button type="button" onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none">
-                                                        {showAddPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                                    </button>
+                                                    <button type="button" onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground"><Eye size={16} /></button>
                                                 </div>
                                             </FormControl>
                                             <FormMessage />
                                         </FormItem>
                                     )} />
-
-                                    <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
-                                        <Button type="button" variant="outline" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }} disabled={addUserMutation.isPending}>{t.btnCancel}</Button>
-                                        <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={addUserMutation.isPending}>
-                                            {addUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />} {t.btnSave}
-                                        </Button>
+                                    <div className="flex justify-end gap-3 pt-4 border-t mt-6">
+                                        <Button type="button" variant="outline" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}>Batal</Button>
+                                        <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={addUserMutation.isPending}>{addUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />} Simpan</Button>
                                     </div>
                                 </form>
                             </Form>
                         </motion.div>
                     </div>
                 )}
-            </AnimatePresence>
 
-            {/* =================================================================== */}
-            {/* MODAL: EDIT USER */}
-            {/* =================================================================== */}
-            <AnimatePresence>
+                {/* Modal Edit Pengguna */}
                 {userToEdit && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card text-card-foreground rounded-2xl shadow-2xl border border-border max-w-md w-full p-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div>
-                                    <h3 className="text-xl font-bold">{t.editTitle}</h3>
-                                    <p className="text-muted-foreground text-sm">{t.editDesc}</p>
-                                </div>
-                                <Button variant="ghost" size="icon" onClick={() => { setUserToEdit(null); editUserForm.reset(); }}><X className="w-5 h-5" /></Button>
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-md w-full p-6">
+                            <div className="flex justify-between mb-4">
+                                <div><h3 className="text-xl font-bold">Edit Profil</h3><p className="text-muted-foreground text-sm">Perbarui informasi pengguna ini.</p></div>
+                                <Button variant="ghost" size="icon" onClick={() => setUserToEdit(null)}><X className="w-5 h-5" /></Button>
                             </div>
-
                             <Form {...editUserForm}>
                                 <form onSubmit={editUserForm.handleSubmit((data) => editUserMutation.mutate({ id: userToEdit.id, data }))} className="space-y-4">
-                                    <div className="space-y-2">
-                                        <FormLabel>{t.fEmail}</FormLabel>
-                                        <Input type="email" value={userToEdit.email} disabled className="bg-muted text-muted-foreground" />
-                                    </div>
-                                    <FormField control={editUserForm.control} name="fullName" render={({ field }) => (
-                                        <FormItem><FormLabel>{t.fName}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>
-                                    )} />
+                                    <div className="space-y-2"><FormLabel>Email</FormLabel><Input value={userToEdit.email} disabled className="bg-muted" /></div>
+                                    <FormField control={editUserForm.control} name="fullName" render={({ field }) => (<FormItem><FormLabel>Nama Lengkap</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
                                     <FormField control={editUserForm.control} name="role" render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>{t.fRole}</FormLabel>
+                                            <FormLabel>Role</FormLabel>
                                             <Select value={field.value} onValueChange={field.onChange} disabled={!isSuperAdmin}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder="Pilih Role" /></SelectTrigger></FormControl>
-                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto z-9999">
+                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto">
                                                     <SelectItem value="SUPER_ADMIN">Super Admin</SelectItem>
                                                     <SelectItem value="ADMIN">Admin IT</SelectItem>
                                                     <SelectItem value="KEPALA_SEKOLAH">Kepala Sekolah</SelectItem>
@@ -495,97 +440,132 @@ export function UserManagementPage() {
                                             <FormMessage />
                                         </FormItem>
                                     )} />
-
-                                    <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
-                                        <Button type="button" variant="outline" onClick={() => { setUserToEdit(null); editUserForm.reset(); }} disabled={editUserMutation.isPending}>{t.btnCancel}</Button>
-                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={editUserMutation.isPending}>
-                                            {editUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Edit className="w-4 h-4 mr-2" />} {t.btnSave}
-                                        </Button>
+                                    <div className="flex justify-end gap-3 pt-4 border-t mt-6">
+                                        <Button type="button" variant="outline" onClick={() => setUserToEdit(null)}>Batal</Button>
+                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={editUserMutation.isPending}>{editUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Edit className="w-4 h-4 mr-2" />} Simpan</Button>
                                     </div>
                                 </form>
                             </Form>
                         </motion.div>
                     </div>
                 )}
-            </AnimatePresence>
 
-            {/* =================================================================== */}
-            {/* MODAL: RESET PASSWORD */}
-            {/* =================================================================== */}
-            <AnimatePresence>
+                {/* Modal Reset Password */}
                 {userToReset && isSuperAdmin && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card text-card-foreground rounded-2xl shadow-2xl border border-border max-w-sm w-full p-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className="w-12 h-12 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center border border-blue-200 dark:border-blue-800">
-                                    <KeyRound className="w-6 h-6 text-blue-600 dark:text-blue-400" />
-                                </div>
-                                <Button variant="ghost" size="icon" onClick={() => { setUserToReset(null); resetPassForm.reset(); setShowResetPassword(false); }}><X className="w-5 h-5" /></Button>
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-sm w-full p-6">
+                            <div className="flex justify-between mb-4">
+                                <div className="w-12 h-12 bg-blue-100 flex items-center justify-center rounded-full"><KeyRound className="w-6 h-6 text-blue-600" /></div>
+                                <Button variant="ghost" size="icon" onClick={() => { setUserToReset(null); setShowResetPassword(false); }}><X className="w-5 h-5" /></Button>
                             </div>
-
-                            <h3 className="text-xl font-bold mb-1">{t.resetTitle}</h3>
-                            <p className="text-muted-foreground text-sm mb-6">{t.resetDesc} <strong className="text-foreground">{userToReset.email}</strong></p>
-
+                            <h3 className="text-xl font-bold mb-1">Reset Password</h3>
+                            <p className="text-muted-foreground text-sm mb-6">Atur ulang kata sandi untuk akun: <strong>{userToReset.email}</strong></p>
                             <Form {...resetPassForm}>
                                 <form onSubmit={resetPassForm.handleSubmit((data) => resetPasswordMutation.mutate({ userId: userToReset.id, newPass: data.newPassword }))} className="space-y-4">
                                     <FormField control={resetPassForm.control} name="newPassword" render={({ field }) => (
                                         <FormItem>
-                                            <FormLabel>{t.newPass}</FormLabel>
+                                            <FormLabel>Password Baru</FormLabel>
                                             <FormControl>
                                                 <div className="relative flex items-center">
                                                     <Input type={showResetPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
-                                                    <button type="button" onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground hover:text-foreground focus:outline-none">
-                                                        {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                                    </button>
+                                                    <button type="button" onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground"><Eye size={16} /></button>
                                                 </div>
                                             </FormControl>
                                             <FormMessage />
                                         </FormItem>
                                     )} />
-                                    <div className="flex justify-end gap-3 pt-4 border-t border-border mt-6">
-                                        <Button type="button" variant="outline" onClick={() => { setUserToReset(null); resetPassForm.reset(); setShowResetPassword(false); }} disabled={resetPasswordMutation.isPending}>{t.btnCancel}</Button>
-                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={resetPasswordMutation.isPending}>
-                                            {resetPasswordMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />} {t.btnSave}
-                                        </Button>
+                                    <div className="flex justify-end gap-3 pt-4 border-t mt-6">
+                                        <Button type="button" variant="outline" onClick={() => { setUserToReset(null); setShowResetPassword(false); }}>Batal</Button>
+                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={resetPasswordMutation.isPending}>{resetPasswordMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />} Simpan</Button>
                                     </div>
                                 </form>
                             </Form>
                         </motion.div>
                     </div>
                 )}
-            </AnimatePresence>
 
-            {/* =================================================================== */}
-            {/* MODAL: DELETE CONFIRMATION */}
-            {/* =================================================================== */}
-            <AnimatePresence>
+                {/* Modal Hapus Individu */}
                 {userToDelete && isSuperAdmin && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card text-card-foreground rounded-2xl shadow-2xl border border-border max-w-sm w-full p-6 text-center">
-                            <div className="w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center border border-red-200 dark:border-red-800 mx-auto mb-4">
-                                <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400" />
-                            </div>
-
-                            <h3 className="text-xl font-bold mb-2">{t.deleteTitle}</h3>
-                            <p className="text-muted-foreground text-sm mb-1">
-                                {t.deleteDesc}
-                            </p>
-                            <p className="font-semibold text-foreground mb-6">
-                                {userToDelete.fullName} ({userToDelete.email})
-                            </p>
-
-                            <div className="flex justify-center gap-3 pt-4 border-t border-border">
-                                <Button type="button" variant="outline" onClick={() => setUserToDelete(null)} disabled={deleteUserMutation.isPending}>
-                                    {t.btnCancel}
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-sm w-full p-6 text-center">
+                            <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
+                            <h3 className="text-xl font-bold mb-2">Hapus Pengguna</h3>
+                            <p className="text-muted-foreground text-sm mb-1">Apakah Anda yakin ingin menghapus akun ini permanen?</p>
+                            <p className="font-semibold text-foreground mb-6">{userToDelete.fullName}</p>
+                            <div className="flex justify-center gap-3">
+                                <Button variant="outline" onClick={() => setUserToDelete(null)}>Batal</Button>
+                                <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => deleteUserMutation.mutate(userToDelete.id)} disabled={deleteUserMutation.isPending}>
+                                    {deleteUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} Hapus
                                 </Button>
-                                <Button
-                                    type="button"
-                                    className="bg-red-600 hover:bg-red-700 text-white"
-                                    onClick={() => deleteUserMutation.mutate(userToDelete.id)}
-                                    disabled={deleteUserMutation.isPending}
-                                >
-                                    {deleteUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Ban className="w-4 h-4 mr-2" />}
-                                    {t.btnDelete}
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+
+                {/* Modal Bulk Generate Selected */}
+                {isGenerateSelectedModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border p-6 text-center max-w-sm w-full">
+                            <div className="w-12 h-12 bg-blue-100 flex items-center justify-center rounded-full mx-auto mb-4"><UserPlus className="w-6 h-6 text-blue-600" /></div>
+                            <h3 className="text-xl font-bold mb-2">Generate {selectedUserIds.length} Akun</h3>
+                            <p className="text-muted-foreground text-sm mb-6">Sistem akan membuatkan sandi bawaan untuk {selectedUserIds.length} data terpilih.</p>
+                            <div className="flex justify-center gap-3">
+                                <Button variant="outline" onClick={() => setIsGenerateSelectedModalOpen(false)}>Batal</Button>
+                                <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => generateSelectedMutation.mutate(filteredUsers.filter(u => selectedUserIds.includes(u.id)))} disabled={generateSelectedMutation.isPending}>
+                                    {generateSelectedMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UserPlus className="w-4 h-4 mr-2" />} Lanjutkan
+                                </Button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+
+                {/* Modal Bulk Generate All */}
+                {isGenerateAllModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border p-6 text-center max-w-sm w-full">
+                            <div className="w-12 h-12 bg-emerald-100 flex items-center justify-center rounded-full mx-auto mb-4"><DatabaseZap className="w-6 h-6 text-emerald-600" /></div>
+                            <h3 className="text-xl font-bold mb-2">Sinkronisasi & Generate Masal</h3>
+                            <p className="text-muted-foreground text-sm mb-6">Apakah Anda yakin ingin memproses seluruh data import di menu {activeTab.toUpperCase()} menjadi akun login?</p>
+                            <div className="flex justify-center gap-3">
+                                <Button variant="outline" onClick={() => setIsGenerateAllModalOpen(false)}>Batal</Button>
+                                <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generateBulkMasterMutation.mutate(activeTab)} disabled={generateBulkMasterMutation.isPending}>
+                                    {generateBulkMasterMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DatabaseZap className="w-4 h-4 mr-2" />} Eksekusi Masal
+                                </Button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+
+                {/* Modal Bulk Delete Selected */}
+                {isDeleteSelectedModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border p-6 text-center max-w-sm w-full">
+                            <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><Trash2 className="w-6 h-6 text-red-600" /></div>
+                            <h3 className="text-xl font-bold mb-2">Hapus {selectedUserIds.length} Akun</h3>
+                            <p className="text-muted-foreground text-sm mb-6">Data login untuk {selectedUserIds.length} pengguna yang dipilih akan dihapus permanen.</p>
+                            <div className="flex justify-center gap-3">
+                                <Button variant="outline" onClick={() => setIsDeleteSelectedModalOpen(false)}>Batal</Button>
+                                <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => deleteSelectedMutation.mutate(selectedUserIds)} disabled={deleteSelectedMutation.isPending}>
+                                    {deleteSelectedMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} Ya, Hapus
+                                </Button>
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+
+                {/* Modal Bulk Delete All */}
+                {isDeleteAllModalOpen && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
+                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border border-red-200 p-6 text-center max-w-sm w-full">
+                            <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
+                            <h3 className="text-xl font-bold mb-2">Peringatan Keras!</h3>
+                            <p className="text-muted-foreground text-sm mb-6">
+                                Anda akan MENGHAPUS SELURUH data login untuk kelompok <strong>{activeTab.toUpperCase()}</strong>. Lanjutkan?
+                            </p>
+                            <div className="flex justify-center gap-3">
+                                <Button variant="outline" onClick={() => setIsDeleteAllModalOpen(false)}>Batal</Button>
+                                <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => deleteAllBulkMutation.mutate(activeTab)} disabled={deleteAllBulkMutation.isPending}>
+                                    {deleteAllBulkMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} Bersihkan Semua
                                 </Button>
                             </div>
                         </motion.div>
@@ -593,94 +573,144 @@ export function UserManagementPage() {
                 )}
             </AnimatePresence>
 
-            {/* =================================================================== */}
-            {/* MAIN HEADER & FILTERS */}
-            {/* =================================================================== */}
+            {/* ============================== */}
+            {/* 2. HEADER & PAGE TITLE */}
+            {/* ============================== */}
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-2">
-                        <Users className="w-6 h-6 text-primary" /> {t.title}
+                        <Users className="w-6 h-6 text-primary" /> Manajemen Pengguna
                     </h1>
-                    <p className="text-sm text-muted-foreground mt-1">{t.subtitle}</p>
+                    <p className="text-sm text-muted-foreground mt-1">Kelola akses login, role, dan keamanan akun.</p>
                 </div>
                 {isSuperAdmin && (
                     <Button onClick={() => setIsAddUserModalOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-md">
-                        <Plus className="w-4 h-4 mr-2" /> {t.btnAdd}
+                        <Plus className="w-4 h-4 mr-2" /> Tambah Pengguna
                     </Button>
                 )}
             </div>
 
             <div className="bg-card text-card-foreground border border-border rounded-xl p-4 shadow-sm space-y-4">
-                <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-border pb-4">
-                    <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full md:w-auto overflow-x-auto">
-                        <TabsList className="bg-muted/50 p-1">
-                            <TabsTrigger value="semua" className="flex items-center gap-1.5 py-2"><Users size={14} /> {t.tabAll}</TabsTrigger>
-                            <TabsTrigger value="manajemen" className="flex items-center gap-1.5 py-2"><ShieldCheck size={14} /> {t.tabManagement}</TabsTrigger>
-                            <TabsTrigger value="staff" className="flex items-center gap-1.5 py-2"><UserCog size={14} /> {t.tabStaff}</TabsTrigger>
-                            <TabsTrigger value="siswa" className="flex items-center gap-1.5 py-2"><GraduationCap size={14} /> {t.tabStudent}</TabsTrigger>
-                            <TabsTrigger value="orangtua" className="flex items-center gap-1.5 py-2"><Users2 size={14} /> {t.tabParent}</TabsTrigger>
+
+                {/* ============================== */}
+                {/* 3. TABS FILTER (KEMBALI KE KOMPONEN BAWAAN UI) */}
+                {/* ============================== */}
+                <div className="w-full overflow-x-auto pb-1">
+                    {/* Menggunakan Tabs asli, dibungkus agar scrollable */}
+                    <Tabs value={activeTab} onValueChange={setActiveTab} className="w-max">
+                        <TabsList className="bg-muted/50 p-1 flex">
+                            <TabsTrigger value="semua" className="flex items-center gap-1.5 py-1.5"><Users size={14} /> Semua</TabsTrigger>
+                            <TabsTrigger value="manajemen" className="flex items-center gap-1.5 py-1.5"><ShieldCheck size={14} /> Manajemen & Admin</TabsTrigger>
+                            <TabsTrigger value="staff" className="flex items-center gap-1.5 py-1.5"><UserCog size={14} /> Guru & Staff</TabsTrigger>
+                            <TabsTrigger value="siswa" className="flex items-center gap-1.5 py-1.5"><GraduationCap size={14} /> Siswa</TabsTrigger>
+                            <TabsTrigger value="orangtua" className="flex items-center gap-1.5 py-1.5"><Users2 size={14} /> Orang Tua</TabsTrigger>
                         </TabsList>
                     </Tabs>
+                </div>
 
-                    <div className="relative w-full md:w-64">
+                {/* ============================== */}
+                {/* 4. TOOLBAR (SEARCH & DROPDOWN ACTION) */}
+                {/* ============================== */}
+                <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 border-b border-border pb-4">
+
+                    {/* Kolom Pencarian */}
+                    <div className="relative w-full md:max-w-xs xl:max-w-sm">
                         <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                        <Input
-                            placeholder={t.searchPlaceholder}
-                            value={searchQuery}
-                            onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchQuery(e.target.value)}
-                            className="pl-9 h-10 w-full"
-                        />
+                        <Input placeholder="Cari nama atau email..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9 w-full" />
+                    </div>
+
+                    {/* Grup Tombol Aksi (Tarik Turun / Dropdown) */}
+                    <div className="flex flex-wrap items-center gap-3">
+
+                        {/* Aksi Generate (Hanya muncul di Tab tertentu) */}
+                        {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4">
+                                        <DatabaseZap className="w-4 h-4 mr-2" />
+                                        Generate Data <ChevronDown className="w-4 h-4 ml-2 opacity-70" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-48">
+                                    <DropdownMenuItem className="cursor-pointer" onClick={() => setIsGenerateAllModalOpen(true)}>
+                                        <DatabaseZap className="w-4 h-4 mr-2" /> Generate Semua
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem className="cursor-pointer" disabled={selectedUserIds.length === 0} onClick={() => setIsGenerateSelectedModalOpen(true)}>
+                                        <UserPlus className="w-4 h-4 mr-2" /> Generate Terpilih ({selectedUserIds.length})
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        )}
+
+                        {/* Aksi Hapus (Hanya muncul untuk Super Admin) */}
+                        {isSuperAdmin && (
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <Button variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 h-9 px-4">
+                                        <Trash2 className="w-4 h-4 mr-2" />
+                                        Opsi Hapus <ChevronDown className="w-4 h-4 ml-2 opacity-70" />
+                                    </Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end" className="w-48">
+                                    {/* Hapus Semua Data (Sembunyikan di tab Semua/Manajemen agar aman) */}
+                                    {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                                        <>
+                                            <DropdownMenuItem className="cursor-pointer text-red-600 focus:text-red-700 focus:bg-red-50" onClick={() => setIsDeleteAllModalOpen(true)}>
+                                                <AlertCircle className="w-4 h-4 mr-2" /> Hapus Masal (Semua)
+                                            </DropdownMenuItem>
+                                            <DropdownMenuSeparator />
+                                        </>
+                                    )}
+                                    <DropdownMenuItem className="cursor-pointer text-red-600 focus:text-red-700 focus:bg-red-50" disabled={selectedUserIds.length === 0} onClick={() => setIsDeleteSelectedModalOpen(true)}>
+                                        <Trash2 className="w-4 h-4 mr-2" /> Hapus Terpilih ({selectedUserIds.length})
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                        )}
                     </div>
                 </div>
 
-                {/* =================================================================== */}
-                {/* TABLE */}
-                {/* =================================================================== */}
+                {/* ============================== */}
+                {/* 5. TABLE */}
+                {/* ============================== */}
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-border bg-muted/20">
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">{t.thNo}</th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{t.thName}</th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{t.thRole}</th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">{t.thStatus}</th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-right w-20">{t.thAction}</th>
+                                <th className="px-4 py-3 w-10 text-center">
+                                    <input
+                                        type="checkbox"
+                                        className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary"
+                                        checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length}
+                                        onChange={handleSelectAll}
+                                    />
+                                </th>
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-12">No.</th>
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">Pengguna</th>
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">Role</th>
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase">Status</th>
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-right w-20">Aksi</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
-                            {isError ? (
+                            {paginatedUsers.length === 0 ? (
                                 <tr>
-                                    <td colSpan={5} className="p-8 text-center text-red-500">
-                                        <AlertCircle className="w-8 h-8 mx-auto mb-3 opacity-80" />
-                                        <p className="font-medium">Gagal memuat data pengguna.</p>
-                                        <p className="text-sm mt-1 mb-4 opacity-80">
-                                            {error?.message || 'Terjadi kesalahan saat menghubungi server.'}
-                                        </p>
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            onClick={() => refetch()}
-                                            className="border-red-200 text-red-600 hover:bg-red-50 dark:hover:bg-red-950"
-                                        >
-                                            Coba Lagi
-                                        </Button>
-                                    </td>
-                                </tr>
-                            ) : isLoading ? (
-                                <tr>
-                                    <td colSpan={5} className="p-8 text-center">
-                                        <div className="w-6 h-6 border-2 border-emerald-600 border-t-transparent rounded-full animate-spin mx-auto"></div>
-                                    </td>
-                                </tr>
-                            ) : paginatedUsers.length === 0 ? (
-                                <tr>
-                                    <td colSpan={5} className="p-8 text-center text-muted-foreground italic">
-                                        {t.empty}
+                                    <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
+                                        Tidak ada pengguna yang ditemukan.
                                     </td>
                                 </tr>
                             ) : (
                                 paginatedUsers.map((user: AppUser, index: number) => (
-                                    <tr key={user.id} className="hover:bg-muted/30 transition-colors">
+                                    <tr key={user.id} className={`hover:bg-muted/30 transition-colors ${selectedUserIds.includes(user.id) ? 'bg-primary/5' : ''}`}>
+                                        <td className="px-4 py-3 text-center">
+                                            <input
+                                                type="checkbox"
+                                                className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary"
+                                                checked={selectedUserIds.includes(user.id)}
+                                                onChange={() => handleToggleSelect(user.id)}
+                                            />
+                                        </td>
                                         <td className="px-4 py-3 text-center text-sm text-muted-foreground font-medium">
                                             {(currentPage - 1) * ITEMS_PER_PAGE + index + 1}
                                         </td>
@@ -701,57 +731,35 @@ export function UserManagementPage() {
                                             </span>
                                         </td>
                                         <td className="px-4 py-3">
-                                            {user.isActive ? (
-                                                <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 text-xs font-medium">
-                                                    <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-                                                    {t.statusActive}
-                                                </span>
-                                            ) : (
-                                                <span className="inline-flex items-center gap-1.5 text-red-600 dark:text-red-400 text-xs font-medium">
-                                                    <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                                                    {t.statusBlocked}
-                                                </span>
-                                            )}
+                                            <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive ? 'text-emerald-600' : 'text-red-600'}`}>
+                                                <div className={`w-2 h-2 rounded-full ${user.isActive ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
+                                                {user.isActive ? 'Aktif' : 'Diblokir'}
+                                            </span>
                                         </td>
                                         <td className="px-4 py-3 text-right">
                                             <DropdownMenu>
                                                 <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-foreground">
-                                                        <MoreVertical className="w-4 h-4" />
-                                                    </Button>
+                                                    <Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button>
                                                 </DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground border-border">
-                                                    <DropdownMenuLabel className="text-xs text-muted-foreground font-normal">Aksi Akun</DropdownMenuLabel>
-
-                                                    <DropdownMenuItem className="cursor-pointer" onClick={() => setUserToEdit(user)}>
-                                                        <Edit className="w-4 h-4 mr-2" /> Edit Profil
-                                                    </DropdownMenuItem>
-
+                                                <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground">
+                                                    <DropdownMenuItem onClick={() => setUserToEdit(user)}><Edit className="w-4 h-4 mr-2" /> Edit Profil</DropdownMenuItem>
                                                     {isSuperAdmin && (
                                                         <>
-                                                            <DropdownMenuItem className="cursor-pointer" onClick={() => setUserToReset(user)}>
-                                                                <KeyRound className="w-4 h-4 mr-2" /> Reset Password
-                                                            </DropdownMenuItem>
-                                                            <DropdownMenuSeparator className="bg-border" />
-                                                            <DropdownMenuItem
-                                                                className={`cursor-pointer ${user.isActive ? 'text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30' : 'text-emerald-600 focus:text-emerald-600 focus:bg-emerald-50 dark:focus:bg-emerald-950/30'}`}
-                                                                onClick={() => toggleStatusMutation.mutate({ userId: user.id, currentStatus: user.isActive })}
-                                                            >
+                                                            <DropdownMenuItem onClick={() => setUserToReset(user)}><KeyRound className="w-4 h-4 mr-2" /> Reset Password</DropdownMenuItem>
+                                                            <DropdownMenuSeparator />
+                                                            <DropdownMenuItem className={user.isActive ? 'text-red-600' : 'text-emerald-600'} onClick={() => toggleStatusMutation.mutate({ userId: user.id, currentStatus: user.isActive })}>
                                                                 {user.isActive ? <Ban className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
                                                                 {user.isActive ? 'Blokir Akses' : 'Aktifkan Akun'}
                                                             </DropdownMenuItem>
-                                                        </>
-                                                    )}
-                                                    {/* Letakkan di bawah tombol Blokir Akses */}
-                                                    {isSuperAdmin && currentUser?.id !== user.id && (
-                                                        <>
-                                                            <DropdownMenuSeparator className="bg-border" />
-                                                            <DropdownMenuItem
-                                                                className="cursor-pointer text-red-600 focus:text-red-600 focus:bg-red-50 dark:focus:bg-red-950/30"
-                                                                onClick={() => setUserToDelete(user)}
-                                                            >
-                                                                <Ban className="w-4 h-4 mr-2" /> Hapus Akun
-                                                            </DropdownMenuItem>
+
+                                                            {currentUser?.id !== user.id && (
+                                                                <>
+                                                                    <DropdownMenuSeparator />
+                                                                    <DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setUserToDelete(user)}>
+                                                                        <Trash2 className="w-4 h-4 mr-2" /> Hapus Akun
+                                                                    </DropdownMenuItem>
+                                                                </>
+                                                            )}
                                                         </>
                                                     )}
                                                 </DropdownMenuContent>
@@ -764,43 +772,59 @@ export function UserManagementPage() {
                     </table>
                 </div>
 
-                {/* =================================================================== */}
-                {/* PAGINATION CONTROLS */}
-                {/* =================================================================== */}
+                {/* ============================== */}
+                {/* 6. PAGINATION DENGAN INPUT */}
+                {/* ============================== */}
                 {filteredUsers.length > 0 && (
-                    <div className="flex flex-col sm:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
-                        <span className="text-sm text-muted-foreground">
-                            {t.pageInfo} <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, filteredUsers.length)}</span> {t.pageOf} <span className="font-medium text-foreground">{filteredUsers.length}</span> {t.pageUsers}
+                    <div className="flex flex-col xl:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
+                        <span className="text-sm text-muted-foreground text-center xl:text-left">
+                            Menampilkan <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, filteredUsers.length)}</span> dari <span className="font-medium text-foreground">{filteredUsers.length}</span> pengguna
                         </span>
 
-                        <div className="flex items-center gap-1.5">
-                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
-                                <ChevronsLeft className="w-4 h-4" />
-                            </Button>
-
-                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
-                                <ChevronLeft className="w-4 h-4" />
-                            </Button>
-
-                            {getPageNumbers().map((pageNum) => (
-                                <Button
-                                    key={pageNum}
-                                    variant={currentPage === pageNum ? "default" : "outline"}
-                                    size="icon"
-                                    onClick={() => setCurrentPage(pageNum)}
-                                    className={`h-8 w-8 font-medium ${currentPage === pageNum ? 'bg-primary text-primary-foreground font-bold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
-                                >
-                                    {pageNum}
+                        <div className="flex flex-wrap items-center justify-center gap-2">
+                            <div className="flex items-center gap-1">
+                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
+                                    <ChevronsLeft className="w-4 h-4" />
                                 </Button>
-                            ))}
+                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground">
+                                    <ChevronLeft className="w-4 h-4" />
+                                </Button>
 
-                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
-                                <ChevronRight className="w-4 h-4" />
-                            </Button>
+                                {getPageNumbers().map((pageNum) => (
+                                    <Button
+                                        key={pageNum}
+                                        variant={currentPage === pageNum ? "default" : "outline"}
+                                        size="icon"
+                                        onClick={() => setCurrentPage(pageNum)}
+                                        className={`h-8 w-8 font-medium ${currentPage === pageNum ? 'bg-primary text-primary-foreground font-bold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}
+                                    >
+                                        {pageNum}
+                                    </Button>
+                                ))}
 
-                            <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
-                                <ChevronsRight className="w-4 h-4" />
-                            </Button>
+                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
+                                    <ChevronRight className="w-4 h-4" />
+                                </Button>
+                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground">
+                                    <ChevronsRight className="w-4 h-4" />
+                                </Button>
+                            </div>
+
+                            {totalPages > 1 && (
+                                <div className="flex items-center gap-2 ml-0 sm:ml-4 sm:pl-4 sm:border-l border-border">
+                                    <span className="text-sm text-muted-foreground">Ke Hal:</span>
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        max={totalPages}
+                                        value={pageInput}
+                                        onChange={(e) => setPageInput(e.target.value)}
+                                        onKeyDown={handleManualPageSubmit}
+                                        onBlur={() => handleManualPageSubmit()}
+                                        className="w-16 h-8 text-center px-1 py-0"
+                                    />
+                                </div>
+                            )}
                         </div>
                     </div>
                 )}

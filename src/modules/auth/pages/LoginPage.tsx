@@ -56,7 +56,7 @@ export function LoginPage() {
     <div className="min-h-screen flex">
       {/* Left Panel - Branding */}
       <div className="hidden lg:flex lg:w-1/2 xl:w-[55%] relative overflow-hidden">
-        <div className="absolute inset-0 bg-gradient-to-br from-indigo-600 via-purple-600 to-violet-700" />
+        <div className="absolute inset-0 bg-linear-to-br from-indigo-600 via-purple-600 to-violet-700" />
 
         <div className="absolute inset-0 opacity-20">
           <div className="absolute top-20 left-20 w-72 h-72 bg-white/10 rounded-full blur-3xl animate-pulse" />
@@ -131,7 +131,7 @@ export function LoginPage() {
           className="w-full max-w-md"
         >
           <div className="lg:hidden flex items-center gap-3 mb-8">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+            <div className="w-10 h-10 rounded-xl bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
               <School size={24} className="text-white" />
             </div>
             <div>
@@ -148,7 +148,7 @@ export function LoginPage() {
           <form onSubmit={handleLogin} className="space-y-5">
             <div>
               <label className="text-sm font-medium text-foreground mb-1.5 block">
-                {locale === 'id' ? 'Email / Username (NISN/NIP)' : 'Email / Username'}
+                {locale === 'id' ? 'Email / NIP / NISN / Username' : 'Email / NIP / NISN / Username'}
               </label>
               <div className="relative">
                 <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
@@ -163,7 +163,8 @@ export function LoginPage() {
                     'focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary/50',
                     'transition-all'
                   )}
-                  placeholder={locale === 'id' ? 'Email asli atau NISN/NIP' : 'Real email or NISN/NIP'}
+                  // PERBAIKAN: Memberikan contoh pengisian yang jelas termasuk untuk Orang Tua
+                  placeholder={locale === 'id' ? 'Cth: budi@mail.com, 1980.., 001.., W-001..' : 'Ex: budi@mail.com, 1980.., 001.., W-001..'}
                   required
                 />
               </div>
@@ -227,7 +228,7 @@ export function LoginPage() {
               disabled={loading}
               className={cn(
                 'w-full flex items-center justify-center gap-2 py-3 rounded-lg font-medium text-sm transition-all',
-                'bg-gradient-to-r from-indigo-500 to-purple-600 text-white',
+                'bg-linear-to-r from-indigo-500 to-purple-600 text-white',
                 'hover:from-indigo-600 hover:to-purple-700 hover:shadow-lg hover:shadow-indigo-500/25',
                 'disabled:opacity-60 disabled:cursor-not-allowed',
                 'active:scale-[0.98]'

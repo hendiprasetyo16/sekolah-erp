@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, GraduationCap, Calendar, Wallet,
   Package, FileText, Award, BarChart3, Settings, ChevronLeft,
   ChevronRight, School, ChevronDown, BookOpen, CreditCard, Receipt,
-  Building2, CalendarDays, ShieldCheck, ClipboardCheck, UserCheck // tambahan attendance icons
+  Building2, CalendarDays, ShieldCheck, ClipboardCheck, UserCheck
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
@@ -14,12 +14,14 @@ import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { Module } from '@/types/permission.types';
 
+// 1. TAMBAH PROPERTI 'allowedRoles' UNTUK KONTROL AKSES SPESIFIK
 interface NavItem {
   label: string;
   icon: React.ReactNode;
   href: string;
   module?: Module;
   badge?: number;
+  allowedRoles?: string[];
 }
 
 interface NavGroup {
@@ -29,7 +31,6 @@ interface NavGroup {
 }
 
 export function Sidebar() {
-  // 2. TAMBAHKAN `locale` UNTUK TRANSLASI MANUAL JIKA DIBUTUHKAN
   const { t, locale } = useTranslation();
   const { sidebarCollapsed, setSidebarCollapsed } = useUIStore();
   const { hasAnyPermission } = usePermission();
@@ -60,7 +61,14 @@ export function Sidebar() {
       id: 'academic',
       title: t('sidebar.academic'),
       items: [
-        { label: t('sidebar.masterData'), icon: <Building2 size={20} />, href: '/academic/master-data', module: 'academic' },
+        // DIBATASI: Hanya role ini yang bisa melihat menu Data Master
+        {
+          label: t('sidebar.masterData'),
+          icon: <Building2 size={20} />,
+          href: '/academic/master-data',
+          module: 'academic',
+          allowedRoles: ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH']
+        },
         { label: t('sidebar.students'), icon: <Users size={20} />, href: '/students', module: 'students' },
         { label: t('sidebar.teachers'), icon: <GraduationCap size={20} />, href: '/teachers', module: 'teachers' },
         { label: t('sidebar.schedules'), icon: <Calendar size={20} />, href: '/schedules', module: 'schedules' },
@@ -102,23 +110,28 @@ export function Sidebar() {
       items: [
         { label: t('sidebar.reports'), icon: <BarChart3 size={20} />, href: '/reports', module: 'reports' },
 
-        // PERUBAHAN: Mengubah href menjadi '/admin/users' agar sesuai dengan router baru
+        // DIBATASI: Hanya Admin yang bisa mengelola User
         {
           label: locale === 'id' ? 'Akses Pengguna' : 'User Access',
           icon: <ShieldCheck size={20} />,
           href: '/admin/users',
-          module: 'administration' // Opsional: Diubah ke 'administration' agar izin aksesnya lebih masuk akal
+          module: 'administration',
+          allowedRoles: ['SUPER_ADMIN', 'ADMIN']
         },
 
-        // Menu Settings berdiri sendiri dengan href '/settings'
         { label: t('sidebar.settings'), icon: <Settings size={20} />, href: '/settings', module: 'settings' },
       ],
     },
   ];
 
+  // 2. LOGIKA FILTERING MENU (Berlaku juga untuk role validation)
   const filteredGroups = navGroups.map(group => ({
     ...group,
-    items: group.items.filter(item => !item.module || hasAnyPermission(item.module)),
+    items: group.items.filter(item => {
+      const hasModule = !item.module || hasAnyPermission(item.module);
+      const hasRole = !item.allowedRoles || (user?.role && item.allowedRoles.includes(user.role));
+      return hasModule && hasRole;
+    }),
   })).filter(group => group.items.length > 0);
 
   return (
@@ -153,7 +166,13 @@ export function Sidebar() {
         </AnimatePresence>
       </div>
 
-      <nav className={cn("flex-1 overflow-y-auto py-4 hide-scrollbar", sidebarCollapsed ? "px-2" : "px-4")}>
+      {/* 3. PERBAIKAN SCROLLBAR DI SINI */}
+      {/* Menghapus 'hide-scrollbar' dan menambahkan scrollbar styling custom agar rapi dan bisa ditarik/diklik */}
+      <nav className={cn(
+        "flex-1 overflow-y-auto overflow-x-hidden py-4",
+        "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/40",
+        sidebarCollapsed ? "px-2" : "px-4"
+      )}>
         {filteredGroups.map((group) => (
           <div key={group.id} className={cn("mb-4", sidebarCollapsed && "mb-2")}>
             {group.title && group.title !== 'main' && !sidebarCollapsed && (

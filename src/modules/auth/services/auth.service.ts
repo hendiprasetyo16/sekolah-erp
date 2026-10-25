@@ -2,8 +2,9 @@ import { supabase } from '@/services/supabase.client';
 import type { User, School, AcademicYear } from '@/types/common.types';
 
 export interface LoginPayload {
-  identifier: string; // Ubah dari 'email' menjadi 'identifier'
+  identifier: string; 
   password: string;
+  // PERBAIKAN: loginAs dihapus dari payload
 }
 
 export interface LoginResponse {
@@ -23,9 +24,11 @@ export const authService = {
     try {
       // 1. LOGIKA DUMMY EMAIL
       const cleanIdentifier = payload.identifier.trim().toLowerCase();
+      
+      // PERBAIKAN KUNCI: Ubah @sekolah.local menjadi @sistem.local sesuai Edge Function
       const loginEmail = cleanIdentifier.includes('@')
         ? cleanIdentifier
-        : `${cleanIdentifier}@sekolah.local`;
+        : `${cleanIdentifier}@sistem.local`;
 
       // 2. Verifikasi Email & Password melalui Supabase Auth
       const { data: authData, error: authError } = await supabase.auth.signInWithPassword({
@@ -42,11 +45,9 @@ export const authService = {
         };
       }
 
-      // ... (sisanya biarkan sama persis seperti kode Anda sebelumnya) ...
-
       const userId = authData.user.id;
 
-      // 2. Ambil Profil User dari public.users (Bypass RLS dengan auth.uid)
+      // 3. Ambil Profil User dari public.users
       const { data: profile, error: profileError } = await supabase
         .from('users')
         .select('*')
@@ -54,7 +55,6 @@ export const authService = {
         .single();
 
       if (profileError || !profile) {
-        // Jika user ada di Auth tapi profil publiknya terhapus
         return {
           success: false,
           data: null as unknown as LoginResponse,
@@ -62,7 +62,7 @@ export const authService = {
         };
       }
 
-      // 3. Ambil Data Sekolah dan Tahun Ajaran Aktif (Jika Punya)
+      // 4. Ambil Data Sekolah dan Tahun Ajaran Aktif
       let schoolData = null;
       let academicYearData = null;
 
@@ -72,7 +72,6 @@ export const authService = {
           supabase.from('academic_years').select('*').eq('schoolId', profile.schoolId).eq('isActive', true).maybeSingle()
         ]);
 
-        // RLS mungkin membuat ini error/null jika hak akses tidak valid
         schoolData = schoolRes.data || null;
         academicYearData = ayRes.data || null;
       }
@@ -97,10 +96,7 @@ export const authService = {
   },
 
   async logout(): Promise<void> {
-    // Menghancurkan sesi aktif di server Supabase
     await supabase.auth.signOut();
-
-    // Membersihkan semua sisa cache di browser
     localStorage.removeItem('auth-storage');
     localStorage.clear();
   },
