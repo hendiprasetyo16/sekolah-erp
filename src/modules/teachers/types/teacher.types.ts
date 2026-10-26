@@ -2,6 +2,7 @@ import type { PaginatedResponse } from '@/types/common.types';
 
 export interface TeacherListItem {
   id: string;
+  schoolId: string; // <-- Tambahkan baris ini
   fullName: string;
   nip?: string;
   nuptk?: string;

@@ -84,7 +84,7 @@ interface FieldProps {
   type?: "text" | "number" | "date" | "email" | "select" | "boolean";
   placeholder?: string;
   options?: { label: string; value: string }[];
-  className?: string; // Menambahkan prop className opsional
+  className?: string; // Menambahkan prop className opsional agar kustomisasi warna berfungsi
 }
 
 export default function TeacherFormPage() {
@@ -159,7 +159,6 @@ export default function TeacherFormPage() {
 
   const mutation = useMutation({
     mutationFn: (values: TeacherFormValues) => {
-      // INJEKSI SCHOOL ID DISINI SEPERTI INSTRUKSI SEBELUMNYA
       if (!school?.id) throw new Error("School ID tidak ditemukan. Harap pastikan institusi sudah dipilih.");
 
       const payload = {
@@ -168,6 +167,7 @@ export default function TeacherFormPage() {
         gender: values.gender as 'L' | 'P',
         isActive: true,
         isCertified: values.isCertified ?? false,
+        maxHoursPerWeek: values.maxHoursPerWeek ?? 24, // Menyediakan nilai default jika undefined
       };
 
       if (!payload.tanggalCpns) delete payload.tanggalCpns;
@@ -176,7 +176,7 @@ export default function TeacherFormPage() {
       if (!payload.joinDate) delete payload.joinDate;
       if (!payload.birthDate) delete payload.birthDate;
 
-      return isEdit ? teacherService.update(id!, payload as any) : teacherService.create(payload as any);
+      return isEdit ? teacherService.update(id!, payload) : teacherService.create(payload);
     },
     onSuccess: () => {
       toast.success(isEdit ? dict.toastUpdateSuccess : dict.toastCreateSuccess);
@@ -192,7 +192,7 @@ export default function TeacherFormPage() {
     return <div className="flex h-100 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
 
-  // Tambahkan prop className opsional untuk kustomisasi warna label secara spesifik
+  // Komponen Field sekarang menerima className dan menurunkannya ke FormItem dan FormLabel
   const Field = ({ name, label, type = "text", placeholder = "", options = [], className = "" }: FieldProps) => (
     <FormField control={form.control} name={name} render={({ field }) => (
       <FormItem className={className}>
@@ -288,7 +288,7 @@ export default function TeacherFormPage() {
                     name="tugasTambahan"
                     label="Tugas Tambahan (Opsional)"
                     placeholder="Contoh: Kepala Sekolah, Bendahara BOS, Wakasek Kurikulum..."
-                    className="text-amber-900 dark:text-amber-300 font-semibold"
+                    className="text-amber-700 dark:text-amber-300 font-semibold"
                   />
                   <p className="text-xs text-amber-700 dark:text-amber-400 mt-2 font-medium">
                     *Tugas tambahan ini akan muncul sebagai label khusus (highlight) di profil guru.
