@@ -137,16 +137,60 @@ export function UserManagementPage() {
 
     const generateBulkMasterMutation = useMutation({
         mutationFn: async (targetGroup: string) => {
-            const { data, error } = await supabase.functions.invoke('generate-accounts-from-master', { body: { targetGroup, schoolId: school?.id } });
-            if (error) throw new Error(error.message);
-            if (data?.error) throw new Error(data.error);
+            // Ambil session token untuk dikirim di header Authorization
+            const { data: { session } } = await supabase.auth.getSession();
+
+            const response = await fetch(
+                `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-accounts-from-master`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${session?.access_token}` // <--- Kirim token di sini
+                    },
+                    body: JSON.stringify({
+                        targetGroup,
+                        schoolId: school?.id
+                    })
+                }
+            );
+
+            const data = await response.json();
+
+            if (!response.ok || data.error) {
+                throw new Error(data.error || 'Terjadi kesalahan sistem');
+            }
+
             return data;
         },
         onSuccess: (data) => {
-            toast.success(tGlobal('info'), { description: data.message });
-            setIsGenerateAllModalOpen(false); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            // Tampilkan pesan sukses dasar
+            toast.success('Proses Selesai', { description: data.message });
+
+            // Jika ada peringatan kegagalan, beri tahu pengguna
+            if (data.failed > 0) {
+                toast.warning(`${data.failed} akun gagal diproses.`, {
+                    description: 'Buka console untuk melihat detail kegagalan.'
+                });
+                console.warn("Detail kegagalan:", data.failures);
+            }
+
+            // Jika masih ada sisa antrean, arahkan pengguna untuk mengklik tombol lagi
+            if (data.remaining > 0) {
+                toast.info(`Tersisa ${data.remaining} antrean.`, {
+                    description: 'Silakan klik Generate Data lagi untuk melanjutkan.'
+                });
+            } else {
+                // Jika antrean habis, tutup modal
+                setIsGenerateAllModalOpen(false);
+            }
+
+            // Refresh tabel
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => {
+            toast.error('Gagal Generate', { description: error.message });
+        }
     });
 
     const deleteSelectedMutation = useMutation({
