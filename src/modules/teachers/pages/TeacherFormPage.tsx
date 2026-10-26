@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import type { Path } from 'react-hook-form'; // Perbaikan 1: Impor tipe dipisah
+import type { Path } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useQuery, useMutation } from '@tanstack/react-query';
@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 import { teacherService } from '../services/teacher.service';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useAuthStore } from '@/modules/auth/store/auth.store';
 
 const teacherSchema = z.object({
   fullName: z.string().min(1, 'Nama lengkap wajib diisi / Full name is required'),
@@ -83,12 +84,14 @@ interface FieldProps {
   type?: "text" | "number" | "date" | "email" | "select" | "boolean";
   placeholder?: string;
   options?: { label: string; value: string }[];
+  className?: string; // Menambahkan prop className opsional
 }
 
 export default function TeacherFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { locale } = useTranslation();
+  const { school } = useAuthStore();
   const isEdit = Boolean(id);
 
   const dict = {
@@ -156,11 +159,15 @@ export default function TeacherFormPage() {
 
   const mutation = useMutation({
     mutationFn: (values: TeacherFormValues) => {
+      // INJEKSI SCHOOL ID DISINI SEPERTI INSTRUKSI SEBELUMNYA
+      if (!school?.id) throw new Error("School ID tidak ditemukan. Harap pastikan institusi sudah dipilih.");
+
       const payload = {
         ...values,
+        schoolId: school.id,
         gender: values.gender as 'L' | 'P',
         isActive: true,
-        isCertified: values.isCertified ?? false, // Perbaikan 2: Paksa menjadi boolean
+        isCertified: values.isCertified ?? false,
       };
 
       if (!payload.tanggalCpns) delete payload.tanggalCpns;
@@ -177,7 +184,7 @@ export default function TeacherFormPage() {
     },
     onError: (error) => {
       console.error(error);
-      toast.error(dict.toastError);
+      toast.error(error instanceof Error ? error.message : dict.toastError);
     },
   });
 
@@ -185,10 +192,11 @@ export default function TeacherFormPage() {
     return <div className="flex h-100 items-center justify-center"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
 
-  const Field = ({ name, label, type = "text", placeholder = "", options = [] }: FieldProps) => (
+  // Tambahkan prop className opsional untuk kustomisasi warna label secara spesifik
+  const Field = ({ name, label, type = "text", placeholder = "", options = [], className = "" }: FieldProps) => (
     <FormField control={form.control} name={name} render={({ field }) => (
-      <FormItem>
-        <FormLabel>{label}</FormLabel>
+      <FormItem className={className}>
+        <FormLabel className={className}>{label}</FormLabel>
         {type === "select" ? (
           <Select onValueChange={field.onChange} value={field.value as string || ""}>
             <FormControl><SelectTrigger><SelectValue placeholder={placeholder} /></SelectTrigger></FormControl>
@@ -258,7 +266,7 @@ export default function TeacherFormPage() {
                 <Field name="pangkatGolongan" label="Pangkat / Golongan" />
                 <Field name="sumberGaji" label="Sumber Gaji" />
 
-                <div className="sm:col-span-2 border-t mt-4 pt-4 font-semibold">Data SK & Pengangkatan</div>
+                <div className="sm:col-span-2 border-t border-border mt-4 pt-4 font-semibold text-foreground">Data SK & Pengangkatan</div>
                 <Field name="skCpns" label="SK CPNS" />
                 <Field name="tanggalCpns" label="Tanggal CPNS" type="date" />
                 <Field name="skPengangkatan" label="SK Pengangkatan" />
@@ -273,21 +281,28 @@ export default function TeacherFormPage() {
             {/* TAB 3: Tugas & Lisensi */}
             <TabsContent value="tasks">
               <Card><CardContent className="grid gap-4 sm:grid-cols-2 pt-6">
-                <div className="sm:col-span-2 p-4 bg-yellow-50 dark:bg-slate-900 rounded-lg border border-yellow-200 dark:border-yellow-700 shadow-sm">
-                  <Field name="tugasTambahan" label="Tugas Tambahan (Opsional)" placeholder="Contoh: Kepala Sekolah, Bendahara BOS, Wakasek Kurikulum..." />
-                  <p className="text-xs text-yellow-700 dark:text-yellow-400 mt-2 font-medium">
+
+                {/* PERBAIKAN UI UNTUK MODE GELAP (TUGAS TAMBAHAN) */}
+                <div className="sm:col-span-2 p-4 bg-amber-500/10 rounded-lg border border-amber-500/20 shadow-none">
+                  <Field
+                    name="tugasTambahan"
+                    label="Tugas Tambahan (Opsional)"
+                    placeholder="Contoh: Kepala Sekolah, Bendahara BOS, Wakasek Kurikulum..."
+                    className="text-amber-900 dark:text-amber-300 font-semibold"
+                  />
+                  <p className="text-xs text-amber-700 dark:text-amber-400 mt-2 font-medium">
                     *Tugas tambahan ini akan muncul sebagai label khusus (highlight) di profil guru.
                   </p>
                 </div>
 
-                <div className="sm:col-span-2 border-t mt-2 pt-4 font-semibold">Pendidikan & Akademik</div>
+                <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">Pendidikan & Akademik</div>
                 <Field name="education" label="Pendidikan Terakhir" type="select" options={[{ label: 'S3', value: 'S3' }, { label: 'S2', value: 'S2' }, { label: 'S1', value: 'S1' }, { label: 'D4', value: 'D4' }, { label: 'SMA', value: 'SMA' }]} />
                 <Field name="major" label="Jurusan" />
                 <Field name="university" label="Universitas / Perguruan Tinggi" />
                 <div className="sm:col-span-2"><Field name="subjects" label="Mata Pelajaran (Pisahkan dengan Koma)" placeholder="Matematika, IPA" /></div>
                 <Field name="maxHoursPerWeek" label="Maks. Jam per Minggu" type="number" />
 
-                <div className="sm:col-span-2 border-t mt-4 pt-4 font-semibold">Sertifikasi & Lisensi</div>
+                <div className="sm:col-span-2 border-t border-border mt-4 pt-4 font-semibold text-foreground">Sertifikasi & Lisensi</div>
                 <Field name="isCertified" label="Sudah Sertifikasi Guru?" type="boolean" />
                 <Field name="certificationNumber" label="Nomor Sertifikasi" />
                 <Field name="sudahLisensiKepalaSekolah" label="Lisensi Kepala Sekolah?" type="boolean" />
@@ -301,14 +316,14 @@ export default function TeacherFormPage() {
             {/* TAB 4: Keluarga & Bank */}
             <TabsContent value="family">
               <Card><CardContent className="grid gap-4 sm:grid-cols-2 pt-6">
-                <div className="sm:col-span-2 font-semibold">Keluarga</div>
+                <div className="sm:col-span-2 font-semibold text-foreground">Keluarga</div>
                 <Field name="statusPerkawinan" label="Status Perkawinan" type="select" options={[{ label: 'Kawin', value: 'Kawin' }, { label: 'Belum Kawin', value: 'Belum Kawin' }, { label: 'Janda/Duda', value: 'Janda/Duda' }]} />
                 <Field name="namaSuamiIstri" label="Nama Suami / Istri" />
                 <Field name="nipSuamiIstri" label="NIP Suami / Istri" />
                 <Field name="pekerjaanSuamiIstri" label="Pekerjaan Suami / Istri" />
                 <Field name="karisKarsu" label="Karis / Karsu" />
 
-                <div className="sm:col-span-2 border-t mt-4 pt-4 font-semibold">Pajak & Rekening Bank</div>
+                <div className="sm:col-span-2 border-t border-border mt-4 pt-4 font-semibold text-foreground">Pajak & Rekening Bank</div>
                 <Field name="npwp" label="NPWP" />
                 <Field name="namaWajibPajak" label="Nama Wajib Pajak" />
                 <Field name="baseSalary" label="Gaji Pokok (Nominal)" type="number" />
@@ -323,7 +338,7 @@ export default function TeacherFormPage() {
             <Button variant="outline" type="button" onClick={() => navigate('/teachers')} disabled={mutation.isPending}>
               <X className="mr-2 h-4 w-4" /> {dict.btnCancel}
             </Button>
-            <Button type="submit" className="bg-blue-600 hover:bg-blue-700" disabled={mutation.isPending}>
+            <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={mutation.isPending}>
               {mutation.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               <Save className="mr-2 h-4 w-4" /> {dict.btnSave}
             </Button>

@@ -243,6 +243,24 @@ export function TeacherListPage() {
     return 'HONORER';
   };
 
+  // Fungsi Helper Konversi Tanggal Excel ke YYYY-MM-DD
+  const parseExcelDate = (excelDate: any) => {
+    if (!excelDate) return undefined;
+
+    // Jika format teks "YYYY-MM-DD"
+    if (typeof excelDate === 'string' && excelDate.includes('-')) {
+      return excelDate.split('T')[0];
+    }
+
+    // Jika format angka serial excel (misal: 44197 = 1 Jan 2021)
+    if (typeof excelDate === 'number') {
+      const date = new Date((excelDate - (25567 + 2)) * 86400 * 1000);
+      return date.toISOString().split('T')[0];
+    }
+
+    return undefined;
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !school?.id) return;
@@ -253,22 +271,12 @@ export function TeacherListPage() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      // Range: 4 artinya mengabaikan 4 baris pertama (biasanya kop Excel Dapodik)
       const jsonData = XLSX.utils.sheet_to_json(worksheet, { range: 4, raw: false });
 
       if (jsonData.length === 0) throw new Error('File Excel kosong/format salah.');
 
       const payloads = jsonData.map((row: any) => {
-        let formattedBirthDate = undefined;
-        let formattedJoinDate = undefined;
-        if (row['Tanggal Lahir']) {
-          const d = new Date(row['Tanggal Lahir']);
-          if (!isNaN(d.getTime())) formattedBirthDate = d.toISOString().split('T')[0];
-        }
-        if (row['TMT Pengangkatan']) {
-          const d = new Date(row['TMT Pengangkatan']);
-          if (!isNaN(d.getTime())) formattedJoinDate = d.toISOString().split('T')[0];
-        }
-
         return {
           schoolId: school.id,
           fullName: String(row['Nama'] || '').trim() || 'Tanpa Nama',
@@ -277,7 +285,11 @@ export function TeacherListPage() {
           nuptk: String(row['NUPTK'] || '').trim() || undefined,
           status: mapStatusKepegawaian(row['Status Kepegawaian']),
           position: String(row['Jenis PTK'] || '').trim() || 'Guru',
-          joinDate: formattedJoinDate,
+
+          // MENGGUNAKAN HELPER BARU
+          joinDate: parseExcelDate(row['TMT Pengangkatan']),
+          birthDate: parseExcelDate(row['Tanggal Lahir']),
+
           isActive: true,
           isCertified: false,
           maxHoursPerWeek: 24,
