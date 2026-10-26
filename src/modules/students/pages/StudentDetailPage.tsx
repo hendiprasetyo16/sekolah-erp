@@ -12,12 +12,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-
-// 1. IMPORT USEAUTHSTORE UNTUK MENGAMBIL ROLE PENGGUNA
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { StudentParent, StudentEconomic } from '../types/student.types';
 
-// Definisi Strict Type lokal untuk menangkap field tambahan Dapodik
+// Definisi Strict Type lokal untuk menangkap field tambahan Dapodik & Pembaruan Database
 interface ExtendedStudentData {
   id: string;
   nis: string;
@@ -31,6 +29,7 @@ interface ExtendedStudentData {
   birthDate: string;
   religion: string;
   address: string;
+  dusun?: string; // Field Baru
   rt?: string;
   rw?: string;
   kelurahan?: string;
@@ -38,14 +37,15 @@ interface ExtendedStudentData {
   city: string;
   province: string;
   postalCode?: string;
+  telepon?: string; // Field Baru
   phone?: string;
   email?: string;
   status: string;
   entryDate: string;
   className: string;
   gradeLevel: number;
-  parents?: StudentParent[];
-  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number };
+  parents?: (StudentParent & { birthYear?: string })[]; // Pembaruan Tahun Lahir
+  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number; hasKks?: boolean; kksNumber?: string };
   noAktaLahir?: string;
   anakKe?: number;
   jmlSaudara?: number;
@@ -59,6 +59,14 @@ interface ExtendedStudentData {
   bank?: string;
   noRekening?: string;
   namaRekening?: string;
+
+  // Field yang sebelumnya menyebabkan error TypeScript
+  kebutuhanKhusus?: string;
+  lintang?: string;
+  bujur?: string;
+  skhun?: string;
+  noIjazah?: string;
+  noPesertaUn?: string;
 }
 
 export function StudentDetailPage() {
@@ -66,7 +74,6 @@ export function StudentDetailPage() {
   const navigate = useNavigate();
   const { locale } = useTranslation();
 
-  // 2. AMBIL DATA USER DAN BUAT LOGIKA IZIN (RBAC)
   const { user } = useAuthStore();
   const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
   const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
@@ -124,14 +131,8 @@ export function StudentDetailPage() {
   const formatCurrency = (amount?: number | string) => {
     if (!amount) return '-';
     const num = Number(amount);
-    if (isNaN(num)) {
-      return String(amount);
-    }
-    return new Intl.NumberFormat('id-ID', {
-      style: 'currency',
-      currency: 'IDR',
-      maximumFractionDigits: 0
-    }).format(num);
+    if (isNaN(num)) return String(amount);
+    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(num);
   };
 
   const formatBool = (val?: boolean) => {
@@ -152,7 +153,6 @@ export function StudentDetailPage() {
           </h1>
         </div>
 
-        {/* 3. SEMBUNYIKAN TOMBOL EDIT DARI GURU/SISWA/ORTU */}
         {canManageData && (
           <Button asChild className="bg-emerald-600 hover:bg-emerald-700 text-white">
             <Link to={`/students/${id}/edit`}>
@@ -179,7 +179,7 @@ export function StudentDetailPage() {
               </div>
 
               <div className="mt-2 text-sm font-medium bg-muted/40 inline-block px-3 py-1.5 rounded-md border border-border">
-                NIS: <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1 mr-4">{student.nis || '-'}</span>
+                NIS / NIPD: <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1 mr-4">{student.nis || '-'}</span>
                 NISN: <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1">{student.nisn}</span>
               </div>
               <p className="text-xs text-muted-foreground mt-1.5 ml-1 flex items-center">
@@ -197,7 +197,7 @@ export function StudentDetailPage() {
                 </div>
                 <div className="flex items-center">
                   <Phone className="mr-2 h-4 w-4" />
-                  {student.phone || '-'}
+                  {student.phone || student.telepon || '-'}
                 </div>
               </div>
             </div>
@@ -258,13 +258,14 @@ export function StudentDetailPage() {
                 <dl className="divide-y divide-border">
                   {[
                     { label: locale === 'id' ? 'Alamat Jalan' : 'Street Address', value: student.address },
-                    { label: 'RT / RW', value: `${student.rt || '-'} / ${student.rw || '-'}` },
+                    { label: 'RT / RW / Dusun', value: `${student.rt || '-'} / ${student.rw || '-'} / ${student.dusun || '-'}` },
                     { label: locale === 'id' ? 'Kelurahan' : 'Village', value: student.kelurahan || '-' },
                     { label: locale === 'id' ? 'Kecamatan' : 'District', value: student.kecamatan || '-' },
                     { label: locale === 'id' ? 'Kabupaten/Kota' : 'City', value: student.city },
                     { label: locale === 'id' ? 'Provinsi' : 'Province', value: student.province },
                     { label: locale === 'id' ? 'Kode Pos' : 'Postal Code', value: student.postalCode || '-' },
-                    { label: locale === 'id' ? 'No. HP / Telp' : 'Phone Number', value: student.phone || '-' },
+                    { label: locale === 'id' ? 'Telepon Rumah' : 'Home Phone', value: student.telepon || '-' },
+                    { label: locale === 'id' ? 'No. Handphone' : 'Mobile Phone', value: student.phone || '-' },
                     { label: 'Email', value: student.email || '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="grid grid-cols-3 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
@@ -331,6 +332,7 @@ export function StudentDetailPage() {
                     <dl className="divide-y divide-border">
                       {[
                         { label: locale === 'id' ? 'Nama Lengkap' : 'Full Name', value: parent?.fullName || '-' },
+                        { label: locale === 'id' ? 'Tahun Lahir' : 'Birth Year', value: parent?.birthYear || '-' },
                         { label: 'NIK', value: parent?.nik || '-' },
                         { label: locale === 'id' ? 'Pekerjaan' : 'Occupation', value: parent?.occupation || '-' },
                         { label: locale === 'id' ? 'No. Handphone' : 'Phone', value: parent?.phone || '-' },
@@ -427,6 +429,12 @@ export function StudentDetailPage() {
                     </dd>
                   </div>
                   <div className="flex justify-between px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
+                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima KKS / KPS' : 'Has KKS / KPS'}</dt>
+                    <dd className="text-foreground font-bold">
+                      {ecoData?.hasKks ? <Badge variant="default">{ecoData.kksNumber || 'Ya'}</Badge> : '-'}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Terdaftar DTKS' : 'Registered in DTKS'}</dt>
                     <dd className="text-foreground font-bold">
                       {ecoData?.isDtks ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
@@ -454,10 +462,11 @@ export function StudentDetailPage() {
                     { label: locale === 'id' ? 'Berat Badan' : 'Weight', value: student.beratBadan ? `${student.beratBadan} kg` : '-' },
                     { label: locale === 'id' ? 'Tinggi Badan' : 'Height', value: student.tinggiBadan ? `${student.tinggiBadan} cm` : '-' },
                     { label: locale === 'id' ? 'Lingkar Kepala' : 'Head Circum.', value: student.lingkarKepala ? `${student.lingkarKepala} cm` : '-' },
+                    { label: locale === 'id' ? 'Kebutuhan Khusus' : 'Special Needs', value: student.kebutuhanKhusus || '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="flex justify-between px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium">{item.label}</dt>
-                      <dd className="text-foreground font-medium">{item.value}</dd>
+                      <dd className="text-foreground font-medium text-right max-w-[50%] overflow-hidden text-ellipsis">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -479,10 +488,11 @@ export function StudentDetailPage() {
                     { label: locale === 'id' ? 'Jarak Sekolah' : 'Distance', value: student.jarakSekolah ? `${student.jarakSekolah} km` : '-' },
                     { label: locale === 'id' ? 'Transportasi' : 'Transport', value: student.alatTransportasi || '-' },
                     { label: locale === 'id' ? 'Jenis Tinggal' : 'Residence Type', value: student.jenisTinggal || '-' },
+                    { label: locale === 'id' ? 'Koordinat (Lat, Long)' : 'Coordinates', value: (student.lintang || student.bujur) ? `${student.lintang || '-'}, ${student.bujur || '-'}` : '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="flex justify-between px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium">{item.label}</dt>
-                      <dd className="text-foreground font-medium">{item.value}</dd>
+                      <dd className="text-foreground font-medium text-right max-w-[50%] overflow-hidden text-ellipsis">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -493,18 +503,21 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-base flex items-center text-primary">
                   <CreditCard className="mr-2 h-4 w-4" />
-                  {locale === 'id' ? 'Registrasi & Bank' : 'Bank & Reg'}
+                  {locale === 'id' ? 'Registrasi & Dokumen' : 'Registration & Docs'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   {[
                     { label: locale === 'id' ? 'No. Akta Lahir' : 'Birth Cert No.', value: student.noAktaLahir || '-' },
+                    { label: 'SKHUN', value: student.skhun || '-' },
+                    { label: locale === 'id' ? 'No. Ijazah' : 'Certificate No.', value: student.noIjazah || '-' },
+                    { label: locale === 'id' ? 'No. Peserta UN' : 'UN No.', value: student.noPesertaUn || '-' },
                     { label: 'Bank', value: student.bank || '-' },
                     { label: locale === 'id' ? 'No. Rekening' : 'Account No.', value: student.noRekening || '-' },
                     { label: locale === 'id' ? 'Atas Nama' : 'Account Name', value: student.namaRekening || '-' },
                   ].map((item, idx) => (
-                    <div key={idx} className="flex flex-col px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
+                    <div key={idx} className="flex flex-col px-4 py-3 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium mb-1">{item.label}</dt>
                       <dd className="text-foreground font-semibold">{item.value}</dd>
                     </div>

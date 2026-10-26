@@ -24,6 +24,7 @@ interface ImportParent {
   id: string;
   relation: string;
   fullName: string;
+  birthYear: string; // BARU: Tahun lahir orang tua
   nik: string;
   occupation: string;
   monthlyIncome: string | null;
@@ -58,6 +59,7 @@ interface StudentImportPayload {
   birthDate: string;
   religion: string;
   address: string;
+  dusun: string;   // BARU: Dusun
   rt: string;
   rw: string;
   kelurahan: string;
@@ -65,7 +67,8 @@ interface StudentImportPayload {
   city: string;
   province: string;
   postalCode: string;
-  phone: string;
+  telepon: string; // BARU: Telepon Rumah
+  phone: string;   // Khusus HP
   email: string;
   anakKe: number | null;
   jmlSaudara: number | null;
@@ -391,6 +394,7 @@ export function StudentListPage() {
               : String(row['tanggal lahir'] || new Date().toISOString()),
             religion: String(row['agama'] || 'ISLAM').toUpperCase(),
             address: finalAddress || '-',
+            dusun: dusunRaw, // BARU: Menangkap dusun dari excel
             rt: String(row['rt'] || ''),
             rw: String(row['rw'] || ''),
             kelurahan: String(row['kelurahan'] || ''),
@@ -398,7 +402,8 @@ export function StudentListPage() {
             city: String(row['kabupaten/kota'] || row['kota'] || school?.city || '-'),
             province: String(row['provinsi'] || school?.province || '-'),
             postalCode: String(row['kode pos'] || ''),
-            phone: String(row['hp'] || row['telepon'] || ''),
+            telepon: String(row['telepon'] || ''), // BARU: Telepon rumah terpisah
+            phone: String(row['hp'] || ''), // BARU: HP membaca murni dari kolom HP
             email: String(row['e-mail'] || row['email'] || ''),
             anakKe: getValidNumber(row['anak ke-berapa'], 1),
             jmlSaudara: getValidNumber(row['jml. saudara kandung'], 0),
@@ -428,6 +433,7 @@ export function StudentListPage() {
                 id: crypto.randomUUID(),
                 relation: 'AYAH',
                 fullName: String(row['data ayah nama'] || row['nama ayah'] || ''),
+                birthYear: String(row['data ayah tahun lahir'] || row['tahun lahir ayah'] || ''), // BARU
                 nik: String(row['data ayah nik'] || row['nik ayah'] || ''),
                 occupation: String(row['data ayah pekerjaan'] || row['pekerjaan ayah'] || ''),
                 monthlyIncome: row['data ayah penghasilan'] || row['penghasilan ayah'] ? String(row['data ayah penghasilan'] || row['penghasilan ayah']) : null,
@@ -439,6 +445,7 @@ export function StudentListPage() {
                 id: crypto.randomUUID(),
                 relation: 'IBU',
                 fullName: String(row['data ibu nama'] || row['nama ibu'] || ''),
+                birthYear: String(row['data ibu tahun lahir'] || row['tahun lahir ibu'] || ''), // BARU
                 nik: String(row['data ibu nik'] || row['nik ibu'] || ''),
                 occupation: String(row['data ibu pekerjaan'] || row['pekerjaan ibu'] || ''),
                 monthlyIncome: row['data ibu penghasilan'] || row['penghasilan ibu'] ? String(row['data ibu penghasilan'] || row['penghasilan ibu']) : null,
@@ -450,6 +457,7 @@ export function StudentListPage() {
                 id: crypto.randomUUID(),
                 relation: 'WALI',
                 fullName: String(row['data wali nama'] || row['nama wali'] || ''),
+                birthYear: String(row['data wali tahun lahir'] || row['tahun lahir wali'] || ''), // BARU
                 nik: String(row['data wali nik'] || row['nik wali'] || ''),
                 occupation: String(row['data wali pekerjaan'] || row['pekerjaan wali'] || ''),
                 monthlyIncome: row['data wali penghasilan'] || row['penghasilan wali'] ? String(row['data wali penghasilan'] || row['penghasilan wali']) : null,
@@ -466,8 +474,8 @@ export function StudentListPage() {
               namaKip: String(row['nama di kip'] || ''),
               layakPip: toBool(row['layak pip (usulan dari sekolah)'] || row['layak pip']),
               alasanLayakPip: String(row['alasan layak pip'] || ''),
-              hasKks: toBool(row['penerima kps'] || row['penerima kks']),
-              kksNumber: String(row['no. kps'] || row['nomor kks'] || ''),
+              hasKks: toBool(row['penerima kps'] || row['penerima kks']), // BARU: Gabung KPS dan KKS
+              kksNumber: String(row['no. kps'] || row['nomor kks'] || ''), // BARU: Gabung No KPS dan KKS
               desil: (() => {
                 const raw = row['desil'] || row['desil p3ke'] || row['desil dtks'] || row['desil (p3ke/dtks)'];
                 if (!raw) return null;
@@ -679,7 +687,6 @@ export function StudentListPage() {
       <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls, .csv" className="hidden" />
 
       {/* --- IMPORT WIZARD MODAL --- */}
-      {/* ... (Modal logic tidak perlu diubah, biarkan seperti semula) ... */}
       <AnimatePresence>
         {wizardState !== 'idle' && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">

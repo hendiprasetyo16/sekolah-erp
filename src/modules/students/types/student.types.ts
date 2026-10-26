@@ -28,6 +28,8 @@ export interface StudentDetail extends StudentListItem {
   schoolId: string;
   noKk?: string;
   nickname?: string;
+  address: string;
+  dusun?: string;     // BARU: Tambahan untuk Dapodik
   rt?: string;
   rw?: string;
   kelurahan?: string;
@@ -35,12 +37,13 @@ export interface StudentDetail extends StudentListItem {
   city: string;
   province: string;
   postalCode?: string;
+  telepon?: string;   // BARU: Telepon Rumah (Beda dengan HP)
   email?: string;
   distanceToSchool?: number;
   transport?: string;
   previousSchool?: string;
 
-  // Dapodik / Fisik / Bank (Sesuai update tabel terbaru)
+  // Dapodik / Fisik / Bank
   skhun?: string;
   noPesertaUn?: string;
   noIjazah?: string;
@@ -70,12 +73,12 @@ export interface StudentParent {
   id: string;
   relation: 'AYAH' | 'IBU' | 'WALI';
   fullName: string;
+  birthYear?: string; // BARU: Tahun Lahir untuk Dapodik
   nik?: string;
   phone?: string;
   email?: string;
   education?: string;
   occupation?: string;
-  // UBAH DARI number MENJADI string | null
   monthlyIncome?: string | null; 
   isAlive: boolean;
   address?: string;
@@ -84,8 +87,8 @@ export interface StudentParent {
 export interface StudentEconomic {
   hasKip: boolean;
   kipNumber?: string;
-  hasKks: boolean;
-  kksNumber?: string;
+  hasKks: boolean;    // CUKUP GUNAKAN INI (Untuk KPS maupun KKS)
+  kksNumber?: string; // CUKUP GUNAKAN INI (Untuk No. KPS maupun No. KKS)
   hasPkh: boolean;
   isDtks: boolean;
   houseOwnership?: string;
@@ -95,8 +98,6 @@ export interface StudentEconomic {
   orphanType?: 'YATIM' | 'PIATU' | 'YATIM_PIATU' | 'BUKAN';
   pipScore?: number;
   economicCategory?: EconomicCategory;
-
-  // Update terbaru PIP/KIP (Desil DTKS/P3KE)
   desil?: number | null;
   scoringDetails?: string;
   scoredAt?: string;
@@ -119,6 +120,7 @@ export interface CreateStudentPayload {
   birthPlace: string;
   religion?: string;
   address: string;
+  dusun?: string;     // BARU
   rt?: string;
   rw?: string;
   kelurahan?: string;
@@ -126,6 +128,7 @@ export interface CreateStudentPayload {
   city: string;
   province: string;
   postalCode?: string;
+  telepon?: string;   // BARU
   phone?: string;
   email?: string;
   classId?: string;
