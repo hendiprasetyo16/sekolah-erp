@@ -186,14 +186,25 @@ export function TeacherListPage() {
     return 'HONORER';
   };
 
+  // DIPERBAIKI: Parser tanggal yang lebih kuat untuk format Excel dan string DD/MM/YYYY
   const parseExcelDate = (excelDate: any) => {
-    if (!excelDate) return undefined;
-    if (typeof excelDate === 'string' && excelDate.includes('-')) return excelDate.split('T')[0];
+    if (!excelDate) return null;
     if (typeof excelDate === 'number') {
       const date = new Date((excelDate - (25567 + 2)) * 86400 * 1000);
       return date.toISOString().split('T')[0];
     }
-    return undefined;
+    if (typeof excelDate === 'string') {
+      if (excelDate.includes('T')) return excelDate.split('T')[0];
+      const parts = excelDate.split(/[-/]/);
+      if (parts.length === 3) {
+        // Jika format YYYY-MM-DD
+        if (parts[0].length === 4) return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`;
+        // Jika format DD-MM-YYYY
+        if (parts[2].length === 4) return `${parts[2]}-${parts[1].padStart(2, '0')}-${parts[0].padStart(2, '0')}`;
+      }
+      return excelDate; // fallback
+    }
+    return null;
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -206,21 +217,75 @@ export function TeacherListPage() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      // Range diset 4 berasumsi header ada di baris 5. Sesuaikan jika header Excel ada di baris lain.
       const jsonData = XLSX.utils.sheet_to_json(worksheet, { range: 4, raw: false });
 
-      if (jsonData.length === 0) throw new Error('File Excel kosong/format salah.');
+      if (jsonData.length === 0) throw new Error('File Excel kosong/format salah. Pastikan header berada di baris yang benar.');
 
+      // DIPERBAIKI: Pemetaan Ekstensif agar semua kolom terbaca dan ter-insert ke database
       const payloads = jsonData.map((row: any) => {
+        // Fungsi helper untuk mencari nama kolom yang variatif dari Dapodik
+        const getVal = (keys: string[]) => {
+          for (const key of keys) {
+            if (row[key] !== undefined && row[key] !== null && row[key] !== '') {
+              return String(row[key]).trim();
+            }
+          }
+          return null;
+        };
+
         return {
           schoolId: school.id,
-          fullName: String(row['Nama'] || '').trim() || 'Tanpa Nama',
-          gender: row['JK'] === 'P' ? 'P' : 'L',
-          nip: String(row['NIP'] || '').trim() || undefined,
-          nuptk: String(row['NUPTK'] || '').trim() || undefined,
-          status: mapStatusKepegawaian(row['Status Kepegawaian']),
-          position: String(row['Jenis PTK'] || '').trim() || 'Guru',
-          joinDate: parseExcelDate(row['TMT Pengangkatan']),
-          birthDate: parseExcelDate(row['Tanggal Lahir']),
+          // Info Dasar
+          fullName: getVal(['Nama', 'Nama Lengkap']) || 'Tanpa Nama',
+          gender: getVal(['JK', 'Jenis Kelamin', 'L/P']) === 'P' ? 'P' : 'L',
+          nip: getVal(['NIP']),
+          nuptk: getVal(['NUPTK']),
+          nik: getVal(['NIK', 'No NIK', 'Nomor Induk Kependudukan']),
+          noKk: getVal(['No KK', 'Nomor KK', 'KK']),
+          birthPlace: getVal(['Tempat Lahir']),
+          birthDate: parseExcelDate(getVal(['Tanggal Lahir'])),
+          address: getVal(['Alamat', 'Alamat Jalan']),
+          phone: getVal(['No HP', 'HP', 'Telepon']),
+          email: getVal(['Email', 'E-mail']),
+
+          // Kepegawaian
+          status: mapStatusKepegawaian(getVal(['Status Kepegawaian']) || ''),
+          position: getVal(['Jenis PTK', 'Jabatan']) || 'Guru',
+          joinDate: parseExcelDate(getVal(['TMT Pengangkatan', 'TMT Kerja'])),
+
+          // Informasi Dapodik Ekstra (Sesuai schema Supabase)
+          tugasTambahan: getVal(['Tugas Tambahan']),
+          skCpns: getVal(['SK CPNS']),
+          tanggalCpns: parseExcelDate(getVal(['Tanggal CPNS'])),
+          skPengangkatan: getVal(['SK Pengangkatan']),
+          tmtPengangkatan: parseExcelDate(getVal(['TMT Pengangkatan'])),
+          lembagaPengangkatan: getVal(['Lembaga Pengangkatan']),
+          pangkatGolongan: getVal(['Pangkat Golongan', 'Pangkat/Golongan', 'Golongan']),
+          sumberGaji: getVal(['Sumber Gaji']),
+          namaIbuKandung: getVal(['Nama Ibu Kandung']),
+          statusPerkawinan: getVal(['Status Perkawinan']),
+          namaSuamiIstri: getVal(['Nama Suami/Istri', 'Nama Suami / Istri', 'Nama Suami/ Istri']),
+          nipSuamiIstri: getVal(['NIP Suami/Istri', 'NIP Suami / Istri']),
+          pekerjaanSuamiIstri: getVal(['Pekerjaan Suami/Istri', 'Pekerjaan Suami / Istri']),
+          tmtPns: parseExcelDate(getVal(['TMT PNS'])),
+
+          // Pajak & Keuangan
+          npwp: getVal(['NPWP']),
+          namaWajibPajak: getVal(['Nama Wajib Pajak']),
+          kewarganegaraan: getVal(['Kewarganegaraan']) || 'Indonesia',
+          bank: getVal(['Bank', 'Nama Bank']),
+          nomorRekeningBank: getVal(['Nomor Rekening Bank', 'No Rekening', 'Rekening Bank']),
+          rekeningAtasNama: getVal(['Rekening Atas Nama', 'Atas Nama']),
+
+          // Lain-lain
+          karpeg: getVal(['Karpeg']),
+          karisKarsu: getVal(['Karis/Karsu', 'Karis Karsu']),
+          lintang: getVal(['Lintang']),
+          bujur: getVal(['Bujur']),
+          nuks: getVal(['NUKS']),
+
+          // Defaults
           isActive: true,
           isCertified: false,
           maxHoursPerWeek: 24,
@@ -461,20 +526,13 @@ export function TeacherListPage() {
           </table>
         </div>
 
-        {/* =================================================================== */}
-        {/* KONTROL PAGINASI (FIXED: PERMANEN SATU BARIS UNTUK BAGIAN NAVIGASI) */}
-        {/* =================================================================== */}
         {totalPages > 0 && (
           <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-sm bg-background rounded-b-xl">
-            {/* Kiri: Teks Informasi */}
             <div className="text-muted-foreground whitespace-nowrap text-center sm:text-left">
               {dict.showing} {teachers.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} - {Math.min(currentPage * pageSize, totalData)} {dict.of} {totalData} {dict.dataText}
             </div>
 
-            {/* Kanan: Navigasi Paginasi Terunci 1 Baris Sejajar */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0 overflow-x-auto max-w-full py-1">
-
-              {/* Input "Lompat ke:" */}
               <div className="flex items-center gap-2 shrink-0">
                 <span className="text-muted-foreground whitespace-nowrap">{dict.jumpTo}</span>
                 <input
@@ -490,112 +548,35 @@ export function TeacherListPage() {
                 />
               </div>
 
-              {/* Garis Pemisah Vertikal */}
               <div className="w-px h-5 bg-border shrink-0 mx-0.5"></div>
 
-              {/* Tombol Navigasi Angka */}
               <div className="flex items-center gap-1 shrink-0">
-                <button
-                  title="Pertama"
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1 || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronsLeft size={16} />
-                </button>
-                <button
-                  title="Sebelumnya"
-                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                  disabled={currentPage === 1 || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-
-                {/* Nomor Halaman Dinamis */}
+                <button title="Pertama" onClick={() => setCurrentPage(1)} disabled={currentPage === 1 || isLoading} className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"><ChevronsLeft size={16} /></button>
+                <button title="Sebelumnya" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1 || isLoading} className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"><ChevronLeft size={16} /></button>
                 {generatePagination(currentPage, totalPages).map((p, i) => (
-                  <button
-                    key={i}
-                    disabled={p === '...' || isLoading}
-                    onClick={() => typeof p === 'number' && setCurrentPage(p)}
-                    className={cn(
-                      "min-w-9 h-9 px-2 flex items-center justify-center rounded-md font-medium text-sm transition-colors shadow-sm",
-                      p === '...'
-                        ? "cursor-default text-muted-foreground border-transparent shadow-none"
-                        : p === currentPage
-                          ? "bg-emerald-600 text-white border-transparent"
-                          : "border border-border hover:bg-muted text-foreground"
-                    )}
-                  >
-                    {p}
-                  </button>
+                  <button key={i} disabled={p === '...' || isLoading} onClick={() => typeof p === 'number' && setCurrentPage(p)} className={cn("min-w-9 h-9 px-2 flex items-center justify-center rounded-md font-medium text-sm transition-colors shadow-sm", p === '...' ? "cursor-default text-muted-foreground border-transparent shadow-none" : p === currentPage ? "bg-emerald-600 text-white border-transparent" : "border border-border hover:bg-muted text-foreground")}>{p}</button>
                 ))}
-
-                <button
-                  title="Selanjutnya"
-                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronRight size={16} />
-                </button>
-                <button
-                  title="Terakhir"
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronsRight size={16} />
-                </button>
+                <button title="Selanjutnya" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || isLoading} className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"><ChevronRight size={16} /></button>
+                <button title="Terakhir" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || isLoading} className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"><ChevronsRight size={16} /></button>
               </div>
             </div>
           </div>
         )}
       </div>
 
-      {/* MODAL POP-UP KONFIRMASI HAPUS MODERN */}
       <AnimatePresence>
         {deleteModal.isOpen && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={() => setDeleteModal({ isOpen: false, type: 'single' })} />
-
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="relative bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm p-6 overflow-hidden z-10"
-            >
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }} className="relative bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm p-6 overflow-hidden z-10">
               <div className="flex flex-col items-center text-center">
-                <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-4 ring-4 ring-red-50">
-                  <AlertTriangle size={28} />
-                </div>
-                <h3 className="text-xl font-bold text-foreground">
-                  {deleteModal.type === 'bulk' ? dict.modalBulkTitle : deleteModal.type === 'all' ? dict.modalAllTitle : dict.modalSingleTitle}
-                </h3>
-                <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-                  {deleteModal.type === 'bulk' ? dict.modalBulkDesc : deleteModal.type === 'all' ? dict.modalAllDesc : dict.modalSingleDesc}
-                </p>
+                <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-4 ring-4 ring-red-50"><AlertTriangle size={28} /></div>
+                <h3 className="text-xl font-bold text-foreground">{deleteModal.type === 'bulk' ? dict.modalBulkTitle : deleteModal.type === 'all' ? dict.modalAllTitle : dict.modalSingleTitle}</h3>
+                <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{deleteModal.type === 'bulk' ? dict.modalBulkDesc : deleteModal.type === 'all' ? dict.modalAllDesc : dict.modalSingleDesc}</p>
               </div>
-
               <div className="flex gap-3 mt-8">
-                <button
-                  onClick={() => setDeleteModal({ isOpen: false, type: 'single' })}
-                  disabled={deleteMutation.isPending || deleteBulkMutation.isPending}
-                  className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
-                >
-                  {dict.cancel}
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  disabled={deleteMutation.isPending || deleteBulkMutation.isPending}
-                  className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {(deleteMutation.isPending || deleteBulkMutation.isPending) ? (
-                    <><Loader2 className="w-4 h-4 animate-spin" /> {dict.processing}</>
-                  ) : (
-                    dict.yesDelete
-                  )}
-                </button>
+                <button onClick={() => setDeleteModal({ isOpen: false, type: 'single' })} disabled={deleteMutation.isPending || deleteBulkMutation.isPending} className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50">{dict.cancel}</button>
+                <button onClick={confirmDelete} disabled={deleteMutation.isPending || deleteBulkMutation.isPending} className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50">{(deleteMutation.isPending || deleteBulkMutation.isPending) ? (<><Loader2 className="w-4 h-4 animate-spin" /> {dict.processing}</>) : (dict.yesDelete)}</button>
               </div>
             </motion.div>
           </div>
