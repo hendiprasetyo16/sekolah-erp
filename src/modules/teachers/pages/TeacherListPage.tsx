@@ -35,81 +35,9 @@ export function TeacherListPage() {
   const [pageInputValue, setPageInputValue] = useState('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [isImporting, setIsImporting] = useState(false);
-
   const [isExporting, setIsExporting] = useState(false);
 
-  const handleExport = async () => {
-    setIsExporting(true);
-    const toastId = toast.loading(locale === 'id' ? 'Menyiapkan file Excel...' : 'Preparing Excel file...');
-
-    try {
-      // 1. Mengambil seluruh data dari database
-      const response = await teacherService.exportAll();
-      let teachersToExport = response.data;
-
-      if (!teachersToExport || teachersToExport.length === 0) {
-        throw new Error(locale === 'id' ? 'Tidak ada data untuk diekspor' : 'No data to export');
-      }
-
-      // ==========================================================
-      // 2. LOGIKA BARU: Filter data jika ada baris yang dicentang
-      // ==========================================================
-      if (selectedRows.length > 0) {
-        teachersToExport = teachersToExport.filter(t => selectedRows.includes(t.id));
-      }
-
-      // 3. Format data agar header tabel Excel berbahasa Indonesia dan rapi
-      const exportData = teachersToExport.map((t, index) => ({
-        'No': index + 1,
-        'Nama Lengkap': t.fullName,
-        'JK': t.gender,
-        'NIP': t.nip || '-',
-        'NUPTK': t.nuptk || '-',
-        'Jenis PTK (Jabatan)': t.position || '-',
-        'Status Kepegawaian': t.status || '-',
-        'Sertifikasi': t.isCertified ? 'Sudah' : 'Belum',
-        'Email': t.email || '-',
-        'Telepon': t.phone || '-',
-      }));
-
-      // 4. Membuat Worksheet dan Workbook menggunakan xlsx
-      const ws = XLSX.utils.json_to_sheet(exportData);
-      const wb = XLSX.utils.book_new();
-
-      // 5. Mengatur lebar kolom otomatis agar rapi
-      const wscols = [
-        { wch: 5 },  // No
-        { wch: 30 }, // Nama Lengkap
-        { wch: 5 },  // JK
-        { wch: 20 }, // NIP
-        { wch: 20 }, // NUPTK
-        { wch: 20 }, // Jabatan
-        { wch: 20 }, // Status
-        { wch: 15 }, // Sertifikasi
-        { wch: 25 }, // Email
-        { wch: 15 }, // Telepon
-      ];
-      ws['!cols'] = wscols;
-
-      XLSX.utils.book_append_sheet(wb, ws, 'Data Guru');
-
-      // 6. Mengunduh file dengan format nama dinamis sesuai tanggal
-      const dateStr = new Date().toISOString().split('T')[0];
-      const fileName = selectedRows.length > 0
-        ? `Data_Guru_Terpilih_${dateStr}.xlsx`
-        : `Data_Guru_Pegawai_${dateStr}.xlsx`;
-
-      XLSX.writeFile(wb, fileName);
-
-      toast.success(locale === 'id' ? 'Data berhasil diekspor!' : 'Data successfully exported!', { id: toastId });
-    } catch (error: any) {
-      toast.error(error.message, { id: toastId });
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
-  const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; type: 'single' | 'bulk'; id?: string }>({ isOpen: false, type: 'single' });
+  const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?: string }>({ isOpen: false, type: 'single' });
 
   const pageSize = 10;
 
@@ -117,7 +45,6 @@ export function TeacherListPage() {
     setPageInputValue(currentPage.toString());
   }, [currentPage]);
 
-  // KAMUS LOKAL BAHASA 
   const dict = {
     title: locale === 'id' ? 'Data Guru & Pegawai' : 'Teachers & Staff Data',
     total: locale === 'id' ? 'Total' : 'Total',
@@ -126,6 +53,7 @@ export function TeacherListPage() {
     search: locale === 'id' ? 'Cari nama atau NIP...' : 'Search by name or NIP...',
     importBtn: locale === 'id' ? 'Impor' : 'Import',
     exportBtn: locale === 'id' ? 'Ekspor' : 'Export',
+    emptyBtn: locale === 'id' ? 'Kosongkan Data' : 'Clear All',
     colNo: locale === 'id' ? 'No' : 'No',
     colName: locale === 'id' ? 'Nama Lengkap' : 'Full Name',
     colNip: locale === 'id' ? 'NIP/NUPTK' : 'NIP/NUPTK',
@@ -140,25 +68,27 @@ export function TeacherListPage() {
     errLoad: locale === 'id' ? 'Gagal memuat data.' : 'Failed to load data.',
     delSuccess: locale === 'id' ? 'Data berhasil dihapus.' : 'Data successfully deleted.',
 
-    // Translasi Paginasi & Tabel
     showing: locale === 'id' ? 'Menampilkan' : 'Showing',
     of: locale === 'id' ? 'dari' : 'of',
     dataText: locale === 'id' ? 'data' : 'entries',
-    page: locale === 'id' ? 'Hal' : 'Page',
+    jumpTo: locale === 'id' ? 'Lompat ke:' : 'Jump to:',
     male: locale === 'id' ? 'Laki-laki' : 'Male',
     female: locale === 'id' ? 'Perempuan' : 'Female',
     selected: locale === 'id' ? 'Terpilih' : 'Selected',
     deleteBtn: locale === 'id' ? 'Hapus' : 'Delete',
 
-    // Translasi Modal
     modalBulkTitle: locale === 'id' ? 'Hapus Massal?' : 'Bulk Delete?',
     modalSingleTitle: locale === 'id' ? 'Hapus Data?' : 'Delete Data?',
+    modalAllTitle: locale === 'id' ? 'Kosongkan Semua Data?' : 'Empty All Data?',
     modalBulkDesc: locale === 'id'
       ? `Sebanyak ${selectedRows.length} data guru akan dihapus dari sistem. Aksi ini bersifat permanen dan tidak dapat dibatalkan.`
       : `${selectedRows.length} teacher records will be removed from the system. This action is permanent and cannot be undone.`,
     modalSingleDesc: locale === 'id'
       ? 'Data guru ini akan dihapus dari sistem secara permanen. Anda tidak dapat mengurungkan aksi ini.'
       : 'This teacher record will be permanently deleted from the system. You cannot undo this action.',
+    modalAllDesc: locale === 'id'
+      ? 'PERHATIAN: Anda akan menghapus SELURUH data guru dari sistem. Aksi ini bersifat permanen dan tidak dapat dibatalkan.'
+      : 'WARNING: You are about to delete ALL teacher records from the system. This action is permanent and cannot be undone.',
     cancel: locale === 'id' ? 'Batal' : 'Cancel',
     yesDelete: locale === 'id' ? 'Ya, Hapus' : 'Yes, Delete',
     processing: locale === 'id' ? 'Memproses' : 'Processing',
@@ -166,11 +96,7 @@ export function TeacherListPage() {
 
   const { data: teachersResponse, isLoading, isError } = useQuery({
     queryKey: ['teachers', currentPage, pageSize, searchQuery],
-    queryFn: () => teacherService.list({
-      page: currentPage,
-      limit: pageSize,
-      search: searchQuery,
-    }),
+    queryFn: () => teacherService.list({ page: currentPage, limit: pageSize, search: searchQuery }),
   });
 
   const teachers = teachersResponse?.data?.data || [];
@@ -211,11 +137,28 @@ export function TeacherListPage() {
     onError: (err: any) => toast.error(err.message)
   });
 
+  const handleDeleteAll = async () => {
+    try {
+      const res = await teacherService.exportAll();
+      const allIds = res.data.map(t => t.id);
+      if (allIds.length === 0) {
+        toast.info(locale === 'id' ? 'Tidak ada data untuk dihapus.' : 'No data to delete.');
+        setDeleteModal({ isOpen: false, type: 'single' });
+        return;
+      }
+      deleteBulkMutation.mutate(allIds);
+    } catch (error: any) {
+      toast.error(error.message);
+    }
+  };
+
   const confirmDelete = () => {
     if (deleteModal.type === 'single' && deleteModal.id) {
       deleteMutation.mutate(deleteModal.id);
     } else if (deleteModal.type === 'bulk') {
       deleteBulkMutation.mutate(selectedRows);
+    } else if (deleteModal.type === 'all') {
+      handleDeleteAll();
     }
   };
 
@@ -243,21 +186,13 @@ export function TeacherListPage() {
     return 'HONORER';
   };
 
-  // Fungsi Helper Konversi Tanggal Excel ke YYYY-MM-DD
   const parseExcelDate = (excelDate: any) => {
     if (!excelDate) return undefined;
-
-    // Jika format teks "YYYY-MM-DD"
-    if (typeof excelDate === 'string' && excelDate.includes('-')) {
-      return excelDate.split('T')[0];
-    }
-
-    // Jika format angka serial excel (misal: 44197 = 1 Jan 2021)
+    if (typeof excelDate === 'string' && excelDate.includes('-')) return excelDate.split('T')[0];
     if (typeof excelDate === 'number') {
       const date = new Date((excelDate - (25567 + 2)) * 86400 * 1000);
       return date.toISOString().split('T')[0];
     }
-
     return undefined;
   };
 
@@ -271,7 +206,6 @@ export function TeacherListPage() {
       const data = await file.arrayBuffer();
       const workbook = XLSX.read(data);
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      // Range: 4 artinya mengabaikan 4 baris pertama (biasanya kop Excel Dapodik)
       const jsonData = XLSX.utils.sheet_to_json(worksheet, { range: 4, raw: false });
 
       if (jsonData.length === 0) throw new Error('File Excel kosong/format salah.');
@@ -285,11 +219,8 @@ export function TeacherListPage() {
           nuptk: String(row['NUPTK'] || '').trim() || undefined,
           status: mapStatusKepegawaian(row['Status Kepegawaian']),
           position: String(row['Jenis PTK'] || '').trim() || 'Guru',
-
-          // MENGGUNAKAN HELPER BARU
           joinDate: parseExcelDate(row['TMT Pengangkatan']),
           birthDate: parseExcelDate(row['Tanggal Lahir']),
-
           isActive: true,
           isCertified: false,
           maxHoursPerWeek: 24,
@@ -306,6 +237,56 @@ export function TeacherListPage() {
     }
   };
 
+  const handleExport = async () => {
+    setIsExporting(true);
+    const toastId = toast.loading(locale === 'id' ? 'Menyiapkan file Excel...' : 'Preparing Excel file...');
+
+    try {
+      const response = await teacherService.exportAll();
+      let teachersToExport = response.data;
+      if (!teachersToExport || teachersToExport.length === 0) throw new Error(locale === 'id' ? 'Tidak ada data untuk diekspor' : 'No data to export');
+
+      if (selectedRows.length > 0) {
+        teachersToExport = teachersToExport.filter(t => selectedRows.includes(t.id));
+      }
+
+      const exportData = teachersToExport.map((t, index) => ({
+        'No': index + 1,
+        'Nama Lengkap': t.fullName,
+        'JK': t.gender,
+        'NIP': t.nip || '-',
+        'NUPTK': t.nuptk || '-',
+        'Jenis PTK (Jabatan)': t.position || '-',
+        'Status Kepegawaian': t.status || '-',
+        'Sertifikasi': t.isCertified ? 'Sudah' : 'Belum',
+        'Email': t.email || '-',
+        'Telepon': t.phone || '-',
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      ws['!cols'] = [{ wch: 5 }, { wch: 30 }, { wch: 5 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 15 }, { wch: 25 }, { wch: 15 }];
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Data Guru');
+      const dateStr = new Date().toISOString().split('T')[0];
+      const fileName = selectedRows.length > 0 ? `Data_Guru_Terpilih_${dateStr}.xlsx` : `Data_Guru_Pegawai_${dateStr}.xlsx`;
+
+      XLSX.writeFile(wb, fileName);
+      toast.success(locale === 'id' ? 'Data berhasil diekspor!' : 'Data successfully exported!', { id: toastId });
+    } catch (error: any) {
+      toast.error(error.message, { id: toastId });
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const generatePagination = (current: number, total: number) => {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    if (current <= 4) return [1, 2, 3, 4, 5, '...', total];
+    if (current >= total - 3) return [1, '...', total - 4, total - 3, total - 2, total - 1, total];
+    return [1, '...', current - 1, current, current + 1, '...', total];
+  };
+
   return (
     <div className="space-y-6 relative">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
@@ -317,13 +298,22 @@ export function TeacherListPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
+          >
+            <Trash2 size={16} />
+            <span className="hidden sm:inline">{dict.emptyBtn}</span>
+          </button>
+
+          <button
             onClick={handleExport}
             disabled={isExporting}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
           >
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
             <span className="hidden sm:inline">{dict.exportBtn}</span>
           </button>
+
           <Link to="/teachers/new" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm">
             <Plus size={16} />
             <span>{dict.addBtn}</span>
@@ -472,42 +462,21 @@ export function TeacherListPage() {
         </div>
 
         {/* =================================================================== */}
-        {/* KONTROL PAGINASI (TEKS DI KIRI, TOMBOL DI KANAN) */}
+        {/* KONTROL PAGINASI (FIXED: PERMANEN SATU BARIS UNTUK BAGIAN NAVIGASI) */}
         {/* =================================================================== */}
         {totalPages > 0 && (
-          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-muted-foreground bg-background rounded-b-xl">
-
-            {/* Bagian Kiri: Teks Informasi */}
-            <div className="text-center sm:text-left w-full sm:w-auto">
+          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-sm bg-background rounded-b-xl">
+            {/* Kiri: Teks Informasi */}
+            <div className="text-muted-foreground whitespace-nowrap text-center sm:text-left">
               {dict.showing} {teachers.length > 0 ? (currentPage - 1) * pageSize + 1 : 0} - {Math.min(currentPage * pageSize, totalData)} {dict.of} {totalData} {dict.dataText}
             </div>
 
-            {/* Bagian Kanan: Kontrol Paginasi */}
-            <div className="flex items-center justify-center sm:justify-end gap-1 sm:gap-2 flex-nowrap overflow-x-auto w-full sm:w-auto pb-1 sm:pb-0">
+            {/* Kanan: Navigasi Paginasi Terunci 1 Baris Sejajar */}
+            <div className="flex items-center gap-2 sm:gap-3 shrink-0 overflow-x-auto max-w-full py-1">
 
-              {/* Tombol Pertama (<<) */}
-              <button
-                title="Pertama"
-                onClick={() => setCurrentPage(1)}
-                disabled={currentPage === 1 || isLoading}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
-              >
-                <ChevronsLeft size={18} />
-              </button>
-
-              {/* Tombol Sebelumnya (<) */}
-              <button
-                title="Sebelumnya"
-                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                disabled={currentPage === 1 || isLoading}
-                className="p-1.5 mr-1 sm:mr-3 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
-              >
-                <ChevronLeft size={18} />
-              </button>
-
-              {/* Area Input Halaman (Hal [ 1 ] dari 4) */}
-              <div className="flex items-center gap-2 px-1 shrink-0">
-                <span className="font-medium text-muted-foreground">{dict.page}</span>
+              {/* Input "Lompat ke:" */}
+              <div className="flex items-center gap-2 shrink-0">
+                <span className="text-muted-foreground whitespace-nowrap">{dict.jumpTo}</span>
                 <input
                   type="number"
                   value={pageInputValue}
@@ -515,33 +484,70 @@ export function TeacherListPage() {
                   onKeyDown={(e) => e.key === 'Enter' && handlePageSubmit()}
                   onBlur={handlePageSubmit}
                   disabled={isLoading}
-                  className="w-12 sm:w-14 h-8 text-center font-medium border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shrink-0 shadow-sm"
+                  className="w-12 h-9 text-center font-medium border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shadow-sm"
                   min={1}
                   max={totalPages}
                 />
-                <span className="font-medium text-muted-foreground">{dict.of} {totalPages}</span>
               </div>
 
-              {/* Tombol Selanjutnya (>) */}
-              <button
-                title="Selanjutnya"
-                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                disabled={currentPage === totalPages || isLoading}
-                className="p-1.5 ml-1 sm:ml-3 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
-              >
-                <ChevronRight size={18} />
-              </button>
+              {/* Garis Pemisah Vertikal */}
+              <div className="w-px h-5 bg-border shrink-0 mx-0.5"></div>
 
-              {/* Tombol Terakhir (>>) */}
-              <button
-                title="Terakhir"
-                onClick={() => setCurrentPage(totalPages)}
-                disabled={currentPage === totalPages || isLoading}
-                className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-muted disabled:opacity-30 transition-all shrink-0"
-              >
-                <ChevronsRight size={18} />
-              </button>
+              {/* Tombol Navigasi Angka */}
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  title="Pertama"
+                  onClick={() => setCurrentPage(1)}
+                  disabled={currentPage === 1 || isLoading}
+                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
+                >
+                  <ChevronsLeft size={16} />
+                </button>
+                <button
+                  title="Sebelumnya"
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  disabled={currentPage === 1 || isLoading}
+                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
+                >
+                  <ChevronLeft size={16} />
+                </button>
 
+                {/* Nomor Halaman Dinamis */}
+                {generatePagination(currentPage, totalPages).map((p, i) => (
+                  <button
+                    key={i}
+                    disabled={p === '...' || isLoading}
+                    onClick={() => typeof p === 'number' && setCurrentPage(p)}
+                    className={cn(
+                      "min-w-9 h-9 px-2 flex items-center justify-center rounded-md font-medium text-sm transition-colors shadow-sm",
+                      p === '...'
+                        ? "cursor-default text-muted-foreground border-transparent shadow-none"
+                        : p === currentPage
+                          ? "bg-emerald-600 text-white border-transparent"
+                          : "border border-border hover:bg-muted text-foreground"
+                    )}
+                  >
+                    {p}
+                  </button>
+                ))}
+
+                <button
+                  title="Selanjutnya"
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages || isLoading}
+                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
+                >
+                  <ChevronRight size={16} />
+                </button>
+                <button
+                  title="Terakhir"
+                  onClick={() => setCurrentPage(totalPages)}
+                  disabled={currentPage === totalPages || isLoading}
+                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
+                >
+                  <ChevronsRight size={16} />
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -564,10 +570,10 @@ export function TeacherListPage() {
                   <AlertTriangle size={28} />
                 </div>
                 <h3 className="text-xl font-bold text-foreground">
-                  {deleteModal.type === 'bulk' ? dict.modalBulkTitle : dict.modalSingleTitle}
+                  {deleteModal.type === 'bulk' ? dict.modalBulkTitle : deleteModal.type === 'all' ? dict.modalAllTitle : dict.modalSingleTitle}
                 </h3>
                 <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-                  {deleteModal.type === 'bulk' ? dict.modalBulkDesc : dict.modalSingleDesc}
+                  {deleteModal.type === 'bulk' ? dict.modalBulkDesc : deleteModal.type === 'all' ? dict.modalAllDesc : dict.modalSingleDesc}
                 </p>
               </div>
 
