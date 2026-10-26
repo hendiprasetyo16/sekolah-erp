@@ -8,8 +8,8 @@ export interface TeacherListItem {
   gender: 'L' | 'P';
   phone?: string;
   email?: string;
-  status: string;
-  position: string;
+  status?: string; // Diubah menjadi opsional agar sesuai database
+  position?: string; // Diubah menjadi opsional agar sesuai database
   isCertified: boolean;
   isActive: boolean;
   photoUrl?: string;
@@ -28,6 +28,38 @@ export interface TeacherDetail extends TeacherListItem {
   baseSalary?: number;
   subjects?: string;
   maxHoursPerWeek: number;
+  
+  // --- KOLOM DAPODIK BARU ---
+  tugasTambahan?: string;
+  skCpns?: string;
+  tanggalCpns?: string;
+  skPengangkatan?: string;
+  tmtPengangkatan?: string;
+  lembagaPengangkatan?: string;
+  pangkatGolongan?: string;
+  sumberGaji?: string;
+  namaIbuKandung?: string;
+  statusPerkawinan?: string;
+  namaSuamiIstri?: string;
+  nipSuamiIstri?: string;
+  pekerjaanSuamiIstri?: string;
+  tmtPns?: string;
+  sudahLisensiKepalaSekolah?: boolean;
+  pernahDiklatKepengawasan?: boolean;
+  keahlianBraille?: boolean;
+  keahlianBahasaIsyarat?: boolean;
+  npwp?: string;
+  namaWajibPajak?: string;
+  kewarganegaraan?: string;
+  bank?: string;
+  nomorRekeningBank?: string;
+  rekeningAtasNama?: string;
+  noKk?: string;
+  karpeg?: string;
+  karisKarsu?: string;
+  lintang?: string;
+  bujur?: string;
+  nuks?: string;
 }
 
 export type CreateTeacherPayload = Omit<TeacherDetail, 'id' | 'photoUrl'>;

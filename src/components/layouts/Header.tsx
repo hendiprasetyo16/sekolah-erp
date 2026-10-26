@@ -3,7 +3,8 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Search, Bell, Sun, Moon, Globe, LogOut, User,
-  Settings, ChevronRight, Menu, Building2, AlertCircle
+  Settings, ChevronRight, Menu, Building2, AlertCircle,
+  CheckCheck, Info // Tambahan icon baru
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
 import { useUIStore } from '@/stores/ui.store';
@@ -19,21 +20,29 @@ export function Header() {
   const location = useLocation();
   const { theme, setTheme, locale: currentLocale, setLocale, sidebarCollapsed, setSidebarOpen } = useUIStore();
   const { user, school, logout } = useAuthStore();
-  const { unreadCount } = useNotificationStore();
+
+  // Mengambil state notifikasi (Asumsi ada properti notifications, jika belum ada kita beri array kosong sementara)
+  const { unreadCount, notifications = [], markAllAsRead } = useNotificationStore() as any;
 
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
 
+  // STATE BARU: Untuk mengontrol buka/tutup panel notifikasi
+  const [notificationOpen, setNotificationOpen] = useState(false);
+
   // STATE BARU: Untuk mengontrol pop-up konfirmasi logout
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
 
-  // Teks terjemahan untuk pop-up logout
+  // Teks terjemahan
   const logoutTitle = locale === 'id' ? 'Konfirmasi Keluar' : 'Confirm Logout';
   const logoutDesc = locale === 'id' ? 'Apakah Anda yakin ingin keluar dari sesi ini?' : 'Are you sure you want to log out of this session?';
   const btnCancel = locale === 'id' ? 'Batal' : 'Cancel';
   const btnConfirm = locale === 'id' ? 'Ya, Keluar' : 'Yes, Log Out';
+  const notifTitle = locale === 'id' ? 'Notifikasi' : 'Notifications';
+  const notifEmpty = locale === 'id' ? 'Belum ada notifikasi baru' : 'No new notifications';
+  const notifMarkAll = locale === 'id' ? 'Tandai semua dibaca' : 'Mark all as read';
 
-  // 1. LOGIKA BREADCRUMB
+  // LOGIKA BREADCRUMB
   const pathSegments = location.pathname.split('/').filter(Boolean);
   const breadcrumbs = pathSegments.map((segment, idx) => {
     const isId = segment.length >= 24 || /^[0-9a-fA-F-]{36}$/.test(segment);
@@ -120,9 +129,7 @@ export function Header() {
         {/* Right: Actions */}
         <div className="flex items-center gap-1">
 
-          {/* ========================================================= */}
-          {/* TOMBOL GANTI SEKOLAH (HANYA MUNCUL UNTUK SUPER_ADMIN)     */}
-          {/* ========================================================= */}
+          {/* TOMBOL GANTI SEKOLAH (HANYA SUPER_ADMIN) */}
           {user?.role === 'SUPER_ADMIN' && school && (
             <button
               onClick={() => useAuthStore.setState({ school: null, academicYear: null })}
@@ -166,26 +173,116 @@ export function Header() {
             </AnimatePresence>
           </button>
 
-          {/* Notifications */}
-          <button
-            className={cn(
-              'relative p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors',
-              unreadCount > 0 && 'notification-badge'
-            )}
-            title={t('common.notifications')}
-          >
-            <Bell size={18} />
-            {unreadCount > 0 && (
-              <span className="absolute -top-0.5 -right-0.5 min-w-4.5 h-4.5 flex items-center justify-center text-[10px] font-bold text-white bg-red-500 rounded-full px-1">
-                {unreadCount}
-              </span>
-            )}
-          </button>
+          {/* =================================================================== */}
+          {/* BAGIAN NOTIFIKASI YANG BARU DIPERBAIKI                              */}
+          {/* =================================================================== */}
+          <div className="relative">
+            <button
+              onClick={() => {
+                setNotificationOpen(!notificationOpen);
+                setUserMenuOpen(false); // Tutup menu user jika sedang terbuka
+              }}
+              className={cn(
+                'relative p-2 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors',
+                unreadCount > 0 && 'notification-badge'
+              )}
+              title={t('common.notifications')}
+            >
+              <Bell size={18} />
+              {unreadCount > 0 && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-4.5 h-4.5 flex items-center justify-center text-[10px] font-bold text-white bg-red-500 rounded-full px-1">
+                  {unreadCount > 99 ? '99+' : unreadCount}
+                </span>
+              )}
+            </button>
 
-          {/* User menu */}
+            <AnimatePresence>
+              {notificationOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setNotificationOpen(false)} />
+                  <motion.div
+                    initial={{ opacity: 0, y: -8, scale: 0.95 }}
+                    animate={{ opacity: 1, y: 0, scale: 1 }}
+                    exit={{ opacity: 0, y: -8, scale: 0.95 }}
+                    transition={{ duration: 0.15 }}
+                    className="absolute right-0 top-full mt-2 w-80 sm:w-96 z-50 rounded-xl border border-border/50 bg-card/95 backdrop-blur-xl shadow-2xl overflow-hidden flex flex-col"
+                  >
+                    {/* Header Notifikasi */}
+                    <div className="flex items-center justify-between p-4 border-b border-border/50">
+                      <div className="flex items-center gap-2">
+                        <h3 className="font-semibold text-foreground">{notifTitle}</h3>
+                        {unreadCount > 0 && (
+                          <span className="bg-primary/20 text-primary text-[10px] font-bold px-2 py-0.5 rounded-full">
+                            {unreadCount} Baru
+                          </span>
+                        )}
+                      </div>
+                      {unreadCount > 0 && markAllAsRead && (
+                        <button
+                          onClick={markAllAsRead}
+                          className="text-xs text-primary hover:text-primary/80 flex items-center gap-1 transition-colors"
+                        >
+                          <CheckCheck size={14} />
+                          {notifMarkAll}
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Body Notifikasi (List) */}
+                    <div className="max-h-87.5 overflow-y-auto">
+                      {notifications.length === 0 ? (
+                        <div className="flex flex-col items-center justify-center py-10 text-muted-foreground">
+                          <Bell size={40} className="mb-3 opacity-20" />
+                          <p className="text-sm">{notifEmpty}</p>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col">
+                          {notifications.map((notif: any) => (
+                            <div
+                              key={notif.id}
+                              className={cn(
+                                "p-4 border-b border-border/50 hover:bg-muted/30 transition-colors cursor-pointer flex gap-3",
+                                !notif.isRead && "bg-primary/5"
+                              )}
+                            >
+                              <div className={cn(
+                                "mt-0.5 w-2 h-2 rounded-full shrink-0",
+                                !notif.isRead ? "bg-primary" : "bg-transparent"
+                              )} />
+                              <div className="flex-1">
+                                <p className="text-sm font-medium text-foreground line-clamp-1">{notif.title}</p>
+                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2">{notif.message}</p>
+                                <p className="text-[10px] text-muted-foreground/70 mt-2">{notif.time || 'Beberapa saat yang lalu'}</p>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Footer Notifikasi */}
+                    {notifications.length > 0 && (
+                      <div className="p-2 border-t border-border/50">
+                        <button className="w-full py-1.5 text-xs font-medium text-center text-primary hover:bg-muted/50 rounded-lg transition-colors">
+                          Lihat Semua Notifikasi
+                        </button>
+                      </div>
+                    )}
+                  </motion.div>
+                </>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* =================================================================== */}
+          {/* BAGIAN USER MENU                                                    */}
+          {/* =================================================================== */}
           <div className="relative ml-2">
             <button
-              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              onClick={() => {
+                setUserMenuOpen(!userMenuOpen);
+                setNotificationOpen(false); // Tutup notifikasi jika menu user dibuka
+              }}
               className="flex items-center gap-2 p-1.5 rounded-lg hover:bg-muted/50 transition-colors"
             >
               <div className="w-8 h-8 rounded-full bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
@@ -230,8 +327,6 @@ export function Header() {
                       </button>
                     </div>
                     <div className="p-1.5 border-t border-border/50">
-
-                      {/* PERUBAHAN: Tombol Logout memanggil setIsLogoutModalOpen(true) */}
                       <button
                         onClick={() => {
                           setUserMenuOpen(false);
@@ -242,7 +337,6 @@ export function Header() {
                         <LogOut size={16} />
                         {t('common.logout')}
                       </button>
-
                     </div>
                   </motion.div>
                 </>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, Edit, Loader2, Mail, Phone } from 'lucide-react';
+import { ArrowLeft, Edit, Loader2, Mail, Phone, Briefcase, Award, GraduationCap, Building } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -15,7 +15,21 @@ import { cn } from '@/utils/cn';
 
 export default function TeacherDetailPage() {
   const { id } = useParams<{ id: string }>();
-  const { t } = useTranslation();
+  const { locale } = useTranslation();
+
+  const dict = {
+    title: locale === 'id' ? 'Profil Guru' : 'Teacher Profile',
+    desc: locale === 'id' ? 'Lihat informasi detail tentang guru.' : 'View detailed information about the teacher.',
+    back: locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers',
+    editBtn: locale === 'id' ? 'Edit Data' : 'Edit Data',
+    tabPersonal: locale === 'id' ? 'Data Pribadi' : 'Personal Info',
+    tabProf: locale === 'id' ? 'Kepegawaian' : 'Employment',
+    tabTask: locale === 'id' ? 'Tugas & Lisensi' : 'Duties & Licenses',
+    tabFamily: locale === 'id' ? 'Keluarga & Finansial' : 'Family & Financial',
+    noData: locale === 'id' ? '-' : '-',
+    yes: locale === 'id' ? 'Ya' : 'Yes',
+    no: locale === 'id' ? 'Tidak' : 'No',
+  };
 
   const { data: response, isLoading, isError } = useQuery({
     queryKey: ['teacher', id],
@@ -38,186 +52,228 @@ export default function TeacherDetailPage() {
       <div className="flex h-100 flex-col items-center justify-center gap-4">
         <p className="text-muted-foreground">Failed to load teacher data.</p>
         <Button variant="outline" asChild>
-          <Link to="/teachers">Back to Teachers</Link>
+          <Link to="/teachers">{dict.back}</Link>
         </Button>
       </div>
     );
   }
 
-  const getInitials = (name: string) => {
-    return name.charAt(0).toUpperCase();
-  };
+  const getInitials = (name: string) => name.charAt(0).toUpperCase();
 
   const statusColorMap: Record<string, string> = {
-    PNS: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-300',
-    CPNS: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-300',
-    HONORER: 'bg-orange-100 text-orange-800 dark:bg-orange-900 dark:text-orange-300',
-    GTY: 'bg-purple-100 text-purple-800 dark:bg-purple-900 dark:text-purple-300',
-    GTT: 'bg-gray-100 text-gray-800 dark:bg-gray-800 dark:text-gray-300',
+    PNS: 'bg-green-100 text-green-800 border-green-200',
+    CPNS: 'bg-blue-100 text-blue-800 border-blue-200',
+    HONORER: 'bg-orange-100 text-orange-800 border-orange-200',
+    GTY: 'bg-purple-100 text-purple-800 border-purple-200',
+    GTT: 'bg-gray-100 text-gray-800 border-gray-200',
   };
+
+  const InfoItem = ({ label, value }: { label: string, value: any }) => (
+    <div className="py-2 border-b border-border/40 last:border-0">
+      <div className="text-xs font-medium text-muted-foreground mb-1">{label}</div>
+      <div className="text-sm font-medium text-foreground">{value || dict.noData}</div>
+    </div>
+  );
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <Button variant="outline" size="icon" asChild>
-            <Link to="/teachers">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
+            <Link to="/teachers"><ArrowLeft className="h-4 w-4" /></Link>
           </Button>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight">Teacher Profile</h1>
-            <p className="text-muted-foreground">View detailed information about the teacher</p>
+            <h1 className="text-2xl font-bold tracking-tight">{dict.title}</h1>
+            <p className="text-sm text-muted-foreground">{dict.desc}</p>
           </div>
         </div>
-        <Button asChild>
+        <Button asChild className="bg-blue-600 hover:bg-blue-700">
           <Link to={`/teachers/${id}/edit`}>
-            <Edit className="mr-2 h-4 w-4" /> Edit Data
+            <Edit className="mr-2 h-4 w-4" /> {dict.editBtn}
           </Link>
         </Button>
       </div>
 
       <div className="grid gap-6 md:grid-cols-[1fr_3fr]">
+        {/* Left Sidebar Profile */}
         <Card className="h-fit">
           <CardContent className="pt-6 flex flex-col items-center text-center">
-            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-primary/10 text-3xl font-semibold text-primary mb-4">
+            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-linear-to-br from-blue-500 to-indigo-600 text-3xl font-bold text-white shadow-lg mb-4">
               {getInitials(teacher.fullName)}
             </div>
-            <h2 className="text-xl font-bold">{teacher.fullName}</h2>
-            <p className="text-sm text-muted-foreground mb-4">{teacher.position || 'Teacher'}</p>
+            <h2 className="text-xl font-bold text-foreground leading-tight">{teacher.fullName}</h2>
+            <p className="text-sm text-muted-foreground mt-1">{teacher.position || 'Guru'}</p>
 
-            <Badge className={cn("mb-6", teacher.status ? statusColorMap[teacher.status] : "")} variant="secondary">
-              {teacher.status || 'No Status'}
-            </Badge>
+            <div className="flex flex-wrap justify-center gap-2 mt-3 mb-5">
+              <Badge className={cn(teacher.status ? statusColorMap[teacher.status] : "bg-muted")} variant="outline">
+                {teacher.status || 'Belum Diatur'}
+              </Badge>
+              {/* Highlight Tugas Tambahan */}
+              {teacher.tugasTambahan && (
+                <Badge className="bg-amber-100 text-amber-800 border-amber-200">
+                  <Briefcase className="w-3 h-3 mr-1" /> {teacher.tugasTambahan}
+                </Badge>
+              )}
+            </div>
 
-            <div className="w-full space-y-3 text-sm">
+            <div className="w-full space-y-3 text-sm border-t border-border/50 pt-5">
               {teacher.phone && (
-                <div className="flex items-center gap-2 text-muted-foreground justify-center">
-                  <Phone className="h-4 w-4" />
-                  <span>{teacher.phone}</span>
+                <div className="flex items-center gap-3 text-muted-foreground justify-center">
+                  <Phone className="h-4 w-4 shrink-0 text-blue-500" />
+                  <span className="truncate">{teacher.phone}</span>
                 </div>
               )}
               {teacher.email && (
-                <div className="flex items-center gap-2 text-muted-foreground justify-center">
-                  <Mail className="h-4 w-4" />
-                  <span>{teacher.email}</span>
+                <div className="flex items-center gap-3 text-muted-foreground justify-center">
+                  <Mail className="h-4 w-4 shrink-0 text-blue-500" />
+                  <span className="truncate">{teacher.email}</span>
+                </div>
+              )}
+              {teacher.isCertified && (
+                <div className="flex items-center gap-3 text-emerald-600 justify-center font-medium mt-2 bg-emerald-50 py-1.5 rounded-md">
+                  <Award className="h-4 w-4 shrink-0" />
+                  <span>Guru Tersertifikasi</span>
                 </div>
               )}
             </div>
           </CardContent>
         </Card>
 
+        {/* Right Content Tabs */}
         <Tabs defaultValue="personal" className="w-full">
-          <TabsList className="grid w-full max-w-md grid-cols-2">
-            <TabsTrigger value="personal">Data Pribadi</TabsTrigger>
-            <TabsTrigger value="professional">Data Kepegawaian</TabsTrigger>
-          </TabsList>
+          {/* Scrollable tab list for mobile */}
+          <div className="w-full overflow-x-auto pb-2 mb-4">
+            <TabsList className="w-max min-w-full flex h-auto p-1 bg-muted/50">
+              <TabsTrigger value="personal" className="py-2 px-4"><GraduationCap className="w-4 h-4 mr-2" />{dict.tabPersonal}</TabsTrigger>
+              <TabsTrigger value="professional" className="py-2 px-4"><Building className="w-4 h-4 mr-2" />{dict.tabProf}</TabsTrigger>
+              <TabsTrigger value="tasks" className="py-2 px-4"><Award className="w-4 h-4 mr-2" />{dict.tabTask}</TabsTrigger>
+              <TabsTrigger value="family" className="py-2 px-4"><Briefcase className="w-4 h-4 mr-2" />{dict.tabFamily}</TabsTrigger>
+            </TabsList>
+          </div>
 
-          <TabsContent value="personal" className="mt-6 space-y-6">
+          {/* TAB 1: Data Pribadi */}
+          <TabsContent value="personal" className="m-0 space-y-4">
             <Card>
-              <CardHeader>
-                <CardTitle>Personal Information</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Full Name</div>
-                  <div>{teacher.fullName}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Gender</div>
-                  <div>{teacher.gender === 'L' ? 'Laki-laki' : 'Perempuan'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">NIK</div>
-                  <div>{teacher.nik || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Birth Place & Date</div>
-                  <div>
-                    {teacher.birthPlace || '-'}, {teacher.birthDate ? formatDate(teacher.birthDate) : '-'}
-                  </div>
-                </div>
-                <div className="sm:col-span-2">
-                  <div className="text-sm font-medium text-muted-foreground">Address</div>
-                  <div>{teacher.address || '-'}</div>
-                </div>
+              <CardHeader className="pb-4"><CardTitle className="text-lg">Informasi Dasar (Dapodik)</CardTitle></CardHeader>
+              <CardContent className="grid gap-x-6 sm:grid-cols-2">
+                <InfoItem label={locale === 'id' ? 'Nama Lengkap' : 'Full Name'} value={teacher.fullName} />
+                <InfoItem label={locale === 'id' ? 'Jenis Kelamin' : 'Gender'} value={teacher.gender === 'L' ? 'Laki-laki' : 'Perempuan'} />
+                <InfoItem label="NIK" value={teacher.nik} />
+                <InfoItem label="No. KK" value={teacher.noKk} />
+                <InfoItem label={locale === 'id' ? 'Tempat, Tanggal Lahir' : 'Birth Info'} value={`${teacher.birthPlace || dict.noData}, ${teacher.birthDate ? formatDate(teacher.birthDate) : dict.noData}`} />
+                <InfoItem label={locale === 'id' ? 'Agama / Kepercayaan' : 'Religion'} value={dict.noData} />
+                <InfoItem label={locale === 'id' ? 'Kewarganegaraan' : 'Nationality'} value={teacher.kewarganegaraan} />
+                <InfoItem label={locale === 'id' ? 'Nama Ibu Kandung' : 'Mother Name'} value={teacher.namaIbuKandung} />
+                <div className="sm:col-span-2"><InfoItem label={locale === 'id' ? 'Alamat Lengkap' : 'Address'} value={teacher.address} /></div>
+                <InfoItem label="Lintang (Latitude)" value={teacher.lintang} />
+                <InfoItem label="Bujur (Longitude)" value={teacher.bujur} />
               </CardContent>
             </Card>
           </TabsContent>
 
-          <TabsContent value="professional" className="mt-6 space-y-6">
+          {/* TAB 2: Kepegawaian */}
+          <TabsContent value="professional" className="m-0 space-y-4">
             <Card>
-              <CardHeader>
-                <CardTitle>Employment & Academic Information</CardTitle>
-              </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2">
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">NIP</div>
-                  <div>{teacher.nip || '-'}</div>
+              <CardHeader className="pb-4"><CardTitle className="text-lg">Status & SK Pengangkatan</CardTitle></CardHeader>
+              <CardContent className="grid gap-x-6 sm:grid-cols-2">
+                <InfoItem label="Status Kepegawaian" value={teacher.status} />
+                <InfoItem label="Jabatan" value={teacher.position} />
+                <InfoItem label="NIP" value={teacher.nip} />
+                <InfoItem label="NUPTK" value={teacher.nuptk} />
+                <InfoItem label="SK CPNS" value={teacher.skCpns} />
+                <InfoItem label="Tanggal CPNS" value={teacher.tanggalCpns ? formatDate(teacher.tanggalCpns) : dict.noData} />
+                <InfoItem label="SK Pengangkatan" value={teacher.skPengangkatan} />
+                <InfoItem label="TMT Pengangkatan" value={teacher.tmtPengangkatan ? formatDate(teacher.tmtPengangkatan) : dict.noData} />
+                <InfoItem label="Lembaga Pengangkatan" value={teacher.lembagaPengangkatan} />
+                <InfoItem label="Pangkat / Golongan" value={teacher.pangkatGolongan} />
+                <InfoItem label="Sumber Gaji" value={teacher.sumberGaji} />
+                <InfoItem label="TMT PNS" value={teacher.tmtPns ? formatDate(teacher.tmtPns) : dict.noData} />
+                <InfoItem label="Karpeg" value={teacher.karpeg} />
+                <InfoItem label="Tanggal Bergabung" value={teacher.joinDate ? formatDate(teacher.joinDate) : dict.noData} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          {/* TAB 3: Tugas & Lisensi */}
+          <TabsContent value="tasks" className="m-0 space-y-4">
+            <Card>
+              <CardHeader className="pb-4"><CardTitle className="text-lg">Akademik, Tugas Tambahan & Kompetensi</CardTitle></CardHeader>
+              <CardContent className="grid gap-x-6 sm:grid-cols-2">
+                <div className="sm:col-span-2 bg-amber-50 dark:bg-amber-500/10 p-4 rounded-lg mb-4 border border-amber-200 dark:border-amber-500/20">
+                  <div className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">Tugas Tambahan Saat Ini</div>
+                  <div className="text-sm font-medium text-amber-950 dark:text-amber-100">
+                    {teacher.tugasTambahan || 'Tidak ada tugas tambahan'}
+                  </div>
                 </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">NUPTK</div>
-                  <div>{teacher.nuptk || '-'}</div>
+
+                <InfoItem label="Pendidikan Terakhir" value={`${teacher.education || dict.noData} - ${teacher.major || dict.noData}`} />
+                <InfoItem label="Universitas / Institusi" value={teacher.university} />
+                <InfoItem label="Sertifikasi Guru" value={teacher.isCertified ? `Ya (No: ${teacher.certificationNumber || '-'})` : dict.no} />
+                <InfoItem label="Maksimal Jam Mengajar" value={`${teacher.maxHoursPerWeek || 24} Jam / Minggu`} />
+                <InfoItem label="NUKS" value={teacher.nuks} />
+
+                <div className="sm:col-span-2 grid sm:grid-cols-2 gap-4 mt-4 bg-muted/30 p-4 rounded-lg">
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Lisensi Kepala Sekolah</span>
+                    <Badge variant={teacher.sudahLisensiKepalaSekolah ? "default" : "secondary"}>{teacher.sudahLisensiKepalaSekolah ? dict.yes : dict.no}</Badge>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Diklat Kepengawasan</span>
+                    <Badge variant={teacher.pernahDiklatKepengawasan ? "default" : "secondary"}>{teacher.pernahDiklatKepengawasan ? dict.yes : dict.no}</Badge>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Keahlian Braille</span>
+                    <Badge variant={teacher.keahlianBraille ? "default" : "secondary"}>{teacher.keahlianBraille ? dict.yes : dict.no}</Badge>
+                  </div>
+                  <div className="flex justify-between items-center text-sm">
+                    <span className="text-muted-foreground">Keahlian Bahasa Isyarat</span>
+                    <Badge variant={teacher.keahlianBahasaIsyarat ? "default" : "secondary"}>{teacher.keahlianBahasaIsyarat ? dict.yes : dict.no}</Badge>
+                  </div>
                 </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Employment Status</div>
-                  <div>{teacher.status || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Position</div>
-                  <div>{teacher.position || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Last Education</div>
-                  <div>{teacher.education || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Major / Field of Study</div>
-                  <div>{teacher.major || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">University / Institution</div>
-                  <div>{teacher.university || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Join Date</div>
-                  <div>{teacher.joinDate ? formatDate(teacher.joinDate) : '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Base Salary</div>
-                  <div>{teacher.baseSalary ? formatCurrency(teacher.baseSalary) : '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Certified</div>
-                  <div>{teacher.isCertified ? 'Yes' : 'No'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Certification Number</div>
-                  <div>{teacher.certificationNumber || '-'}</div>
-                </div>
-                <div>
-                  <div className="text-sm font-medium text-muted-foreground">Max Hours Per Week</div>
-                  <div>{teacher.maxHoursPerWeek || 24} hours</div>
-                </div>
-                <div className="sm:col-span-2">
-                  <div className="text-sm font-medium text-muted-foreground">Subjects</div>
-                  <div className="flex flex-wrap gap-2 mt-1">
-                    {teacher.subjects && Array.isArray(teacher.subjects) && teacher.subjects.length > 0 ? (
-                      teacher.subjects.map((sub: string, i: number) => (
-                        <Badge key={i} variant="outline">{sub}</Badge>
+
+                <div className="sm:col-span-2 mt-4">
+                  <div className="text-sm font-medium text-muted-foreground mb-2">Mata Pelajaran yang Diampu</div>
+                  <div className="flex flex-wrap gap-2">
+                    {teacher.subjects ? (
+                      String(teacher.subjects).split(',').map((sub, i) => (
+                        <Badge key={i} variant="outline" className="bg-background">{sub.trim()}</Badge>
                       ))
-                    ) : (
-                      typeof teacher.subjects === 'string' && teacher.subjects ? (
-                        teacher.subjects.split(',').map((sub: string, i: number) => (
-                          <Badge key={i} variant="outline">{sub.trim()}</Badge>
-                        ))
-                      ) : '-'
-                    )}
+                    ) : (<span className="text-sm">{dict.noData}</span>)}
                   </div>
                 </div>
               </CardContent>
             </Card>
           </TabsContent>
+
+          {/* TAB 4: Keluarga & Finansial */}
+          <TabsContent value="family" className="m-0 space-y-4">
+            <Card>
+              <CardHeader className="pb-4"><CardTitle className="text-lg">Keluarga & Pajak</CardTitle></CardHeader>
+              <CardContent className="grid gap-x-6 sm:grid-cols-2">
+                <InfoItem label="Status Perkawinan" value={teacher.statusPerkawinan} />
+                <InfoItem label="Nama Suami/Istri" value={teacher.namaSuamiIstri} />
+                <InfoItem label="NIP Suami/Istri" value={teacher.nipSuamiIstri} />
+                <InfoItem label="Pekerjaan Suami/Istri" value={teacher.pekerjaanSuamiIstri} />
+                <InfoItem label="Karis / Karsu" value={teacher.karisKarsu} />
+                <div className="col-span-1 hidden sm:block"></div> {/* Spacer */}
+
+                <InfoItem label="NPWP" value={teacher.npwp} />
+                <InfoItem label="Nama Wajib Pajak" value={teacher.namaWajibPajak} />
+                <InfoItem label="Gaji Pokok" value={teacher.baseSalary ? formatCurrency(teacher.baseSalary) : dict.noData} />
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader className="pb-4"><CardTitle className="text-lg">Informasi Rekening Bank</CardTitle></CardHeader>
+              <CardContent className="grid gap-x-6 sm:grid-cols-2">
+                <InfoItem label="Nama Bank" value={teacher.bank} />
+                <InfoItem label="Nomor Rekening" value={teacher.nomorRekeningBank} />
+                <InfoItem label="Rekening Atas Nama" value={teacher.rekeningAtasNama} />
+              </CardContent>
+            </Card>
+          </TabsContent>
+
         </Tabs>
       </div>
     </div>
