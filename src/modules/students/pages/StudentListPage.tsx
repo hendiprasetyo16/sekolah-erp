@@ -7,7 +7,7 @@ import {
   Loader2, AlertCircle, CheckCircle2, XCircle, FileSpreadsheet,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CheckSquare,
   Filter, ChevronDown,
-  ArrowUpDown, ArrowUp, ArrowDown // BARU: Ikon untuk fitur sorting
+  ArrowUpDown, ArrowUp, ArrowDown // Ikon untuk fitur sorting
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -119,7 +119,7 @@ export function StudentListPage() {
   const [jumpPage, setJumpPage] = useState<string>('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
 
-  // BARU: State untuk konfigurasi Sorting
+  // State untuk konfigurasi Sorting
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({
     key: 'fullName',
     direction: 'asc'
@@ -167,13 +167,18 @@ export function StudentListPage() {
     enabled: !!school?.id
   });
 
+  // PERBAIKAN: useQuery memanggil Backend Sorting
   const { data: studentsResponse, isLoading } = useQuery({
-    queryKey: ['students', currentPage, pageSize, searchQuery, selectedClass],
+    // Menambahkan sortConfig ke queryKey agar data dimuat ulang saat sorting berubah
+    queryKey: ['students', currentPage, pageSize, searchQuery, selectedClass, sortConfig],
     queryFn: () => studentService.list({
       page: currentPage,
       limit: pageSize,
       search: searchQuery,
-      classId: selectedClass === 'all' ? undefined : selectedClass
+      classId: selectedClass === 'all' ? undefined : selectedClass,
+      // Mengirimkan instruksi sorting ke database
+      sortBy: sortConfig?.key,
+      sortOrder: sortConfig?.direction
     }),
   });
 
@@ -240,7 +245,7 @@ export function StudentListPage() {
   const meta = studentsResponse?.data?.meta;
   const totalPages = Math.ceil((meta?.total || 0) / pageSize) || 1;
 
-  // BARU: Fungsi untuk mengubah urutan (Sort)
+  // Fungsi untuk mengubah urutan (Sort state) saat header tabel diklik
   const handleSort = (key: string) => {
     let direction: 'asc' | 'desc' = 'asc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
@@ -249,19 +254,25 @@ export function StudentListPage() {
     setSortConfig({ key, direction });
   };
 
-  // BARU: Menyalin dan mengurutkan data siswa berdasarkan state sortConfig
-  const sortedStudents = [...students].sort((a: any, b: any) => {
-    if (!sortConfig) return 0;
-    const { key, direction } = sortConfig;
+  // =========================================================================
+  // ARSIP KODE FRONTEND SORTING
+  // Jika suatu saat ingin kembali mengurutkan data dari sisi browser (Frontend),
+  // cukup hapus tanda komentar (//) pada blok kode di bawah ini, dan jangan 
+  // lupa ubah `students.map` menjadi `sortedStudents.map` pada baris tabel di bawah.
+  // =========================================================================
 
-    // Pastikan data diubah ke huruf kecil semua agar A-Z akurat
-    const aValue = String(a[key] || '').toLowerCase();
-    const bValue = String(b[key] || '').toLowerCase();
-
-    if (aValue < bValue) return direction === 'asc' ? -1 : 1;
-    if (aValue > bValue) return direction === 'asc' ? 1 : -1;
-    return 0;
-  });
+  // const sortedStudents = [...students].sort((a: any, b: any) => {
+  //   if (!sortConfig) return 0;
+  //   const { key, direction } = sortConfig;
+  //
+  //   // Pastikan data diubah ke huruf kecil semua agar A-Z akurat
+  //   const aValue = String(a[key] || '').toLowerCase();
+  //   const bValue = String(b[key] || '').toLowerCase();
+  //
+  //   if (aValue < bValue) return direction === 'asc' ? -1 : 1;
+  //   if (aValue > bValue) return direction === 'asc' ? 1 : -1;
+  //   return 0;
+  // });
 
   const toggleRow = (id: string) => setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
   const toggleAll = () => setSelectedRows(selectedRows.length === students.length && students.length > 0 ? [] : students.map(s => s.id));
@@ -957,7 +968,7 @@ export function StudentListPage() {
                 )}
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">No</th>
 
-                {/* BARU: Kolom tabel yang bisa diklik untuk sorting */}
+                {/* Kolom tabel yang bisa diklik untuk sorting */}
                 <th
                   className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
                   onClick={() => handleSort('nisn')}
@@ -1007,11 +1018,13 @@ export function StudentListPage() {
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
                 <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">{locale === 'id' ? 'Memuat...' : 'Loading...'}</p></td></tr>
-              ) : sortedStudents.length === 0 ? (
+              ) : students.length === 0 ? (
                 <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center text-muted-foreground">{locale === 'id' ? 'Tidak ada data.' : 'No data available.'}</td></tr>
               ) : (
-                // BARU: Kita melakukan .map dari sortedStudents, BUKAN students lagi
-                sortedStudents.map((student, idx) => {
+                // PERBAIKAN: Menggunakan kembali 'students.map' dari Backend
+                // INFO PENTING: Jika kamu mengaktifkan kembali Frontend Sorting di atas,
+                // ubah kode di bawah ini menjadi `sortedStudents.map((student, idx) => {`
+                students.map((student, idx) => {
                   const statusConf = getStatusConfig(student.status);
                   return (
                     <motion.tr key={student.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={cn("hover:bg-muted/30 transition-colors", selectedRows.includes(student.id) && "bg-emerald-500/5")}>

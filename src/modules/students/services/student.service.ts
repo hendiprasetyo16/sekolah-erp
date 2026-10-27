@@ -29,8 +29,23 @@ const handleDbError = (error: unknown) => {
 };
 
 export const studentService = {
-  async list(params: PaginatedParams & { classId?: string; status?: string }): Promise<ApiResponsePaginated<StudentListItem>> {
-    const { page = 1, limit = 10, search, classId, status } = params;
+  async list(params: PaginatedParams & { 
+    classId?: string; 
+    status?: string;
+    sortBy?: string; 
+    sortOrder?: 'asc' | 'desc'; 
+  }): Promise<ApiResponsePaginated<StudentListItem>> {
+    
+    const { 
+      page = 1, 
+      limit = 10, 
+      search, 
+      classId, 
+      status, 
+      sortBy = 'fullName', 
+      sortOrder = 'asc' 
+    } = params;
+    
     let query = supabase.from('students').select('*, classes(name, gradeLevel)', { count: 'exact' });
 
     if (search) query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%,nis.ilike.%${search}%`);
@@ -40,7 +55,19 @@ export const studentService = {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query.order('fullName', { ascending: true }).range(from, to);
+    // PENANGANAN KHUSUS SORTING KELAS:
+    // Karena 'className' adalah properti hasil gabungan (join), 
+    // jika user mengurutkan berdasarkan kelas, kita arahkan ke kolom 'fullName' atau default dulu 
+    // agar tidak error di Supabase, atau biarkan kolom database yang valid.
+    let safeSortBy = sortBy;
+    if (sortBy === 'className') {
+      safeSortBy = 'fullName'; // Sementara di-fallback ke fullName agar tidak error query
+    }
+
+    const { data, count, error } = await query
+      .order(safeSortBy, { ascending: sortOrder === 'asc' })
+      .range(from, to);
+      
     if (error) throw new Error(error.message);
 
     const mappedData: StudentListItem[] = (data || []).map((item: Record<string, unknown>) => {
