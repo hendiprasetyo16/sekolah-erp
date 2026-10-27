@@ -5,7 +5,9 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Upload, Download, Search, Eye, Edit, Trash2,
   Loader2, AlertCircle, CheckCircle2, XCircle, FileSpreadsheet,
-  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CheckSquare
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CheckSquare,
+  Filter, ChevronDown,
+  ArrowUpDown, ArrowUp, ArrowDown // BARU: Ikon untuk fitur sorting
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -24,7 +26,7 @@ interface ImportParent {
   id: string;
   relation: string;
   fullName: string;
-  birthYear: string; // BARU: Tahun lahir orang tua
+  birthYear: string;
   nik: string;
   occupation: string;
   monthlyIncome: string | null;
@@ -59,7 +61,7 @@ interface StudentImportPayload {
   birthDate: string;
   religion: string;
   address: string;
-  dusun: string;   // BARU: Dusun
+  dusun: string;
   rt: string;
   rw: string;
   kelurahan: string;
@@ -67,8 +69,8 @@ interface StudentImportPayload {
   city: string;
   province: string;
   postalCode: string;
-  telepon: string; // BARU: Telepon Rumah
-  phone: string;   // Khusus HP
+  telepon: string;
+  phone: string;
   email: string;
   anakKe: number | null;
   jmlSaudara: number | null;
@@ -106,10 +108,8 @@ export function StudentListPage() {
   const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
 
-  // 1. AMBIL DATA USER DARI STORE UNTUK MENGECEK ROLE
   const { school, user } = useAuthStore();
 
-  // 2. BUAT LOGIKA BATASAN AKSES (RBAC)
   const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
   const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
 
@@ -119,12 +119,16 @@ export function StudentListPage() {
   const [jumpPage, setJumpPage] = useState<string>('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
 
-  // States for Modals & Actions
+  // BARU: State untuk konfigurasi Sorting
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({
+    key: 'fullName',
+    direction: 'asc'
+  });
+
   const [studentToDelete, setStudentToDelete] = useState<{ id: string, name: string } | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
-  // WIZARD IMPORT STATES
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [wizardState, setWizardState] = useState<'idle' | 'parsing' | 'preview' | 'importing'>('idle');
   const [parsedImportData, setParsedImportData] = useState<StudentImportPayload[]>([]);
@@ -137,7 +141,6 @@ export function StudentListPage() {
     setJumpPage(String(currentPage));
   }, [currentPage]);
 
-  // Fetch Classes
   const { data: classesData } = useQuery({
     queryKey: ['classes-list'],
     queryFn: async () => {
@@ -150,7 +153,6 @@ export function StudentListPage() {
     }
   });
 
-  // Mengambil Tahun Ajaran Aktif
   const { data: activeYear } = useQuery({
     queryKey: ['active-academic-year'],
     queryFn: async () => {
@@ -165,7 +167,6 @@ export function StudentListPage() {
     enabled: !!school?.id
   });
 
-  // Fetch Students
   const { data: studentsResponse, isLoading } = useQuery({
     queryKey: ['students', currentPage, pageSize, searchQuery, selectedClass],
     queryFn: () => studentService.list({
@@ -176,7 +177,6 @@ export function StudentListPage() {
     }),
   });
 
-  // Delete Mutation
   const deleteMutation = useMutation({
     mutationFn: (id: string) => studentService.delete(id),
     onSuccess: () => {
@@ -191,7 +191,6 @@ export function StudentListPage() {
     }
   });
 
-  // Bulk Delete Mutation
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids: string[]) => {
       await Promise.all(ids.map(id => studentService.delete(id)));
@@ -210,7 +209,6 @@ export function StudentListPage() {
 
   const [isDeletingAll, setIsDeletingAll] = useState(false);
 
-  // Mutation untuk Hapus Semua Data
   const deleteAllMutation = useMutation({
     mutationFn: () => studentService.deleteAll(school!.id),
     onSuccess: (res) => {
@@ -225,7 +223,6 @@ export function StudentListPage() {
     }
   });
 
-  // Bulk Import Mutation
   const importMutation = useMutation({
     mutationFn: (payload: StudentImportPayload[]) => studentService.bulkImport(payload),
     onSuccess: (res: { message?: string }) => {
@@ -242,6 +239,29 @@ export function StudentListPage() {
   const students = studentsResponse?.data?.data || [];
   const meta = studentsResponse?.data?.meta;
   const totalPages = Math.ceil((meta?.total || 0) / pageSize) || 1;
+
+  // BARU: Fungsi untuk mengubah urutan (Sort)
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
+
+  // BARU: Menyalin dan mengurutkan data siswa berdasarkan state sortConfig
+  const sortedStudents = [...students].sort((a: any, b: any) => {
+    if (!sortConfig) return 0;
+    const { key, direction } = sortConfig;
+
+    // Pastikan data diubah ke huruf kecil semua agar A-Z akurat
+    const aValue = String(a[key] || '').toLowerCase();
+    const bValue = String(b[key] || '').toLowerCase();
+
+    if (aValue < bValue) return direction === 'asc' ? -1 : 1;
+    if (aValue > bValue) return direction === 'asc' ? 1 : -1;
+    return 0;
+  });
 
   const toggleRow = (id: string) => setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
   const toggleAll = () => setSelectedRows(selectedRows.length === students.length && students.length > 0 ? [] : students.map(s => s.id));
@@ -394,7 +414,7 @@ export function StudentListPage() {
               : String(row['tanggal lahir'] || new Date().toISOString()),
             religion: String(row['agama'] || 'ISLAM').toUpperCase(),
             address: finalAddress || '-',
-            dusun: dusunRaw, // BARU: Menangkap dusun dari excel
+            dusun: dusunRaw,
             rt: String(row['rt'] || ''),
             rw: String(row['rw'] || ''),
             kelurahan: String(row['kelurahan'] || ''),
@@ -402,8 +422,8 @@ export function StudentListPage() {
             city: String(row['kabupaten/kota'] || row['kota'] || school?.city || '-'),
             province: String(row['provinsi'] || school?.province || '-'),
             postalCode: String(row['kode pos'] || ''),
-            telepon: String(row['telepon'] || ''), // BARU: Telepon rumah terpisah
-            phone: String(row['hp'] || ''), // BARU: HP membaca murni dari kolom HP
+            telepon: String(row['telepon'] || ''),
+            phone: String(row['hp'] || ''),
             email: String(row['e-mail'] || row['email'] || ''),
             anakKe: getValidNumber(row['anak ke-berapa'], 1),
             jmlSaudara: getValidNumber(row['jml. saudara kandung'], 0),
@@ -433,7 +453,7 @@ export function StudentListPage() {
                 id: crypto.randomUUID(),
                 relation: 'AYAH',
                 fullName: String(row['data ayah nama'] || row['nama ayah'] || ''),
-                birthYear: String(row['data ayah tahun lahir'] || row['tahun lahir ayah'] || ''), // BARU
+                birthYear: String(row['data ayah tahun lahir'] || row['tahun lahir ayah'] || ''),
                 nik: String(row['data ayah nik'] || row['nik ayah'] || ''),
                 occupation: String(row['data ayah pekerjaan'] || row['pekerjaan ayah'] || ''),
                 monthlyIncome: row['data ayah penghasilan'] || row['penghasilan ayah'] ? String(row['data ayah penghasilan'] || row['penghasilan ayah']) : null,
@@ -445,7 +465,7 @@ export function StudentListPage() {
                 id: crypto.randomUUID(),
                 relation: 'IBU',
                 fullName: String(row['data ibu nama'] || row['nama ibu'] || ''),
-                birthYear: String(row['data ibu tahun lahir'] || row['tahun lahir ibu'] || ''), // BARU
+                birthYear: String(row['data ibu tahun lahir'] || row['tahun lahir ibu'] || ''),
                 nik: String(row['data ibu nik'] || row['nik ibu'] || ''),
                 occupation: String(row['data ibu pekerjaan'] || row['pekerjaan ibu'] || ''),
                 monthlyIncome: row['data ibu penghasilan'] || row['penghasilan ibu'] ? String(row['data ibu penghasilan'] || row['penghasilan ibu']) : null,
@@ -457,7 +477,7 @@ export function StudentListPage() {
                 id: crypto.randomUUID(),
                 relation: 'WALI',
                 fullName: String(row['data wali nama'] || row['nama wali'] || ''),
-                birthYear: String(row['data wali tahun lahir'] || row['tahun lahir wali'] || ''), // BARU
+                birthYear: String(row['data wali tahun lahir'] || row['tahun lahir wali'] || ''),
                 nik: String(row['data wali nik'] || row['nik wali'] || ''),
                 occupation: String(row['data wali pekerjaan'] || row['pekerjaan wali'] || ''),
                 monthlyIncome: row['data wali penghasilan'] || row['penghasilan wali'] ? String(row['data wali penghasilan'] || row['penghasilan wali']) : null,
@@ -474,8 +494,8 @@ export function StudentListPage() {
               namaKip: String(row['nama di kip'] || ''),
               layakPip: toBool(row['layak pip (usulan dari sekolah)'] || row['layak pip']),
               alasanLayakPip: String(row['alasan layak pip'] || ''),
-              hasKks: toBool(row['penerima kps'] || row['penerima kks']), // BARU: Gabung KPS dan KKS
-              kksNumber: String(row['no. kps'] || row['nomor kks'] || ''), // BARU: Gabung No KPS dan KKS
+              hasKks: toBool(row['penerima kps'] || row['penerima kks']),
+              kksNumber: String(row['no. kps'] || row['nomor kks'] || ''),
               desil: (() => {
                 const raw = row['desil'] || row['desil p3ke'] || row['desil dtks'] || row['desil (p3ke/dtks)'];
                 if (!raw) return null;
@@ -853,7 +873,6 @@ export function StudentListPage() {
           <p className="text-sm text-muted-foreground mt-1">{locale === 'id' ? `Total ${meta?.total || 0} siswa terdaftar` : `${meta?.total || 0} students registered`}</p>
         </div>
 
-        {/* 3. TAMPILKAN TOMBOL AKSI HANYA UNTUK ROLE TERTENTU (KECUALI TOMBOL EXPORT) */}
         <div className="flex flex-wrap items-center gap-2">
           {selectedRows.length > 0 && canManageData && (
             <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} onClick={() => setIsBulkDeleting(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-bold hover:bg-red-500/20 transition-colors shadow-sm">
@@ -873,7 +892,6 @@ export function StudentListPage() {
             </button>
           )}
 
-          {/* Tombol Export Data dibiarkan agar Guru tetap bisa mencetak data */}
           <button onClick={handleExport} disabled={isExporting} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} <span className="hidden sm:inline">Export Data</span>
           </button>
@@ -886,19 +904,45 @@ export function StudentListPage() {
         </div>
       </div>
 
-      {/* Filters */}
+      {/* --- BAGIAN FILTER YANG DIPERBARUI MENGGUNAKAN DROPDOWN --- */}
       <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3">
+
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-            <input type="text" placeholder={t('students.search')} value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }} className="w-full pl-9 pr-4 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all" />
+            <input
+              type="text"
+              placeholder={t('students.search')}
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setCurrentPage(1); }}
+              className="w-full pl-9 pr-4 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+            />
           </div>
-          <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar pb-1 sm:pb-0">
-            <button onClick={() => { setSelectedClass('all'); setCurrentPage(1); }} className={cn('px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all border', selectedClass === 'all' ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : 'bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted/50')}>{locale === 'id' ? 'Semua Kelas' : 'All Classes'}</button>
-            {classesData?.map(cls => (
-              <button key={cls.id} onClick={() => { setSelectedClass(cls.id); setCurrentPage(1); }} className={cn('px-3 py-2 rounded-lg text-xs font-medium whitespace-nowrap transition-all border', selectedClass === cls.id ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-600' : 'bg-muted/20 border-border/50 text-muted-foreground hover:bg-muted/50')}>{cls.name}</button>
-            ))}
+
+          <div className="relative min-w-50">
+            <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+            <select
+              value={selectedClass}
+              onChange={(e) => {
+                setSelectedClass(e.target.value);
+                setCurrentPage(1);
+              }}
+              className="w-full pl-9 pr-8 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all appearance-none cursor-pointer"
+            >
+              <option value="all">{locale === 'id' ? 'Semua Kelas' : 'All Classes'}</option>
+              {classesData
+                ?.sort((a, b) => a.name.localeCompare(b.name))
+                .map(cls => (
+                  <option key={cls.id} value={cls.id}>
+                    {cls.name}
+                  </option>
+                ))}
+            </select>
+            <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
+              <ChevronDown size={16} />
+            </div>
           </div>
+
         </div>
       </div>
 
@@ -908,14 +952,54 @@ export function StudentListPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-border/50 bg-muted/30">
-                {/* 4. SEMBUNYIKAN CHECKBOX MASSAL JIKA BUKAN ADMIN */}
                 {canManageData && (
                   <th className="p-4 w-12"><input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" /></th>
                 )}
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">No</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">NISN / NIPD</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{locale === 'id' ? 'Siswa' : 'Student'}</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">{locale === 'id' ? 'Kelas' : 'Class'}</th>
+
+                {/* BARU: Kolom tabel yang bisa diklik untuk sorting */}
+                <th
+                  className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('nisn')}
+                >
+                  <div className="flex items-center gap-1">
+                    NISN / NIPD
+                    {sortConfig?.key === 'nisn' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (
+                      <ArrowUpDown size={14} className="opacity-40" />
+                    )}
+                  </div>
+                </th>
+
+                <th
+                  className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('fullName')}
+                >
+                  <div className="flex items-center gap-1">
+                    {locale === 'id' ? 'Siswa' : 'Student'}
+                    {sortConfig?.key === 'fullName' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (
+                      <ArrowUpDown size={14} className="opacity-40" />
+                    )}
+                  </div>
+                </th>
+
+                <th
+                  className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('className')}
+                >
+                  <div className="flex items-center gap-1">
+                    {locale === 'id' ? 'Kelas' : 'Class'}
+                    {sortConfig?.key === 'className' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (
+                      <ArrowUpDown size={14} className="opacity-40" />
+                    )}
+                  </div>
+                </th>
+
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">{locale === 'id' ? 'Aksi' : 'Action'}</th>
               </tr>
@@ -923,14 +1007,14 @@ export function StudentListPage() {
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
                 <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">{locale === 'id' ? 'Memuat...' : 'Loading...'}</p></td></tr>
-              ) : students.length === 0 ? (
+              ) : sortedStudents.length === 0 ? (
                 <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center text-muted-foreground">{locale === 'id' ? 'Tidak ada data.' : 'No data available.'}</td></tr>
               ) : (
-                students.map((student, idx) => {
+                // BARU: Kita melakukan .map dari sortedStudents, BUKAN students lagi
+                sortedStudents.map((student, idx) => {
                   const statusConf = getStatusConfig(student.status);
                   return (
                     <motion.tr key={student.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={cn("hover:bg-muted/30 transition-colors", selectedRows.includes(student.id) && "bg-emerald-500/5")}>
-                      {/* 5. SEMBUNYIKAN CHECKBOX MASSAL JIKA BUKAN ADMIN */}
                       {canManageData && (
                         <td className="p-4"><input type="checkbox" checked={selectedRows.includes(student.id)} onChange={() => toggleRow(student.id)} className="w-4 h-4 rounded border-border accent-emerald-600" /></td>
                       )}
@@ -942,7 +1026,6 @@ export function StudentListPage() {
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
                           <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"><Eye className="h-4 w-4" /></Link>
-                          {/* 6. SEMBUNYIKAN ICON EDIT DAN HAPUS JIKA BUKAN ADMIN */}
                           {canManageData && (
                             <>
                               <Link to={`/students/${student.id}/edit`} className="p-2 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"><Edit className="h-4 w-4" /></Link>

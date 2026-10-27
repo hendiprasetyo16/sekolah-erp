@@ -12,10 +12,12 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+
+// 1. IMPORT USEAUTHSTORE UNTUK MENGAMBIL ROLE PENGGUNA
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { StudentParent, StudentEconomic } from '../types/student.types';
 
-// Definisi Strict Type lokal untuk menangkap field tambahan Dapodik & Pembaruan Database
+// Definisi Strict Type lokal untuk menangkap field tambahan Dapodik
 interface ExtendedStudentData {
   id: string;
   nis: string;
@@ -29,7 +31,7 @@ interface ExtendedStudentData {
   birthDate: string;
   religion: string;
   address: string;
-  dusun?: string; // Field Baru
+  dusun?: string; // BARU
   rt?: string;
   rw?: string;
   kelurahan?: string;
@@ -37,15 +39,15 @@ interface ExtendedStudentData {
   city: string;
   province: string;
   postalCode?: string;
-  telepon?: string; // Field Baru
+  telepon?: string; // BARU
   phone?: string;
   email?: string;
   status: string;
   entryDate: string;
   className: string;
   gradeLevel: number;
-  parents?: (StudentParent & { birthYear?: string })[]; // Pembaruan Tahun Lahir
-  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number; hasKks?: boolean; kksNumber?: string };
+  parents?: (StudentParent & { birthYear?: string })[]; // BARU: Tahun Lahir
+  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number; hasKks?: boolean; kksNumber?: string }; // BARU: KKS
   noAktaLahir?: string;
   anakKe?: number;
   jmlSaudara?: number;
@@ -59,8 +61,7 @@ interface ExtendedStudentData {
   bank?: string;
   noRekening?: string;
   namaRekening?: string;
-
-  // Field yang sebelumnya menyebabkan error TypeScript
+  // FIX: Menambahkan properti yang sebelumnya error di TypeScript
   kebutuhanKhusus?: string;
   lintang?: string;
   bujur?: string;
@@ -74,6 +75,7 @@ export function StudentDetailPage() {
   const navigate = useNavigate();
   const { locale } = useTranslation();
 
+  // 2. AMBIL DATA USER DAN BUAT LOGIKA IZIN (RBAC)
   const { user } = useAuthStore();
   const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
   const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
@@ -131,8 +133,14 @@ export function StudentDetailPage() {
   const formatCurrency = (amount?: number | string) => {
     if (!amount) return '-';
     const num = Number(amount);
-    if (isNaN(num)) return String(amount);
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(num);
+    if (isNaN(num)) {
+      return String(amount);
+    }
+    return new Intl.NumberFormat('id-ID', {
+      style: 'currency',
+      currency: 'IDR',
+      maximumFractionDigits: 0
+    }).format(num);
   };
 
   const formatBool = (val?: boolean) => {
@@ -153,6 +161,7 @@ export function StudentDetailPage() {
           </h1>
         </div>
 
+        {/* 3. SEMBUNYIKAN TOMBOL EDIT DARI GURU/SISWA/ORTU */}
         {canManageData && (
           <Button asChild className="bg-emerald-600 hover:bg-emerald-700 text-white">
             <Link to={`/students/${id}/edit`}>
@@ -265,7 +274,7 @@ export function StudentDetailPage() {
                     { label: locale === 'id' ? 'Provinsi' : 'Province', value: student.province },
                     { label: locale === 'id' ? 'Kode Pos' : 'Postal Code', value: student.postalCode || '-' },
                     { label: locale === 'id' ? 'Telepon Rumah' : 'Home Phone', value: student.telepon || '-' },
-                    { label: locale === 'id' ? 'No. Handphone' : 'Mobile Phone', value: student.phone || '-' },
+                    { label: locale === 'id' ? 'No. HP' : 'Mobile Phone', value: student.phone || '-' },
                     { label: 'Email', value: student.email || '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="grid grid-cols-3 px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
@@ -466,7 +475,8 @@ export function StudentDetailPage() {
                   ].map((item, idx) => (
                     <div key={idx} className="flex justify-between px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium">{item.label}</dt>
-                      <dd className="text-foreground font-medium text-right max-w-[50%] overflow-hidden text-ellipsis">{item.value}</dd>
+                      {/* FIX: Mengganti break-words menjadi break-all untuk mengatasi warning tailwind */}
+                      <dd className="text-foreground font-medium text-right max-w-[50%] break-all">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
@@ -492,7 +502,7 @@ export function StudentDetailPage() {
                   ].map((item, idx) => (
                     <div key={idx} className="flex justify-between px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium">{item.label}</dt>
-                      <dd className="text-foreground font-medium text-right max-w-[50%] overflow-hidden text-ellipsis">{item.value}</dd>
+                      <dd className="text-foreground font-medium text-right max-w-[50%] break-all">{item.value}</dd>
                     </div>
                   ))}
                 </dl>
