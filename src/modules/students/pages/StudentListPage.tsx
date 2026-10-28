@@ -337,6 +337,7 @@ export function StudentListPage() {
     onSuccess: () => {
       toast.success(tr('Siswa berhasil dihapus', 'Student deleted successfully'));
       queryClient.invalidateQueries({ queryKey: ['students'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       setSelectedRows(prev => prev.filter(r => r !== studentToDelete?.id));
       setStudentToDelete(null);
     },
@@ -362,6 +363,7 @@ export function StudentListPage() {
         toast.success(tr(`${total} data berhasil dihapus`, `${total} data deleted successfully`));
       }
       queryClient.invalidateQueries({ queryKey: ['students'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       setSelectedRows([]);
       setIsBulkDeleting(false);
     },
@@ -376,6 +378,7 @@ export function StudentListPage() {
     onSuccess: (res) => {
       toast.success(res.message);
       queryClient.invalidateQueries({ queryKey: ['students'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       setSelectedRows([]);
       setIsDeletingAll(false);
     },
@@ -390,6 +393,7 @@ export function StudentListPage() {
     onSuccess: (res: { message?: string }) => {
       toast.success(res.message || 'Import berhasil');
       queryClient.invalidateQueries({ queryKey: ['students'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       queryClient.invalidateQueries({ queryKey: ['classes-list'] });
       closeImportWizard();
     },

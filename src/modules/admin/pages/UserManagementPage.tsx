@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useForm } from 'react-hook-form';
@@ -31,6 +31,9 @@ import {
     DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+// ==========================================
+// TYPES & INTERFACES
+// ==========================================
 export type AppUserRole =
     | 'SUPER_ADMIN' | 'ADMIN' | 'KEPALA_SEKOLAH' | 'OPERATOR'
     | 'BENDAHARA' | 'WALI_KELAS' | 'GURU' | 'STAFF_TU'
@@ -50,13 +53,12 @@ export interface AppUser {
 }
 
 type SortKey = 'fullName' | 'role' | 'isActive' | 'none';
+type SortConfig = { key: SortKey; direction: 'asc' | 'desc' };
 
-// ---------------------------------------------------------------------------
-// KONSTANTA & SCHEMA (di luar komponen supaya tidak dibuat ulang tiap render)
-// ---------------------------------------------------------------------------
+// ==========================================
+// KONSTANTA & SCHEMA
+// ==========================================
 const ITEMS_PER_PAGE = 10;
-
-// TODO: sebaiknya diganti password acak per user / wajib ganti saat login pertama
 const DEFAULT_PASSWORD = 'Password123!';
 
 const ROLE_VALUES = [
@@ -87,8 +89,6 @@ const resetPasswordSchema = z.object({
 });
 type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
 
-// Hitung hasil sukses/gagal dari banyak pemanggilan edge function.
-// supabase.functions.invoke TIDAK melempar error, ia mengembalikan { data, error }.
 type InvokeResult = { data: any; error: { message: string } | null };
 const summarizeResults = (results: InvokeResult[]) => {
     const failures = results.filter(r => r.error || r.data?.error);
@@ -100,6 +100,67 @@ const summarizeResults = (results: InvokeResult[]) => {
     };
 };
 
+const fetchAllUsers = async (schoolId: string | null, isSuperAdmin: boolean): Promise<AppUser[]> => {
+    const size = 1000;
+    const all: AppUser[] = [];
+    for (let from = 0; ; from += size) {
+        let query = supabase
+            .from('users')
+            .select('*')
+            .order('createdAt', { ascending: false })
+            .order('id', { ascending: true })
+            .range(from, from + size - 1);
+
+        if (!isSuperAdmin && schoolId) query = query.eq('schoolId', schoolId);
+
+        const { data, error } = await query;
+        if (error) throw new Error(error.message);
+
+        all.push(...((data as AppUser[]) || []));
+        if (!data || data.length < size) break;
+    }
+    return all;
+};
+
+// ==========================================
+// SUB-KOMPONEN HEADER TABEL
+// ==========================================
+interface SortableHeaderProps {
+    columnKey: SortKey;
+    label: string;
+    sortConfig: SortConfig;
+    onSort: (key: SortKey) => void;
+}
+
+function SortableHeader({ columnKey, label, sortConfig, onSort }: SortableHeaderProps) {
+    const renderIcon = () => {
+        if (sortConfig.key !== columnKey) return <ArrowUpDown className="w-3 h-3 opacity-30 ml-1" />;
+        if (columnKey === 'fullName') {
+            return sortConfig.direction === 'asc'
+                ? <ArrowDownAZ className="w-3 h-3 text-primary ml-1" />
+                : <ArrowUpZA className="w-3 h-3 text-primary ml-1" />;
+        }
+        return sortConfig.direction === 'asc'
+            ? <ArrowDown className="w-3 h-3 text-primary ml-1" />
+            : <ArrowUp className="w-3 h-3 text-primary ml-1" />;
+    };
+
+    return (
+        <th
+            className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none"
+            onClick={() => onSort(columnKey)}
+        >
+            <div className="flex items-center gap-1">
+                {label}
+                {renderIcon()}
+            </div>
+        </th>
+    );
+}
+
+// ==========================================
+// KOMPONEN UTAMA
+// ==========================================
 export function UserManagementPage() {
     const { school, user: currentUser } = useAuthStore();
     const queryClient = useQueryClient();
@@ -108,45 +169,37 @@ export function UserManagementPage() {
     const { locale } = useUIStore();
     const lang = locale === 'en' ? 'en' : 'id';
 
-    const tGlobal = (key: keyof typeof translations.id.common): string => {
-        return translations[lang].common[key];
-    };
-
+    const tGlobal = (key: keyof typeof translations.id.common): string => translations[lang].common[key];
     const tUM = (key: keyof typeof translations.id.userManagement, replace?: Record<string, any>): string => {
         let text: string = translations[lang].userManagement[key];
         if (replace) {
-            Object.keys(replace).forEach(k => {
-                text = text.replace(`{${k}}`, String(replace[k]));
-            });
+            Object.keys(replace).forEach(k => { text = text.replace(`{${k}}`, String(replace[k])); });
         }
         return text;
     };
 
+    // STATES
     const [activeTab, setActiveTab] = useState<string>('semua');
     const [searchQuery, setSearchQuery] = useState<string>('');
-
-    // State Sortir
-    const [sortConfig, setSortConfig] = useState<{ key: SortKey, direction: 'asc' | 'desc' }>({ key: 'none', direction: 'asc' });
-
-    // State Pagination
+    const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'none', direction: 'asc' });
     const [currentPage, setCurrentPage] = useState<number>(1);
     const [pageInput, setPageInput] = useState<string>('1');
     const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
 
-    // Reset pagination ketika filter, search, atau urutan berubah
     useEffect(() => { setCurrentPage(1); setPageInput('1'); setSelectedUserIds([]); }, [searchQuery, activeTab, sortConfig]);
     useEffect(() => { setPageInput(currentPage.toString()); }, [currentPage]);
 
-    const [isAddUserModalOpen, setIsAddUserModalOpen] = useState<boolean>(false);
+    // Modal States
+    const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
     const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
     const [userToDelete, setUserToDelete] = useState<AppUser | null>(null);
-    const [isGenerateSelectedModalOpen, setIsGenerateSelectedModalOpen] = useState<boolean>(false);
-    const [isGenerateAllModalOpen, setIsGenerateAllModalOpen] = useState<boolean>(false);
-    const [isDeleteSelectedModalOpen, setIsDeleteSelectedModalOpen] = useState<boolean>(false);
-    const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState<boolean>(false);
-    const [showAddPassword, setShowAddPassword] = useState<boolean>(false);
-    const [showResetPassword, setShowResetPassword] = useState<boolean>(false);
+    const [isGenerateSelectedModalOpen, setIsGenerateSelectedModalOpen] = useState(false);
+    const [isGenerateAllModalOpen, setIsGenerateAllModalOpen] = useState(false);
+    const [isDeleteSelectedModalOpen, setIsDeleteSelectedModalOpen] = useState(false);
+    const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
+    const [showAddPassword, setShowAddPassword] = useState(false);
+    const [showResetPassword, setShowResetPassword] = useState(false);
 
     // FORMS
     const addUserForm = useForm<CreateUserFormValues>({ resolver: zodResolver(createUserSchema), defaultValues: { fullName: '', email: '', password: '', role: 'GURU' } });
@@ -155,112 +208,51 @@ export function UserManagementPage() {
 
     useEffect(() => { if (userToEdit) editUserForm.reset({ fullName: userToEdit.fullName, role: userToEdit.role }); }, [userToEdit, editUserForm]);
 
+    // DATA FETCHING
+    const { data: users, isLoading } = useQuery<AppUser[], Error>({
+        queryKey: ['users-list', school?.id, isSuperAdmin],
+        queryFn: async () => {
+            if (!isSuperAdmin && !school?.id) return [];
+            return fetchAllUsers(school?.id ?? null, isSuperAdmin);
+        },
+        enabled: isSuperAdmin || !!school?.id,
+        staleTime: 0,
+        refetchOnMount: 'always',
+        refetchOnWindowFocus: true,
+        refetchOnReconnect: true,
+    });
+
+    // BUGFIX: Realtime Sync dengan ID Channel Unik
+    useEffect(() => {
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        // Menambahkan UID pada nama channel mencegah race condition di React Strict Mode
+        const channelName = `users-list-realtime-${Date.now()}`;
+
+        const channel = supabase
+            .channel(channelName)
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+                clearTimeout(timer);
+                timer = setTimeout(() => queryClient.invalidateQueries({ queryKey: ['users-list'] }), 500);
+            })
+            .subscribe();
+
+        return () => {
+            clearTimeout(timer);
+            supabase.removeChannel(channel);
+        };
+    }, [queryClient]);
+
     // MUTATIONS
-    const generateSelectedMutation = useMutation({
-        mutationFn: async (usersTarget: AppUser[]) => {
-            const results = await Promise.all(
-                usersTarget.map(user =>
-                    supabase.functions.invoke('create-user', {
-                        body: { email: user.email, password: DEFAULT_PASSWORD, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id }
-                    })
-                )
-            );
-            const summary = summarizeResults(results as InvokeResult[]);
-            if (summary.success === 0) throw new Error(summary.firstMessage);
-            return summary;
-        },
-        onSuccess: (summary) => {
-            toast.success(tUM('toastGenSelSuccess', { count: summary.success }), { description: `Password: ${DEFAULT_PASSWORD}` });
-            if (summary.failed > 0) {
-                toast.warning(`${summary.failed} akun gagal diproses.`, { description: summary.firstMessage });
-            }
-            setIsGenerateSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
-    });
-
-    const generateBulkMasterMutation = useMutation({
-        mutationFn: async (targetGroup: string) => {
-            const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch(
-                `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-accounts-from-master`,
-                {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${session?.access_token}`
-                    },
-                    body: JSON.stringify({ targetGroup, schoolId: school?.id })
-                }
-            );
-
-            const data = await response.json();
-            if (!response.ok || data.error) {
-                throw new Error(data.error || 'Terjadi kesalahan sistem');
-            }
-            return data;
-        },
-        onSuccess: (data) => {
-            toast.success('Proses Selesai', { description: data.message });
-            if (data.failed > 0) {
-                toast.warning(`${data.failed} akun gagal diproses.`, { description: 'Buka console untuk melihat detail kegagalan.' });
-                console.warn("Detail kegagalan:", data.failures);
-            }
-            if (data.remaining > 0) {
-                toast.info(`Tersisa ${data.remaining} antrean.`, { description: 'Silakan klik Generate Data lagi untuk melanjutkan.' });
-            } else {
-                setIsGenerateAllModalOpen(false);
-            }
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => {
-            toast.error('Gagal Generate', { description: error.message });
-        }
-    });
-
-    const deleteSelectedMutation = useMutation({
-        mutationFn: async (userIds: string[]) => {
-            const results = await Promise.all(
-                userIds.map(id => supabase.functions.invoke('delete-user', { body: { targetUserId: id } }))
-            );
-            const summary = summarizeResults(results as InvokeResult[]);
-            if (summary.success === 0) throw new Error(summary.firstMessage);
-            return summary;
-        },
-        onSuccess: (summary) => {
-            toast.success(tUM('toastDelSelSuccess', { count: summary.success }));
-            if (summary.failed > 0) {
-                toast.warning(`${summary.failed} akun gagal dihapus.`, { description: summary.firstMessage });
-            }
-            setIsDeleteSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
-    });
-
-    const deleteAllBulkMutation = useMutation({
-        mutationFn: async (targetGroup: string) => {
-            const { data, error } = await supabase.functions.invoke('delete-users-by-role', { body: { targetGroup, schoolId: school?.id } });
-            if (error) throw new Error(error.message);
-            if (data?.error) throw new Error(data.error);
-            return data;
-        },
-        onSuccess: (data) => {
-            toast.success(tGlobal('info'), { description: data.message || "Done!" });
-            setIsDeleteAllModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        },
-        onError: (error: Error) => toast.error(error.message)
-    });
-
     const addUserMutation = useMutation({
         mutationFn: async (payload: CreateUserFormValues) => {
             const { data, error } = await supabase.functions.invoke('create-user', { body: { ...payload, schoolId: school?.id } });
-            if (error) throw new Error(error.message);
-            if (data?.error) throw new Error(data.error);
+            if (error || data?.error) throw new Error(error?.message || data?.error);
             return data;
         },
         onSuccess: () => {
             toast.success(tUM('toastAddSuccess'));
-            setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
         onError: (error: Error) => toast.error(error.message)
     });
@@ -307,78 +299,112 @@ export function UserManagementPage() {
         onError: (error: Error) => toast.error(error.message)
     });
 
-    // FETCHING DATA
-    const { data: users, isLoading } = useQuery<AppUser[], Error>({
-        queryKey: ['users-list', school?.id, isSuperAdmin],
-        queryFn: async () => {
-            if (!isSuperAdmin && !school?.id) return [];
-            let query = supabase.from('users').select('*').order('createdAt', { ascending: false });
-            if (!isSuperAdmin && school) query = query.eq('schoolId', school.id);
-            const { data, error: fetchError } = await query;
-            if (fetchError) throw new Error(fetchError.message);
-            return (data as AppUser[]) || [];
+    const generateSelectedMutation = useMutation({
+        mutationFn: async (usersTarget: AppUser[]) => {
+            const results = await Promise.all(
+                usersTarget.map(user => supabase.functions.invoke('create-user', {
+                    body: { email: user.email, password: DEFAULT_PASSWORD, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id }
+                }))
+            );
+            const summary = summarizeResults(results as InvokeResult[]);
+            if (summary.success === 0) throw new Error(summary.firstMessage);
+            return summary;
         },
-        enabled: isSuperAdmin || !!school?.id,
+        onSuccess: (summary) => {
+            toast.success(tUM('toastGenSelSuccess', { count: summary.success }), { description: `Password: ${DEFAULT_PASSWORD}` });
+            if (summary.failed > 0) toast.warning(`${summary.failed} akun gagal diproses.`, { description: summary.firstMessage });
+            setIsGenerateSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
     });
 
-    // SORT: klik header (asc -> desc -> reset)
-    const handleSort = (key: SortKey) => {
-        if (sortConfig.key === key) {
-            if (sortConfig.direction === 'asc') {
-                setSortConfig({ key, direction: 'desc' });
-            } else {
-                setSortConfig({ key: 'none', direction: 'asc' });
-            }
-        } else {
-            setSortConfig({ key, direction: 'asc' });
-        }
-    };
+    const generateBulkMasterMutation = useMutation({
+        mutationFn: async (targetGroup: string) => {
+            const { data: { session } } = await supabase.auth.getSession();
+            const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-accounts-from-master`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
+                body: JSON.stringify({ targetGroup, schoolId: school?.id })
+            });
+            const data = await response.json();
+            if (!response.ok || data.error) throw new Error(data.error || 'Terjadi kesalahan sistem');
+            return data;
+        },
+        onSuccess: (data) => {
+            toast.success('Proses Selesai', { description: data.message });
+            if (data.failed > 0) toast.warning(`${data.failed} akun gagal diproses.`);
+            if (data.remaining > 0) toast.info(`Tersisa ${data.remaining} antrean.`, { description: 'Klik Generate Data lagi.' });
+            else setIsGenerateAllModalOpen(false);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error('Gagal Generate', { description: error.message })
+    });
 
-    const renderSortIcon = (columnKey: SortKey) => {
-        if (sortConfig.key !== columnKey) return <ArrowUpDown className="w-3 h-3 opacity-30 ml-1" />;
-        if (columnKey === 'fullName') {
-            return sortConfig.direction === 'asc' ? <ArrowDownAZ className="w-3 h-3 text-primary ml-1" /> : <ArrowUpZA className="w-3 h-3 text-primary ml-1" />;
-        }
-        return sortConfig.direction === 'asc' ? <ArrowDown className="w-3 h-3 text-primary ml-1" /> : <ArrowUp className="w-3 h-3 text-primary ml-1" />;
-    };
+    const deleteSelectedMutation = useMutation({
+        mutationFn: async (userIds: string[]) => {
+            const results = await Promise.all(userIds.map(id => supabase.functions.invoke('delete-user', { body: { targetUserId: id } })));
+            const summary = summarizeResults(results as InvokeResult[]);
+            if (summary.success === 0) throw new Error(summary.firstMessage);
+            return summary;
+        },
+        onSuccess: (summary) => {
+            toast.success(tUM('toastDelSelSuccess', { count: summary.success }));
+            if (summary.failed > 0) toast.warning(`${summary.failed} akun gagal dihapus.`, { description: summary.firstMessage });
+            setIsDeleteSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
 
-    // FILTER DAN SORT
-    const filteredUsers: AppUser[] = (users || [])
-        .filter((user: AppUser) => {
+    const deleteAllBulkMutation = useMutation({
+        mutationFn: async (targetGroup: string) => {
+            const { data, error } = await supabase.functions.invoke('delete-users-by-role', { body: { targetGroup, schoolId: school?.id } });
+            if (error || data?.error) throw new Error(error?.message || data?.error);
+            return data;
+        },
+        onSuccess: (data) => {
+            toast.success(tGlobal('info'), { description: data.message || "Done!" });
+            setIsDeleteAllModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message)
+    });
+
+    // ==========================================
+    // OPTIMASI PERFORMA: MEMOIZATION
+    // ==========================================
+    const processedUsers = useMemo(() => {
+        if (!users) return [];
+
+        let filtered = users.filter((u) => {
             const q = searchQuery.toLowerCase();
-            const matchesSearch = user.fullName.toLowerCase().includes(q) || user.email.toLowerCase().includes(q);
+            const matchesSearch = u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+
             let matchesTab = true;
+            if (activeTab === 'manajemen') matchesTab = MANAGEMENT_ROLES.includes(u.role);
+            else if (activeTab === 'staff') matchesTab = STAFF_ROLES.includes(u.role);
+            else if (activeTab === 'siswa') matchesTab = u.role === 'SISWA';
+            else if (activeTab === 'orangtua') matchesTab = u.role === 'ORANG_TUA';
 
-            if (activeTab === 'manajemen') {
-                matchesTab = MANAGEMENT_ROLES.includes(user.role);
-            } else if (activeTab === 'staff') {
-                matchesTab = STAFF_ROLES.includes(user.role);
-            } else if (activeTab === 'siswa') {
-                matchesTab = user.role === 'SISWA';
-            } else if (activeTab === 'orangtua') {
-                matchesTab = user.role === 'ORANG_TUA';
-            }
             return matchesSearch && matchesTab;
-        })
-        .sort((a, b) => {
-            if (sortConfig.key === 'none') return 0; // urutan default dari database
-
-            let comparison = 0;
-            if (sortConfig.key === 'fullName') {
-                comparison = a.fullName.localeCompare(b.fullName);
-            } else if (sortConfig.key === 'role') {
-                comparison = a.role.localeCompare(b.role);
-            } else if (sortConfig.key === 'isActive') {
-                // asc = aktif di atas
-                comparison = (a.isActive === b.isActive) ? 0 : a.isActive ? -1 : 1;
-            }
-
-            return sortConfig.direction === 'asc' ? comparison : -comparison;
         });
 
+        if (sortConfig.key !== 'none') {
+            filtered = filtered.sort((a, b) => {
+                let comparison = 0;
+                if (sortConfig.key === 'fullName') comparison = a.fullName.localeCompare(b.fullName);
+                else if (sortConfig.key === 'role') comparison = a.role.localeCompare(b.role);
+                else if (sortConfig.key === 'isActive') comparison = (a.isActive === b.isActive) ? 0 : a.isActive ? -1 : 1;
+
+                return sortConfig.direction === 'asc' ? comparison : -comparison;
+            });
+        }
+
+        return filtered;
+    }, [users, searchQuery, activeTab, sortConfig]);
+
     // PAGINATION
-    const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
-    const paginatedUsers = filteredUsers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+    const totalPages = Math.ceil(processedUsers.length / ITEMS_PER_PAGE);
+    const paginatedUsers = processedUsers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+
     const getPageNumbers = () => {
         const pages = [];
         let start = Math.max(1, currentPage - 2);
@@ -386,6 +412,14 @@ export function UserManagementPage() {
         if (end - start < 4) start = Math.max(1, end - 4);
         for (let i = start; i <= end; i++) pages.push(i);
         return pages;
+    };
+
+    const handleSort = (key: SortKey) => {
+        if (sortConfig.key === key) {
+            setSortConfig({ key: sortConfig.direction === 'asc' ? key : 'none', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc' });
+        } else {
+            setSortConfig({ key, direction: 'asc' });
+        }
     };
 
     const handleManualPageSubmit = (e?: React.KeyboardEvent<HTMLInputElement>) => {
@@ -398,7 +432,7 @@ export function UserManagementPage() {
     };
 
     const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.checked) setSelectedUserIds(paginatedUsers.map(u => u.id)); else setSelectedUserIds([]);
+        setSelectedUserIds(e.target.checked ? paginatedUsers.map(u => u.id) : []);
     };
     const handleToggleSelect = (userId: string) => {
         setSelectedUserIds(prev => prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]);
@@ -417,14 +451,10 @@ export function UserManagementPage() {
         <SelectItem key={r} value={r}>{tUM(('role_' + r) as keyof typeof translations.id.userManagement)}</SelectItem>
     ));
 
-    const sortLabel =
-        sortConfig.key === 'fullName' ? 'Sortir Nama' :
-            sortConfig.key === 'role' ? 'Sortir Role' :
-                sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir';
+    const sortLabel = sortConfig.key === 'fullName' ? 'Sortir Nama' : sortConfig.key === 'role' ? 'Sortir Role' : sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir';
 
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 relative">
-            {/* MODALS */}
             <AnimatePresence>
                 {isAddUserModalOpen && isSuperAdmin && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
@@ -566,7 +596,7 @@ export function UserManagementPage() {
                             <p className="text-muted-foreground text-sm mb-6">{tUM('modalGenSelSub', { count: selectedUserIds.length })}</p>
                             <div className="flex justify-center gap-3">
                                 <Button variant="outline" onClick={() => setIsGenerateSelectedModalOpen(false)}>{tGlobal('cancel')}</Button>
-                                <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => generateSelectedMutation.mutate(filteredUsers.filter(u => selectedUserIds.includes(u.id)))} disabled={generateSelectedMutation.isPending}>
+                                <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => generateSelectedMutation.mutate(processedUsers.filter(u => selectedUserIds.includes(u.id)))} disabled={generateSelectedMutation.isPending}>
                                     {generateSelectedMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UserPlus className="w-4 h-4 mr-2" />} {tGlobal('yes')}
                                 </Button>
                             </div>
@@ -623,7 +653,6 @@ export function UserManagementPage() {
                 )}
             </AnimatePresence>
 
-            {/* HEADER & PAGE TITLE */}
             <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -639,7 +668,6 @@ export function UserManagementPage() {
             </div>
 
             <div className="bg-card text-card-foreground border border-border rounded-xl p-4 shadow-sm space-y-4">
-                {/* TABS FILTER */}
                 <div className="w-full overflow-x-auto pb-1">
                     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-max">
                         <TabsList className="bg-muted/50 p-1 flex">
@@ -652,153 +680,75 @@ export function UserManagementPage() {
                     </Tabs>
                 </div>
 
-                {/* TOOLBAR */}
                 <div className="border-b border-border pb-4">
-                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-
-                        {/* SEARCH */}
-                        <div className="relative w-full min-w-0 xl:max-w-90 xl:flex-1">
-                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-                            <Input
-                                placeholder={tUM('searchPlaceholder')}
-                                value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
-                                className="w-full pl-9 h-10"
-                            />
+                    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(240px,1fr)_auto] xl:items-center">
+                        <div className="relative w-full min-w-0">
+                            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input placeholder={tUM('searchPlaceholder')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="h-10 w-full pl-9" />
                         </div>
 
-                        {/* ACTIONS */}
-                        <div className="flex flex-wrap items-center gap-2 sm:gap-3 xl:justify-end">
-
-                            {/* SORTIR */}
+                        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center xl:flex-nowrap xl:justify-end">
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                    <Button type="button" variant="outline" className="h-10 shrink-0 gap-2 px-3 sm:px-4">
-                                        {sortConfig.key === 'none' ? (
-                                            <ArrowUpDown className="w-4 h-4 text-muted-foreground" />
-                                        ) : sortConfig.direction === 'asc' ? (
-                                            <ArrowDown className="w-4 h-4 text-primary" />
-                                        ) : (
-                                            <ArrowUp className="w-4 h-4 text-primary" />
-                                        )}
-                                        <span className="font-normal">{sortLabel}</span>
-                                        <ChevronDown className="w-4 h-4 opacity-50" />
+                                    <Button type="button" variant="outline" className="h-10 w-full min-w-0 justify-between gap-2 px-3 sm:w-auto sm:min-w-33 sm:justify-center sm:px-4">
+                                        {sortConfig.key === 'none' ? <ArrowUpDown className="h-4 w-4 shrink-0 text-muted-foreground" /> : sortConfig.direction === 'asc' ? <ArrowDown className="h-4 w-4 shrink-0 text-primary" /> : <ArrowUp className="h-4 w-4 shrink-0 text-primary" />}
+                                        <span className="truncate font-normal">{sortLabel}</span>
+                                        <ChevronDown className="h-4 w-4 shrink-0 opacity-50" />
                                     </Button>
                                 </DropdownMenuTrigger>
-
                                 <DropdownMenuContent align="end" className="w-48">
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'asc' })} className="cursor-pointer">
-                                        <ArrowDownAZ className="w-4 h-4 mr-2" /> Nama (A - Z)
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'desc' })} className="cursor-pointer">
-                                        <ArrowUpZA className="w-4 h-4 mr-2" /> Nama (Z - A)
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'role', direction: 'asc' })} className="cursor-pointer">
-                                        <ArrowDown className="w-4 h-4 mr-2" /> Role
-                                    </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'isActive', direction: 'asc' })} className="cursor-pointer">
-                                        <ArrowDown className="w-4 h-4 mr-2" /> Status Aktif
-                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'asc' })} className="cursor-pointer"><ArrowDownAZ className="mr-2 h-4 w-4 shrink-0" /> Nama (A - Z)</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'desc' })} className="cursor-pointer"><ArrowUpZA className="mr-2 h-4 w-4 shrink-0" /> Nama (Z - A)</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'role', direction: 'asc' })} className="cursor-pointer"><ArrowDown className="mr-2 h-4 w-4 shrink-0" /> Role (A - Z)</DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'isActive', direction: 'asc' })} className="cursor-pointer"><CheckCircle2 className="mr-2 h-4 w-4 shrink-0" /> Status Aktif</DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        onClick={() => setSortConfig({ key: 'none', direction: 'asc' })}
-                                        className={`cursor-pointer ${sortConfig.key === 'none' ? 'bg-primary/10 text-primary' : ''}`}
-                                    >
-                                        <ArrowUpDown className="w-4 h-4 mr-2" /> Reset (Default)
-                                    </DropdownMenuItem>
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'none', direction: 'asc' })} className={`cursor-pointer ${sortConfig.key === 'none' ? 'bg-primary/10 text-primary' : ''}`}><ArrowUpDown className="mr-2 h-4 w-4 shrink-0" /> Reset (Default)</DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
 
-                            {/* GENERATE DATA */}
                             {BULK_TABS.includes(activeTab) && (
                                 <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
-                                        <Button type="button" className="h-10 shrink-0 gap-2 bg-blue-600 px-3 text-white hover:bg-blue-700 sm:px-4">
-                                            <DatabaseZap className="w-4 h-4" />
-                                            <span>{tUM('generateData')}</span>
-                                            <ChevronDown className="w-4 h-4 opacity-70" />
+                                        <Button type="button" className="h-10 w-full min-w-0 justify-between gap-2 bg-blue-600 px-3 text-white hover:bg-blue-700 sm:w-auto sm:min-w-41 sm:justify-center sm:px-4">
+                                            <DatabaseZap className="h-4 w-4 shrink-0" />
+                                            <span className="truncate">{tUM('generateData')}</span>
+                                            <ChevronDown className="h-4 w-4 shrink-0 opacity-70" />
                                         </Button>
                                     </DropdownMenuTrigger>
-
                                     <DropdownMenuContent align="end" className="w-52">
-                                        <DropdownMenuItem className="cursor-pointer" onClick={() => setIsGenerateAllModalOpen(true)}>
-                                            <DatabaseZap className="w-4 h-4 mr-2" />
-                                            {tUM('generateAll')}
-                                        </DropdownMenuItem>
+                                        <DropdownMenuItem className="cursor-pointer" onClick={() => setIsGenerateAllModalOpen(true)}><DatabaseZap className="mr-2 h-4 w-4 shrink-0" />{tUM('generateAll')}</DropdownMenuItem>
                                         <DropdownMenuSeparator />
-                                        <DropdownMenuItem
-                                            className="cursor-pointer"
-                                            disabled={selectedUserIds.length === 0}
-                                            onClick={() => setIsGenerateSelectedModalOpen(true)}
-                                        >
-                                            <UserPlus className="w-4 h-4 mr-2" />
-                                            {tUM('generateSelected')} ({selectedUserIds.length})
-                                        </DropdownMenuItem>
+                                        <DropdownMenuItem className="cursor-pointer" disabled={selectedUserIds.length === 0} onClick={() => setIsGenerateSelectedModalOpen(true)}><UserPlus className="mr-2 h-4 w-4 shrink-0" />{tUM('generateSelected')} ({selectedUserIds.length})</DropdownMenuItem>
                                     </DropdownMenuContent>
                                 </DropdownMenu>
                             )}
 
-                            {/* HAPUS */}
                             {isSuperAdmin && (
-                                <>
-                                    {selectedUserIds.length > 0 ? (
-                                        <Button
-                                            type="button"
-                                            variant="outline"
-                                            className="h-10 shrink-0 gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:px-4"
-                                            onClick={() => setIsDeleteSelectedModalOpen(true)}
-                                        >
-                                            <Trash2 className="w-4 h-4 shrink-0" />
-                                            <span>{tUM('deleteSelected')} ({selectedUserIds.length})</span>
+                                selectedUserIds.length > 0 ? (
+                                    <Button type="button" variant="outline" className="col-span-2 h-10 w-full min-w-0 justify-center gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:col-span-1 sm:w-auto sm:min-w-37.5 sm:px-4" onClick={() => setIsDeleteSelectedModalOpen(true)}>
+                                        <Trash2 className="h-4 w-4 shrink-0" /><span className="truncate">{tUM('deleteSelected')} ({selectedUserIds.length})</span>
+                                    </Button>
+                                ) : (
+                                    BULK_TABS.includes(activeTab) && (
+                                        <Button type="button" variant="outline" className="col-span-2 h-10 w-full min-w-0 justify-center gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:col-span-1 sm:w-auto sm:min-w-37.5 sm:px-4" onClick={() => setIsDeleteAllModalOpen(true)}>
+                                            <AlertCircle className="h-4 w-4 shrink-0" /><span className="truncate">{tUM('bulkDeleteAll')}</span>
                                         </Button>
-                                    ) : (
-                                        BULK_TABS.includes(activeTab) && (
-                                            <Button
-                                                type="button"
-                                                variant="outline"
-                                                className="h-10 shrink-0 gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:px-4"
-                                                onClick={() => setIsDeleteAllModalOpen(true)}
-                                            >
-                                                <AlertCircle className="w-4 h-4 shrink-0" />
-                                                <span>{tUM('bulkDeleteAll')}</span>
-                                            </Button>
-                                        )
-                                    )}
-                                </>
+                                    )
+                                )
                             )}
                         </div>
                     </div>
                 </div>
 
-                {/* TABLE */}
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-border bg-muted/20">
-                                <th className="px-4 py-3 w-10 text-center">
-                                    <input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length} onChange={handleSelectAll} />
-                                </th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">
-                                    {tUM('colNo')}
-                                </th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none" onClick={() => handleSort('fullName')}>
-                                    <div className="flex items-center gap-1">
-                                        {tUM('colUser')}
-                                        {renderSortIcon('fullName')}
-                                    </div>
-                                </th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none" onClick={() => handleSort('role')}>
-                                    <div className="flex items-center gap-1">
-                                        {tUM('colRole')}
-                                        {renderSortIcon('role')}
-                                    </div>
-                                </th>
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none" onClick={() => handleSort('isActive')}>
-                                    <div className="flex items-center gap-1">
-                                        {tUM('colStatus')}
-                                        {renderSortIcon('isActive')}
-                                    </div>
-                                </th>
+                                <th className="px-4 py-3 w-10 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length} onChange={handleSelectAll} /></th>
+                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">{tUM('colNo')}</th>
+                                <SortableHeader columnKey="fullName" label={tUM('colUser')} sortConfig={sortConfig} onSort={handleSort} />
+                                <SortableHeader columnKey="role" label={tUM('colRole')} sortConfig={sortConfig} onSort={handleSort} />
+                                <SortableHeader columnKey="isActive" label={tUM('colStatus')} sortConfig={sortConfig} onSort={handleSort} />
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-right w-20">{tUM('colAction')}</th>
                             </tr>
                         </thead>
@@ -812,28 +762,15 @@ export function UserManagementPage() {
                             ) : (
                                 paginatedUsers.map((user: AppUser, index: number) => (
                                     <tr key={user.id} className={`hover:bg-muted/30 transition-colors ${selectedUserIds.includes(user.id) ? 'bg-primary/5' : ''}`}>
-                                        <td className="px-4 py-3 text-center">
-                                            <input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={selectedUserIds.includes(user.id)} onChange={() => handleToggleSelect(user.id)} />
-                                        </td>
-                                        <td className="px-4 py-3 text-center text-sm text-muted-foreground font-medium">
-                                            {(currentPage - 1) * ITEMS_PER_PAGE + index + 1}
-                                        </td>
+                                        <td className="px-4 py-3 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={selectedUserIds.includes(user.id)} onChange={() => handleToggleSelect(user.id)} /></td>
+                                        <td className="px-4 py-3 text-center text-sm text-muted-foreground font-medium">{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-3">
-                                                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">
-                                                    {user.fullName.charAt(0).toUpperCase()}
-                                                </div>
-                                                <div>
-                                                    <p className="font-semibold text-sm">{user.fullName}</p>
-                                                    <p className="text-xs text-muted-foreground">{user.email}</p>
-                                                </div>
+                                                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">{user.fullName.charAt(0).toUpperCase()}</div>
+                                                <div><p className="font-semibold text-sm">{user.fullName}</p><p className="text-xs text-muted-foreground">{user.email}</p></div>
                                             </div>
                                         </td>
-                                        <td className="px-4 py-3">
-                                            <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${getRoleBadgeColor(user.role)}`}>
-                                                {formatRoleName(user.role)}
-                                            </span>
-                                        </td>
+                                        <td className="px-4 py-3"><span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${getRoleBadgeColor(user.role)}`}>{formatRoleName(user.role)}</span></td>
                                         <td className="px-4 py-3">
                                             <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive ? 'text-emerald-600' : 'text-red-600'}`}>
                                                 <div className={`w-2 h-2 rounded-full ${user.isActive ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
@@ -842,9 +779,7 @@ export function UserManagementPage() {
                                         </td>
                                         <td className="px-4 py-3 text-right">
                                             <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                    <Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button>
-                                                </DropdownMenuTrigger>
+                                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground">
                                                     <DropdownMenuItem onClick={() => setUserToEdit(user)}><Edit className="w-4 h-4 mr-2" /> {tUM('actionEdit')}</DropdownMenuItem>
                                                     {isSuperAdmin && (
@@ -852,16 +787,10 @@ export function UserManagementPage() {
                                                             <DropdownMenuItem onClick={() => setUserToReset(user)}><KeyRound className="w-4 h-4 mr-2" /> {tUM('actionResetPass')}</DropdownMenuItem>
                                                             <DropdownMenuSeparator />
                                                             <DropdownMenuItem className={user.isActive ? 'text-red-600' : 'text-emerald-600'} onClick={() => toggleStatusMutation.mutate({ userId: user.id, currentStatus: user.isActive })}>
-                                                                {user.isActive ? <Ban className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}
-                                                                {user.isActive ? tUM('actionBlock') : tUM('actionUnblock')}
+                                                                {user.isActive ? <Ban className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}{user.isActive ? tUM('actionBlock') : tUM('actionUnblock')}
                                                             </DropdownMenuItem>
                                                             {currentUser?.id !== user.id && (
-                                                                <>
-                                                                    <DropdownMenuSeparator />
-                                                                    <DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setUserToDelete(user)}>
-                                                                        <Trash2 className="w-4 h-4 mr-2" /> {tUM('actionDelete')}
-                                                                    </DropdownMenuItem>
-                                                                </>
+                                                                <><DropdownMenuSeparator /><DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setUserToDelete(user)}><Trash2 className="w-4 h-4 mr-2" /> {tUM('actionDelete')}</DropdownMenuItem></>
                                                             )}
                                                         </>
                                                     )}
@@ -875,13 +804,11 @@ export function UserManagementPage() {
                     </table>
                 </div>
 
-                {/* PAGINATION */}
-                {filteredUsers.length > 0 && (
+                {processedUsers.length > 0 && (
                     <div className="flex flex-col xl:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
                         <span className="text-sm text-muted-foreground text-center xl:text-left">
-                            {tGlobal('showing')} <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, filteredUsers.length)}</span> {tGlobal('of')} <span className="font-medium text-foreground">{filteredUsers.length}</span> {tGlobal('entries')}
+                            {tGlobal('showing')} <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, processedUsers.length)}</span> {tGlobal('of')} <span className="font-medium text-foreground">{processedUsers.length}</span> {tGlobal('entries')}
                         </span>
-
                         <div className="flex flex-wrap items-center justify-center gap-2">
                             <div className="flex items-center gap-1">
                                 <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground"><ChevronsLeft className="w-4 h-4" /></Button>
@@ -892,16 +819,9 @@ export function UserManagementPage() {
                                 <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground"><ChevronRight className="w-4 h-4" /></Button>
                                 <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground"><ChevronsRight className="w-4 h-4" /></Button>
                             </div>
-
                             <div className="flex items-center gap-2 sm:ml-4 sm:border-l sm:pl-4 border-border">
                                 <span className="text-sm text-muted-foreground hidden sm:inline-block">Ke Halaman:</span>
-                                <Input
-                                    value={pageInput}
-                                    onChange={(e) => setPageInput(e.target.value)}
-                                    onKeyDown={handleManualPageSubmit}
-                                    onBlur={() => handleManualPageSubmit()}
-                                    className="h-8 w-14 text-center px-1"
-                                />
+                                <Input value={pageInput} onChange={(e) => setPageInput(e.target.value)} onKeyDown={handleManualPageSubmit} onBlur={() => handleManualPageSubmit()} className="h-8 w-14 text-center px-1" />
                             </div>
                         </div>
                     </div>

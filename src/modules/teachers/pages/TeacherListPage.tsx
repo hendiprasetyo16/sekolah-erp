@@ -315,6 +315,7 @@ export function TeacherListPage() {
     mutationFn: (id: string) => teacherService.delete(id),
     onSuccess: (_res, id) => {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       setSelectedRows(prev => prev.filter(r => r !== id));
       toast.success(tr('Data berhasil dihapus.', 'Data successfully deleted.'));
       closeDeleteModal();
@@ -326,6 +327,7 @@ export function TeacherListPage() {
     mutationFn: (ids: string[]) => teacherService.deleteBulk(ids),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       setSelectedRows([]);
       toast.success(tr('Data berhasil dihapus.', 'Data successfully deleted.'));
       closeDeleteModal();
@@ -336,7 +338,10 @@ export function TeacherListPage() {
   // Error import ditangani di handleFileUpload supaya tidak muncul dua toast sekaligus
   const importMutation = useMutation({
     mutationFn: (payloads: TeacherImportPayload[]) => teacherService.importBulk(payloads),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['teachers'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['teachers'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+    },
   });
 
   const isDeleteBusy = deleteMutation.isPending || deleteBulkMutation.isPending || isPreparingDeleteAll;
