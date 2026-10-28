@@ -19,10 +19,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 import type { CreateClassPayload } from '../types/academic.types';
 
-// Zod schema dengan bilingual error messages
 const classSchema = z.object({
     name: z.string().min(2, 'Nama kelas minimal 2 karakter / Name requires at least 2 chars'),
-    gradeLevel: z.coerce.number().min(1, 'Pilih tingkat / Select grade level').max(12),
+    gradeLevel: z.coerce.number().min(0, 'Pilih tingkat / Select grade level').max(12),
     academicYearId: z.string().min(1, 'Tahun ajaran wajib dipilih / Academic year is required'),
     homeroomTeacherId: z.string().optional().or(z.literal('none')),
     capacity: z.coerce.number().min(1, 'Kapasitas minimal 1 / Min capacity is 1'),
@@ -43,14 +42,12 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
     const navigate = useNavigate();
     const queryClient = useQueryClient();
 
-    // Kamus Bahasa Form
     const t = {
         ayLabel: locale === 'id' ? 'Tahun Ajaran' : 'Academic Year',
         ayPlaceholder: locale === 'id' ? 'Pilih Tahun Ajaran' : 'Select Academic Year',
         ayActive: locale === 'id' ? '(Aktif)' : '(Active)',
         gradeLabel: locale === 'id' ? 'Tingkat / Grade' : 'Grade Level',
         gradePlaceholder: locale === 'id' ? 'Pilih Tingkat' : 'Select Grade',
-        gradeItem: locale === 'id' ? 'Tingkat' : 'Grade',
         nameLabel: locale === 'id' ? 'Nama Rombel' : 'Class Name',
         namePlaceholder: locale === 'id' ? 'Cth: Kelas 1A, 10 RPL A' : 'e.g: Class 1A, Grade 10A',
         capacityLabel: locale === 'id' ? 'Kapasitas Maksimal' : 'Max Capacity',
@@ -60,8 +57,10 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
         btnCancel: locale === 'id' ? 'Batal' : 'Cancel',
         btnSave: locale === 'id' ? 'Simpan Perubahan' : 'Save Changes',
         btnCreate: locale === 'id' ? 'Buat Kelas' : 'Create Class',
-        toastUpdateSuccess: locale === 'id' ? 'Kelas berhasil diperbarui' : 'Class updated successfully',
-        toastCreateSuccess: locale === 'id' ? 'Kelas berhasil ditambahkan' : 'Class created successfully',
+        gradeTk: locale === 'id' ? 'TK / PAUD' : 'Kindergarten / Pre-K',
+        gradeNum: (num: number) => locale === 'id' ? `Tingkat ${num}` : `Grade ${num}`,
+        toastSuccessUpdate: locale === 'id' ? 'Kelas berhasil diperbarui' : 'Class successfully updated',
+        toastSuccessCreate: locale === 'id' ? 'Kelas berhasil ditambahkan' : 'Class successfully created',
     };
 
     const form = useForm<ClassFormValues>({
@@ -83,7 +82,7 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
             return isEdit ? academicService.updateClass(classId!, data) : academicService.createClass(data);
         },
         onSuccess: async () => {
-            toast.success(isEdit ? t.toastUpdateSuccess : t.toastCreateSuccess);
+            toast.success(isEdit ? t.toastSuccessUpdate : t.toastSuccessCreate);
             await queryClient.invalidateQueries({ queryKey: ['classes'] });
             if (isEdit && classId) {
                 await queryClient.invalidateQueries({ queryKey: ['class', classId] });
@@ -134,11 +133,12 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
                     <FormField control={form.control} name="gradeLevel" render={({ field }) => (
                         <FormItem>
                             <FormLabel>{t.gradeLabel} <span className="text-red-500">*</span></FormLabel>
-                            <Select value={field.value ? String(field.value) : ""} onValueChange={(val) => field.onChange(Number(val))}>
+                            <Select value={field.value !== undefined ? String(field.value) : ""} onValueChange={(val) => field.onChange(Number(val))}>
                                 <FormControl><SelectTrigger><SelectValue placeholder={t.gradePlaceholder} /></SelectTrigger></FormControl>
-                                <SelectContent>
+                                <SelectContent className="max-h-75">
+                                    <SelectItem value="0">{t.gradeTk}</SelectItem>
                                     {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(num => (
-                                        <SelectItem key={num} value={String(num)}>{t.gradeItem} {num}</SelectItem>
+                                        <SelectItem key={num} value={String(num)}>{t.gradeNum(num)}</SelectItem>
                                     ))}
                                 </SelectContent>
                             </Select>
@@ -170,7 +170,7 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
                         <FormLabel>{t.teacherLabel}</FormLabel>
                         <Select value={field.value || 'none'} onValueChange={field.onChange}>
                             <FormControl><SelectTrigger><SelectValue placeholder={t.teacherPlaceholder} /></SelectTrigger></FormControl>
-                            <SelectContent>
+                            <SelectContent className="max-h-75">
                                 <SelectItem value="none">{t.noTeacher}</SelectItem>
                                 {teachers.map(t => (
                                     <SelectItem key={t.id} value={t.id}>{t.fullName}</SelectItem>
@@ -196,17 +196,17 @@ function ClassFormInner({ initialData, academicYears, teachers, isEdit, school, 
 }
 
 export function ClassFormPage() {
+    const { locale } = useTranslation();
     const { id } = useParams<{ id: string }>();
     const isEdit = !!id;
     const navigate = useNavigate();
     const { school } = useAuthStore();
-    const { locale } = useTranslation();
 
     const t = {
-        editTitle: locale === 'id' ? 'Edit Kelas' : 'Edit Class',
-        createTitle: locale === 'id' ? 'Tambah Kelas Baru' : 'Add New Class',
-        desc: locale === 'id' ? 'Atur rombongan belajar berdasarkan tingkat dan tahun ajaran.' : 'Manage study groups based on grade level and academic year.',
-        cardTitle: locale === 'id' ? 'Informasi Kelas' : 'Class Information',
+        pageTitleEdit: locale === 'id' ? 'Edit Kelas' : 'Edit Class',
+        pageTitleAdd: locale === 'id' ? 'Tambah Kelas Baru' : 'Add New Class',
+        pageDesc: locale === 'id' ? 'Atur rombongan belajar berdasarkan tingkat dan tahun ajaran.' : 'Manage study groups based on grade level and academic year.',
+        infoCard: locale === 'id' ? 'Informasi Kelas' : 'Class Information',
     };
 
     const { data: academicYearsResponse, isLoading: isLoadingAy } = useQuery({
@@ -245,15 +245,15 @@ export function ClassFormPage() {
                 </Button>
                 <div>
                     <h1 className="text-2xl font-bold tracking-tight">
-                        {isEdit ? t.editTitle : t.createTitle}
+                        {isEdit ? t.pageTitleEdit : t.pageTitleAdd}
                     </h1>
-                    <p className="text-muted-foreground">{t.desc}</p>
+                    <p className="text-muted-foreground">{t.pageDesc}</p>
                 </div>
             </div>
 
             <Card>
                 <CardHeader className="bg-muted/20 border-b border-border">
-                    <CardTitle className="text-lg">{t.cardTitle}</CardTitle>
+                    <CardTitle className="text-lg">{t.infoCard}</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-6">
                     {!isDataReady ? (

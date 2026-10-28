@@ -182,5 +182,42 @@ export const academicService = {
             data: undefined,
             message: 'Kelas berhasil dihapus'
         };
+    }, // <--- INI TANDA KOMA YANG SEBELUMNYA HILANG
+
+    // ==========================================
+    // BULK DELETE TAHUN AJARAN & KELAS
+    // ==========================================
+    async deleteBulkAcademicYears(ids: string[]): Promise<ApiResponse<void>> {
+        // Cek apakah ada tahun ajaran yang sudah dipakai di tabel classes
+        const { count } = await supabase
+            .from('classes')
+            .select('*', { count: 'exact', head: true })
+            .in('academicYearId', ids);
+
+        if (count && count > 0) {
+            throw new Error('Beberapa tahun ajaran tidak dapat dihapus karena sedang digunakan oleh data kelas.');
+        }
+
+        const { error } = await supabase.from('academic_years').delete().in('id', ids);
+        if (error) throw handleDbError(error);
+
+        return { success: true, data: undefined, message: 'Tahun ajaran terpilih berhasil dihapus' };
+    },
+
+    async deleteBulkClasses(ids: string[]): Promise<ApiResponse<void>> {
+        // Cek apakah ada kelas yang sudah memiliki siswa
+        const { count } = await supabase
+            .from('students')
+            .select('*', { count: 'exact', head: true })
+            .in('classId', ids);
+
+        if (count && count > 0) {
+            throw new Error('Beberapa kelas tidak dapat dihapus karena masih memiliki siswa yang terdaftar.');
+        }
+
+        const { error } = await supabase.from('classes').delete().in('id', ids);
+        if (error) throw handleDbError(error);
+
+        return { success: true, data: undefined, message: 'Kelas terpilih berhasil dihapus' };
     }
 };

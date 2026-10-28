@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
-import { MapContainer, TileLayer, Marker, useMapEvents, useMap } from 'react-leaflet';
+// TAMBAHAN: Import Circle
+import { MapContainer, TileLayer, Marker, Circle, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 // Import modul pencarian
@@ -17,6 +18,8 @@ L.Icon.Default.mergeOptions({
 interface LocationPickerProps {
     latitude: number | null;
     longitude: number | null;
+    // TAMBAHAN: Mendukung prop radius opsional dari form
+    radius?: number;
     onChange: (lat: number, lng: number) => void;
 }
 
@@ -69,7 +72,8 @@ function ClickableMap({ position, setPosition, onChange }: any) {
     return position === null ? null : <Marker position={position}></Marker>;
 }
 
-export function LocationPickerMap({ latitude, longitude, onChange }: LocationPickerProps) {
+// TAMBAHAN: Menerima prop radius dengan nilai default 0
+export function LocationPickerMap({ latitude, longitude, radius = 0, onChange }: LocationPickerProps) {
     const defaultCenter = { lat: -7.4923, lng: 110.0093 };
     const [position, setPosition] = useState<L.LatLng | null>(
         latitude && longitude ? L.latLng(latitude, longitude) : null
@@ -89,11 +93,25 @@ export function LocationPickerMap({ latitude, longitude, onChange }: LocationPic
                 style={{ height: '100%', width: '100%', zIndex: 10 }}
             >
                 <TileLayer
-                    attribution='&copy; OpenStreetMap'
+                    attribution='© OpenStreetMap'
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                 />
                 <SearchField onChange={onChange} setPosition={setPosition} />
                 <ClickableMap position={position} setPosition={setPosition} onChange={onChange} />
+
+                {/* TAMBAHAN: Menampilkan Radius Lingkaran Toleransi Absensi jika radius > 0 */}
+                {position && radius > 0 && (
+                    <Circle
+                        center={position}
+                        radius={radius}
+                        pathOptions={{
+                            color: '#059669',     // Warna garis luar (Emerald 600)
+                            fillColor: '#059669', // Warna isi (Emerald 600)
+                            fillOpacity: 0.2,     // Transparansi (20%)
+                            weight: 2             // Ketebalan garis
+                        }}
+                    />
+                )}
             </MapContainer>
         </div>
     );
