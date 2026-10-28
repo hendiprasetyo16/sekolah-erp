@@ -7,7 +7,7 @@ import {
   Loader2, AlertCircle, CheckCircle2, XCircle, FileSpreadsheet,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, CheckSquare,
   Filter, ChevronDown,
-  ArrowUpDown, ArrowUp, ArrowDown // Ikon untuk fitur sorting
+  ArrowUpDown, ArrowUp, ArrowDown
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -19,9 +19,6 @@ import { supabase } from '@/services/supabase.client';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 
-// ==========================================
-// T Y P E S C R I P T   I N T E R F A C E S
-// ==========================================
 interface ImportParent {
   id: string;
   relation: string;
@@ -101,9 +98,6 @@ interface StudentImportPayload {
 
 type ExcelRow = Record<string, string | number | boolean>;
 
-// ==========================================
-// M A I N   C O M P O N E N T
-// ==========================================
 export function StudentListPage() {
   const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
@@ -119,7 +113,6 @@ export function StudentListPage() {
   const [jumpPage, setJumpPage] = useState<string>('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
 
-  // State untuk konfigurasi Sorting
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({
     key: 'fullName',
     direction: 'asc'
@@ -167,16 +160,13 @@ export function StudentListPage() {
     enabled: !!school?.id
   });
 
-  // PERBAIKAN: useQuery memanggil Backend Sorting
   const { data: studentsResponse, isLoading } = useQuery({
-    // Menambahkan sortConfig ke queryKey agar data dimuat ulang saat sorting berubah
     queryKey: ['students', currentPage, pageSize, searchQuery, selectedClass, sortConfig],
     queryFn: () => studentService.list({
       page: currentPage,
       limit: pageSize,
       search: searchQuery,
       classId: selectedClass === 'all' ? undefined : selectedClass,
-      // Mengirimkan instruksi sorting ke database
       sortBy: sortConfig?.key,
       sortOrder: sortConfig?.direction
     }),
@@ -245,7 +235,6 @@ export function StudentListPage() {
   const meta = studentsResponse?.data?.meta;
   const totalPages = Math.ceil((meta?.total || 0) / pageSize) || 1;
 
-  // Fungsi untuk mengubah urutan (Sort state) saat header tabel diklik
   const handleSort = (key: string) => {
     let direction: 'asc' | 'desc' = 'asc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
@@ -254,30 +243,10 @@ export function StudentListPage() {
     setSortConfig({ key, direction });
   };
 
-  // =========================================================================
-  // ARSIP KODE FRONTEND SORTING
-  // Jika suatu saat ingin kembali mengurutkan data dari sisi browser (Frontend),
-  // cukup hapus tanda komentar (//) pada blok kode di bawah ini, dan jangan 
-  // lupa ubah `students.map` menjadi `sortedStudents.map` pada baris tabel di bawah.
-  // =========================================================================
-
-  // const sortedStudents = [...students].sort((a: any, b: any) => {
-  //   if (!sortConfig) return 0;
-  //   const { key, direction } = sortConfig;
-  //
-  //   // Pastikan data diubah ke huruf kecil semua agar A-Z akurat
-  //   const aValue = String(a[key] || '').toLowerCase();
-  //   const bValue = String(b[key] || '').toLowerCase();
-  //
-  //   if (aValue < bValue) return direction === 'asc' ? -1 : 1;
-  //   if (aValue > bValue) return direction === 'asc' ? 1 : -1;
-  //   return 0;
-  // });
-
   const toggleRow = (id: string) => setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
   const toggleAll = () => setSelectedRows(selectedRows.length === students.length && students.length > 0 ? [] : students.map(s => s.id));
 
-  // --- LOGIKA IMPORT WIZARD ---
+  // --- LOGIKA IMPORT WIZARD (SMARTDIFF UNTUK TK/PAUD) ---
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -297,12 +266,12 @@ export function StudentListPage() {
         let headerRowIndex = -1;
         for (let i = 0; i < Math.min(20, rawData.length); i++) {
           const rowText = (rawData[i] as unknown[])?.map(cell => String(cell).toLowerCase().replace(/\s+/g, '')) || [];
-          if (rowText.includes('nama') && (rowText.includes('nipd') || rowText.includes('nisn'))) {
+          if (rowText.includes('nama') && (rowText.includes('nipd') || rowText.includes('nisn') || rowText.includes('jk'))) {
             headerRowIndex = i; break;
           }
         }
 
-        if (headerRowIndex === -1) throw new Error(locale === 'id' ? 'Format kolom tidak dikenali (Tidak ada Nama/NIPD)' : 'Invalid column format (Missing Name/NIPD)');
+        if (headerRowIndex === -1) throw new Error(locale === 'id' ? 'Format kolom tidak dikenali (Tidak ada Nama)' : 'Invalid column format (Missing Name)');
 
         const rowMain = (rawData[headerRowIndex] as string[]) || [];
         const rowSub = (rawData[headerRowIndex + 1] as string[]) || [];
@@ -361,9 +330,10 @@ export function StudentListPage() {
         const existingNisns = new Set(existingStudents?.map(s => s.nisn) || []);
 
         for (const row of data) {
-          if (!row['nama'] && !row['nipd'] && !row['nisn']) continue;
+          if (!row['nama'] && !row['nipd'] && !row['nisn']) continue; // Lewati baris kosong
 
-          if (!row['nama'] || (!row['nipd'] && !row['nisn'])) {
+          // FIX: Di TK/PAUD, yang selalu ada biasanya hanya 'Nama'.
+          if (!row['nama']) {
             missingMandatoryCount++;
             continue;
           }
@@ -375,8 +345,13 @@ export function StudentListPage() {
             finalAddress = finalAddress ? `${finalAddress}, Dusun ${dusunRaw}` : `Dusun ${dusunRaw}`;
           }
 
-          const currentNisn = String(row['nisn'] || '').trim();
-          if (currentNisn && existingNisns.has(currentNisn)) {
+          // FIX: Anak TK sering belum punya NISN pusat. Kita generate dummy string agar aman di database
+          let currentNisn = String(row['nisn'] || '').trim();
+          if (!currentNisn || currentNisn.toLowerCase() === 'null') {
+            currentNisn = `TK-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
+          }
+
+          if (currentNisn && existingNisns.has(currentNisn) && !currentNisn.startsWith('TK-')) {
             duplicateCount++;
             continue;
           }
@@ -410,12 +385,15 @@ export function StudentListPage() {
 
           const toBool = (val: unknown) => String(val).toLowerCase().trim() === 'ya';
 
+          // FIX: Anak TK yang belum setor KK bisa dibuatkan NIK dummy untuk constraint Supabase
+          const currentNik = row['nik'] ? String(row['nik']).trim() : `NONIK-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
+
           parsedPayloads.push({
             id: crypto.randomUUID(),
             schoolId: school?.id || '',
             nis: parsedNis,
             nisn: currentNisn,
-            nik: row['nik'] ? String(row['nik']).trim() : `NONIK-${currentNisn}`,
+            nik: currentNik,
             noKk: (row['no kk'] || row['nokk']) ? String(row['no kk'] || row['nokk']).trim() : '-',
             fullName: String(row['nama'] || ''),
             gender: (String(row['jk'] || row['jenis kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P'),
@@ -521,7 +499,7 @@ export function StudentListPage() {
         setParsedImportData(parsedPayloads);
         setUnmatchedClasses(Array.from(unfoundClassSet));
         setImportStats({
-          total: data.filter(r => r['nama'] || r['nisn'] || r['nipd']).length,
+          total: data.filter(r => r['nama']).length,
           valid: parsedPayloads.length,
           missingClass: missingClassCount,
           missingMandatory: missingMandatoryCount,
@@ -556,13 +534,20 @@ export function StudentListPage() {
     try {
       let currentClasses = classesData || [];
 
+      // PROSES 1: Buat kelas baru jika ada yang belum terdaftar
       if (unmatchedClasses.length > 0 && activeYear?.id) {
         const uniqueClassNames = Array.from(new Set(unmatchedClasses));
 
         const classesToCreate = uniqueClassNames.map(className => {
-          let gradeLevel = 1;
+          let gradeLevel = 0; // Default set ke Tingkat 0 (PAUD/Non-Formal/Nama Unik)
           const upper = className.toUpperCase();
-          if (upper.includes('XII') || upper.includes('12')) gradeLevel = 12;
+
+          if (upper.includes('TK B') || upper.includes('TKB') || upper.includes('BESAR')) {
+            gradeLevel = 2;
+          } else if (upper.includes('TK A') || upper.includes('TKA') || upper.includes('KECIL')) {
+            gradeLevel = 1;
+          }
+          else if (upper.includes('XII') || upper.includes('12')) gradeLevel = 12;
           else if (upper.includes('XI') || upper.includes('11')) gradeLevel = 11;
           else if (upper.includes('X') || upper.includes('10')) gradeLevel = 10;
           else if (upper.includes('IX') || upper.includes('9')) gradeLevel = 9;
@@ -580,7 +565,7 @@ export function StudentListPage() {
             academicYearId: activeYear.id,
             name: className,
             gradeLevel: gradeLevel,
-            capacity: 36
+            capacity: 29
           };
         });
 
@@ -591,24 +576,33 @@ export function StudentListPage() {
 
         if (classError) {
           console.error("Error creating classes:", classError);
-          throw classError;
+          throw new Error("Gagal membuat kelas otomatis di database.");
         }
 
-        if (newClasses) {
-          const newClassNames = newClasses.map(nc => nc.name);
-          currentClasses = [
-            ...currentClasses.filter(cc => !newClassNames.includes(cc.name)),
-            ...newClasses
-          ];
-          queryClient.invalidateQueries({ queryKey: ['classes-list'] });
-        }
+        // AMAN: Refresh data kelas dengan mengambil ulang langsung dari Supabase
+        // untuk memastikan kita mendapat ID yang 100% sah dan sudah masuk DB.
+        const { data: refreshedClasses, error: refreshError } = await supabase
+          .from('classes')
+          .select('id, name, gradeLevel')
+          .eq('schoolId', school!.id);
+
+        if (refreshError) throw refreshError;
+
+        currentClasses = refreshedClasses || [];
+
+        // Perbarui cache React Query agar tampilan tabel langsung update nanti
+        queryClient.setQueryData(['classes-list'], currentClasses);
       }
 
+      // PROSES 2: Pasangkan data siswa dengan ID Kelas yang sudah dipastikan ada
       const finalPayload = parsedImportData.map(payload => {
         let updatedClassId = payload.classId;
 
         if (!updatedClassId && payload.rawClassName) {
-          const matched = currentClasses.find(c => c.name === payload.rawClassName);
+          // Cari ID Kelas berdasarkan nama (menggunakan data kelas yang sudah di-refresh)
+          const matched = currentClasses.find(c =>
+            c.name.toLowerCase().trim() === payload.rawClassName?.toLowerCase().trim()
+          );
           if (matched) {
             updatedClassId = matched.id;
           }
@@ -616,20 +610,19 @@ export function StudentListPage() {
 
         const { rawClassName, ...cleanPayload } = payload;
 
+        // Jika kelas masih tidak ketemu (null), kita terpaksa kosongkan classId (null)
+        // daripada terjadi foreign key constraint error.
         return {
           ...cleanPayload,
-          classId: updatedClassId
+          classId: updatedClassId || null
         };
-      }).filter(d => d.classId !== null);
+      });
 
-      if (finalPayload.length === 0) {
-        throw new Error("Gagal memasangkan kelas.");
-      }
-
+      // PROSES 3: Eksekusi Bulk Import Siswa
       importMutation.mutate(finalPayload as any);
 
     } catch (error: any) {
-      toast.error(error.message || (locale === 'id' ? 'Gagal membuat kelas otomatis.' : 'Failed to auto-create classes.'));
+      toast.error(error.message || (locale === 'id' ? 'Gagal memproses data import.' : 'Failed to process import data.'));
       setWizardState('preview');
     }
   };
@@ -717,7 +710,6 @@ export function StudentListPage() {
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
       <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls, .csv" className="hidden" />
 
-      {/* --- IMPORT WIZARD MODAL --- */}
       <AnimatePresence>
         {wizardState !== 'idle' && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -780,7 +772,7 @@ export function StudentListPage() {
                           <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
                           <div>
                             <p className="text-sm font-semibold">{locale === 'id' ? `Data Tidak Lengkap (${importStats.missingMandatory} Siswa)` : `Incomplete Data (${importStats.missingMandatory} Students)`}</p>
-                            <p className="text-xs mt-1">{locale === 'id' ? 'Siswa ini tidak memiliki Nama atau NISN/NIPD sehingga akan dilewati.' : 'Missing Name or NISN/NIPD, so they will be skipped.'}</p>
+                            <p className="text-xs mt-1">{locale === 'id' ? 'Siswa ini tidak memiliki Nama (kolom kosong) sehingga akan dilewati oleh sistem.' : 'Missing Name column, so they will be skipped.'}</p>
                           </div>
                         </div>
                       )}
@@ -826,7 +818,6 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
-      {/* --- MODAL KONFIRMASI HAPUS --- */}
       <AnimatePresence>
         {(studentToDelete || isBulkDeleting) && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -851,7 +842,6 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
-      {/* --- MODAL KONFIRMASI HAPUS SEMUA (DANGER ZONE) --- */}
       <AnimatePresence>
         {isDeletingAll && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -877,7 +867,6 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
-      {/* Header & Buttons */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t('students.title')}</h1>
@@ -886,10 +875,8 @@ export function StudentListPage() {
 
         <div className="flex flex-wrap items-center gap-2">
 
-          {/* --- PENGGABUNGAN TOMBOL HAPUS --- */}
           {canManageData && (
             selectedRows.length > 0 ? (
-              // Tombol muncul saat ADA baris yang diceklis
               <motion.button
                 key="delete-selected"
                 initial={{ opacity: 0, scale: 0.9 }}
@@ -901,7 +888,6 @@ export function StudentListPage() {
                 <span className="hidden sm:inline">{locale === 'id' ? `Hapus Terpilih (${selectedRows.length})` : `Delete Selected (${selectedRows.length})`}</span>
               </motion.button>
             ) : (meta?.total || 0) > 0 ? (
-              // Tombol muncul saat TIDAK ADA baris yang diceklis
               <motion.button
                 key="delete-all"
                 initial={{ opacity: 0, scale: 0.9 }}
@@ -914,7 +900,6 @@ export function StudentListPage() {
               </motion.button>
             ) : null
           )}
-          {/* --------------------------------- */}
 
           {canManageData && (
             <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
@@ -934,10 +919,8 @@ export function StudentListPage() {
         </div>
       </div>
 
-      {/* --- BAGIAN FILTER YANG DIPERBARUI MENGGUNAKAN DROPDOWN --- */}
       <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3">
-
           <div className="relative flex-1">
             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <input
@@ -972,11 +955,9 @@ export function StudentListPage() {
               <ChevronDown size={16} />
             </div>
           </div>
-
         </div>
       </div>
 
-      {/* Table */}
       <div className="bg-card border border-border/50 rounded-xl overflow-hidden shadow-sm flex flex-col">
         <div className="overflow-x-auto flex-1">
           <table className="w-full text-left border-collapse">
@@ -986,8 +967,6 @@ export function StudentListPage() {
                   <th className="p-4 w-12"><input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" /></th>
                 )}
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">No</th>
-
-                {/* Kolom tabel yang bisa diklik untuk sorting */}
                 <th
                   className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
                   onClick={() => handleSort('nisn')}
@@ -1001,7 +980,6 @@ export function StudentListPage() {
                     )}
                   </div>
                 </th>
-
                 <th
                   className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
                   onClick={() => handleSort('fullName')}
@@ -1015,7 +993,6 @@ export function StudentListPage() {
                     )}
                   </div>
                 </th>
-
                 <th
                   className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
                   onClick={() => handleSort('className')}
@@ -1029,7 +1006,6 @@ export function StudentListPage() {
                     )}
                   </div>
                 </th>
-
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">{locale === 'id' ? 'Aksi' : 'Action'}</th>
               </tr>
@@ -1040,9 +1016,6 @@ export function StudentListPage() {
               ) : students.length === 0 ? (
                 <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center text-muted-foreground">{locale === 'id' ? 'Tidak ada data.' : 'No data available.'}</td></tr>
               ) : (
-                // PERBAIKAN: Menggunakan kembali 'students.map' dari Backend
-                // INFO PENTING: Jika kamu mengaktifkan kembali Frontend Sorting di atas,
-                // ubah kode di bawah ini menjadi `sortedStudents.map((student, idx) => {`
                 students.map((student, idx) => {
                   const statusConf = getStatusConfig(student.status);
                   return (
@@ -1074,7 +1047,6 @@ export function StudentListPage() {
           </table>
         </div>
 
-        {/* --- PAGINATION TINGKAT LANJUT --- */}
         {(meta?.total || 0) > 0 && (
           <div className="p-4 border-t border-border/50 bg-muted/10 flex flex-col sm:flex-row items-center justify-between gap-4">
             <span className="text-sm text-muted-foreground">
