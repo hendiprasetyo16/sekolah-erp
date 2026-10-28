@@ -49,8 +49,56 @@ export interface AppUser {
     updatedAt: string;
 }
 
-// Tipe urutan tanpa kolom 'no'
 type SortKey = 'fullName' | 'role' | 'isActive' | 'none';
+
+// ---------------------------------------------------------------------------
+// KONSTANTA & SCHEMA (di luar komponen supaya tidak dibuat ulang tiap render)
+// ---------------------------------------------------------------------------
+const ITEMS_PER_PAGE = 10;
+
+// TODO: sebaiknya diganti password acak per user / wajib ganti saat login pertama
+const DEFAULT_PASSWORD = 'Password123!';
+
+const ROLE_VALUES = [
+    'SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
+    'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS', 'ORANG_TUA', 'SISWA',
+] as const satisfies readonly AppUserRole[];
+
+const MANAGEMENT_ROLES: AppUserRole[] = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'];
+const STAFF_ROLES: AppUserRole[] = ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'];
+const BULK_TABS = ['staff', 'siswa', 'orangtua'];
+
+const createUserSchema = z.object({
+    fullName: z.string().min(3, 'Minimal 3 char'),
+    email: z.string().email('Invalid email'),
+    password: z.string().min(6, 'Minimal 6 char'),
+    role: z.enum(ROLE_VALUES),
+});
+type CreateUserFormValues = z.infer<typeof createUserSchema>;
+
+const editUserSchema = z.object({
+    fullName: z.string().min(3, 'Minimal 3 char'),
+    role: z.enum(ROLE_VALUES),
+});
+type EditUserFormValues = z.infer<typeof editUserSchema>;
+
+const resetPasswordSchema = z.object({
+    newPassword: z.string().min(6, 'Minimal 6 char'),
+});
+type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
+
+// Hitung hasil sukses/gagal dari banyak pemanggilan edge function.
+// supabase.functions.invoke TIDAK melempar error, ia mengembalikan { data, error }.
+type InvokeResult = { data: any; error: { message: string } | null };
+const summarizeResults = (results: InvokeResult[]) => {
+    const failures = results.filter(r => r.error || r.data?.error);
+    return {
+        total: results.length,
+        success: results.length - failures.length,
+        failed: failures.length,
+        firstMessage: failures[0]?.error?.message || failures[0]?.data?.error || 'Unknown error',
+    };
+};
 
 export function UserManagementPage() {
     const { school, user: currentUser } = useAuthStore();
@@ -74,26 +122,6 @@ export function UserManagementPage() {
         return text;
     };
 
-    // SCHEMAS
-    const createUserSchema = z.object({
-        fullName: z.string().min(3, 'Minimal 3 char'),
-        email: z.string().email('Invalid email'),
-        password: z.string().min(6, 'Minimal 6 char'),
-        role: z.enum(['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA', 'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS', 'ORANG_TUA', 'SISWA']),
-    });
-    type CreateUserFormValues = z.infer<typeof createUserSchema>;
-
-    const editUserSchema = z.object({
-        fullName: z.string().min(3, 'Minimal 3 char'),
-        role: z.enum(['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA', 'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS', 'ORANG_TUA', 'SISWA']),
-    });
-    type EditUserFormValues = z.infer<typeof editUserSchema>;
-
-    const resetPasswordSchema = z.object({
-        newPassword: z.string().min(6, 'Minimal 6 char'),
-    });
-    type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
-
     const [activeTab, setActiveTab] = useState<string>('semua');
     const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -103,7 +131,6 @@ export function UserManagementPage() {
     // State Pagination
     const [currentPage, setCurrentPage] = useState<number>(1);
     const [pageInput, setPageInput] = useState<string>('1');
-    const ITEMS_PER_PAGE = 10;
     const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
 
     // Reset pagination ketika filter, search, atau urutan berubah
@@ -121,18 +148,32 @@ export function UserManagementPage() {
     const [showAddPassword, setShowAddPassword] = useState<boolean>(false);
     const [showResetPassword, setShowResetPassword] = useState<boolean>(false);
 
+    // FORMS
+    const addUserForm = useForm<CreateUserFormValues>({ resolver: zodResolver(createUserSchema), defaultValues: { fullName: '', email: '', password: '', role: 'GURU' } });
+    const editUserForm = useForm<EditUserFormValues>({ resolver: zodResolver(editUserSchema), defaultValues: { fullName: '', role: 'GURU' } });
+    const resetPassForm = useForm<ResetPasswordFormValues>({ resolver: zodResolver(resetPasswordSchema), defaultValues: { newPassword: '' } });
+
+    useEffect(() => { if (userToEdit) editUserForm.reset({ fullName: userToEdit.fullName, role: userToEdit.role }); }, [userToEdit, editUserForm]);
+
     // MUTATIONS
     const generateSelectedMutation = useMutation({
         mutationFn: async (usersTarget: AppUser[]) => {
-            const defaultPassword = 'Password123!';
-            const promises = usersTarget.map(user =>
-                supabase.functions.invoke('create-user', { body: { email: user.email, password: defaultPassword, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id } })
+            const results = await Promise.all(
+                usersTarget.map(user =>
+                    supabase.functions.invoke('create-user', {
+                        body: { email: user.email, password: DEFAULT_PASSWORD, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id }
+                    })
+                )
             );
-            await Promise.all(promises);
-            return usersTarget.length;
+            const summary = summarizeResults(results as InvokeResult[]);
+            if (summary.success === 0) throw new Error(summary.firstMessage);
+            return summary;
         },
-        onSuccess: (count) => {
-            toast.success(tUM('toastGenSelSuccess', { count }), { description: 'Password: Password123!' });
+        onSuccess: (summary) => {
+            toast.success(tUM('toastGenSelSuccess', { count: summary.success }), { description: `Password: ${DEFAULT_PASSWORD}` });
+            if (summary.failed > 0) {
+                toast.warning(`${summary.failed} akun gagal diproses.`, { description: summary.firstMessage });
+            }
             setIsGenerateSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
         onError: (error: Error) => toast.error(error.message)
@@ -179,12 +220,18 @@ export function UserManagementPage() {
 
     const deleteSelectedMutation = useMutation({
         mutationFn: async (userIds: string[]) => {
-            const promises = userIds.map(id => supabase.functions.invoke('delete-user', { body: { targetUserId: id } }));
-            await Promise.all(promises);
-            return userIds.length;
+            const results = await Promise.all(
+                userIds.map(id => supabase.functions.invoke('delete-user', { body: { targetUserId: id } }))
+            );
+            const summary = summarizeResults(results as InvokeResult[]);
+            if (summary.success === 0) throw new Error(summary.firstMessage);
+            return summary;
         },
-        onSuccess: (count) => {
-            toast.success(tUM('toastDelSelSuccess', { count }));
+        onSuccess: (summary) => {
+            toast.success(tUM('toastDelSelSuccess', { count: summary.success }));
+            if (summary.failed > 0) {
+                toast.warning(`${summary.failed} akun gagal dihapus.`, { description: summary.firstMessage });
+            }
             setIsDeleteSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
         onError: (error: Error) => toast.error(error.message)
@@ -214,7 +261,8 @@ export function UserManagementPage() {
         onSuccess: () => {
             toast.success(tUM('toastAddSuccess'));
             setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        }
+        },
+        onError: (error: Error) => toast.error(error.message)
     });
 
     const editUserMutation = useMutation({
@@ -225,7 +273,8 @@ export function UserManagementPage() {
         onSuccess: () => {
             toast.success(tUM('toastEditSuccess'));
             setUserToEdit(null); queryClient.invalidateQueries({ queryKey: ['users-list'] });
-        }
+        },
+        onError: (error: Error) => toast.error(error.message)
     });
 
     const resetPasswordMutation = useMutation({
@@ -236,7 +285,8 @@ export function UserManagementPage() {
         onSuccess: () => {
             toast.success(tUM('toastResetSuccess'));
             setUserToReset(null); resetPassForm.reset(); setShowResetPassword(false);
-        }
+        },
+        onError: (error: Error) => toast.error(error.message)
     });
 
     const toggleStatusMutation = useMutation({
@@ -244,7 +294,8 @@ export function UserManagementPage() {
             const { error } = await supabase.from('users').update({ isActive: !payload.currentStatus }).eq('id', payload.userId);
             if (error) throw new Error(error.message);
         },
-        onSuccess: () => { toast.success(tUM('toastStatusSuccess')); queryClient.invalidateQueries({ queryKey: ['users-list'] }); }
+        onSuccess: () => { toast.success(tUM('toastStatusSuccess')); queryClient.invalidateQueries({ queryKey: ['users-list'] }); },
+        onError: (error: Error) => toast.error(error.message)
     });
 
     const deleteUserMutation = useMutation({
@@ -252,7 +303,8 @@ export function UserManagementPage() {
             const { data, error } = await supabase.functions.invoke('delete-user', { body: { targetUserId: userId } });
             if (error || data?.error) throw new Error(error?.message || data?.error);
         },
-        onSuccess: () => { toast.success(tUM('toastDelSuccess')); setUserToDelete(null); queryClient.invalidateQueries({ queryKey: ['users-list'] }); }
+        onSuccess: () => { toast.success(tUM('toastDelSuccess')); setUserToDelete(null); queryClient.invalidateQueries({ queryKey: ['users-list'] }); },
+        onError: (error: Error) => toast.error(error.message)
     });
 
     // FETCHING DATA
@@ -269,13 +321,13 @@ export function UserManagementPage() {
         enabled: isSuperAdmin || !!school?.id,
     });
 
-    // FUNGSI HANDLE SORT KLIK HEADER
+    // SORT: klik header (asc -> desc -> reset)
     const handleSort = (key: SortKey) => {
         if (sortConfig.key === key) {
             if (sortConfig.direction === 'asc') {
                 setSortConfig({ key, direction: 'desc' });
             } else {
-                setSortConfig({ key: 'none', direction: 'asc' }); // Reset di klik ketiga
+                setSortConfig({ key: 'none', direction: 'asc' });
             }
         } else {
             setSortConfig({ key, direction: 'asc' });
@@ -293,13 +345,14 @@ export function UserManagementPage() {
     // FILTER DAN SORT
     const filteredUsers: AppUser[] = (users || [])
         .filter((user: AppUser) => {
-            const matchesSearch = user.fullName.toLowerCase().includes(searchQuery.toLowerCase()) || user.email.toLowerCase().includes(searchQuery.toLowerCase());
+            const q = searchQuery.toLowerCase();
+            const matchesSearch = user.fullName.toLowerCase().includes(q) || user.email.toLowerCase().includes(q);
             let matchesTab = true;
 
             if (activeTab === 'manajemen') {
-                matchesTab = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(user.role);
+                matchesTab = MANAGEMENT_ROLES.includes(user.role);
             } else if (activeTab === 'staff') {
-                matchesTab = ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(user.role);
+                matchesTab = STAFF_ROLES.includes(user.role);
             } else if (activeTab === 'siswa') {
                 matchesTab = user.role === 'SISWA';
             } else if (activeTab === 'orangtua') {
@@ -308,34 +361,33 @@ export function UserManagementPage() {
             return matchesSearch && matchesTab;
         })
         .sort((a, b) => {
-            if (sortConfig.key === 'none') return 0; // Urutan default bawaan database
+            if (sortConfig.key === 'none') return 0; // urutan default dari database
 
             let comparison = 0;
-
             if (sortConfig.key === 'fullName') {
                 comparison = a.fullName.localeCompare(b.fullName);
             } else if (sortConfig.key === 'role') {
                 comparison = a.role.localeCompare(b.role);
             } else if (sortConfig.key === 'isActive') {
+                // asc = aktif di atas
                 comparison = (a.isActive === b.isActive) ? 0 : a.isActive ? -1 : 1;
             }
 
             return sortConfig.direction === 'asc' ? comparison : -comparison;
         });
 
-    // LOGIKA PAGINATION
+    // PAGINATION
     const totalPages = Math.ceil(filteredUsers.length / ITEMS_PER_PAGE);
     const paginatedUsers = filteredUsers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
     const getPageNumbers = () => {
         const pages = [];
         let start = Math.max(1, currentPage - 2);
-        let end = Math.min(totalPages, start + 4);
+        const end = Math.min(totalPages, start + 4);
         if (end - start < 4) start = Math.max(1, end - 4);
         for (let i = start; i <= end; i++) pages.push(i);
         return pages;
     };
 
-    // Fungsi submit Input Halaman Manual
     const handleManualPageSubmit = (e?: React.KeyboardEvent<HTMLInputElement>) => {
         if (e && e.key !== 'Enter') return;
         let targetPage = parseInt(pageInput, 10);
@@ -352,21 +404,23 @@ export function UserManagementPage() {
         setSelectedUserIds(prev => prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]);
     };
 
-    // FORMS
-    const addUserForm = useForm<CreateUserFormValues>({ resolver: zodResolver(createUserSchema), defaultValues: { fullName: '', email: '', password: '', role: 'GURU' } });
-    const editUserForm = useForm<EditUserFormValues>({ resolver: zodResolver(editUserSchema), defaultValues: { fullName: '', role: 'GURU' } });
-    const resetPassForm = useForm<ResetPasswordFormValues>({ resolver: zodResolver(resetPasswordSchema), defaultValues: { newPassword: '' } });
-
-    useEffect(() => { if (userToEdit) editUserForm.reset({ fullName: userToEdit.fullName, role: userToEdit.role }); }, [userToEdit, editUserForm]);
-
     const formatRoleName = (role: AppUserRole): string => tUM(('role_' + role) as keyof typeof translations.id.userManagement);
     const getRoleBadgeColor = (role: AppUserRole): string => {
-        if (['SUPER_ADMIN'].includes(role)) return 'bg-rose-100 text-rose-700 border-rose-200';
+        if (role === 'SUPER_ADMIN') return 'bg-rose-100 text-rose-700 border-rose-200';
         if (['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(role)) return 'bg-purple-100 text-purple-700 border-purple-200';
-        if (['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'].includes(role)) return 'bg-blue-100 text-blue-700 border-blue-200';
+        if (STAFF_ROLES.includes(role)) return 'bg-blue-100 text-blue-700 border-blue-200';
         if (role === 'SISWA') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
         return 'bg-slate-100 text-slate-700 border-slate-200';
     };
+
+    const roleSelectItems = ROLE_VALUES.map(r => (
+        <SelectItem key={r} value={r}>{tUM(('role_' + r) as keyof typeof translations.id.userManagement)}</SelectItem>
+    ));
+
+    const sortLabel =
+        sortConfig.key === 'fullName' ? 'Sortir Nama' :
+            sortConfig.key === 'role' ? 'Sortir Role' :
+                sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir';
 
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 relative">
@@ -389,17 +443,7 @@ export function UserManagementPage() {
                                             <Select value={field.value} onValueChange={field.onChange}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder={tUM('roleReq')} /></SelectTrigger></FormControl>
                                                 <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto">
-                                                    <SelectItem value="SUPER_ADMIN">{tUM('role_SUPER_ADMIN')}</SelectItem>
-                                                    <SelectItem value="ADMIN">{tUM('role_ADMIN')}</SelectItem>
-                                                    <SelectItem value="KEPALA_SEKOLAH">{tUM('role_KEPALA_SEKOLAH')}</SelectItem>
-                                                    <SelectItem value="OPERATOR">{tUM('role_OPERATOR')}</SelectItem>
-                                                    <SelectItem value="BENDAHARA">{tUM('role_BENDAHARA')}</SelectItem>
-                                                    <SelectItem value="WALI_KELAS">{tUM('role_WALI_KELAS')}</SelectItem>
-                                                    <SelectItem value="GURU">{tUM('role_GURU')}</SelectItem>
-                                                    <SelectItem value="STAFF_TU">{tUM('role_STAFF_TU')}</SelectItem>
-                                                    <SelectItem value="STAFF_SARPRAS">{tUM('role_STAFF_SARPRAS')}</SelectItem>
-                                                    <SelectItem value="ORANG_TUA">{tUM('role_ORANG_TUA')}</SelectItem>
-                                                    <SelectItem value="SISWA">{tUM('role_SISWA')}</SelectItem>
+                                                    {roleSelectItems}
                                                 </SelectContent>
                                             </Select>
                                             <FormMessage />
@@ -411,7 +455,9 @@ export function UserManagementPage() {
                                             <FormControl>
                                                 <div className="relative flex items-center">
                                                     <Input type={showAddPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
-                                                    <button type="button" onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground"><Eye size={16} /></button>
+                                                    <button type="button" onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground">
+                                                        {showAddPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                                    </button>
                                                 </div>
                                             </FormControl>
                                             <FormMessage />
@@ -444,17 +490,7 @@ export function UserManagementPage() {
                                             <Select value={field.value} onValueChange={field.onChange} disabled={!isSuperAdmin}>
                                                 <FormControl><SelectTrigger><SelectValue placeholder={tUM('roleReq')} /></SelectTrigger></FormControl>
                                                 <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto">
-                                                    <SelectItem value="SUPER_ADMIN">{tUM('role_SUPER_ADMIN')}</SelectItem>
-                                                    <SelectItem value="ADMIN">{tUM('role_ADMIN')}</SelectItem>
-                                                    <SelectItem value="KEPALA_SEKOLAH">{tUM('role_KEPALA_SEKOLAH')}</SelectItem>
-                                                    <SelectItem value="OPERATOR">{tUM('role_OPERATOR')}</SelectItem>
-                                                    <SelectItem value="BENDAHARA">{tUM('role_BENDAHARA')}</SelectItem>
-                                                    <SelectItem value="WALI_KELAS">{tUM('role_WALI_KELAS')}</SelectItem>
-                                                    <SelectItem value="GURU">{tUM('role_GURU')}</SelectItem>
-                                                    <SelectItem value="STAFF_TU">{tUM('role_STAFF_TU')}</SelectItem>
-                                                    <SelectItem value="STAFF_SARPRAS">{tUM('role_STAFF_SARPRAS')}</SelectItem>
-                                                    <SelectItem value="ORANG_TUA">{tUM('role_ORANG_TUA')}</SelectItem>
-                                                    <SelectItem value="SISWA">{tUM('role_SISWA')}</SelectItem>
+                                                    {roleSelectItems}
                                                 </SelectContent>
                                             </Select>
                                             <FormMessage />
@@ -487,7 +523,9 @@ export function UserManagementPage() {
                                             <FormControl>
                                                 <div className="relative flex items-center">
                                                     <Input type={showResetPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
-                                                    <button type="button" onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground"><Eye size={16} /></button>
+                                                    <button type="button" onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground">
+                                                        {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                                                    </button>
                                                 </div>
                                             </FormControl>
                                             <FormMessage />
@@ -614,16 +652,13 @@ export function UserManagementPage() {
                     </Tabs>
                 </div>
 
-
                 {/* TOOLBAR */}
-                <div className="border-b border-border pb-4 space-y-4">
-                    {/* BARIS ATAS: SEARCH + ACTIONS */}
+                <div className="border-b border-border pb-4">
                     <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
 
                         {/* SEARCH */}
                         <div className="relative w-full min-w-0 xl:max-w-90 xl:flex-1">
                             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
-
                             <Input
                                 placeholder={tUM('searchPlaceholder')}
                                 value={searchQuery}
@@ -638,11 +673,7 @@ export function UserManagementPage() {
                             {/* SORTIR */}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        className="h-10 shrink-0 gap-2 px-3 sm:px-4"
-                                    >
+                                    <Button type="button" variant="outline" className="h-10 shrink-0 gap-2 px-3 sm:px-4">
                                         {sortConfig.key === 'none' ? (
                                             <ArrowUpDown className="w-4 h-4 text-muted-foreground" />
                                         ) : sortConfig.direction === 'asc' ? (
@@ -650,135 +681,58 @@ export function UserManagementPage() {
                                         ) : (
                                             <ArrowUp className="w-4 h-4 text-primary" />
                                         )}
-
-                                        <span className="font-normal">
-                                            {sortConfig.key === 'none'
-                                                ? 'Sortir'
-                                                : sortConfig.key === 'fullName'
-                                                    ? 'Sortir Nama'
-                                                    : sortConfig.key === 'role'
-                                                        ? 'Sortir Role'
-                                                        : sortConfig.key === 'isActive'
-                                                            ? 'Sortir Status'
-                                                            : 'Sortir'}
-                                        </span>
-
+                                        <span className="font-normal">{sortLabel}</span>
                                         <ChevronDown className="w-4 h-4 opacity-50" />
                                     </Button>
                                 </DropdownMenuTrigger>
 
                                 <DropdownMenuContent align="end" className="w-48">
-                                    <DropdownMenuItem
-                                        onClick={() =>
-                                            setSortConfig({
-                                                key: 'fullName',
-                                                direction: 'asc',
-                                            })
-                                        }
-                                        className="cursor-pointer"
-                                    >
-                                        <ArrowDownAZ className="w-4 h-4 mr-2" />
-                                        Nama (A - Z)
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'asc' })} className="cursor-pointer">
+                                        <ArrowDownAZ className="w-4 h-4 mr-2" /> Nama (A - Z)
                                     </DropdownMenuItem>
-
-                                    <DropdownMenuItem
-                                        onClick={() =>
-                                            setSortConfig({
-                                                key: 'fullName',
-                                                direction: 'desc',
-                                            })
-                                        }
-                                        className="cursor-pointer"
-                                    >
-                                        <ArrowUpZA className="w-4 h-4 mr-2" />
-                                        Nama (Z - A)
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'desc' })} className="cursor-pointer">
+                                        <ArrowUpZA className="w-4 h-4 mr-2" /> Nama (Z - A)
                                     </DropdownMenuItem>
-
-                                    <DropdownMenuItem
-                                        onClick={() =>
-                                            setSortConfig({
-                                                key: 'role',
-                                                direction: 'asc',
-                                            })
-                                        }
-                                        className="cursor-pointer"
-                                    >
-                                        <ArrowDown className="w-4 h-4 mr-2" />
-                                        Role
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'role', direction: 'asc' })} className="cursor-pointer">
+                                        <ArrowDown className="w-4 h-4 mr-2" /> Role
                                     </DropdownMenuItem>
-
-                                    <DropdownMenuItem
-                                        onClick={() =>
-                                            setSortConfig({
-                                                key: 'isActive',
-                                                direction: 'desc',
-                                            })
-                                        }
-                                        className="cursor-pointer"
-                                    >
-                                        <ArrowDown className="w-4 h-4 mr-2" />
-                                        Status Aktif
+                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'isActive', direction: 'asc' })} className="cursor-pointer">
+                                        <ArrowDown className="w-4 h-4 mr-2" /> Status Aktif
                                     </DropdownMenuItem>
-
                                     <DropdownMenuSeparator />
-
                                     <DropdownMenuItem
-                                        onClick={() =>
-                                            setSortConfig({
-                                                key: 'none',
-                                                direction: 'asc',
-                                            })
-                                        }
-                                        className={`cursor-pointer ${sortConfig.key === 'none'
-                                            ? 'bg-primary/10 text-primary'
-                                            : ''
-                                            }`}
+                                        onClick={() => setSortConfig({ key: 'none', direction: 'asc' })}
+                                        className={`cursor-pointer ${sortConfig.key === 'none' ? 'bg-primary/10 text-primary' : ''}`}
                                     >
-                                        <ArrowUpDown className="w-4 h-4 mr-2" />
-                                        Reset (Default)
+                                        <ArrowUpDown className="w-4 h-4 mr-2" /> Reset (Default)
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
 
                             {/* GENERATE DATA */}
-                            {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                            {BULK_TABS.includes(activeTab) && (
                                 <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
-                                        <Button
-                                            type="button"
-                                            className="h-10 shrink-0 gap-2 bg-blue-600 px-3 text-white hover:bg-blue-700 sm:px-4"
-                                        >
+                                        <Button type="button" className="h-10 shrink-0 gap-2 bg-blue-600 px-3 text-white hover:bg-blue-700 sm:px-4">
                                             <DatabaseZap className="w-4 h-4" />
-
                                             <span>{tUM('generateData')}</span>
-
                                             <ChevronDown className="w-4 h-4 opacity-70" />
                                         </Button>
                                     </DropdownMenuTrigger>
 
                                     <DropdownMenuContent align="end" className="w-52">
-                                        <DropdownMenuItem
-                                            className="cursor-pointer"
-                                            onClick={() =>
-                                                setIsGenerateAllModalOpen(true)
-                                            }
-                                        >
+                                        <DropdownMenuItem className="cursor-pointer" onClick={() => setIsGenerateAllModalOpen(true)}>
                                             <DatabaseZap className="w-4 h-4 mr-2" />
                                             {tUM('generateAll')}
                                         </DropdownMenuItem>
-
                                         <DropdownMenuSeparator />
-
                                         <DropdownMenuItem
                                             className="cursor-pointer"
                                             disabled={selectedUserIds.length === 0}
-                                            onClick={() =>
-                                                setIsGenerateSelectedModalOpen(true)
-                                            }
+                                            onClick={() => setIsGenerateSelectedModalOpen(true)}
                                         >
                                             <UserPlus className="w-4 h-4 mr-2" />
-                                            {tUM('generateSelected')} (
-                                            {selectedUserIds.length})
+                                            {tUM('generateSelected')} ({selectedUserIds.length})
                                         </DropdownMenuItem>
                                     </DropdownMenuContent>
                                 </DropdownMenu>
@@ -792,34 +746,21 @@ export function UserManagementPage() {
                                             type="button"
                                             variant="outline"
                                             className="h-10 shrink-0 gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:px-4"
-                                            onClick={() =>
-                                                setIsDeleteSelectedModalOpen(true)
-                                            }
+                                            onClick={() => setIsDeleteSelectedModalOpen(true)}
                                         >
                                             <Trash2 className="w-4 h-4 shrink-0" />
-
-                                            <span>
-                                                {tUM('deleteSelected')} (
-                                                {selectedUserIds.length})
-                                            </span>
+                                            <span>{tUM('deleteSelected')} ({selectedUserIds.length})</span>
                                         </Button>
                                     ) : (
-                                        ['staff', 'siswa', 'orangtua'].includes(
-                                            activeTab
-                                        ) && (
+                                        BULK_TABS.includes(activeTab) && (
                                             <Button
                                                 type="button"
                                                 variant="outline"
                                                 className="h-10 shrink-0 gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:px-4"
-                                                onClick={() =>
-                                                    setIsDeleteAllModalOpen(true)
-                                                }
+                                                onClick={() => setIsDeleteAllModalOpen(true)}
                                             >
                                                 <AlertCircle className="w-4 h-4 shrink-0" />
-
-                                                <span>
-                                                    {tUM('bulkDeleteAll')}
-                                                </span>
+                                                <span>{tUM('bulkDeleteAll')}</span>
                                             </Button>
                                         )
                                     )}
@@ -829,8 +770,7 @@ export function UserManagementPage() {
                     </div>
                 </div>
 
-
-                {/* TABLE DENGAN KLIK SORTIR DI HEADER */}
+                {/* TABLE */}
                 <div className="overflow-x-auto">
                     <table className="w-full text-left border-collapse">
                         <thead>
@@ -838,37 +778,27 @@ export function UserManagementPage() {
                                 <th className="px-4 py-3 w-10 text-center">
                                     <input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length} onChange={handleSelectAll} />
                                 </th>
-
-                                {/* Kolom No. (Sudah Diperbaiki: Tidak bisa diklik / disortir lagi) */}
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">
                                     {tUM('colNo')}
                                 </th>
-
-                                {/* Kolom Pengguna Dapat Diklik */}
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none" onClick={() => handleSort('fullName')}>
                                     <div className="flex items-center gap-1">
                                         {tUM('colUser')}
                                         {renderSortIcon('fullName')}
                                     </div>
                                 </th>
-
-                                {/* Kolom Role Dapat Diklik */}
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none" onClick={() => handleSort('role')}>
                                     <div className="flex items-center gap-1">
                                         {tUM('colRole')}
                                         {renderSortIcon('role')}
                                     </div>
                                 </th>
-
-                                {/* Kolom Status Dapat Diklik */}
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none" onClick={() => handleSort('isActive')}>
                                     <div className="flex items-center gap-1">
                                         {tUM('colStatus')}
                                         {renderSortIcon('isActive')}
                                     </div>
                                 </th>
-
-                                {/* Kolom Aksi Tidak Perlu Diklik */}
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-right w-20">{tUM('colAction')}</th>
                             </tr>
                         </thead>
@@ -945,7 +875,7 @@ export function UserManagementPage() {
                     </table>
                 </div>
 
-                {/* PAGINATION DENGAN INPUT MANUAL */}
+                {/* PAGINATION */}
                 {filteredUsers.length > 0 && (
                     <div className="flex flex-col xl:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
                         <span className="text-sm text-muted-foreground text-center xl:text-left">
@@ -953,7 +883,6 @@ export function UserManagementPage() {
                         </span>
 
                         <div className="flex flex-wrap items-center justify-center gap-2">
-                            {/* Tombol Panah Pagination */}
                             <div className="flex items-center gap-1">
                                 <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground"><ChevronsLeft className="w-4 h-4" /></Button>
                                 <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground"><ChevronLeft className="w-4 h-4" /></Button>
@@ -964,7 +893,6 @@ export function UserManagementPage() {
                                 <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground"><ChevronsRight className="w-4 h-4" /></Button>
                             </div>
 
-                            {/* (Baru) Kotak Input Manual Halaman */}
                             <div className="flex items-center gap-2 sm:ml-4 sm:border-l sm:pl-4 border-border">
                                 <span className="text-sm text-muted-foreground hidden sm:inline-block">Ke Halaman:</span>
                                 <Input
