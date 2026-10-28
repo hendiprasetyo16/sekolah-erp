@@ -617,30 +617,28 @@ export function UserManagementPage() {
                 {/* TOOLBAR */}
                 <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 border-b border-border pb-4">
 
-                    {/* SEARCH & SORT GROUP (Diperbaiki CSS Flex-nya agar Search melebar) */}
-                    <div className="flex flex-col sm:flex-row gap-3 w-full md:max-w-2xl">
+                    {/* KIRI: SEARCH INPUT */}
+                    <div className="relative w-full md:max-w-md">
+                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                        <Input placeholder={tUM('searchPlaceholder')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9 w-full" />
+                    </div>
 
-                        {/* Search Input akan melebar otomatis dengan flex-grow dan w-full */}
-                        <div className="relative grow">
-                            <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                            <Input placeholder={tUM('searchPlaceholder')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9 w-full" />
-                        </div>
+                    {/* KANAN: ACTIONS & SORT */}
+                    <div className="flex flex-wrap items-center justify-start md:justify-end gap-3 w-full md:w-auto">
 
-                        {/* Dropdown Sortir disamping search */}
+                        {/* Dropdown Sortir (Sekarang menempel dengan tombol aksi) */}
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
-                                <Button variant="outline" className="w-full sm:w-auto shrink-0 flex items-center justify-between gap-2">
-                                    <div className="flex items-center gap-2">
-                                        {sortConfig.key === 'none' ? <ArrowUpDown size={16} className="text-muted-foreground" /> :
-                                            sortConfig.direction === 'asc' ? <ArrowDown size={16} className="text-primary" /> : <ArrowUp size={16} className="text-primary" />}
-                                        <span className="hidden sm:inline font-normal">
-                                            {sortConfig.key === 'none' ? 'Sortir' :
-                                                sortConfig.key === 'fullName' ? 'Sortir Nama' :
-                                                    sortConfig.key === 'role' ? 'Sortir Role' :
-                                                        sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir'}
-                                        </span>
-                                    </div>
-                                    <ChevronDown className="w-4 h-4 opacity-50 sm:hidden" />
+                                <Button variant="outline" className="shrink-0 flex items-center gap-2">
+                                    {sortConfig.key === 'none' ? <ArrowUpDown size={16} className="text-muted-foreground" /> :
+                                        sortConfig.direction === 'asc' ? <ArrowDown size={16} className="text-primary" /> : <ArrowUp size={16} className="text-primary" />}
+                                    <span className="font-normal">
+                                        {sortConfig.key === 'none' ? 'Sortir' :
+                                            sortConfig.key === 'fullName' ? 'Sortir Nama' :
+                                                sortConfig.key === 'role' ? 'Sortir Role' :
+                                                    sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir'}
+                                    </span>
+                                    <ChevronDown className="w-4 h-4 opacity-50 ml-1" />
                                 </Button>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end" className="w-48">
@@ -662,10 +660,8 @@ export function UserManagementPage() {
                                 </DropdownMenuItem>
                             </DropdownMenuContent>
                         </DropdownMenu>
-                    </div>
 
-                    {/* ACTION BUTTONS */}
-                    <div className="flex flex-wrap items-center gap-3 shrink-0">
+                        {/* Tombol Generate Data */}
                         {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
@@ -686,29 +682,35 @@ export function UserManagementPage() {
                             </DropdownMenu>
                         )}
 
+                        {/* Tombol Hapus Dinamis (Tanpa Dropdown) */}
                         {isSuperAdmin && (
-                            <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <Button variant="outline" className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 h-9 px-4">
+                            <>
+                                {selectedUserIds.length > 0 ? (
+                                    // Muncul saat ada kotak yang dicentang
+                                    <Button
+                                        variant="outline"
+                                        className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 h-9 px-4 shrink-0"
+                                        onClick={() => setIsDeleteSelectedModalOpen(true)}
+                                    >
                                         <Trash2 className="w-4 h-4 mr-2" />
-                                        {tUM('deleteOptions')} <ChevronDown className="w-4 h-4 ml-2 opacity-70" />
+                                        {tUM('deleteSelected')} ({selectedUserIds.length})
                                     </Button>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent align="end" className="w-48">
-                                    {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
-                                        <>
-                                            <DropdownMenuItem className="cursor-pointer text-red-600 focus:text-red-700 focus:bg-red-50" onClick={() => setIsDeleteAllModalOpen(true)}>
-                                                <AlertCircle className="w-4 h-4 mr-2" /> {tUM('bulkDeleteAll')}
-                                            </DropdownMenuItem>
-                                            <DropdownMenuSeparator />
-                                        </>
-                                    )}
-                                    <DropdownMenuItem className="cursor-pointer text-red-600 focus:text-red-700 focus:bg-red-50" disabled={selectedUserIds.length === 0} onClick={() => setIsDeleteSelectedModalOpen(true)}>
-                                        <Trash2 className="w-4 h-4 mr-2" /> {tUM('deleteSelected')} ({selectedUserIds.length})
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
+                                ) : (
+                                    // Muncul saat tidak ada yang dicentang (hanya pada tab tertentu)
+                                    ['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                                        <Button
+                                            variant="outline"
+                                            className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 h-9 px-4 shrink-0"
+                                            onClick={() => setIsDeleteAllModalOpen(true)}
+                                        >
+                                            <AlertCircle className="w-4 h-4 mr-2" />
+                                            {tUM('bulkDeleteAll')}
+                                        </Button>
+                                    )
+                                )}
+                            </>
                         )}
+
                     </div>
                 </div>
 

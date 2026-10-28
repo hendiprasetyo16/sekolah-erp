@@ -205,7 +205,7 @@ export const translations = {
       generateAll: "Generate Semua",
       generateSelected: "Generate Terpilih",
       deleteOptions: "Opsi Hapus",
-      bulkDeleteAll: "Hapus Masal (Semua)",
+      bulkDeleteAll: "Hapus Semua",
       deleteSelected: "Hapus Terpilih",
       colNo: "No.",
       colUser: "Pengguna",
