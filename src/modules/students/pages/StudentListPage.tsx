@@ -885,17 +885,36 @@ export function StudentListPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {selectedRows.length > 0 && canManageData && (
-            <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} onClick={() => setIsBulkDeleting(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-bold hover:bg-red-500/20 transition-colors shadow-sm">
-              <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? `Hapus Terpilih (${selectedRows.length})` : `Delete Selected (${selectedRows.length})`}</span>
-            </motion.button>
-          )}
 
-          {(meta?.total || 0) > 0 && canManageData && (
-            <button onClick={() => setIsDeletingAll(true)} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm">
-              <Trash2 size={16} /> <span className="hidden sm:inline">{locale === 'id' ? 'Kosongkan Data' : 'Wipe Data'}</span>
-            </button>
+          {/* --- PENGGABUNGAN TOMBOL HAPUS --- */}
+          {canManageData && (
+            selectedRows.length > 0 ? (
+              // Tombol muncul saat ADA baris yang diceklis
+              <motion.button
+                key="delete-selected"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                onClick={() => setIsBulkDeleting(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-bold hover:bg-red-500/20 transition-colors shadow-sm"
+              >
+                <Trash2 size={16} />
+                <span className="hidden sm:inline">{locale === 'id' ? `Hapus Terpilih (${selectedRows.length})` : `Delete Selected (${selectedRows.length})`}</span>
+              </motion.button>
+            ) : (meta?.total || 0) > 0 ? (
+              // Tombol muncul saat TIDAK ADA baris yang diceklis
+              <motion.button
+                key="delete-all"
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                onClick={() => setIsDeletingAll(true)}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm"
+              >
+                <Trash2 size={16} />
+                <span className="hidden sm:inline">{locale === 'id' ? 'Kosongkan Data' : 'Wipe Data'}</span>
+              </motion.button>
+            ) : null
           )}
+          {/* --------------------------------- */}
 
           {canManageData && (
             <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
