@@ -6,7 +6,8 @@ import {
   Users, Plus, Upload, Download, Search, Filter,
   Eye, Edit, Trash2, Loader2, BookOpen,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-  X, AlertTriangle
+  X, AlertTriangle,
+  ArrowUpDown, ArrowUp, ArrowDown // <-- Tambahkan ini
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -37,6 +38,11 @@ export function TeacherListPage() {
   const [isImporting, setIsImporting] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
+  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({
+    key: 'fullName',
+    direction: 'asc'
+  });
+
   const [deleteModal, setDeleteModal] = useState<{ isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?: string }>({ isOpen: false, type: 'single' });
 
   const pageSize = 10;
@@ -44,6 +50,14 @@ export function TeacherListPage() {
   useEffect(() => {
     setPageInputValue(currentPage.toString());
   }, [currentPage]);
+
+  const handleSort = (key: string) => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    }
+    setSortConfig({ key, direction });
+  };
 
   const dict = {
     title: locale === 'id' ? 'Data Guru & Pegawai' : 'Teachers & Staff Data',
@@ -95,8 +109,14 @@ export function TeacherListPage() {
   };
 
   const { data: teachersResponse, isLoading, isError } = useQuery({
-    queryKey: ['teachers', currentPage, pageSize, searchQuery],
-    queryFn: () => teacherService.list({ page: currentPage, limit: pageSize, search: searchQuery }),
+    queryKey: ['teachers', currentPage, pageSize, searchQuery, sortConfig], // <-- Tambahkan sortConfig
+    queryFn: () => teacherService.list({
+      page: currentPage,
+      limit: pageSize,
+      search: searchQuery,
+      sortBy: sortConfig?.key,           // <-- Tambahkan sortBy
+      sortOrder: sortConfig?.direction   // <-- Tambahkan sortOrder
+    }),
   });
 
   const teachers = teachersResponse?.data?.data || [];
@@ -444,11 +464,59 @@ export function TeacherListPage() {
                     className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
                   />
                 </th>
+
                 <th className="px-4 py-3 text-sm font-semibold text-muted-foreground w-12 text-center">{dict.colNo}</th>
-                <th className="px-4 py-3 text-sm font-semibold text-muted-foreground min-w-50">{dict.colName}</th>
-                <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">{dict.colNip}</th>
-                <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">{dict.colPos}</th>
-                <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">{dict.colStat}</th>
+
+                {/* --- HEADER TABEL YANG BISA DIKLIK UNTUK SORTING --- */}
+                <th
+                  className="px-4 py-3 text-sm font-semibold text-muted-foreground min-w-50 cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('fullName')}
+                >
+                  <div className="flex items-center gap-1">
+                    {dict.colName}
+                    {sortConfig?.key === 'fullName' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (<ArrowUpDown size={14} className="opacity-40" />)}
+                  </div>
+                </th>
+
+                <th
+                  className="px-4 py-3 text-sm font-semibold text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('nip')}
+                >
+                  <div className="flex items-center gap-1">
+                    {dict.colNip}
+                    {sortConfig?.key === 'nip' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (<ArrowUpDown size={14} className="opacity-40" />)}
+                  </div>
+                </th>
+
+                <th
+                  className="px-4 py-3 text-sm font-semibold text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('position')}
+                >
+                  <div className="flex items-center gap-1">
+                    {dict.colPos}
+                    {sortConfig?.key === 'position' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (<ArrowUpDown size={14} className="opacity-40" />)}
+                  </div>
+                </th>
+
+                <th
+                  className="px-4 py-3 text-sm font-semibold text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors select-none"
+                  onClick={() => handleSort('status')}
+                >
+                  <div className="flex items-center gap-1">
+                    {dict.colStat}
+                    {sortConfig?.key === 'status' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
+                    ) : (<ArrowUpDown size={14} className="opacity-40" />)}
+                  </div>
+                </th>
+                {/* --------------------------------------------------- */}
+
                 <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">{dict.colCert}</th>
                 <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">{dict.colAct}</th>
               </tr>

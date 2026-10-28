@@ -71,4 +71,6 @@ export interface TeacherListParams {
   limit?: number;
   search?: string;
   isActive?: boolean;
+  sortBy?: string;               // <-- Tambahkan baris ini
+  sortOrder?: 'asc' | 'desc';    // <-- Tambahkan baris ini
 }

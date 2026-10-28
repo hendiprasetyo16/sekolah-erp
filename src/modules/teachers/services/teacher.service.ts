@@ -4,7 +4,14 @@ import type { TeacherDetail, TeacherListItem, TeacherListParams, CreateTeacherPa
 
 class TeacherService {
   async list(params?: TeacherListParams) {
-    const { page = 1, limit = 10, search, isActive } = params || {};
+    const { 
+      page = 1, 
+      limit = 10, 
+      search, 
+      isActive,
+      sortBy = 'fullName',       // <-- Default sorting
+      sortOrder = 'asc'          // <-- Default arah sorting
+    } = params || {};
     
     let query = supabase.from('teachers').select('*', { count: 'exact' });
 
@@ -19,7 +26,7 @@ class TeacherService {
     const to = from + limit - 1;
     
     const { data, count, error } = await query
-      .order('fullName', { ascending: true })
+      .order(sortBy, { ascending: sortOrder === 'asc', nullsFirst: false }) // <-- Ubah bagian ini
       .range(from, to);
 
     if (error) {
@@ -52,7 +59,7 @@ class TeacherService {
 
     return { data: data as TeacherDetail[] };
   }
-  
+
   async getById(id: string) {
     const { data, error } = await supabase
       .from('teachers')
