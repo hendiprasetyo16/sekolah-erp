@@ -19,6 +19,9 @@ import { supabase } from '@/services/supabase.client';
 import { Button } from '@/components/ui/button';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 
+// ==========================================
+// TYPES
+// ==========================================
 interface ImportParent {
   id: string;
   relation: string;
@@ -97,29 +100,177 @@ interface StudentImportPayload {
 }
 
 type ExcelRow = Record<string, string | number | boolean>;
+type ClassRow = { id: string; name: string; gradeLevel: number };
+type SortConfig = { key: string; direction: 'asc' | 'desc' } | null;
 
+// ==========================================
+// CONSTANTS & PURE HELPERS (di luar komponen)
+// ==========================================
+const ALLOWED_ROLES = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
+const PAGE_SIZE = 10;
+const EMPTY_CLASS_LABEL = '(Kosong/Empty)';
+
+const getStatusConfig = (status: string, locale: string) => {
+  const isId = locale === 'id';
+  const config: Record<string, { label: string; color: string }> = {
+    AKTIF: { label: isId ? 'Aktif' : 'Active', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
+    MUTASI_KELUAR: { label: isId ? 'Mutasi' : 'Transferred', color: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
+    LULUS: { label: isId ? 'Lulus' : 'Graduated', color: 'bg-blue-500/10 text-blue-600 border-blue-500/20' },
+    DO: { label: isId ? 'DO' : 'Dropped Out', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
+    CUTI: { label: isId ? 'Cuti' : 'On Leave', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
+  };
+  return config[status] || { label: status, color: 'bg-muted text-muted-foreground border-border' };
+};
+
+const normalizeClassName = (name: string) => {
+  if (!name) return '';
+  return String(name).toLowerCase()
+    .replace(/kelas/g, '').replace(/rombel/g, '')
+    .replace(/saat ini/g, '').replace(/tingkat/g, '')
+    .replace(/-/g, '').replace(/\s+/g, '').trim();
+};
+
+const getValidNumber = (val: unknown, min: number = 0): number | null => {
+  if (val === undefined || val === null || String(val).trim() === '') return null;
+  const num = Number(val);
+  return !isNaN(num) && num >= min ? num : null;
+};
+
+const toBool = (val: unknown) => String(val).toLowerCase().trim() === 'ya';
+
+const shortId = () => crypto.randomUUID().split('-')[0].toUpperCase();
+
+// Tebak tingkat kelas dari nama. Angka & angka Romawi dicek sebagai "kata" utuh,
+// supaya nama seperti "KELOMPOK BERMAIN" tidak salah terbaca mengandung "I".
+const guessGradeLevel = (className: string): number => {
+  const upper = className.toUpperCase();
+  if (/\bTK\s*B\b/.test(upper) || upper.includes('TKB') || upper.includes('BESAR')) return 2;
+  if (/\bTK\s*A\b/.test(upper) || upper.includes('TKA') || upper.includes('KECIL')) return 1;
+
+  const digit = upper.match(/\d{1,2}/);
+  if (digit) {
+    const n = parseInt(digit[0], 10);
+    if (n >= 1 && n <= 12) return n;
+  }
+
+  const romanMap: Record<string, number> = {
+    I: 1, II: 2, III: 3, IV: 4, V: 5, VI: 6, VII: 7, VIII: 8, IX: 9, X: 10, XI: 11, XII: 12,
+  };
+  const roman = upper.match(/(?<![A-Z])(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)(?![IVX])/);
+  if (roman) return romanMap[roman[1]] ?? 0;
+
+  return 0; // PAUD / non-formal / nama unik
+};
+
+const parseBirthDate = (raw: unknown): string => {
+  const str = String(raw ?? '').trim();
+  if (!str) return new Date().toISOString();
+  // Serial tanggal Excel (angka murni)
+  if (/^\d+(\.\d+)?$/.test(str)) {
+    return new Date(Math.round((Number(str) - 25569) * 86400 * 1000)).toISOString();
+  }
+  return str;
+};
+
+const parseDesil = (row: ExcelRow): number | null => {
+  const raw = row['desil'] || row['desil p3ke'] || row['desil dtks'] || row['desil (p3ke/dtks)'];
+  if (!raw) return null;
+  const num = parseInt(String(raw).replace(/\D/g, ''), 10);
+  return num >= 1 && num <= 10 ? num : null;
+};
+
+const pick = (row: ExcelRow, ...keys: string[]): string => {
+  for (const k of keys) {
+    const v = row[k];
+    if (v !== undefined && v !== null && String(v) !== '') return String(v);
+  }
+  return '';
+};
+
+const buildParent = (row: ExcelRow, who: 'ayah' | 'ibu' | 'wali', relation: string, schoolId: string): ImportParent | null => {
+  const fullName = pick(row, `data ${who} nama`, `nama ${who}`);
+  if (!fullName) return null;
+  return {
+    id: crypto.randomUUID(),
+    relation,
+    fullName,
+    birthYear: pick(row, `data ${who} tahun lahir`, `tahun lahir ${who}`),
+    nik: pick(row, `data ${who} nik`, `nik ${who}`),
+    occupation: pick(row, `data ${who} pekerjaan`, `pekerjaan ${who}`),
+    monthlyIncome: pick(row, `data ${who} penghasilan`, `penghasilan ${who}`) || null,
+    education: pick(row, `data ${who} jenjang pendidikan`, `pendidikan ${who}`),
+    isAlive: true,
+    schoolId,
+  };
+};
+
+// Supabase membatasi 1000 baris per query, jadi diambil bertahap agar deteksi data ganda akurat.
+const fetchExistingNisns = async (schoolId: string): Promise<Set<string>> => {
+  const result = new Set<string>();
+  const size = 1000;
+  for (let from = 0; ; from += size) {
+    const { data, error } = await supabase
+      .from('students')
+      .select('nisn')
+      .eq('schoolId', schoolId)
+      .range(from, from + size - 1);
+    if (error) throw error;
+    (data || []).forEach(s => s.nisn && result.add(s.nisn));
+    if (!data || data.length < size) break;
+  }
+  return result;
+};
+
+// ==========================================
+// SUB-COMPONENT
+// ==========================================
+interface SortableHeaderProps {
+  columnKey: string;
+  label: string;
+  sortConfig: SortConfig;
+  onSort: (key: string) => void;
+}
+
+function SortableHeader({ columnKey, label, sortConfig, onSort }: SortableHeaderProps) {
+  const direction = sortConfig?.key === columnKey ? sortConfig.direction : null;
+  return (
+    <th
+      className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
+      onClick={() => onSort(columnKey)}
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        {direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" />
+          : direction === 'desc' ? <ArrowDown size={14} className="text-emerald-600" />
+            : <ArrowUpDown size={14} className="opacity-40" />}
+      </div>
+    </th>
+  );
+}
+
+// ==========================================
+// MAIN COMPONENT
+// ==========================================
 export function StudentListPage() {
   const { t, locale } = useTranslation();
   const queryClient = useQueryClient();
-
   const { school, user } = useAuthStore();
 
-  const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
-  const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
+  const isId = locale === 'id';
+  const tr = (id: string, en: string) => (isId ? id : en);
+
+  const canManageData = user?.role ? ALLOWED_ROLES.includes(user.role) : false;
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
   const [jumpPage, setJumpPage] = useState<string>('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
-
-  const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({
-    key: 'fullName',
-    direction: 'asc'
-  });
+  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'fullName', direction: 'asc' });
 
   const [studentToDelete, setStudentToDelete] = useState<{ id: string, name: string } | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -128,12 +279,11 @@ export function StudentListPage() {
   const [importStats, setImportStats] = useState({ total: 0, valid: 0, missingClass: 0, missingMandatory: 0, duplicates: 0 });
   const [unmatchedClasses, setUnmatchedClasses] = useState<string[]>([]);
 
-  const pageSize = 10;
-
   useEffect(() => {
     setJumpPage(String(currentPage));
   }, [currentPage]);
 
+  // --- QUERIES ---
   const { data: classesData } = useQuery({
     queryKey: ['classes-list'],
     queryFn: async () => {
@@ -142,14 +292,14 @@ export function StudentListPage() {
         .select('id, name, gradeLevel')
         .order('gradeLevel', { ascending: true });
       if (error) throw error;
-      return data as { id: string; name: string; gradeLevel: number }[];
+      return data as ClassRow[];
     }
   });
 
   const { data: activeYear } = useQuery({
-    queryKey: ['active-academic-year'],
+    queryKey: ['active-academic-year', school?.id],
     queryFn: async () => {
-      const { data, error } = await supabase
+      const { data } = await supabase
         .from('academic_years')
         .select('id')
         .eq('schoolId', school?.id || '')
@@ -161,10 +311,10 @@ export function StudentListPage() {
   });
 
   const { data: studentsResponse, isLoading } = useQuery({
-    queryKey: ['students', currentPage, pageSize, searchQuery, selectedClass, sortConfig],
+    queryKey: ['students', currentPage, PAGE_SIZE, searchQuery, selectedClass, sortConfig],
     queryFn: () => studentService.list({
       page: currentPage,
-      limit: pageSize,
+      limit: PAGE_SIZE,
       search: searchQuery,
       classId: selectedClass === 'all' ? undefined : selectedClass,
       sortBy: sortConfig?.key,
@@ -172,10 +322,20 @@ export function StudentListPage() {
     }),
   });
 
+  const students = studentsResponse?.data?.data || [];
+  const meta = studentsResponse?.data?.meta;
+  const totalPages = Math.ceil((meta?.total || 0) / PAGE_SIZE) || 1;
+
+  // Kalau halaman aktif kosong setelah hapus data, mundur ke halaman terakhir yang ada
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  // --- MUTATIONS ---
   const deleteMutation = useMutation({
     mutationFn: (id: string) => studentService.delete(id),
     onSuccess: () => {
-      toast.success(locale === 'id' ? 'Siswa berhasil dihapus' : 'Student deleted successfully');
+      toast.success(tr('Siswa berhasil dihapus', 'Student deleted successfully'));
       queryClient.invalidateQueries({ queryKey: ['students'] });
       setSelectedRows(prev => prev.filter(r => r !== studentToDelete?.id));
       setStudentToDelete(null);
@@ -188,21 +348,28 @@ export function StudentListPage() {
 
   const bulkDeleteMutation = useMutation({
     mutationFn: async (ids: string[]) => {
-      await Promise.all(ids.map(id => studentService.delete(id)));
+      const results = await Promise.allSettled(ids.map(id => studentService.delete(id)));
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed === ids.length) {
+        throw new Error(tr('Semua data gagal dihapus', 'Failed to delete all selected data'));
+      }
+      return { total: ids.length, failed };
     },
-    onSuccess: () => {
-      toast.success(locale === 'id' ? `${selectedRows.length} data berhasil dihapus` : `${selectedRows.length} data deleted successfully`);
+    onSuccess: ({ total, failed }) => {
+      if (failed > 0) {
+        toast.warning(tr(`Terhapus ${total - failed}, gagal ${failed}`, `Deleted ${total - failed}, failed ${failed}`));
+      } else {
+        toast.success(tr(`${total} data berhasil dihapus`, `${total} data deleted successfully`));
+      }
       queryClient.invalidateQueries({ queryKey: ['students'] });
       setSelectedRows([]);
       setIsBulkDeleting(false);
     },
     onError: (error: Error) => {
-      toast.error(error.message || (locale === 'id' ? 'Gagal menghapus data massal' : 'Failed to bulk delete data'));
+      toast.error(error.message || tr('Gagal menghapus data massal', 'Failed to bulk delete data'));
       setIsBulkDeleting(false);
     }
   });
-
-  const [isDeletingAll, setIsDeletingAll] = useState(false);
 
   const deleteAllMutation = useMutation({
     mutationFn: () => studentService.deleteAll(school!.id),
@@ -223,45 +390,53 @@ export function StudentListPage() {
     onSuccess: (res: { message?: string }) => {
       toast.success(res.message || 'Import berhasil');
       queryClient.invalidateQueries({ queryKey: ['students'] });
+      queryClient.invalidateQueries({ queryKey: ['classes-list'] });
       closeImportWizard();
     },
     onError: (error: Error) => {
-      toast.error(error.message || (locale === 'id' ? 'Gagal melakukan import' : 'Import failed'));
+      toast.error(error.message || tr('Gagal melakukan import', 'Import failed'));
       setWizardState('preview');
     }
   });
 
-  const students = studentsResponse?.data?.data || [];
-  const meta = studentsResponse?.data?.meta;
-  const totalPages = Math.ceil((meta?.total || 0) / pageSize) || 1;
-
+  // --- HANDLERS ---
   const handleSort = (key: string) => {
-    let direction: 'asc' | 'desc' = 'asc';
-    if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc';
-    }
+    const direction: 'asc' | 'desc' = sortConfig?.key === key && sortConfig.direction === 'asc' ? 'desc' : 'asc';
     setSortConfig({ key, direction });
   };
 
-  const toggleRow = (id: string) => setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
-  const toggleAll = () => setSelectedRows(selectedRows.length === students.length && students.length > 0 ? [] : students.map(s => s.id));
+  const toggleRow = (id: string) =>
+    setSelectedRows(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
 
-  // --- LOGIKA IMPORT WIZARD (SMARTDIFF UNTUK TK/PAUD) ---
+  const toggleAll = () =>
+    setSelectedRows(selectedRows.length === students.length && students.length > 0 ? [] : students.map(s => s.id));
+
+  const closeImportWizard = () => {
+    setWizardState('idle');
+    setParsedImportData([]);
+    setUnmatchedClasses([]);
+  };
+
+  // --- IMPORT: PARSE EXCEL (SmartDiff untuk TK/PAUD) ---
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!school) {
+      toast.error(tr('Data sekolah belum termuat.', 'School data is not loaded yet.'));
+      e.target.value = '';
+      return;
+    }
 
     setWizardState('parsing');
 
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
-        const bstr = evt.target?.result;
-        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const workbook = XLSX.read(evt.target?.result, { type: 'array' });
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];
         const rawData = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1 });
 
-        if (rawData.length === 0) throw new Error(locale === 'id' ? 'File kosong' : 'Empty file');
+        if (rawData.length === 0) throw new Error(tr('File kosong', 'Empty file'));
 
         let headerRowIndex = -1;
         for (let i = 0; i < Math.min(20, rawData.length); i++) {
@@ -271,7 +446,9 @@ export function StudentListPage() {
           }
         }
 
-        if (headerRowIndex === -1) throw new Error(locale === 'id' ? 'Format kolom tidak dikenali (Tidak ada Nama)' : 'Invalid column format (Missing Name)');
+        if (headerRowIndex === -1) {
+          throw new Error(tr('Format kolom tidak dikenali (Tidak ada Nama)', 'Invalid column format (Missing Name)'));
+        }
 
         const rowMain = (rawData[headerRowIndex] as string[]) || [];
         const rowSub = (rawData[headerRowIndex + 1] as string[]) || [];
@@ -293,27 +470,16 @@ export function StudentListPage() {
           }
         }
 
-        const data: ExcelRow[] = rawData.slice(headerRowIndex + 2).map((rowArray: any) => {
+        const data: ExcelRow[] = rawData.slice(headerRowIndex + 2).map((rowArray) => {
           const rowObject: ExcelRow = {};
           cleanHeaders.forEach((header, index) => {
-            if (header) {
-              const cellValue = (rowArray as unknown[])[index];
+            if (header && Array.isArray(rowArray)) {
+              const cellValue = rowArray[index];
               rowObject[header] = cellValue !== undefined && cellValue !== null ? String(cellValue) : '';
             }
           });
           return rowObject;
         });
-
-        const normalizeClassName = (name: string) => {
-          if (!name) return '';
-          return String(name).toLowerCase().replace(/kelas/g, '').replace(/rombel/g, '')
-            .replace(/saat ini/g, '').replace(/tingkat/g, '').replace(/-/g, '').replace(/\s+/g, '').trim();
-        };
-
-        const getValidNumber = (val: any, min: number = 0) => {
-          const num = Number(val);
-          return !isNaN(num) && num >= min ? num : null;
-        };
 
         const parsedPayloads: StudentImportPayload[] = [];
         let missingClassCount = 0;
@@ -322,17 +488,14 @@ export function StudentListPage() {
 
         const unfoundClassSet = new Set<string>();
         const seenNis = new Set<string>();
+        const seenNisn = new Set<string>();
 
-        const { data: existingStudents } = await supabase
-          .from('students')
-          .select('nisn')
-          .eq('schoolId', school?.id || '');
-        const existingNisns = new Set(existingStudents?.map(s => s.nisn) || []);
+        const existingNisns = await fetchExistingNisns(school.id);
 
         for (const row of data) {
-          if (!row['nama'] && !row['nipd'] && !row['nisn']) continue; // Lewati baris kosong
+          if (!row['nama'] && !row['nipd'] && !row['nisn']) continue; // baris kosong
 
-          // FIX: Di TK/PAUD, yang selalu ada biasanya hanya 'Nama'.
+          // Di TK/PAUD yang pasti ada hanya Nama
           if (!row['nama']) {
             missingMandatoryCount++;
             continue;
@@ -345,62 +508,62 @@ export function StudentListPage() {
             finalAddress = finalAddress ? `${finalAddress}, Dusun ${dusunRaw}` : `Dusun ${dusunRaw}`;
           }
 
-          // FIX: Anak TK sering belum punya NISN pusat. Kita generate dummy string agar aman di database
+          // Anak TK sering belum punya NISN, buat ID sementara agar aman di database
           let currentNisn = String(row['nisn'] || '').trim();
+          let isDummyNisn = false;
           if (!currentNisn || currentNisn.toLowerCase() === 'null') {
-            currentNisn = `TK-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
+            currentNisn = `TK-${shortId()}`;
+            isDummyNisn = true;
           }
 
-          if (currentNisn && existingNisns.has(currentNisn) && !currentNisn.startsWith('TK-')) {
-            duplicateCount++;
-            continue;
+          if (!isDummyNisn) {
+            // Sudah ada di database ATAU muncul dua kali di file Excel yang sama
+            if (existingNisns.has(currentNisn) || seenNisn.has(currentNisn)) {
+              duplicateCount++;
+              continue;
+            }
+            seenNisn.add(currentNisn);
           }
 
           let parsedNis = (row['nipd'] || row['nis']) ? String(row['nipd'] || row['nis']).trim() : null;
           if (parsedNis) {
-            if (seenNis.has(parsedNis)) {
-              parsedNis = null;
-            } else {
-              seenNis.add(parsedNis);
-            }
+            if (seenNis.has(parsedNis)) parsedNis = null;
+            else seenNis.add(parsedNis);
           }
 
           const rombelKey = Object.keys(row).find(k => k.includes('rombel') || k.includes('kelas'));
           const rawExcelRombel = rombelKey ? String(row[rombelKey]) : '';
           const normalizedExcelRombel = normalizeClassName(rawExcelRombel);
 
-          let matchedClass = null;
-          if (classesData && classesData.length > 0) {
-            matchedClass = classesData.find(c => {
-              const normalizedDbClass = normalizeClassName(c.name);
-              const dbGradeLevel = String(c.gradeLevel);
-              return normalizedDbClass === normalizedExcelRombel || dbGradeLevel === normalizedExcelRombel;
-            });
-          }
+          const matchedClass = (classesData || []).find(c =>
+            normalizeClassName(c.name) === normalizedExcelRombel || String(c.gradeLevel) === normalizedExcelRombel
+          );
 
           if (!matchedClass) {
             missingClassCount++;
-            unfoundClassSet.add(rawExcelRombel || '(Kosong/Empty)');
+            unfoundClassSet.add(rawExcelRombel.trim() || EMPTY_CLASS_LABEL);
           }
 
-          const toBool = (val: unknown) => String(val).toLowerCase().trim() === 'ya';
+          // NIK sementara untuk anak yang belum setor KK (constraint database)
+          const currentNik = row['nik'] ? String(row['nik']).trim() : `NONIK-${shortId()}`;
 
-          // FIX: Anak TK yang belum setor KK bisa dibuatkan NIK dummy untuk constraint Supabase
-          const currentNik = row['nik'] ? String(row['nik']).trim() : `NONIK-${crypto.randomUUID().split('-')[0].toUpperCase()}`;
+          const parents = [
+            buildParent(row, 'ayah', 'AYAH', school.id),
+            buildParent(row, 'ibu', 'IBU', school.id),
+            buildParent(row, 'wali', 'WALI', school.id),
+          ].filter((p): p is ImportParent => p !== null);
 
           parsedPayloads.push({
             id: crypto.randomUUID(),
-            schoolId: school?.id || '',
+            schoolId: school.id,
             nis: parsedNis,
             nisn: currentNisn,
             nik: currentNik,
             noKk: (row['no kk'] || row['nokk']) ? String(row['no kk'] || row['nokk']).trim() : '-',
             fullName: String(row['nama'] || ''),
-            gender: (String(row['jk'] || row['jenis kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P'),
+            gender: String(row['jk'] || row['jenis kelamin'] || '').toUpperCase().startsWith('L') ? 'L' : 'P',
             birthPlace: String(row['tempat lahir'] || '-'),
-            birthDate: !isNaN(Number(row['tanggal lahir']))
-              ? new Date(Math.round((Number(row['tanggal lahir']) - 25569) * 86400 * 1000)).toISOString()
-              : String(row['tanggal lahir'] || new Date().toISOString()),
+            birthDate: parseBirthDate(row['tanggal lahir']),
             religion: String(row['agama'] || 'ISLAM').toUpperCase(),
             address: finalAddress || '-',
             dusun: dusunRaw,
@@ -408,8 +571,8 @@ export function StudentListPage() {
             rw: String(row['rw'] || ''),
             kelurahan: String(row['kelurahan'] || ''),
             kecamatan: String(row['kecamatan'] || ''),
-            city: String(row['kabupaten/kota'] || row['kota'] || school?.city || '-'),
-            province: String(row['provinsi'] || school?.province || '-'),
+            city: String(row['kabupaten/kota'] || row['kota'] || school.city || '-'),
+            province: String(row['provinsi'] || school.province || '-'),
             postalCode: String(row['kode pos'] || ''),
             telepon: String(row['telepon'] || ''),
             phone: String(row['hp'] || ''),
@@ -427,7 +590,7 @@ export function StudentListPage() {
             sekolahAsal: String(row['sekolah asal'] || ''),
             kebutuhanKhusus: String(row['kebutuhan khusus'] || ''),
             classId: matchedClass?.id || null,
-            rawClassName: rawExcelRombel || 'Belum Ada Kelas',
+            rawClassName: rawExcelRombel.trim() || 'Belum Ada Kelas',
             entryDate: new Date().toISOString(),
             status: 'AKTIF',
             skhun: String(row['skhun'] || ''),
@@ -437,47 +600,10 @@ export function StudentListPage() {
             bank: String(row['bank'] || ''),
             noRekening: String(row['nomor rekening bank'] || ''),
             namaRekening: String(row['rekening atas nama'] || ''),
-            parents: [
-              ...(row['data ayah nama'] || row['nama ayah'] ? [{
-                id: crypto.randomUUID(),
-                relation: 'AYAH',
-                fullName: String(row['data ayah nama'] || row['nama ayah'] || ''),
-                birthYear: String(row['data ayah tahun lahir'] || row['tahun lahir ayah'] || ''),
-                nik: String(row['data ayah nik'] || row['nik ayah'] || ''),
-                occupation: String(row['data ayah pekerjaan'] || row['pekerjaan ayah'] || ''),
-                monthlyIncome: row['data ayah penghasilan'] || row['penghasilan ayah'] ? String(row['data ayah penghasilan'] || row['penghasilan ayah']) : null,
-                education: String(row['data ayah jenjang pendidikan'] || row['pendidikan ayah'] || ''),
-                isAlive: true,
-                schoolId: school?.id || ''
-              }] : []),
-              ...(row['data ibu nama'] || row['nama ibu'] ? [{
-                id: crypto.randomUUID(),
-                relation: 'IBU',
-                fullName: String(row['data ibu nama'] || row['nama ibu'] || ''),
-                birthYear: String(row['data ibu tahun lahir'] || row['tahun lahir ibu'] || ''),
-                nik: String(row['data ibu nik'] || row['nik ibu'] || ''),
-                occupation: String(row['data ibu pekerjaan'] || row['pekerjaan ibu'] || ''),
-                monthlyIncome: row['data ibu penghasilan'] || row['penghasilan ibu'] ? String(row['data ibu penghasilan'] || row['penghasilan ibu']) : null,
-                education: String(row['data ibu jenjang pendidikan'] || row['pendidikan ibu'] || ''),
-                isAlive: true,
-                schoolId: school?.id || ''
-              }] : []),
-              ...(row['data wali nama'] || row['nama wali'] ? [{
-                id: crypto.randomUUID(),
-                relation: 'WALI',
-                fullName: String(row['data wali nama'] || row['nama wali'] || ''),
-                birthYear: String(row['data wali tahun lahir'] || row['tahun lahir wali'] || ''),
-                nik: String(row['data wali nik'] || row['nik wali'] || ''),
-                occupation: String(row['data wali pekerjaan'] || row['pekerjaan wali'] || ''),
-                monthlyIncome: row['data wali penghasilan'] || row['penghasilan wali'] ? String(row['data wali penghasilan'] || row['penghasilan wali']) : null,
-                education: String(row['data wali jenjang pendidikan'] || row['pendidikan wali'] || ''),
-                isAlive: true,
-                schoolId: school?.id || ''
-              }] : [])
-            ],
+            parents,
             economic: {
               id: crypto.randomUUID(),
-              schoolId: school?.id || '',
+              schoolId: school.id,
               hasKip: toBool(row['penerima kip']),
               kipNumber: String(row['nomor kip'] || ''),
               namaKip: String(row['nama di kip'] || ''),
@@ -485,13 +611,7 @@ export function StudentListPage() {
               alasanLayakPip: String(row['alasan layak pip'] || ''),
               hasKks: toBool(row['penerima kps'] || row['penerima kks']),
               kksNumber: String(row['no. kps'] || row['nomor kks'] || ''),
-              desil: (() => {
-                const raw = row['desil'] || row['desil p3ke'] || row['desil dtks'] || row['desil (p3ke/dtks)'];
-                if (!raw) return null;
-                const match = String(raw).replace(/\D/g, '');
-                const num = parseInt(match, 10);
-                return num >= 1 && num <= 10 ? num : null;
-              })(),
+              desil: parseDesil(row),
             }
           });
         }
@@ -508,143 +628,113 @@ export function StudentListPage() {
         setWizardState('preview');
 
       } catch (error: unknown) {
-        const errMsg = error instanceof Error ? error.message : 'Unknown error occurred';
-        toast.error(errMsg || (locale === 'id' ? 'Gagal membaca file Excel' : 'Failed to parse Excel file'));
+        const errMsg = error instanceof Error ? error.message : '';
+        toast.error(errMsg || tr('Gagal membaca file Excel', 'Failed to parse Excel file'));
         setWizardState('idle');
       } finally {
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
-    reader.readAsBinaryString(file);
+    reader.onerror = () => {
+      toast.error(tr('Gagal membaca file', 'Failed to read file'));
+      setWizardState('idle');
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    };
+    reader.readAsArrayBuffer(file);
   };
 
+  // --- IMPORT: EKSEKUSI ---
   const executeImport = async () => {
+    if (!school) return;
+
     if (parsedImportData.length === 0) {
-      toast.error(locale === 'id' ? 'Tidak ada data baru yang valid.' : 'No valid new data.');
+      toast.error(tr('Tidak ada data baru yang valid.', 'No valid new data.'));
       return;
     }
 
     if (unmatchedClasses.length > 0 && !activeYear?.id) {
-      toast.error(locale === 'id' ? 'Tahun Ajaran Aktif tidak ditemukan! Silakan atur di menu Tahun Ajaran agar sistem bisa membuat kelas otomatis.' : 'Active Academic Year not found! Please set it first.');
+      toast.error(tr(
+        'Tahun Ajaran Aktif tidak ditemukan! Silakan atur di menu Tahun Ajaran agar sistem bisa membuat kelas otomatis.',
+        'Active Academic Year not found! Please set it first.'
+      ));
       return;
     }
 
     setWizardState('importing');
 
     try {
-      let currentClasses = classesData || [];
+      // Nama kelas (huruf kecil) -> id, khusus kelas yang baru dibuat/dipastikan ada di tahun ajaran aktif
+      const createdClassMap = new Map<string, string>();
+      let currentClasses: ClassRow[] = classesData || [];
 
-      // PROSES 1: Buat kelas baru jika ada yang belum terdaftar
+      // PROSES 1: buat kelas yang belum terdaftar
       if (unmatchedClasses.length > 0 && activeYear?.id) {
-        const uniqueClassNames = Array.from(new Set(unmatchedClasses));
-
-        const classesToCreate = uniqueClassNames.map(className => {
-          let gradeLevel = 0; // Default set ke Tingkat 0 (PAUD/Non-Formal/Nama Unik)
-          const upper = className.toUpperCase();
-
-          if (upper.includes('TK B') || upper.includes('TKB') || upper.includes('BESAR')) {
-            gradeLevel = 2;
-          } else if (upper.includes('TK A') || upper.includes('TKA') || upper.includes('KECIL')) {
-            gradeLevel = 1;
-          }
-          else if (upper.includes('XII') || upper.includes('12')) gradeLevel = 12;
-          else if (upper.includes('XI') || upper.includes('11')) gradeLevel = 11;
-          else if (upper.includes('X') || upper.includes('10')) gradeLevel = 10;
-          else if (upper.includes('IX') || upper.includes('9')) gradeLevel = 9;
-          else if (upper.includes('VIII') || upper.includes('8')) gradeLevel = 8;
-          else if (upper.includes('VII') || upper.includes('7')) gradeLevel = 7;
-          else if (upper.includes('VI') || upper.includes('6')) gradeLevel = 6;
-          else if (upper.includes('V') || upper.includes('5')) gradeLevel = 5;
-          else if (upper.includes('IV') || upper.includes('4')) gradeLevel = 4;
-          else if (upper.includes('III') || upper.includes('3')) gradeLevel = 3;
-          else if (upper.includes('II') || upper.includes('2')) gradeLevel = 2;
-          else if (upper.includes('I') || upper.includes('1')) gradeLevel = 1;
-
-          return {
-            schoolId: school!.id,
+        const classesToCreate = Array.from(new Set(unmatchedClasses))
+          .filter(name => name !== EMPTY_CLASS_LABEL)
+          .map(className => ({
+            schoolId: school.id,
             academicYearId: activeYear.id,
             name: className,
-            gradeLevel: gradeLevel,
+            gradeLevel: guessGradeLevel(className),
             capacity: 29
-          };
-        });
+          }));
 
-        const { data: newClasses, error: classError } = await supabase
-          .from('classes')
-          .upsert(classesToCreate, { onConflict: 'schoolId, academicYearId, name' })
-          .select('id, name, gradeLevel');
+        if (classesToCreate.length > 0) {
+          const { data: newClasses, error: classError } = await supabase
+            .from('classes')
+            .upsert(classesToCreate, { onConflict: 'schoolId, academicYearId, name' })
+            .select('id, name, gradeLevel');
 
-        if (classError) {
-          console.error("Error creating classes:", classError);
-          throw new Error("Gagal membuat kelas otomatis di database.");
+          if (classError) {
+            console.error('Error creating classes:', classError);
+            throw new Error(tr('Gagal membuat kelas otomatis di database.', 'Failed to auto-create classes.'));
+          }
+
+          (newClasses || []).forEach(c => createdClassMap.set(c.name.toLowerCase().trim(), c.id));
+
+          const knownIds = new Set(currentClasses.map(c => c.id));
+          currentClasses = [...currentClasses, ...(newClasses || []).filter(c => !knownIds.has(c.id))];
+          queryClient.setQueryData(['classes-list'], currentClasses);
         }
-
-        // AMAN: Refresh data kelas dengan mengambil ulang langsung dari Supabase
-        // untuk memastikan kita mendapat ID yang 100% sah dan sudah masuk DB.
-        const { data: refreshedClasses, error: refreshError } = await supabase
-          .from('classes')
-          .select('id, name, gradeLevel')
-          .eq('schoolId', school!.id);
-
-        if (refreshError) throw refreshError;
-
-        currentClasses = refreshedClasses || [];
-
-        // Perbarui cache React Query agar tampilan tabel langsung update nanti
-        queryClient.setQueryData(['classes-list'], currentClasses);
       }
 
-      // PROSES 2: Pasangkan data siswa dengan ID Kelas yang sudah dipastikan ada
-      const finalPayload = parsedImportData.map(payload => {
+      // PROSES 2: pasangkan siswa dengan ID kelas yang sudah pasti ada
+      const finalPayload: StudentImportPayload[] = parsedImportData.map(payload => {
         let updatedClassId = payload.classId;
 
         if (!updatedClassId && payload.rawClassName) {
-          // Cari ID Kelas berdasarkan nama (menggunakan data kelas yang sudah di-refresh)
-          const matched = currentClasses.find(c =>
-            c.name.toLowerCase().trim() === payload.rawClassName?.toLowerCase().trim()
-          );
-          if (matched) {
-            updatedClassId = matched.id;
-          }
+          const key = payload.rawClassName.toLowerCase().trim();
+          updatedClassId =
+            createdClassMap.get(key) ||
+            currentClasses.find(c => c.name.toLowerCase().trim() === key)?.id ||
+            null;
         }
 
-        const { rawClassName, ...cleanPayload } = payload;
-
-        // Jika kelas masih tidak ketemu (null), kita terpaksa kosongkan classId (null)
-        // daripada terjadi foreign key constraint error.
-        return {
-          ...cleanPayload,
-          classId: updatedClassId || null
-        };
+        // Kalau tetap tidak ketemu, kosongkan classId daripada kena foreign key error
+        const { rawClassName: _raw, ...cleanPayload } = payload;
+        return { ...cleanPayload, classId: updatedClassId || null };
       });
 
-      // PROSES 3: Eksekusi Bulk Import Siswa
-      importMutation.mutate(finalPayload as any);
+      // PROSES 3: bulk import
+      importMutation.mutate(finalPayload);
 
-    } catch (error: any) {
-      toast.error(error.message || (locale === 'id' ? 'Gagal memproses data import.' : 'Failed to process import data.'));
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : '';
+      toast.error(errMsg || tr('Gagal memproses data import.', 'Failed to process import data.'));
       setWizardState('preview');
     }
   };
 
-  const closeImportWizard = () => {
-    setWizardState('idle');
-    setParsedImportData([]);
-    setUnmatchedClasses([]);
-  };
-
-  const triggerImport = () => fileInputRef.current?.click();
-
+  // --- EXPORT ---
   const handleExport = async () => {
+    setIsExporting(true);
+    const toastId = toast.loading(tr('Menyiapkan file Excel...', 'Preparing Excel file...'));
     try {
-      setIsExporting(true);
-      const toastId = toast.loading(locale === 'id' ? 'Menyiapkan file Excel...' : 'Preparing Excel file...');
-
       const response = await studentService.exportAll();
       let dataToExport = response.data || [];
 
       if (dataToExport.length === 0) {
-        throw new Error(locale === 'id' ? 'Tidak ada data untuk diexport' : 'No data to export');
+        throw new Error(tr('Tidak ada data untuk diexport', 'No data to export'));
       }
 
       if (selectedRows.length > 0) {
@@ -656,16 +746,16 @@ export function StudentListPage() {
         'NISN': s.nisn,
         'NIS': s.nis || '-',
         'NIK': s.nik || '-',
-        [locale === 'id' ? 'Nama Lengkap' : 'Full Name']: s.fullName,
-        [locale === 'id' ? 'L/P' : 'Gender']: s.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female'),
-        [locale === 'id' ? 'Kelas' : 'Class']: s.className,
-        [locale === 'id' ? 'Tempat Lahir' : 'Birth Place']: s.birthPlace || '-',
-        [locale === 'id' ? 'Tanggal Lahir' : 'Birth Date']: s.birthDate ? new Date(s.birthDate).toLocaleDateString('id-ID') : '-',
-        [locale === 'id' ? 'Alamat' : 'Address']: s.address || '-',
-        [locale === 'id' ? 'Desa/Kelurahan' : 'Village']: s.kelurahan || '-',
-        [locale === 'id' ? 'Kecamatan' : 'District']: s.kecamatan || '-',
-        [locale === 'id' ? 'Kab/Kota' : 'City']: s.city || '-',
-        [locale === 'id' ? 'No. HP/Telepon' : 'Phone Number']: s.phone || '-',
+        [tr('Nama Lengkap', 'Full Name')]: s.fullName,
+        [tr('L/P', 'Gender')]: s.gender === 'L' ? tr('Laki-laki', 'Male') : tr('Perempuan', 'Female'),
+        [tr('Kelas', 'Class')]: s.className,
+        [tr('Tempat Lahir', 'Birth Place')]: s.birthPlace || '-',
+        [tr('Tanggal Lahir', 'Birth Date')]: s.birthDate ? new Date(s.birthDate).toLocaleDateString('id-ID') : '-',
+        [tr('Alamat', 'Address')]: s.address || '-',
+        [tr('Desa/Kelurahan', 'Village')]: s.kelurahan || '-',
+        [tr('Kecamatan', 'District')]: s.kecamatan || '-',
+        [tr('Kab/Kota', 'City')]: s.city || '-',
+        [tr('No. HP/Telepon', 'Phone Number')]: s.phone || '-',
         'Status': s.status
       }));
 
@@ -674,11 +764,11 @@ export function StudentListPage() {
 
       worksheet['!cols'] = [
         { wch: 5 }, { wch: 15 }, { wch: 15 }, { wch: 20 }, { wch: 35 },
-        { wch: 10 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 40 },
+        { wch: 12 }, { wch: 15 }, { wch: 20 }, { wch: 15 }, { wch: 40 },
         { wch: 20 }, { wch: 20 }, { wch: 20 }, { wch: 15 }, { wch: 15 }
       ];
 
-      XLSX.utils.book_append_sheet(workbook, worksheet, "Data_Siswa");
+      XLSX.utils.book_append_sheet(workbook, worksheet, 'Data_Siswa');
 
       const dateStr = new Date().toISOString().split('T')[0];
       const fileName = selectedRows.length > 0
@@ -686,30 +776,23 @@ export function StudentListPage() {
         : `Data_Siswa_Keseluruhan_${dateStr}.xlsx`;
 
       XLSX.writeFile(workbook, fileName);
-
-      toast.success(locale === 'id' ? 'Export berhasil!' : 'Export successful!', { id: toastId });
-    } catch (error: any) {
-      toast.error(error.message || (locale === 'id' ? 'Gagal melakukan export data' : 'Export failed'));
+      toast.success(tr('Export berhasil!', 'Export successful!'), { id: toastId });
+    } catch (error: unknown) {
+      const errMsg = error instanceof Error ? error.message : '';
+      toast.error(errMsg || tr('Gagal melakukan export data', 'Export failed'), { id: toastId });
     } finally {
       setIsExporting(false);
     }
   };
 
-  const getStatusConfig = (status: string) => {
-    const config: Record<string, { id: string; en: string; color: string }> = {
-      AKTIF: { id: 'Aktif', en: 'Active', color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20' },
-      MUTASI_KELUAR: { id: 'Mutasi', en: 'Transferred', color: 'bg-amber-500/10 text-amber-600 border-amber-500/20' },
-      LULUS: { id: 'Lulus', en: 'Graduated', color: 'bg-blue-500/10 text-blue-600 border-blue-500/20' },
-      DO: { id: 'DO', en: 'Dropped Out', color: 'bg-red-500/10 text-red-600 border-red-500/20' },
-      CUTI: { id: 'Cuti', en: 'On Leave', color: 'bg-gray-500/10 text-gray-600 border-gray-500/20' },
-    };
-    return config[status] || { id: status, en: status, color: 'bg-muted text-muted-foreground border-border' };
-  };
+  const sortedClasses = [...(classesData || [])].sort((a, b) => a.name.localeCompare(b.name));
+  const total = meta?.total || 0;
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
       <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".xlsx, .xls, .csv" className="hidden" />
 
+      {/* --- IMPORT WIZARD MODAL --- */}
       <AnimatePresence>
         {wizardState !== 'idle' && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -719,7 +802,7 @@ export function StudentListPage() {
                   <div className="p-2 bg-blue-500/10 text-blue-600 rounded-lg"><FileSpreadsheet size={24} /></div>
                   <div>
                     <h3 className="text-lg font-bold text-foreground">Import Wizard Dapodik</h3>
-                    <p className="text-sm text-muted-foreground">{locale === 'id' ? 'Validasi dan pencocokan data otomatis' : 'Automatic data validation and matching'}</p>
+                    <p className="text-sm text-muted-foreground">{tr('Validasi dan pencocokan data otomatis', 'Automatic data validation and matching')}</p>
                   </div>
                 </div>
               </div>
@@ -728,16 +811,16 @@ export function StudentListPage() {
                 {wizardState === 'parsing' && (
                   <div className="flex flex-col items-center justify-center py-8 text-center">
                     <Loader2 className="w-10 h-10 animate-spin text-blue-600 mb-4" />
-                    <p className="font-medium text-foreground">{locale === 'id' ? 'Menganalisa dan Mencari Data Ganda...' : 'Analyzing and Finding Duplicates...'}</p>
-                    <p className="text-sm text-muted-foreground">{locale === 'id' ? 'Ini membutuhkan waktu beberapa detik.' : 'This will take a few seconds.'}</p>
+                    <p className="font-medium text-foreground">{tr('Menganalisa dan Mencari Data Ganda...', 'Analyzing and Finding Duplicates...')}</p>
+                    <p className="text-sm text-muted-foreground">{tr('Ini membutuhkan waktu beberapa detik.', 'This will take a few seconds.')}</p>
                   </div>
                 )}
 
                 {wizardState === 'importing' && (
                   <div className="flex flex-col items-center justify-center py-8 text-center">
                     <Loader2 className="w-10 h-10 animate-spin text-emerald-600 mb-4" />
-                    <p className="font-medium text-foreground">{locale === 'id' ? 'Sedang menyimpan data ke Database...' : 'Saving data to database...'}</p>
-                    <p className="text-sm text-muted-foreground">{locale === 'id' ? 'Tolong jangan tutup halaman ini.' : 'Please do not close this page.'}</p>
+                    <p className="font-medium text-foreground">{tr('Sedang menyimpan data ke Database...', 'Saving data to database...')}</p>
+                    <p className="text-sm text-muted-foreground">{tr('Tolong jangan tutup halaman ini.', 'Please do not close this page.')}</p>
                   </div>
                 )}
 
@@ -746,23 +829,26 @@ export function StudentListPage() {
                     <div className="grid grid-cols-2 gap-4">
                       <div className="bg-muted/30 border border-border p-4 rounded-xl flex flex-col items-center justify-center text-center">
                         <span className="text-3xl font-black text-foreground">{importStats.total}</span>
-                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-1">{locale === 'id' ? 'Total Excel' : 'Excel Total'}</span>
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-1">{tr('Total Excel', 'Excel Total')}</span>
                       </div>
                       <div className="bg-emerald-500/10 border border-emerald-500/20 p-4 rounded-xl flex flex-col items-center justify-center text-center">
                         <span className="text-3xl font-black text-emerald-600">{importStats.valid}</span>
-                        <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400 uppercase tracking-wider mt-1">{locale === 'id' ? 'Data Baru' : 'New Data'}</span>
+                        <span className="text-xs font-medium text-emerald-700 dark:text-emerald-400 uppercase tracking-wider mt-1">{tr('Data Baru', 'New Data')}</span>
                       </div>
                     </div>
 
                     <div className="space-y-3 mt-6">
-                      <h4 className="text-sm font-semibold text-foreground">{locale === 'id' ? 'Hasil Validasi:' : 'Validation Result:'}</h4>
+                      <h4 className="text-sm font-semibold text-foreground">{tr('Hasil Validasi:', 'Validation Result:')}</h4>
 
                       {importStats.duplicates > 0 && (
                         <div className="flex items-start gap-3 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-blue-700 dark:text-blue-400">
                           <CheckSquare className="w-5 h-5 shrink-0 mt-0.5" />
                           <div>
-                            <p className="text-sm font-semibold">{locale === 'id' ? `Data Sudah Ada (${importStats.duplicates} Siswa)` : `Data Exists (${importStats.duplicates} Students)`}</p>
-                            <p className="text-xs mt-1">{locale === 'id' ? 'Siswa ini sudah ada di dalam database (NISN sama). Sistem akan otomatis melewati data ini.' : 'These students are already in the database (same NISN). The system will skip them.'}</p>
+                            <p className="text-sm font-semibold">{tr(`Data Sudah Ada (${importStats.duplicates} Siswa)`, `Data Exists (${importStats.duplicates} Students)`)}</p>
+                            <p className="text-xs mt-1">{tr(
+                              'Siswa ini sudah ada di database atau muncul ganda di file (NISN sama). Sistem akan otomatis melewati data ini.',
+                              'These students already exist in the database or appear twice in the file (same NISN). The system will skip them.'
+                            )}</p>
                           </div>
                         </div>
                       )}
@@ -771,8 +857,8 @@ export function StudentListPage() {
                         <div className="flex items-start gap-3 p-3 rounded-lg bg-red-500/10 border border-red-500/20 text-red-700 dark:text-red-400">
                           <XCircle className="w-5 h-5 shrink-0 mt-0.5" />
                           <div>
-                            <p className="text-sm font-semibold">{locale === 'id' ? `Data Tidak Lengkap (${importStats.missingMandatory} Siswa)` : `Incomplete Data (${importStats.missingMandatory} Students)`}</p>
-                            <p className="text-xs mt-1">{locale === 'id' ? 'Siswa ini tidak memiliki Nama (kolom kosong) sehingga akan dilewati oleh sistem.' : 'Missing Name column, so they will be skipped.'}</p>
+                            <p className="text-sm font-semibold">{tr(`Data Tidak Lengkap (${importStats.missingMandatory} Siswa)`, `Incomplete Data (${importStats.missingMandatory} Students)`)}</p>
+                            <p className="text-xs mt-1">{tr('Siswa ini tidak memiliki Nama (kolom kosong) sehingga akan dilewati oleh sistem.', 'Missing Name column, so they will be skipped.')}</p>
                           </div>
                         </div>
                       )}
@@ -781,15 +867,16 @@ export function StudentListPage() {
                         <div className="flex items-start gap-3 p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-400">
                           <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                           <div className="w-full">
-                            <p className="text-sm font-semibold">{locale === 'id' ? `Kelas Baru Ditemukan (${importStats.missingClass} Siswa)` : `New Classes Found (${importStats.missingClass} Students)`}</p>
+                            <p className="text-sm font-semibold">{tr(`Kelas Baru Ditemukan (${importStats.missingClass} Siswa)`, `New Classes Found (${importStats.missingClass} Students)`)}</p>
                             <div className="flex flex-wrap gap-1.5 mt-2 mb-2">
                               {unmatchedClasses.map((className, idx) => (
-                                <span key={idx} className="bg-indigo-500/20 px-2 py-1 rounded text-xs font-bold font-mono">
-                                  {className}
-                                </span>
+                                <span key={idx} className="bg-indigo-500/20 px-2 py-1 rounded text-xs font-bold font-mono">{className}</span>
                               ))}
                             </div>
-                            <p className="text-xs italic">{locale === 'id' ? '*Sistem akan otomatis membuat kelas-kelas ini sebelum menyimpan data siswa.' : '*The system will automatically create these classes before importing.'}</p>
+                            <p className="text-xs italic">{tr(
+                              '*Sistem akan otomatis membuat kelas-kelas ini sebelum menyimpan data siswa.',
+                              '*The system will automatically create these classes before importing.'
+                            )}</p>
                           </div>
                         </div>
                       )}
@@ -797,7 +884,7 @@ export function StudentListPage() {
                       {(importStats.missingMandatory === 0 && importStats.missingClass === 0 && importStats.duplicates === 0) && (
                         <div className="flex items-center gap-2 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400">
                           <CheckCircle2 className="w-5 h-5" />
-                          <p className="text-sm font-medium">{locale === 'id' ? 'Semua data siap dimasukkan dengan sempurna!' : 'All data is ready for import!'}</p>
+                          <p className="text-sm font-medium">{tr('Semua data siap dimasukkan dengan sempurna!', 'All data is ready for import!')}</p>
                         </div>
                       )}
                     </div>
@@ -807,9 +894,9 @@ export function StudentListPage() {
 
               {wizardState === 'preview' && (
                 <div className="p-4 border-t border-border bg-muted/20 flex justify-end gap-3">
-                  <Button variant="outline" onClick={closeImportWizard} disabled={importMutation.isPending}>{locale === 'id' ? 'Batal' : 'Cancel'}</Button>
+                  <Button variant="outline" onClick={closeImportWizard} disabled={importMutation.isPending}>{tr('Batal', 'Cancel')}</Button>
                   <Button onClick={executeImport} disabled={importMutation.isPending || importStats.valid === 0} className="bg-blue-600 hover:bg-blue-700 text-white">
-                    {locale === 'id' ? `Mulai Import (${importStats.valid} Data Baru)` : `Start Import (${importStats.valid} New Data)`}
+                    {tr(`Mulai Import (${importStats.valid} Data Baru)`, `Start Import (${importStats.valid} New Data)`)}
                   </Button>
                 </div>
               )}
@@ -818,23 +905,24 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
+      {/* --- DELETE CONFIRMATION --- */}
       <AnimatePresence>
         {(studentToDelete || isBulkDeleting) && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
             <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden">
               <div className="p-6">
                 <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
-                <h3 className="text-xl font-bold text-foreground mb-2">{locale === 'id' ? 'Hapus Data Siswa?' : 'Delete Student Data?'}</h3>
+                <h3 className="text-xl font-bold text-foreground mb-2">{tr('Hapus Data Siswa?', 'Delete Student Data?')}</h3>
                 <p className="text-muted-foreground text-sm">
                   {isBulkDeleting
-                    ? (locale === 'id' ? `Apakah Anda yakin ingin menghapus ${selectedRows.length} siswa yang dipilih?` : `Are you sure you want to delete ${selectedRows.length} selected students?`)
-                    : (locale === 'id' ? `Apakah Anda yakin ingin menghapus siswa bernama "${studentToDelete?.name}"?` : `Are you sure you want to delete "${studentToDelete?.name}"?`)}
+                    ? tr(`Apakah Anda yakin ingin menghapus ${selectedRows.length} siswa yang dipilih?`, `Are you sure you want to delete ${selectedRows.length} selected students?`)
+                    : tr(`Apakah Anda yakin ingin menghapus siswa bernama "${studentToDelete?.name}"?`, `Are you sure you want to delete "${studentToDelete?.name}"?`)}
                 </p>
               </div>
               <div className="bg-muted/50 p-4 flex justify-end gap-3 border-t border-border/50">
-                <Button variant="outline" onClick={() => { setStudentToDelete(null); setIsBulkDeleting(false); }} disabled={deleteMutation.isPending || bulkDeleteMutation.isPending}>{locale === 'id' ? 'Batal' : 'Cancel'}</Button>
+                <Button variant="outline" onClick={() => { setStudentToDelete(null); setIsBulkDeleting(false); }} disabled={deleteMutation.isPending || bulkDeleteMutation.isPending}>{tr('Batal', 'Cancel')}</Button>
                 <Button variant="destructive" onClick={() => isBulkDeleting ? bulkDeleteMutation.mutate(selectedRows) : deleteMutation.mutate(studentToDelete!.id)} disabled={deleteMutation.isPending || bulkDeleteMutation.isPending}>
-                  {(deleteMutation.isPending || bulkDeleteMutation.isPending) ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} {locale === 'id' ? 'Ya, Hapus' : 'Yes, Delete'}
+                  {(deleteMutation.isPending || bulkDeleteMutation.isPending) ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} {tr('Ya, Hapus', 'Yes, Delete')}
                 </Button>
               </div>
             </motion.div>
@@ -842,24 +930,26 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
+      {/* --- WIPE ALL CONFIRMATION --- */}
       <AnimatePresence>
         {isDeletingAll && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden">
               <div className="p-6">
                 <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
-                <h3 className="text-xl font-bold text-foreground mb-2">{locale === 'id' ? 'KOSONGKAN SEMUA DATA?' : 'WIPE ALL DATA?'}</h3>
+                <h3 className="text-xl font-bold text-foreground mb-2">{tr('KOSONGKAN SEMUA DATA?', 'WIPE ALL DATA?')}</h3>
                 <p className="text-muted-foreground text-sm">
-                  {locale === 'id'
-                    ? `Tindakan ini sangat berbahaya! Anda akan menghapus KESELURUHAN DATA SISWA (${meta?.total || 0} Siswa) beserta data Orang Tua dan Kesejahteraannya dari sekolah ini. Tindakan ini tidak dapat dibatalkan.`
-                    : `Dangerous action! This will wipe ALL STUDENT DATA (${meta?.total || 0} Students) for this school. It cannot be undone.`}
+                  {tr(
+                    `Tindakan ini sangat berbahaya! Anda akan menghapus KESELURUHAN DATA SISWA (${total} Siswa) beserta data Orang Tua dan Kesejahteraannya dari sekolah ini. Tindakan ini tidak dapat dibatalkan.`,
+                    `Dangerous action! This will wipe ALL STUDENT DATA (${total} Students) for this school. It cannot be undone.`
+                  )}
                 </p>
               </div>
               <div className="bg-muted/50 p-4 flex justify-end gap-3 border-t border-border/50">
-                <Button variant="outline" onClick={() => setIsDeletingAll(false)} disabled={deleteAllMutation.isPending}>{locale === 'id' ? 'Batal' : 'Cancel'}</Button>
+                <Button variant="outline" onClick={() => setIsDeletingAll(false)} disabled={deleteAllMutation.isPending}>{tr('Batal', 'Cancel')}</Button>
                 <Button variant="destructive" onClick={() => deleteAllMutation.mutate()} disabled={deleteAllMutation.isPending}>
                   {deleteAllMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-                  {locale === 'id' ? 'Ya, Hapus Semuanya!' : 'Yes, Wipe Everything!'}
+                  {tr('Ya, Hapus Semuanya!', 'Yes, Wipe Everything!')}
                 </Button>
               </div>
             </motion.div>
@@ -867,14 +957,14 @@ export function StudentListPage() {
         )}
       </AnimatePresence>
 
+      {/* --- PAGE HEADER --- */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-foreground">{t('students.title')}</h1>
-          <p className="text-sm text-muted-foreground mt-1">{locale === 'id' ? `Total ${meta?.total || 0} siswa terdaftar` : `${meta?.total || 0} students registered`}</p>
+          <p className="text-sm text-muted-foreground mt-1">{tr(`Total ${total} siswa terdaftar`, `${total} students registered`)}</p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-
           {canManageData && (
             selectedRows.length > 0 ? (
               <motion.button
@@ -885,9 +975,9 @@ export function StudentListPage() {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-bold hover:bg-red-500/20 transition-colors shadow-sm"
               >
                 <Trash2 size={16} />
-                <span className="hidden sm:inline">{locale === 'id' ? `Hapus Terpilih (${selectedRows.length})` : `Delete Selected (${selectedRows.length})`}</span>
+                <span className="hidden sm:inline">{tr(`Hapus Terpilih (${selectedRows.length})`, `Delete Selected (${selectedRows.length})`)}</span>
               </motion.button>
-            ) : (meta?.total || 0) > 0 ? (
+            ) : total > 0 ? (
               <motion.button
                 key="delete-all"
                 initial={{ opacity: 0, scale: 0.9 }}
@@ -896,29 +986,30 @@ export function StudentListPage() {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm"
               >
                 <Trash2 size={16} />
-                <span className="hidden sm:inline">{locale === 'id' ? 'Kosongkan Data' : 'Wipe Data'}</span>
+                <span className="hidden sm:inline">{tr('Kosongkan Data', 'Wipe Data')}</span>
               </motion.button>
             ) : null
           )}
 
           {canManageData && (
-            <button onClick={triggerImport} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
+            <button onClick={() => fileInputRef.current?.click()} disabled={wizardState !== 'idle'} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
               <Upload size={16} /> <span className="hidden sm:inline">Import Verval PD</span>
             </button>
           )}
 
           <button onClick={handleExport} disabled={isExporting} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50">
-            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} <span className="hidden sm:inline">Export Data</span>
+            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />} <span className="hidden sm:inline">{tr('Ekspor Data', 'Export Data')}</span>
           </button>
 
           {canManageData && (
             <Link to="/students/new" className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md">
-              <Plus size={16} /> <span>{locale === 'id' ? 'Tambah Siswa' : 'Add Student'}</span>
+              <Plus size={16} /> <span>{tr('Tambah Siswa', 'Add Student')}</span>
             </Link>
           )}
         </div>
       </div>
 
+      {/* --- FILTERS --- */}
       <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm">
         <div className="flex flex-col sm:flex-row gap-3">
           <div className="relative flex-1">
@@ -936,20 +1027,13 @@ export function StudentListPage() {
             <Filter size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
             <select
               value={selectedClass}
-              onChange={(e) => {
-                setSelectedClass(e.target.value);
-                setCurrentPage(1);
-              }}
+              onChange={(e) => { setSelectedClass(e.target.value); setCurrentPage(1); }}
               className="w-full pl-9 pr-8 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all appearance-none cursor-pointer"
             >
-              <option value="all">{locale === 'id' ? 'Semua Kelas' : 'All Classes'}</option>
-              {classesData
-                ?.sort((a, b) => a.name.localeCompare(b.name))
-                .map(cls => (
-                  <option key={cls.id} value={cls.id}>
-                    {cls.name}
-                  </option>
-                ))}
+              <option value="all">{tr('Semua Kelas', 'All Classes')}</option>
+              {sortedClasses.map(cls => (
+                <option key={cls.id} value={cls.id}>{cls.name}</option>
+              ))}
             </select>
             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground">
               <ChevronDown size={16} />
@@ -958,76 +1042,43 @@ export function StudentListPage() {
         </div>
       </div>
 
+      {/* --- TABLE --- */}
       <div className="bg-card border border-border/50 rounded-xl overflow-hidden shadow-sm flex flex-col">
         <div className="overflow-x-auto flex-1">
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="border-b border-border/50 bg-muted/30">
                 {canManageData && (
-                  <th className="p-4 w-12"><input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" /></th>
+                  <th className="p-4 w-12">
+                    <input type="checkbox" checked={selectedRows.length === students.length && students.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border accent-emerald-600" />
+                  </th>
                 )}
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider w-16">No</th>
-                <th
-                  className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
-                  onClick={() => handleSort('nisn')}
-                >
-                  <div className="flex items-center gap-1">
-                    NISN / NIPD
-                    {sortConfig?.key === 'nisn' ? (
-                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
-                    ) : (
-                      <ArrowUpDown size={14} className="opacity-40" />
-                    )}
-                  </div>
-                </th>
-                <th
-                  className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
-                  onClick={() => handleSort('fullName')}
-                >
-                  <div className="flex items-center gap-1">
-                    {locale === 'id' ? 'Siswa' : 'Student'}
-                    {sortConfig?.key === 'fullName' ? (
-                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
-                    ) : (
-                      <ArrowUpDown size={14} className="opacity-40" />
-                    )}
-                  </div>
-                </th>
-                <th
-                  className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider cursor-pointer hover:bg-muted/50 transition-colors select-none"
-                  onClick={() => handleSort('className')}
-                >
-                  <div className="flex items-center gap-1">
-                    {locale === 'id' ? 'Kelas' : 'Class'}
-                    {sortConfig?.key === 'className' ? (
-                      sortConfig.direction === 'asc' ? <ArrowUp size={14} className="text-emerald-600" /> : <ArrowDown size={14} className="text-emerald-600" />
-                    ) : (
-                      <ArrowUpDown size={14} className="opacity-40" />
-                    )}
-                  </div>
-                </th>
+                <SortableHeader columnKey="nisn" label="NISN / NIPD" sortConfig={sortConfig} onSort={handleSort} />
+                <SortableHeader columnKey="fullName" label={tr('Siswa', 'Student')} sortConfig={sortConfig} onSort={handleSort} />
+                <SortableHeader columnKey="className" label={tr('Kelas', 'Class')} sortConfig={sortConfig} onSort={handleSort} />
                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Status</th>
-                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">{locale === 'id' ? 'Aksi' : 'Action'}</th>
+                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase tracking-wider text-right">{tr('Aksi', 'Action')}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
-                <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">{locale === 'id' ? 'Memuat...' : 'Loading...'}</p></td></tr>
+                <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" /><p className="text-muted-foreground">{tr('Memuat...', 'Loading...')}</p></td></tr>
               ) : students.length === 0 ? (
-                <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center text-muted-foreground">{locale === 'id' ? 'Tidak ada data.' : 'No data available.'}</td></tr>
+                <tr><td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center text-muted-foreground">{tr('Tidak ada data.', 'No data available.')}</td></tr>
               ) : (
                 students.map((student, idx) => {
-                  const statusConf = getStatusConfig(student.status);
+                  const statusConf = getStatusConfig(student.status, locale);
                   return (
-                    <motion.tr key={student.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={cn("hover:bg-muted/30 transition-colors", selectedRows.includes(student.id) && "bg-emerald-500/5")}>
+                    <motion.tr key={student.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={cn('hover:bg-muted/30 transition-colors', selectedRows.includes(student.id) && 'bg-emerald-500/5')}>
                       {canManageData && (
                         <td className="p-4"><input type="checkbox" checked={selectedRows.includes(student.id)} onChange={() => toggleRow(student.id)} className="w-4 h-4 rounded border-border accent-emerald-600" /></td>
                       )}
-                      <td className="px-4 py-3 text-sm font-medium text-muted-foreground">{(currentPage - 1) * pageSize + idx + 1}</td>
+                      <td className="px-4 py-3 text-sm font-medium text-muted-foreground">{(currentPage - 1) * PAGE_SIZE + idx + 1}</td>
                       <td className="px-4 py-3"><div className="flex flex-col"><span className="text-sm font-bold text-foreground">{student.nisn}</span><span className="text-xs font-mono text-muted-foreground">{student.nis}</span></div></td>
-                      <td className="px-4 py-3"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs flex items-center justify-center">{student.fullName.charAt(0)}</div><div><p className="text-sm font-medium">{student.fullName}</p><p className="text-xs text-muted-foreground">{student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female')}</p></div></div></td>
+                      <td className="px-4 py-3"><div className="flex items-center gap-3"><div className="w-8 h-8 rounded-full bg-emerald-100 text-emerald-700 font-bold text-xs flex items-center justify-center">{student.fullName.charAt(0)}</div><div><p className="text-sm font-medium">{student.fullName}</p><p className="text-xs text-muted-foreground">{student.gender === 'L' ? tr('Laki-laki', 'Male') : tr('Perempuan', 'Female')}</p></div></div></td>
                       <td className="px-4 py-3"><span className="text-sm">{student.className}</span></td>
-                      <td className="px-4 py-3"><span className={cn('text-xs font-medium px-2.5 py-1 rounded-md border', statusConf.color)}>{locale === 'id' ? statusConf.id : statusConf.en}</span></td>
+                      <td className="px-4 py-3"><span className={cn('text-xs font-medium px-2.5 py-1 rounded-md border', statusConf.color)}>{statusConf.label}</span></td>
                       <td className="px-6 py-4 text-right">
                         <div className="flex items-center justify-end space-x-2">
                           <Link to={`/students/${student.id}`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"><Eye className="h-4 w-4" /></Link>
@@ -1047,17 +1098,19 @@ export function StudentListPage() {
           </table>
         </div>
 
-        {(meta?.total || 0) > 0 && (
+        {/* --- PAGINATION --- */}
+        {total > 0 && (
           <div className="p-4 border-t border-border/50 bg-muted/10 flex flex-col sm:flex-row items-center justify-between gap-4">
             <span className="text-sm text-muted-foreground">
-              {locale === 'id'
-                ? `Menampilkan ${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, meta?.total || 0)} dari ${meta?.total || 0} siswa`
-                : `Showing ${(currentPage - 1) * pageSize + 1} - ${Math.min(currentPage * pageSize, meta?.total || 0)} of ${meta?.total || 0} students`}
+              {tr(
+                `Menampilkan ${(currentPage - 1) * PAGE_SIZE + 1} - ${Math.min(currentPage * PAGE_SIZE, total)} dari ${total} siswa`,
+                `Showing ${(currentPage - 1) * PAGE_SIZE + 1} - ${Math.min(currentPage * PAGE_SIZE, total)} of ${total} students`
+              )}
             </span>
 
             <div className="flex items-center gap-2">
               <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground mr-2 border-r border-border pr-4">
-                <span>{locale === 'id' ? 'Lompat ke:' : 'Jump to:'}</span>
+                <span>{tr('Lompat ke:', 'Jump to:')}</span>
                 <input
                   type="number" min={1} max={totalPages} value={jumpPage}
                   onChange={(e) => setJumpPage(e.target.value)}
@@ -1087,8 +1140,8 @@ export function StudentListPage() {
                         key={page}
                         onClick={() => setCurrentPage(page)}
                         className={cn(
-                          "w-8 h-8 flex items-center justify-center rounded-md text-sm font-medium transition-colors border",
-                          currentPage === page ? "bg-emerald-600 text-white border-emerald-600" : "bg-background border-border/50 hover:bg-muted text-muted-foreground"
+                          'w-8 h-8 flex items-center justify-center rounded-md text-sm font-medium transition-colors border',
+                          currentPage === page ? 'bg-emerald-600 text-white border-emerald-600' : 'bg-background border-border/50 hover:bg-muted text-muted-foreground'
                         )}
                       >
                         {page}
