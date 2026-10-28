@@ -614,105 +614,221 @@ export function UserManagementPage() {
                     </Tabs>
                 </div>
 
+
                 {/* TOOLBAR */}
-                <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 border-b border-border pb-4">
+                <div className="border-b border-border pb-4 space-y-4">
+                    {/* BARIS ATAS: SEARCH + ACTIONS */}
+                    <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
 
-                    {/* KIRI: SEARCH INPUT */}
-                    <div className="relative w-full md:max-w-md">
-                        <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                        <Input placeholder={tUM('searchPlaceholder')} value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9 w-full" />
-                    </div>
+                        {/* SEARCH */}
+                        <div className="relative w-full min-w-0 xl:max-w-90 xl:flex-1">
+                            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
 
-                    {/* KANAN: ACTIONS & SORT */}
-                    <div className="flex flex-wrap items-center justify-start md:justify-end gap-3 w-full md:w-auto">
+                            <Input
+                                placeholder={tUM('searchPlaceholder')}
+                                value={searchQuery}
+                                onChange={(e) => setSearchQuery(e.target.value)}
+                                className="w-full pl-9 h-10"
+                            />
+                        </div>
 
-                        {/* Dropdown Sortir (Sekarang menempel dengan tombol aksi) */}
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <Button variant="outline" className="shrink-0 flex items-center gap-2">
-                                    {sortConfig.key === 'none' ? <ArrowUpDown size={16} className="text-muted-foreground" /> :
-                                        sortConfig.direction === 'asc' ? <ArrowDown size={16} className="text-primary" /> : <ArrowUp size={16} className="text-primary" />}
-                                    <span className="font-normal">
-                                        {sortConfig.key === 'none' ? 'Sortir' :
-                                            sortConfig.key === 'fullName' ? 'Sortir Nama' :
-                                                sortConfig.key === 'role' ? 'Sortir Role' :
-                                                    sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir'}
-                                    </span>
-                                    <ChevronDown className="w-4 h-4 opacity-50 ml-1" />
-                                </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end" className="w-48">
-                                <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'asc' })} className="cursor-pointer">
-                                    <ArrowDownAZ className="w-4 h-4 mr-2" /> Nama (A - Z)
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'desc' })} className="cursor-pointer">
-                                    <ArrowUpZA className="w-4 h-4 mr-2" /> Nama (Z - A)
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setSortConfig({ key: 'role', direction: 'asc' })} className="cursor-pointer">
-                                    <ArrowDown className="w-4 h-4 mr-2" /> Role
-                                </DropdownMenuItem>
-                                <DropdownMenuItem onClick={() => setSortConfig({ key: 'isActive', direction: 'desc' })} className="cursor-pointer">
-                                    <ArrowDown className="w-4 h-4 mr-2" /> Status Aktif
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => setSortConfig({ key: 'none', direction: 'asc' })} className={`cursor-pointer ${sortConfig.key === 'none' ? 'bg-primary/10 text-primary' : ''}`}>
-                                    <ArrowUpDown className="w-4 h-4 mr-2" /> Reset (Default)
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
+                        {/* ACTIONS */}
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3 xl:justify-end">
 
-                        {/* Tombol Generate Data */}
-                        {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                            {/* SORTIR */}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
-                                    <Button className="bg-blue-600 hover:bg-blue-700 text-white h-9 px-4">
-                                        <DatabaseZap className="w-4 h-4 mr-2" />
-                                        {tUM('generateData')} <ChevronDown className="w-4 h-4 ml-2 opacity-70" />
+                                    <Button
+                                        type="button"
+                                        variant="outline"
+                                        className="h-10 shrink-0 gap-2 px-3 sm:px-4"
+                                    >
+                                        {sortConfig.key === 'none' ? (
+                                            <ArrowUpDown className="w-4 h-4 text-muted-foreground" />
+                                        ) : sortConfig.direction === 'asc' ? (
+                                            <ArrowDown className="w-4 h-4 text-primary" />
+                                        ) : (
+                                            <ArrowUp className="w-4 h-4 text-primary" />
+                                        )}
+
+                                        <span className="font-normal">
+                                            {sortConfig.key === 'none'
+                                                ? 'Sortir'
+                                                : sortConfig.key === 'fullName'
+                                                    ? 'Sortir Nama'
+                                                    : sortConfig.key === 'role'
+                                                        ? 'Sortir Role'
+                                                        : sortConfig.key === 'isActive'
+                                                            ? 'Sortir Status'
+                                                            : 'Sortir'}
+                                        </span>
+
+                                        <ChevronDown className="w-4 h-4 opacity-50" />
                                     </Button>
                                 </DropdownMenuTrigger>
+
                                 <DropdownMenuContent align="end" className="w-48">
-                                    <DropdownMenuItem className="cursor-pointer" onClick={() => setIsGenerateAllModalOpen(true)}>
-                                        <DatabaseZap className="w-4 h-4 mr-2" /> {tUM('generateAll')}
+                                    <DropdownMenuItem
+                                        onClick={() =>
+                                            setSortConfig({
+                                                key: 'fullName',
+                                                direction: 'asc',
+                                            })
+                                        }
+                                        className="cursor-pointer"
+                                    >
+                                        <ArrowDownAZ className="w-4 h-4 mr-2" />
+                                        Nama (A - Z)
                                     </DropdownMenuItem>
+
+                                    <DropdownMenuItem
+                                        onClick={() =>
+                                            setSortConfig({
+                                                key: 'fullName',
+                                                direction: 'desc',
+                                            })
+                                        }
+                                        className="cursor-pointer"
+                                    >
+                                        <ArrowUpZA className="w-4 h-4 mr-2" />
+                                        Nama (Z - A)
+                                    </DropdownMenuItem>
+
+                                    <DropdownMenuItem
+                                        onClick={() =>
+                                            setSortConfig({
+                                                key: 'role',
+                                                direction: 'asc',
+                                            })
+                                        }
+                                        className="cursor-pointer"
+                                    >
+                                        <ArrowDown className="w-4 h-4 mr-2" />
+                                        Role
+                                    </DropdownMenuItem>
+
+                                    <DropdownMenuItem
+                                        onClick={() =>
+                                            setSortConfig({
+                                                key: 'isActive',
+                                                direction: 'desc',
+                                            })
+                                        }
+                                        className="cursor-pointer"
+                                    >
+                                        <ArrowDown className="w-4 h-4 mr-2" />
+                                        Status Aktif
+                                    </DropdownMenuItem>
+
                                     <DropdownMenuSeparator />
-                                    <DropdownMenuItem className="cursor-pointer" disabled={selectedUserIds.length === 0} onClick={() => setIsGenerateSelectedModalOpen(true)}>
-                                        <UserPlus className="w-4 h-4 mr-2" /> {tUM('generateSelected')} ({selectedUserIds.length})
+
+                                    <DropdownMenuItem
+                                        onClick={() =>
+                                            setSortConfig({
+                                                key: 'none',
+                                                direction: 'asc',
+                                            })
+                                        }
+                                        className={`cursor-pointer ${sortConfig.key === 'none'
+                                            ? 'bg-primary/10 text-primary'
+                                            : ''
+                                            }`}
+                                    >
+                                        <ArrowUpDown className="w-4 h-4 mr-2" />
+                                        Reset (Default)
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
-                        )}
 
-                        {/* Tombol Hapus Dinamis (Tanpa Dropdown) */}
-                        {isSuperAdmin && (
-                            <>
-                                {selectedUserIds.length > 0 ? (
-                                    // Muncul saat ada kotak yang dicentang
-                                    <Button
-                                        variant="outline"
-                                        className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 h-9 px-4 shrink-0"
-                                        onClick={() => setIsDeleteSelectedModalOpen(true)}
-                                    >
-                                        <Trash2 className="w-4 h-4 mr-2" />
-                                        {tUM('deleteSelected')} ({selectedUserIds.length})
-                                    </Button>
-                                ) : (
-                                    // Muncul saat tidak ada yang dicentang (hanya pada tab tertentu)
-                                    ['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                            {/* GENERATE DATA */}
+                            {['staff', 'siswa', 'orangtua'].includes(activeTab) && (
+                                <DropdownMenu>
+                                    <DropdownMenuTrigger asChild>
                                         <Button
-                                            variant="outline"
-                                            className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 h-9 px-4 shrink-0"
-                                            onClick={() => setIsDeleteAllModalOpen(true)}
+                                            type="button"
+                                            className="h-10 shrink-0 gap-2 bg-blue-600 px-3 text-white hover:bg-blue-700 sm:px-4"
                                         >
-                                            <AlertCircle className="w-4 h-4 mr-2" />
-                                            {tUM('bulkDeleteAll')}
-                                        </Button>
-                                    )
-                                )}
-                            </>
-                        )}
+                                            <DatabaseZap className="w-4 h-4" />
 
+                                            <span>{tUM('generateData')}</span>
+
+                                            <ChevronDown className="w-4 h-4 opacity-70" />
+                                        </Button>
+                                    </DropdownMenuTrigger>
+
+                                    <DropdownMenuContent align="end" className="w-52">
+                                        <DropdownMenuItem
+                                            className="cursor-pointer"
+                                            onClick={() =>
+                                                setIsGenerateAllModalOpen(true)
+                                            }
+                                        >
+                                            <DatabaseZap className="w-4 h-4 mr-2" />
+                                            {tUM('generateAll')}
+                                        </DropdownMenuItem>
+
+                                        <DropdownMenuSeparator />
+
+                                        <DropdownMenuItem
+                                            className="cursor-pointer"
+                                            disabled={selectedUserIds.length === 0}
+                                            onClick={() =>
+                                                setIsGenerateSelectedModalOpen(true)
+                                            }
+                                        >
+                                            <UserPlus className="w-4 h-4 mr-2" />
+                                            {tUM('generateSelected')} (
+                                            {selectedUserIds.length})
+                                        </DropdownMenuItem>
+                                    </DropdownMenuContent>
+                                </DropdownMenu>
+                            )}
+
+                            {/* HAPUS */}
+                            {isSuperAdmin && (
+                                <>
+                                    {selectedUserIds.length > 0 ? (
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-10 shrink-0 gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:px-4"
+                                            onClick={() =>
+                                                setIsDeleteSelectedModalOpen(true)
+                                            }
+                                        >
+                                            <Trash2 className="w-4 h-4 shrink-0" />
+
+                                            <span>
+                                                {tUM('deleteSelected')} (
+                                                {selectedUserIds.length})
+                                            </span>
+                                        </Button>
+                                    ) : (
+                                        ['staff', 'siswa', 'orangtua'].includes(
+                                            activeTab
+                                        ) && (
+                                            <Button
+                                                type="button"
+                                                variant="outline"
+                                                className="h-10 shrink-0 gap-2 border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:px-4"
+                                                onClick={() =>
+                                                    setIsDeleteAllModalOpen(true)
+                                                }
+                                            >
+                                                <AlertCircle className="w-4 h-4 shrink-0" />
+
+                                                <span>
+                                                    {tUM('bulkDeleteAll')}
+                                                </span>
+                                            </Button>
+                                        )
+                                    )}
+                                </>
+                            )}
+                        </div>
                     </div>
                 </div>
+
 
                 {/* TABLE DENGAN KLIK SORTIR DI HEADER */}
                 <div className="overflow-x-auto">
