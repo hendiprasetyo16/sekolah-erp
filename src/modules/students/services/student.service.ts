@@ -29,7 +29,7 @@ const handleDbError = (error: unknown) => {
 };
 
 export const studentService = {
-  async list(params: PaginatedParams & { 
+async list(params: PaginatedParams & { 
     classId?: string; 
     status?: string;
     sortBy?: string; 
@@ -46,27 +46,33 @@ export const studentService = {
       sortOrder = 'asc' 
     } = params;
     
+    // Pastikan kita menarik data relasi classes(name, gradeLevel)
     let query = supabase.from('students').select('*, classes(name, gradeLevel)', { count: 'exact' });
 
     if (search) query = query.or(`fullName.ilike.%${search}%,nisn.ilike.%${search}%,nis.ilike.%${search}%`);
     if (classId) query = query.eq('classId', classId);
     if (status) query = query.eq('status', status);
 
+    // ========================================================
+    // PENANGANAN KHUSUS SORTING & KELAS ROMAWI
+    // ========================================================
+    if (sortBy === 'className') {
+      // 1. Urutkan berdasarkan angka murni (gradeLevel) agar Romawi tidak berantakan
+      // 2. Jika tingkat kelasnya sama, urutkan berdasarkan nama kelas (misal: X A lalu X B)
+      // 3. BARU: Setelah kelasnya rapi, urutkan nama siswa dari A-Z secara default
+      query = query
+        .order('classes(gradeLevel)' as any, { ascending: sortOrder === 'asc', nullsFirst: false })
+        .order('classes(name)' as any, { ascending: sortOrder === 'asc', nullsFirst: false })
+        .order('fullName', { ascending: true, nullsFirst: false }); // <--- TAMBAHKAN BARIS INI
+    } else {
+      // Sorting normal untuk NISN, Nama, dll
+      query = query.order(sortBy as any, { ascending: sortOrder === 'asc', nullsFirst: false });
+    }
+
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    // PENANGANAN KHUSUS SORTING KELAS:
-    // Karena 'className' adalah properti hasil gabungan (join), 
-    // jika user mengurutkan berdasarkan kelas, kita arahkan ke kolom 'fullName' atau default dulu 
-    // agar tidak error di Supabase, atau biarkan kolom database yang valid.
-    let safeSortBy = sortBy;
-    if (sortBy === 'className') {
-      safeSortBy = 'fullName'; // Sementara di-fallback ke fullName agar tidak error query
-    }
-
-    const { data, count, error } = await query
-      .order(safeSortBy, { ascending: sortOrder === 'asc' })
-      .range(from, to);
+    const { data, count, error } = await query.range(from, to);
       
     if (error) throw new Error(error.message);
 
