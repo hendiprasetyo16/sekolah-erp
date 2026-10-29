@@ -15,7 +15,17 @@ import { cn } from '@/utils/cn';
 export function ClassListPage() {
     const { locale } = useTranslation();
     const queryClient = useQueryClient();
-    const { school } = useAuthStore();
+
+    // Ambil data user untuk pengecekan role
+    const { school, user } = useAuthStore();
+
+    // ==========================================
+    // HAK AKSES (RBAC)
+    // ==========================================
+    const role = user?.role as string | undefined;
+    const isSuperAdmin = role === 'SUPER_ADMIN';
+    const canManageData = role === 'SUPER_ADMIN' || role === 'ADMIN'; // Bisa tambah/edit/hapus pilihan
+    const canDeleteData = role === 'SUPER_ADMIN' || role === 'ADMIN'; // Bisa melihat checkbox & tombol hapus
 
     // Kamus Bahasa (Bilingual Support)
     const t = {
@@ -46,13 +56,14 @@ export function ClassListPage() {
         deleteBtn: locale === 'id' ? 'Hapus' : 'Delete',
         delWarning: locale === 'id' ? '*Kelas yang sudah memiliki siswa tidak akan bisa dihapus.' : '*Classes with enrolled students cannot be deleted.',
         delMsgBulk: (count: number) => locale === 'id' ? `Yakin ingin menghapus ${count} kelas?` : `Are you sure you want to delete ${count} classes?`,
-        delMsgAll: locale === 'id' ? 'PERINGATAN: Yakin ingin menghapus SEMUA kelas yang tertampil?' : 'WARNING: Are you sure you want to delete ALL displayed classes?',
+        delMsgAll: locale === 'id' ? 'PERINGATAN: Yakin ingin mengosongkan SEMUA kelas?' : 'WARNING: Are you sure you want to delete ALL classes?',
         delMsgSingle: (name: string) => locale === 'id' ? `Yakin ingin menghapus kelas "${name}"?` : `Are you sure you want to delete class "${name}"?`,
         entries: locale === 'id' ? 'entri' : 'entries',
         showing: locale === 'id' ? 'Menampilkan' : 'Showing',
         to: locale === 'id' ? '-' : 'to',
         of: locale === 'id' ? 'dari' : 'of',
         jumpTo: locale === 'id' ? 'Lompat ke:' : 'Jump to:',
+        superAdminOnly: locale === 'id' ? 'Hanya Super Admin yang dapat mengosongkan semua data.' : 'Only Super Admin can clear all data.',
     };
 
     const [selectedAcademicYear, setSelectedAcademicYear] = useState<string>('all');
@@ -125,7 +136,6 @@ export function ClassListPage() {
     const startIndex = (currentPage - 1) * itemsPerPage;
     const endIndex = Math.min(startIndex + itemsPerPage, totalItems);
 
-    // Potong data berdasarkan halaman yang aktif
     const paginatedClasses = sortedClasses.slice(startIndex, endIndex);
 
     const handleSort = (key: string) => {
@@ -163,7 +173,6 @@ export function ClassListPage() {
             queryClient.invalidateQueries({ queryKey: ['classes'] });
             setSelectedClasses([]); setClassToDelete(null);
 
-            // Cek jika halaman ini kosong setelah dihapus, mundur 1 halaman
             if (paginatedClasses.length === selectedClasses.length && currentPage > 1) {
                 setCurrentPage(prev => prev - 1);
             }
@@ -174,14 +183,24 @@ export function ClassListPage() {
     });
 
     const confirmDelete = () => {
+        if (!canDeleteData) return;
+
         if (deleteModalType === 'single' && classToDelete) deleteBulkClassMutation.mutate([classToDelete.id]);
         else if (deleteModalType === 'bulk') deleteBulkClassMutation.mutate(selectedClasses);
-        else if (deleteModalType === 'all') deleteBulkClassMutation.mutate(classes.map(c => c.id));
+        else if (deleteModalType === 'all') {
+            if (!isSuperAdmin) {
+                toast.error(t.superAdminOnly);
+                setClassToDelete(null);
+                return;
+            }
+            deleteBulkClassMutation.mutate(classes.map(c => c.id));
+        }
     };
 
     return (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
-            {/* MODAL HAPUS */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 relative">
+
+            {/* ================= MODAL HAPUS ================= */}
             <AnimatePresence>
                 {classToDelete && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
@@ -207,17 +226,35 @@ export function ClassListPage() {
                 )}
             </AnimatePresence>
 
+            {/* ================= HEADER & TOMBOL AKSI UTAMA ================= */}
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div>
                     <h1 className="text-2xl font-bold">{t.title}</h1>
                     <p className="text-sm text-muted-foreground mt-1">{t.subtitle}</p>
                 </div>
-                <Link to="/academic/classes/new" className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md">
-                    <Plus size={16} /> <span>{t.addBtn}</span>
-                </Link>
+
+                <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                    {/* TOMBOL KOSONGKAN SEMUA: Khusus Super Admin */}
+                    {isSuperAdmin && (
+                        <Button
+                            variant="outline"
+                            className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700 shadow-sm transition-colors"
+                            onClick={() => { setDeleteModalType('all'); setClassToDelete({ id: 'all', name: 'all' }); }}
+                        >
+                            <AlertCircle size={16} className="mr-2" /> {t.clearAll}
+                        </Button>
+                    )}
+
+                    {/* TOMBOL TAMBAH KELAS: Admin & Super Admin */}
+                    {canManageData && (
+                        <Link to="/academic/classes/new" className="flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md">
+                            <Plus size={16} /> <span>{t.addBtn}</span>
+                        </Link>
+                    )}
+                </div>
             </div>
 
-            {/* ACTION BAR & FILTER */}
+            {/* ================= BAR FILTER & HAPUS TERPILIH ================= */}
             <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div className="flex flex-col sm:flex-row sm:items-center gap-3 w-full">
                     <label className="text-sm font-medium text-muted-foreground whitespace-nowrap">{t.filterLabel}</label>
@@ -234,8 +271,9 @@ export function ClassListPage() {
                     </Select>
                 </div>
 
+                {/* Hapus Terpilih */}
                 <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    {selectedClasses.length > 0 && (
+                    {canDeleteData && selectedClasses.length > 0 && (
                         <div className="flex items-center gap-2 animate-in fade-in">
                             <span className="hidden sm:inline-block text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200">
                                 {selectedClasses.length} {t.selected}
@@ -246,26 +284,25 @@ export function ClassListPage() {
                             <button onClick={() => setSelectedClasses([])} className="p-1.5 text-muted-foreground hover:bg-muted rounded-md"><X size={16} /></button>
                         </div>
                     )}
-                    <Button variant="outline" size="sm" className="border-red-200 text-red-600 hover:bg-red-50" onClick={() => { setDeleteModalType('all'); setClassToDelete({ id: 'all', name: 'all' }); }}>
-                        <Trash2 size={16} className="mr-2" /> {t.clearAll}
-                    </Button>
                 </div>
             </div>
 
-            {/* TABEL */}
+            {/* ================= TABEL DATA ================= */}
             <div className="bg-card border border-border/50 rounded-xl overflow-hidden shadow-sm">
                 <div className="overflow-x-auto w-full">
                     <table className="w-full text-left border-collapse">
                         <thead>
                             <tr className="border-b border-border/50 bg-muted/30 whitespace-nowrap">
-                                <th className="p-4 w-12 text-center">
-                                    <input
-                                        type="checkbox"
-                                        checked={selectedClasses.length === paginatedClasses.length && paginatedClasses.length > 0}
-                                        onChange={toggleAll}
-                                        className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
-                                    />
-                                </th>
+                                {canDeleteData && (
+                                    <th className="p-4 w-12 text-center">
+                                        <input
+                                            type="checkbox"
+                                            checked={selectedClasses.length === paginatedClasses.length && paginatedClasses.length > 0}
+                                            onChange={toggleAll}
+                                            className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
+                                        />
+                                    </th>
+                                )}
                                 <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase w-16">{t.thNo}</th>
 
                                 <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase cursor-pointer hover:bg-muted/50 select-none" onClick={() => handleSort('name')}>
@@ -285,22 +322,24 @@ export function ClassListPage() {
                                 </th>
 
                                 <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-center">{t.thStudents}</th>
-                                <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-right">{t.thAction}</th>
+                                {canManageData && <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase text-right">{t.thAction}</th>}
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border/50">
                             {isLoading ? (
-                                <tr><td colSpan={8} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />{t.loading}</td></tr>
+                                <tr><td colSpan={canManageData ? 8 : 7} className="px-6 py-12 text-center"><Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />{t.loading}</td></tr>
                             ) : isError ? (
-                                <tr><td colSpan={8} className="px-6 py-12 text-center text-destructive">{t.error}</td></tr>
+                                <tr><td colSpan={canManageData ? 8 : 7} className="px-6 py-12 text-center text-destructive">{t.error}</td></tr>
                             ) : paginatedClasses.length === 0 ? (
-                                <tr><td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">{t.empty}</td></tr>
+                                <tr><td colSpan={canManageData ? 8 : 7} className="px-6 py-12 text-center text-muted-foreground">{t.empty}</td></tr>
                             ) : (
                                 paginatedClasses.map((cls, idx) => (
                                     <motion.tr key={cls.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: idx * 0.03 }} className={`hover:bg-muted/30 transition-colors whitespace-nowrap ${selectedClasses.includes(cls.id) ? 'bg-emerald-500/5' : ''}`}>
-                                        <td className="p-4 text-center">
-                                            <input type="checkbox" checked={selectedClasses.includes(cls.id)} onChange={() => toggleRow(cls.id)} className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer" />
-                                        </td>
+                                        {canDeleteData && (
+                                            <td className="p-4 text-center">
+                                                <input type="checkbox" checked={selectedClasses.includes(cls.id)} onChange={() => toggleRow(cls.id)} className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer" />
+                                            </td>
+                                        )}
                                         <td className="px-6 py-4 text-sm text-muted-foreground font-medium">{startIndex + idx + 1}</td>
                                         <td className="px-6 py-4">
                                             <span className="font-bold text-foreground text-base">{cls.name}</span>
@@ -314,12 +353,17 @@ export function ClassListPage() {
                                                 <Users size={14} /> {cls.studentCount} / {cls.capacity}
                                             </div>
                                         </td>
-                                        <td className="px-6 py-4 text-right">
-                                            <div className="flex items-center justify-end space-x-2">
-                                                <Link to={`/academic/classes/${cls.id}/edit`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"><Edit className="h-4 w-4" /></Link>
-                                                <button onClick={() => { setDeleteModalType('single'); setClassToDelete({ id: cls.id, name: cls.name }); }} className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 className="h-4 w-4" /></button>
-                                            </div>
-                                        </td>
+
+                                        {canManageData && (
+                                            <td className="px-6 py-4 text-right">
+                                                <div className="flex items-center justify-end space-x-2">
+                                                    <Link to={`/academic/classes/${cls.id}/edit`} className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"><Edit className="h-4 w-4" /></Link>
+                                                    {canDeleteData && (
+                                                        <button onClick={() => { setDeleteModalType('single'); setClassToDelete({ id: cls.id, name: cls.name }); }} className="p-2 text-red-600 hover:bg-red-50 rounded-md transition-colors"><Trash2 className="h-4 w-4" /></button>
+                                                    )}
+                                                </div>
+                                            </td>
+                                        )}
                                     </motion.tr>
                                 ))
                             )}
@@ -327,19 +371,14 @@ export function ClassListPage() {
                     </table>
                 </div>
 
-                {/* PAGINATION UI MODERN */}
+                {/* ================= PAGINASI ================= */}
                 {totalItems > 0 && (
                     <div className="p-4 border-t border-border flex flex-col lg:flex-row items-center justify-between gap-4 text-sm bg-background rounded-b-xl">
-
-                        {/* Kiri: Teks Informasi */}
                         <div className="text-muted-foreground w-full lg:w-auto text-center lg:text-left">
                             {t.showing} {paginatedClasses.length > 0 ? startIndex + 1 : 0} {t.to} {endIndex} {t.of} {totalItems} {t.entries}
                         </div>
 
-                        {/* Kanan: Navigasi Paginasi (1 Baris Terkunci) */}
                         <div className="flex items-center justify-center lg:justify-end gap-2 sm:gap-3 shrink-0 overflow-x-auto max-w-full py-1">
-
-                            {/* Input "Lompat ke:" */}
                             <div className="flex items-center gap-2 shrink-0">
                                 <span className="text-muted-foreground whitespace-nowrap">{t.jumpTo}</span>
                                 <input
@@ -355,10 +394,8 @@ export function ClassListPage() {
                                 />
                             </div>
 
-                            {/* Garis Pemisah Vertikal */}
                             <div className="hidden sm:block w-px h-5 bg-border shrink-0 mx-0.5"></div>
 
-                            {/* Tombol Navigasi Angka */}
                             <div className="flex items-center gap-1 shrink-0">
                                 <button
                                     title="Pertama"
@@ -377,7 +414,6 @@ export function ClassListPage() {
                                     <ChevronLeft size={16} />
                                 </button>
 
-                                {/* Nomor Halaman Dinamis */}
                                 {generatePagination(currentPage, totalPages).map((p, i) => (
                                     <button
                                         key={i}
