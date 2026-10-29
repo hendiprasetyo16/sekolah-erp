@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -7,6 +7,7 @@ import { Save, Loader2, Plus, Trash2, CheckCircle2, School, AlertCircle, ArrowUp
 import { toast } from 'sonner';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useLocation } from 'react-router-dom';
+import type { ComponentType } from 'react';
 
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -21,6 +22,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 import { ClassListPage } from './ClassListPage';
 import { academicService } from '../services/academic.service';
+import type { AcademicYear } from '../types/academic.types';
 import { LocationPickerMap } from '@/components/map/LocationPickerMap';
 
 // ==========================================
@@ -40,7 +42,7 @@ const toNumberOrNull = (v: unknown): number | null => {
 
 const schoolSchema = z.object({
     name: z.string().min(3, 'Nama sekolah wajib diisi / School name is required'),
-    npsn: z.string().min(8, 'NPSN tidak valid / Invalid NPSN'),
+    npsn: z.string().trim().regex(/^\d{8}$/, 'NPSN harus terdiri dari tepat 8 angka / NPSN must contain exactly 8 digits'),
     level: z.string().min(1, 'Jenjang wajib dipilih / Level is required'),
     type: z.string().min(1, 'Status wajib dipilih / Status is required'),
     address: z.string().min(5, 'Alamat wajib diisi / Address is required'),
@@ -48,15 +50,24 @@ const schoolSchema = z.object({
     province: z.string().min(3, 'Provinsi wajib diisi / Province is required'),
     phone: z.string().optional(),
     email: z.string().email('Email tidak valid / Invalid email').optional().or(z.literal('')),
-    latitude: z.number().nullable(),
-    longitude: z.number().nullable(),
-    attendanceRadiusMeters: z.coerce.number().min(10, 'Radius minimal 10 meter / Radius min 10 meters'),
+    latitude: z.number().nullable().refine((v) => v === null || (v >= -90 && v <= 90), 'Latitude harus antara -90 dan 90'),
+    longitude: z.number().nullable().refine((v) => v === null || (v >= -180 && v <= 180), 'Longitude harus antara -180 dan 180'),
+    attendanceRadiusMeters: z.coerce.number().int('Radius harus berupa bilangan bulat').min(10, 'Radius minimal 10 meter / Radius min 10 meters'),
 });
 
 type SchoolFormValues = z.infer<typeof schoolSchema>;
 
-// Fix TypeScript Error untuk Prop 'radius' dengan melakukan type casting sementara
-const MapComponent = LocationPickerMap as any;
+// Kontrak props peta yang dipakai halaman ini.
+// Jika LocationPickerMap belum mendeklarasikan radius, sebaiknya tambahkan prop ini
+// pada komponen aslinya agar tidak memerlukan type assertion.
+type LocationPickerMapProps = {
+    latitude: number | null;
+    longitude: number | null;
+    radius: number;
+    onChange: (latitude: number, longitude: number) => void;
+};
+
+const MapComponent = LocationPickerMap as unknown as ComponentType<LocationPickerMapProps>;
 
 // ==========================================
 // KONSTANTA
@@ -75,7 +86,27 @@ type DeleteModalState = { isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?:
 // FORM PROFIL SEKOLAH
 // Dipakai untuk membuat sekolah baru (belum ada data) atau mengedit sekolah yang sudah ada
 // ==========================================
-function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: any, authUser: any, onSuccess: any }) {
+async function getSchoolRecord(id: string) {
+    const { data, error } = await supabase.from('schools').select('*').eq('id', id).maybeSingle();
+    if (error) throw new Error(error.message);
+    return data;
+}
+
+type SchoolRecord = NonNullable<Awaited<ReturnType<typeof getSchoolRecord>>>;
+
+type SchoolAuthUser = {
+    id?: string;
+    role?: string;
+    email?: string | null;
+    user_metadata?: { full_name?: string | null };
+};
+type SchoolProfileFormProps = {
+    schoolData: (Partial<SchoolFormValues> & { id?: string }) | null | undefined;
+    authUser: SchoolAuthUser | null | undefined;
+    onSuccess: (school: SchoolRecord) => void;
+};
+
+function SchoolProfileForm({ schoolData, authUser, onSuccess }: SchoolProfileFormProps) {
     const queryClient = useQueryClient();
     const { locale } = useTranslation();
     const isEdit = !!schoolData?.id;
@@ -125,7 +156,7 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
     // Simpan profil: update kalau sudah ada, insert sekolah baru kalau belum
     const saveSchoolMutation = useMutation({
         mutationFn: async (payload: SchoolFormValues) => {
-            if (isEdit) {
+            if (schoolData?.id) {
                 const { data, error } = await supabase.from('schools').update(payload).eq('id', schoolData.id).select().single();
                 if (error) throw new Error(error.message);
                 return data;
@@ -218,13 +249,13 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                             latitude={form.watch('latitude') ?? null}
                             longitude={form.watch('longitude') ?? null}
                             radius={form.watch('attendanceRadiusMeters') ?? 0}
-                            onChange={(lat: number, lng: number) => { form.setValue('latitude', lat); form.setValue('longitude', lng); }}
+                            onChange={(lat: number, lng: number) => { form.setValue('latitude', lat, { shouldDirty: true, shouldValidate: true }); form.setValue('longitude', lng, { shouldDirty: true, shouldValidate: true }); }}
                         />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                         <FormField control={form.control} name="latitude" render={({ field }) => (<FormItem><FormLabel>Latitude</FormLabel><FormControl><Input type="number" step="any" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(toNumberOrNull(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
                         <FormField control={form.control} name="longitude" render={({ field }) => (<FormItem><FormLabel>Longitude</FormLabel><FormControl><Input type="number" step="any" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(toNumberOrNull(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
-                        <FormField control={form.control} name="attendanceRadiusMeters" render={({ field }) => (<FormItem><FormLabel>{t.radiusLabel}</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>)} />
+                        <FormField control={form.control} name="attendanceRadiusMeters" render={({ field }) => (<FormItem><FormLabel>{t.radiusLabel}</FormLabel><FormControl><Input type="number" {...field} value={field.value ?? 200} onChange={(e) => field.onChange(e.target.value === '' ? '' : Number(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
                     </div>
                 </div>
 
@@ -270,7 +301,7 @@ export function MasterSettingsPage() {
     const [activeTab, setActiveTab] = useState(location.state?.tab || 'profil');
     const [deleteModal, setDeleteModal] = useState<DeleteModalState>({ isOpen: false, type: 'single' });
     const [selectedAys, setSelectedAys] = useState<string[]>([]);
-    const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({ key: 'startYear', direction: 'desc' });
+    const [sortConfig, setSortConfig] = useState<{ key: keyof AcademicYear, direction: 'asc' | 'desc' } | null>({ key: 'startYear', direction: 'desc' });
 
     // Teks dua bahasa untuk halaman ini
     const t = {
@@ -315,7 +346,8 @@ export function MasterSettingsPage() {
         queryKey: ['school-profile', authSchool?.id],
         queryFn: async () => {
             if (!authSchool?.id) return null;
-            const { data } = await supabase.from('schools').select('*').eq('id', authSchool.id).single();
+            const { data, error } = await supabase.from('schools').select('*').eq('id', authSchool.id).maybeSingle();
+            if (error) throw new Error(error.message);
             return data;
         },
     });
@@ -331,6 +363,15 @@ export function MasterSettingsPage() {
     // Tahun ajaran yang boleh dihapus (yang sedang aktif tidak boleh)
     const deletableAys = academicYears.filter(ay => !ay.isActive);
 
+    // Bersihkan pilihan yang sudah tidak ada atau kini menjadi tahun ajaran aktif.
+    useEffect(() => {
+        const allowedIds = new Set(deletableAys.map((ay) => ay.id));
+        setSelectedAys((prev) => {
+            const next = prev.filter((id) => allowedIds.has(id));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [academicYears]);
+
     // Sekolah sudah terdaftar? Tab Tahun Ajaran & Kelas hanya bisa dibuka kalau sudah.
     const hasSchool = !!schoolData;
     // Kalau belum ada sekolah, paksa tetap di tab Profil (mencegah halaman kosong
@@ -342,10 +383,11 @@ export function MasterSettingsPage() {
         let sortable = [...academicYears];
         if (sortConfig !== null) {
             sortable.sort((a, b) => {
-                let aValue = a[sortConfig.key as keyof typeof a];
-                let bValue = b[sortConfig.key as keyof typeof b];
-                if (aValue < bValue) return sortConfig.direction === 'asc' ? -1 : 1;
-                if (aValue > bValue) return sortConfig.direction === 'asc' ? 1 : -1;
+                const aValue = a[sortConfig.key];
+                const bValue = b[sortConfig.key];
+                const comparison = String(aValue ?? '').localeCompare(String(bValue ?? ''), undefined, { numeric: true, sensitivity: 'base' });
+                if (comparison < 0) return sortConfig.direction === 'asc' ? -1 : 1;
+                if (comparison > 0) return sortConfig.direction === 'asc' ? 1 : -1;
                 return 0;
             });
         }
@@ -357,14 +399,18 @@ export function MasterSettingsPage() {
     // ------------------------------------------
 
     // Klik header kolom: asc -> desc
-    const handleSort = (key: string) => {
+    const handleSort = (key: keyof AcademicYear) => {
         let direction: 'asc' | 'desc' = 'asc';
         if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
         setSortConfig({ key, direction });
     };
 
     // Checkbox baris; tahun ajaran aktif tidak bisa dicentang karena tidak boleh dihapus
-    const toggleRow = (id: string) => setSelectedAys(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
+    const toggleRow = (id: string) => {
+        const row = academicYears.find((ay) => ay.id === id);
+        if (!row || row.isActive) return;
+        setSelectedAys((prev) => prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]);
+    };
     const toggleAll = () => {
         if (selectedAys.length === deletableAys.length && deletableAys.length > 0) setSelectedAys([]);
         else setSelectedAys(deletableAys.map(ay => ay.id));
@@ -379,45 +425,57 @@ export function MasterSettingsPage() {
     // Buat tahun ajaran baru otomatis (tahun terakhir + 1)
     const generateNewAcademicYear = useMutation({
         mutationFn: async () => {
+            const schoolId = authSchool?.id;
+            if (!schoolId) throw new Error('School ID tidak ditemukan. Muat ulang halaman atau masuk kembali.');
+
             let nextStartYear = new Date().getFullYear();
             if (academicYears.length > 0) {
                 const maxYear = Math.max(...academicYears.map(ay => ay.startYear));
                 nextStartYear = maxYear + 1;
             }
+
+            const proposedName = `${nextStartYear}/${nextStartYear + 1}`;
+            if (academicYears.some((ay) => ay.name === proposedName || ay.startYear === nextStartYear)) {
+                throw new Error(`Tahun ajaran ${proposedName} sudah tersedia.`);
+            }
+
             const { error } = await supabase.from('academic_years').insert({
                 id: crypto.randomUUID(),
-                schoolId: authSchool?.id || '',
-                name: `${nextStartYear}/${nextStartYear + 1}`,
+                schoolId,
+                name: proposedName,
                 startYear: nextStartYear,
                 endYear: nextStartYear + 1,
                 isActive: false
             });
             if (error) throw new Error(error.message);
         },
-        onSuccess: () => { toast.success(t.toastAyCreated); queryClient.invalidateQueries({ queryKey: ['academic-years'] }); },
+        onSuccess: () => { toast.success(t.toastAyCreated); queryClient.invalidateQueries({ queryKey: ['academic-years', authSchool?.id] }); queryClient.invalidateQueries({ queryKey: ['active-academic-year'] }); },
         onError: (e: Error) => toast.error(e.message)
     });
 
     // Jadikan satu tahun ajaran sebagai yang aktif (hanya boleh ada satu yang aktif)
     const setActiveAcademicYear = useMutation({
         mutationFn: async (id: string) => {
+            const schoolId = authSchool?.id;
+            if (!schoolId) throw new Error('School ID tidak ditemukan.');
+            if (!academicYears.some((ay) => ay.id === id)) throw new Error('Tahun ajaran tidak ditemukan pada sekolah ini.');
             const previousActiveId = academicYears.find(ay => ay.isActive)?.id;
 
-            // 1) Nonaktifkan semua tahun ajaran sekolah ini
-            const { error: offError } = await supabase.from('academic_years').update({ isActive: false }).eq('schoolId', authSchool?.id || '');
+            // Nonaktifkan hanya tahun ajaran milik sekolah ini.
+            const { error: offError } = await supabase.from('academic_years').update({ isActive: false }).eq('schoolId', schoolId);
             if (offError) throw new Error(offError.message);
 
             // 2) Aktifkan yang dipilih; kalau gagal, kembalikan tahun ajaran aktif sebelumnya
             //    supaya tidak berakhir dengan nol tahun ajaran aktif
-            const { error } = await supabase.from('academic_years').update({ isActive: true }).eq('id', id);
+            const { error } = await supabase.from('academic_years').update({ isActive: true }).eq('schoolId', schoolId).eq('id', id);
             if (error) {
-                if (previousActiveId) await supabase.from('academic_years').update({ isActive: true }).eq('id', previousActiveId);
+                if (previousActiveId) await supabase.from('academic_years').update({ isActive: true }).eq('schoolId', schoolId).eq('id', previousActiveId);
                 throw new Error(error.message);
             }
         },
         onSuccess: () => {
             toast.success(t.toastAyActive);
-            queryClient.invalidateQueries({ queryKey: ['academic-years'] });
+            queryClient.invalidateQueries({ queryKey: ['academic-years', authSchool?.id] });
             // Halaman Siswa memakai tahun ajaran aktif saat import, jadi cache-nya ikut disegarkan
             queryClient.invalidateQueries({ queryKey: ['active-academic-year'] });
         },
@@ -426,10 +484,14 @@ export function MasterSettingsPage() {
 
     // Hapus satu / beberapa / semua tahun ajaran
     const deleteBulkAyMutation = useMutation({
-        mutationFn: (ids: string[]) => academicService.deleteBulkAcademicYears(ids),
+        mutationFn: (ids: string[]) => {
+            const schoolId = authSchool?.id;
+            if (!schoolId) throw new Error('School ID tidak ditemukan.');
+            return academicService.deleteBulkAcademicYears(schoolId, ids);
+        },
         onSuccess: () => {
             toast.success(t.toastAyDeleted);
-            queryClient.invalidateQueries({ queryKey: ['academic-years'] });
+            queryClient.invalidateQueries({ queryKey: ['academic-years', authSchool?.id] });
             queryClient.invalidateQueries({ queryKey: ['active-academic-year'] });
             queryClient.invalidateQueries({ queryKey: ['classes-list'] }); // kelas terkait tahun ajaran
             setSelectedAys([]); closeDeleteModal();
@@ -615,7 +677,7 @@ export function MasterSettingsPage() {
                                                             <td className="px-6 py-4 text-right">
                                                                 <div className="flex items-center justify-end gap-2 flex-wrap">
                                                                     {!ay.isActive && (
-                                                                        <Button variant="outline" size="sm" className="whitespace-nowrap shrink-0" onClick={() => setActiveAcademicYear.mutate(ay.id)} disabled={setActiveAcademicYear.isPending}>
+                                                                        <Button variant="outline" size="sm" className="whitespace-nowrap shrink-0" onClick={() => setActiveAcademicYear.mutate(ay.id)} disabled={setActiveAcademicYear.isPending || deleteBulkAyMutation.isPending}>
                                                                             {t.btnSetActive}
                                                                         </Button>
                                                                     )}
