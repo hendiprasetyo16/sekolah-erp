@@ -183,9 +183,16 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                         <FormField control={form.control} name="attendanceRadiusMeters" render={({ field }) => (<FormItem><FormLabel>{t.radiusLabel}</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>)} />
                     </div>
                 </div>
-                <div className="flex justify-end pt-6">
-                    <Button type="submit" disabled={saveSchoolMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-                        {saveSchoolMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />} {isEdit ? t.btnSave : t.btnCreate}
+
+                {/* ACTIONS: Tombol simpan yang responsif */}
+                <div className="flex flex-wrap justify-end gap-3 pt-6 border-t mt-8">
+                    <Button
+                        type="submit"
+                        disabled={saveSchoolMutation.isPending}
+                        className="h-10 w-full sm:w-auto grow justify-center gap-2 whitespace-nowrap bg-emerald-600 hover:bg-emerald-700 text-white sm:grow-0 px-6"
+                    >
+                        {saveSchoolMutation.isPending ? <Loader2 className="w-4 h-4 shrink-0 animate-spin" /> : <Save className="w-4 h-4 shrink-0" />}
+                        <span>{isEdit ? t.btnSave : t.btnCreate}</span>
                     </Button>
                 </div>
             </form>
@@ -357,11 +364,29 @@ export function MasterSettingsPage() {
             </div>
 
             <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                <div className="w-full overflow-x-auto pb-2">
-                    <TabsList className="flex w-max min-w-full md:grid md:grid-cols-3 h-auto p-1 max-w-2xl">
-                        <TabsTrigger value="profil" className="py-2.5 px-6">{t.tabProfile}</TabsTrigger>
-                        <TabsTrigger value="tahun-ajaran" className="py-2.5 px-6" disabled={!hasSchool}>{t.tabAy}</TabsTrigger>
-                        <TabsTrigger value="kelas" className="py-2.5 px-6" disabled={!hasSchool}>{t.tabClass}</TabsTrigger>
+                {/* TABS MENU: Dibuat responsif dan bisa discroll secara mendatar */}
+                <div className="w-full overflow-x-auto pb-1">
+                    <TabsList className="h-auto gap-1 bg-muted/50 p-1 w-max min-w-full sm:min-w-0 flex">
+                        <TabsTrigger
+                            value="profil"
+                            className="flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                        >
+                            {t.tabProfile}
+                        </TabsTrigger>
+                        <TabsTrigger
+                            value="tahun-ajaran"
+                            disabled={!hasSchool}
+                            className="flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white disabled:opacity-50"
+                        >
+                            {t.tabAy}
+                        </TabsTrigger>
+                        <TabsTrigger
+                            value="kelas"
+                            disabled={!hasSchool}
+                            className="flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white disabled:opacity-50"
+                        >
+                            {t.tabClass}
+                        </TabsTrigger>
                     </TabsList>
                 </div>
 
@@ -380,20 +405,33 @@ export function MasterSettingsPage() {
                     <>
                         <TabsContent value="tahun-ajaran" className="mt-6">
                             <Card className="border-border shadow-sm max-w-4xl">
-                                <CardHeader className="bg-muted/20 border-b border-border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                                    <div>
-                                        <CardTitle className="text-lg">{t.ayListTitle}</CardTitle>
-                                        <CardDescription>{t.ayListDesc}</CardDescription>
-                                    </div>
-                                    <div className="flex gap-2 w-full sm:w-auto">
-                                        {selectedAys.length > 0 && (
-                                            <Button variant="destructive" onClick={() => { setDeleteModalType('bulk'); setAyToDelete({ id: 'bulk', name: 'bulk' }); }}>
-                                                <Trash2 className="w-4 h-4 mr-2" /> {t.btnDeleteSel} ({selectedAys.length})
+                                {/* TOOLBAR AKSI: Flexbox responsif (grow) */}
+                                <CardHeader className="bg-muted/20 border-b border-border p-4 sm:p-6">
+                                    <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                                        <div>
+                                            <CardTitle className="text-lg">{t.ayListTitle}</CardTitle>
+                                            <CardDescription className="mt-1">{t.ayListDesc}</CardDescription>
+                                        </div>
+                                        <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:flex-nowrap">
+                                            {selectedAys.length > 0 && (
+                                                <Button
+                                                    variant="destructive"
+                                                    onClick={() => { setDeleteModalType('bulk'); setAyToDelete({ id: 'bulk', name: 'bulk' }); }}
+                                                    className="h-10 grow justify-center gap-2 whitespace-nowrap sm:grow-0 sm:px-4"
+                                                >
+                                                    <Trash2 className="h-4 w-4 shrink-0" />
+                                                    <span>{t.btnDeleteSel} ({selectedAys.length})</span>
+                                                </Button>
+                                            )}
+                                            <Button
+                                                onClick={() => generateNewAcademicYear.mutate()}
+                                                disabled={generateNewAcademicYear.isPending}
+                                                className="h-10 grow justify-center gap-2 whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white sm:grow-0 sm:px-4"
+                                            >
+                                                {generateNewAcademicYear.isPending ? <Loader2 className="h-4 w-4 shrink-0 animate-spin" /> : <Plus className="h-4 w-4 shrink-0" />}
+                                                <span>{t.btnCreateNew}</span>
                                             </Button>
-                                        )}
-                                        <Button onClick={() => generateNewAcademicYear.mutate()} disabled={generateNewAcademicYear.isPending} className="bg-blue-600 hover:bg-blue-700 text-white w-full sm:w-auto">
-                                            <Plus className="w-4 h-4 mr-2" /> {t.btnCreateNew}
-                                        </Button>
+                                        </div>
                                     </div>
                                 </CardHeader>
                                 <CardContent className="pt-0 p-0">
@@ -435,11 +473,15 @@ export function MasterSettingsPage() {
                                                                 )}
                                                             </td>
                                                             <td className="px-6 py-4 text-right">
-                                                                <div className="flex items-center justify-end space-x-2">
-                                                                    {!ay.isActive && <Button variant="outline" size="sm" onClick={() => setActiveAcademicYear.mutate(ay.id)} disabled={setActiveAcademicYear.isPending}>{t.btnSetActive}</Button>}
+                                                                <div className="flex items-center justify-end gap-2 flex-wrap">
+                                                                    {!ay.isActive && (
+                                                                        <Button variant="outline" size="sm" className="whitespace-nowrap shrink-0" onClick={() => setActiveAcademicYear.mutate(ay.id)} disabled={setActiveAcademicYear.isPending}>
+                                                                            {t.btnSetActive}
+                                                                        </Button>
+                                                                    )}
                                                                     {isSuperAdmin && (
-                                                                        <Button variant="ghost" size="icon" className="text-red-500 hover:bg-red-50" onClick={() => { setDeleteModalType('single'); setAyToDelete({ id: ay.id, name: ay.name }); }}>
-                                                                            <Trash2 className="w-4 h-4" />
+                                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50 hover:text-red-600 shrink-0" onClick={() => { setDeleteModalType('single'); setAyToDelete({ id: ay.id, name: ay.name }); }}>
+                                                                            <Trash2 className="w-4 h-4 shrink-0" />
                                                                         </Button>
                                                                     )}
                                                                 </div>
