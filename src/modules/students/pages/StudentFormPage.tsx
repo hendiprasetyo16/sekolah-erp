@@ -6,12 +6,13 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-import { Save, X, ArrowLeft, ArrowRight, Loader2 } from 'lucide-react';
+// Menambahkan ikon untuk menu tab agar seragam
+import { Save, X, ArrowLeft, ArrowRight, Loader2, User, GraduationCap, Briefcase, Wallet, HeartPulse } from 'lucide-react';
 import { studentService } from '../services/student.service';
 import { supabase } from '@/services/supabase.client';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -318,29 +319,69 @@ export function StudentFormPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center space-x-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/students')} type="button"><ArrowLeft className="h-5 w-5" /></Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{isEdit ? (locale === 'id' ? 'Edit Data Siswa' : 'Edit Student') : (locale === 'id' ? 'Tambah Siswa Baru' : 'Add New Student')}</h1>
-            <p className="text-muted-foreground">{locale === 'id' ? 'Formulir Pendaftaran & Pendataan terintegrasi struktur Verval PD (Dapodik).' : 'Registration form integrated with Dapodik structure.'}</p>
-          </div>
+      {/* ================= HEADER ================= */}
+      <div className="flex items-center space-x-4">
+        <Button variant="outline" size="icon" onClick={() => navigate('/students')} type="button" className="shrink-0 mt-1 sm:mt-0">
+          <ArrowLeft className="h-4 w-4" />
+        </Button>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">{isEdit ? (locale === 'id' ? 'Edit Data Siswa' : 'Edit Student') : (locale === 'id' ? 'Tambah Siswa Baru' : 'Add New Student')}</h1>
+          <p className="text-muted-foreground">{locale === 'id' ? 'Formulir Pendaftaran & Pendataan terintegrasi struktur Verval PD (Dapodik).' : 'Registration form integrated with Dapodik structure.'}</p>
         </div>
       </div>
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} onKeyDown={preventAutoSubmitOnEnter} className="space-y-6">
-          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-            <TabsList className="grid w-full grid-cols-5 h-auto p-1 lg:w-200">
-              <TabsTrigger value="pribadi">{locale === 'id' ? 'Pribadi' : 'Personal'}</TabsTrigger>
-              <TabsTrigger value="akademik">{locale === 'id' ? 'Akademik' : 'Academic'}</TabsTrigger>
-              <TabsTrigger value="orangtua">{locale === 'id' ? 'Orang Tua/Wali' : 'Parents/Guardian'}</TabsTrigger>
-              <TabsTrigger value="ekonomi">{locale === 'id' ? 'Kesejahteraan' : 'Welfare'}</TabsTrigger>
-              <TabsTrigger value="dapodik">{locale === 'id' ? 'Dapodik / Fisik' : 'Dapodik'}</TabsTrigger>
-            </TabsList>
+          <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full min-w-0">
 
-            <Card className="mt-6 border-t-4 border-t-emerald-600">
-              <CardContent className="pt-6">
+            {/* PEMBUNGKUS UTAMA: Menggabungkan Tabs & Tombol Navigasi/Simpan di satu Card yang sama */}
+            <Card className="shadow-sm border-border overflow-hidden">
+              <CardContent className="p-4 sm:p-6">
+
+                {/* TAB MENU: Menggunakan styling highlight aktif hijau zamrud seperti sebelumnya */}
+                <div className="w-full overflow-x-auto pb-1 mb-6">
+                  <TabsList className="h-auto gap-1 bg-muted/50 p-1 flex w-max min-w-full sm:min-w-0">
+                    <TabsTrigger
+                      value="pribadi"
+                      className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                    >
+                      <User className="w-4 h-4 mr-2 shrink-0" />
+                      {locale === 'id' ? 'Pribadi' : 'Personal'}
+                    </TabsTrigger>
+
+                    <TabsTrigger
+                      value="akademik"
+                      className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                    >
+                      <GraduationCap className="w-4 h-4 mr-2 shrink-0" />
+                      {locale === 'id' ? 'Akademik' : 'Academic'}
+                    </TabsTrigger>
+
+                    <TabsTrigger
+                      value="orangtua"
+                      className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                    >
+                      <Briefcase className="w-4 h-4 mr-2 shrink-0" />
+                      {locale === 'id' ? 'Orang Tua/Wali' : 'Parents/Guardian'}
+                    </TabsTrigger>
+
+                    <TabsTrigger
+                      value="ekonomi"
+                      className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                    >
+                      <Wallet className="w-4 h-4 mr-2 shrink-0" />
+                      {locale === 'id' ? 'Kesejahteraan' : 'Welfare'}
+                    </TabsTrigger>
+
+                    <TabsTrigger
+                      value="dapodik"
+                      className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                    >
+                      <HeartPulse className="w-4 h-4 mr-2 shrink-0" />
+                      {locale === 'id' ? 'Dapodik / Fisik' : 'Dapodik'}
+                    </TabsTrigger>
+                  </TabsList>
+                </div>
 
                 {/* --- TAB 1: PRIBADI --- */}
                 <TabsContent value="pribadi" className="m-0 space-y-6">
@@ -589,29 +630,54 @@ export function StudentFormPage() {
                 </TabsContent>
 
               </CardContent>
+
+              {/* ================= ACTION BUTTONS (Sama Persis seperti Screenshot & Logika Tidak Berubah) ================= */}
+              {/* Dibungkus sebagai Footer dari Card sehingga warnanya menyatu dengan form input */}
+              <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border bg-card p-4 sm:p-6 rounded-b-xl">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => navigate('/students')}
+                  disabled={mutation.isPending}
+                >
+                  <X className="mr-2 h-4 w-4 shrink-0" />
+                  {locale === 'id' ? 'Batal' : 'Cancel'}
+                </Button>
+
+                {activeTab !== 'pribadi' && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handlePrevTab}
+                  >
+                    <ArrowLeft className="mr-2 h-4 w-4 shrink-0" />
+                    {locale === 'id' ? 'Sebelumnya' : 'Previous'}
+                  </Button>
+                )}
+
+                {activeTab !== 'dapodik' ? (
+                  <Button
+                    type="button"
+                    onClick={handleNextTab}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white"
+                  >
+                    {locale === 'id' ? 'Selanjutnya' : 'Next'}
+                    <ArrowRight className="ml-2 h-4 w-4 shrink-0" />
+                  </Button>
+                ) : (
+                  <Button
+                    type="submit"
+                    disabled={mutation.isPending}
+                    className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+                  >
+                    {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 shrink-0 animate-spin" /> : <Save className="mr-2 h-4 w-4 shrink-0" />}
+                    {isEdit ? (locale === 'id' ? 'Simpan Perubahan' : 'Save Changes') : (locale === 'id' ? 'Simpan Seluruh Data' : 'Save All Data')}
+                  </Button>
+                )}
+              </div>
+
             </Card>
           </Tabs>
-
-          <div className="flex justify-end space-x-4 pt-4">
-            <Button type="button" variant="ghost" onClick={() => navigate('/students')} disabled={mutation.isPending}>
-              <X className="mr-2 h-4 w-4" /> {locale === 'id' ? 'Batal' : 'Cancel'}
-            </Button>
-            {activeTab !== 'pribadi' && (
-              <Button type="button" variant="outline" onClick={handlePrevTab}>
-                <ArrowLeft className="mr-2 h-4 w-4" /> {locale === 'id' ? 'Sebelumnya' : 'Previous'}
-              </Button>
-            )}
-            {activeTab !== 'dapodik' ? (
-              <Button type="button" onClick={handleNextTab} className="bg-emerald-600 hover:bg-emerald-700 text-white">
-                {locale === 'id' ? 'Selanjutnya' : 'Next'} <ArrowRight className="ml-2 h-4 w-4" />
-              </Button>
-            ) : (
-              <Button type="submit" disabled={mutation.isPending} className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-lg">
-                {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                {isEdit ? (locale === 'id' ? 'Simpan Perubahan' : 'Save Changes') : (locale === 'id' ? 'Simpan Seluruh Data' : 'Save All Data')}
-              </Button>
-            )}
-          </div>
         </form>
       </Form>
     </div>
