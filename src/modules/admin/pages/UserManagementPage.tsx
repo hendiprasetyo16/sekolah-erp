@@ -225,20 +225,27 @@ export function UserManagementPage() {
     // BUGFIX: Realtime Sync dengan ID Channel Unik
     useEffect(() => {
         let timer: ReturnType<typeof setTimeout> | undefined;
-        // Menambahkan UID pada nama channel mencegah race condition di React Strict Mode
-        const channelName = `users-list-realtime-${Date.now()}`;
+        let channel: ReturnType<typeof supabase.channel> | null = null;
 
-        const channel = supabase
-            .channel(channelName)
-            .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
-                clearTimeout(timer);
-                timer = setTimeout(() => queryClient.invalidateQueries({ queryKey: ['users-list'] }), 500);
-            })
-            .subscribe();
+        try {
+            channel = supabase
+                .channel(`users-list-${crypto.randomUUID()}`)
+                .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
+                    clearTimeout(timer);
+                    timer = setTimeout(() => queryClient.invalidateQueries({ queryKey: ['users-list'] }), 500);
+                })
+                .subscribe((status, err) => {
+                    if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+                        console.warn('Realtime users tidak aktif:', status, err?.message);
+                    }
+                });
+        } catch (e) {
+            console.warn('Realtime gagal dipasang:', e);
+        }
 
         return () => {
             clearTimeout(timer);
-            supabase.removeChannel(channel);
+            if (channel) supabase.removeChannel(channel);
         };
     }, [queryClient]);
 
@@ -403,6 +410,21 @@ export function UserManagementPage() {
 
     // PAGINATION
     const totalPages = Math.ceil(processedUsers.length / ITEMS_PER_PAGE);
+    // Kalau data menyusut (mis. dihapus dari tab lain), mundur ke halaman terakhir yang ada
+    useEffect(() => {
+        if (totalPages > 0 && currentPage > totalPages) setCurrentPage(totalPages);
+    }, [currentPage, totalPages]);
+
+    // Buang ID terpilih yang akunnya sudah tidak ada
+    useEffect(() => {
+        if (!users) return;
+        const ids = new Set(users.map(u => u.id));
+        setSelectedUserIds(prev => {
+            const next = prev.filter(id => ids.has(id));
+            return next.length === prev.length ? prev : next;
+        });
+    }, [users]);
+
     const paginatedUsers = processedUsers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
 
     const getPageNumbers = () => {
