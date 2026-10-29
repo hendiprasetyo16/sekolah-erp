@@ -783,7 +783,7 @@ export function UserManagementPage() {
                 )}
 
                 {/* Modal: Konfirmasi hapus SEMUA akun di tab aktif (peringatan keras) */}
-                {isDeleteAllModalOpen && (
+                {isDeleteAllModalOpen && isSuperAdmin && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
                         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border border-red-200 p-6 text-center max-w-sm w-full">
                             <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>

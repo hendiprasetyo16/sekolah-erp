@@ -261,6 +261,10 @@ export function StudentListPage() {
 
   const canManageData = user?.role ? ALLOWED_ROLES.includes(user.role) : false;
 
+  // "Kosongkan Data" (hapus SEMUA siswa) HANYA untuk Super Admin.
+  // Admin, Operator, dan Kepala Sekolah tetap bisa mengelola data, tetapi tidak melihat tombol ini.
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('all');
   const [currentPage, setCurrentPage] = useState(1);
@@ -374,7 +378,10 @@ export function StudentListPage() {
   });
 
   const deleteAllMutation = useMutation({
-    mutationFn: () => studentService.deleteAll(school!.id),
+    mutationFn: () => {
+      if (!isSuperAdmin) throw new Error(tr('Hanya Super Admin yang dapat mengosongkan data.', 'Only Super Admin can wipe all data.'));
+      return studentService.deleteAll(school!.id);
+    },
     onSuccess: (res) => {
       toast.success(res.message);
       queryClient.invalidateQueries({ queryKey: ['students'] });
@@ -936,7 +943,7 @@ export function StudentListPage() {
 
       {/* --- WIPE ALL CONFIRMATION --- */}
       <AnimatePresence>
-        {isDeletingAll && (
+        {isDeletingAll && isSuperAdmin && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 20 }} className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full overflow-hidden">
               <div className="p-6">
@@ -981,7 +988,7 @@ export function StudentListPage() {
                 <Trash2 size={16} />
                 <span className="hidden sm:inline">{tr(`Hapus Terpilih (${selectedRows.length})`, `Delete Selected (${selectedRows.length})`)}</span>
               </motion.button>
-            ) : total > 0 ? (
+            ) : isSuperAdmin && total > 0 ? (
               <motion.button
                 key="delete-all"
                 initial={{ opacity: 0, scale: 0.9 }}

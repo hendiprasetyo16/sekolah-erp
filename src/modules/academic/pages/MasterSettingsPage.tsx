@@ -23,6 +23,21 @@ import { ClassListPage } from './ClassListPage';
 import { academicService } from '../services/academic.service';
 import { LocationPickerMap } from '@/components/map/LocationPickerMap';
 
+// ==========================================
+// SCHEMA FORM PROFIL SEKOLAH
+// ==========================================
+
+// Ubah nilai apa pun (string dari input, angka dari database, kosong) menjadi number atau null.
+// Kolom kosong HARUS menjadi null, bukan 0: z.coerce.number() mengubah '' dan null menjadi 0,
+// sehingga koordinat kosong tersimpan sebagai 0,0 dan titik absensi sekolah jadi salah.
+// Konversi dilakukan di sisi input (onChange) supaya tipe schema tetap sederhana (number | null),
+// dan tidak membuat tipe form "unknown" yang memicu error TypeScript pada resolver.
+const toNumberOrNull = (v: unknown): number | null => {
+    if (v === '' || v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+};
+
 const schoolSchema = z.object({
     name: z.string().min(3, 'Nama sekolah wajib diisi / School name is required'),
     npsn: z.string().min(8, 'NPSN tidak valid / Invalid NPSN'),
@@ -33,8 +48,8 @@ const schoolSchema = z.object({
     province: z.string().min(3, 'Provinsi wajib diisi / Province is required'),
     phone: z.string().optional(),
     email: z.string().email('Email tidak valid / Invalid email').optional().or(z.literal('')),
-    latitude: z.coerce.number().optional().nullable(),
-    longitude: z.coerce.number().optional().nullable(),
+    latitude: z.number().nullable(),
+    longitude: z.number().nullable(),
     attendanceRadiusMeters: z.coerce.number().min(10, 'Radius minimal 10 meter / Radius min 10 meters'),
 });
 
@@ -43,11 +58,29 @@ type SchoolFormValues = z.infer<typeof schoolSchema>;
 // Fix TypeScript Error untuk Prop 'radius' dengan melakukan type casting sementara
 const MapComponent = LocationPickerMap as any;
 
+// ==========================================
+// KONSTANTA
+// ==========================================
+
+// Gaya tombol tab: tab aktif berwarna hijau penuh + teks putih (sama seperti halaman Manajemen Pengguna)
+const TAB_TRIGGER_CLASS =
+    'flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground ' +
+    'data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white ' +
+    'disabled:opacity-50';
+
+// Status modal konfirmasi hapus: satu data / data terpilih / semua data
+type DeleteModalState = { isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?: string; name?: string };
+
+// ==========================================
+// FORM PROFIL SEKOLAH
+// Dipakai untuk membuat sekolah baru (belum ada data) atau mengedit sekolah yang sudah ada
+// ==========================================
 function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: any, authUser: any, onSuccess: any }) {
     const queryClient = useQueryClient();
     const { locale } = useTranslation();
     const isEdit = !!schoolData?.id;
 
+    // Teks dua bahasa untuk form ini
     const t = {
         alert: locale === 'id' ? 'Anda belum memiliki data sekolah. Silakan isi form di bawah ini untuk mendaftarkan institusi Anda.' : 'You have no school data yet. Please fill out the form below to register your institution.',
         nameLabel: locale === 'id' ? 'Nama Sekolah' : 'School Name',
@@ -64,6 +97,7 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
         btnCreate: locale === 'id' ? 'Buat Institusi Baru' : 'Create New Institution',
         toastSave: locale === 'id' ? 'Profil sekolah berhasil disimpan' : 'School profile successfully saved',
         toastCreate: locale === 'id' ? 'Sekolah baru berhasil dibuat!' : 'New school successfully created!',
+        warnLinkUser: locale === 'id' ? 'Sekolah dibuat, tetapi akun Anda gagal dihubungkan ke sekolah ini. Silakan muat ulang halaman atau hubungi Super Admin.' : 'School created, but your account could not be linked to it. Please reload the page or contact a Super Admin.',
         phLevel: locale === 'id' ? 'Pilih Jenjang' : 'Select Level',
         phStatus: locale === 'id' ? 'Pilih Status' : 'Select Status',
         statusPublic: locale === 'id' ? 'NEGERI / PUBLIC' : 'PUBLIC',
@@ -82,12 +116,13 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
             province: schoolData?.province ?? '',
             phone: schoolData?.phone ?? '',
             email: schoolData?.email ?? '',
-            latitude: schoolData?.latitude ?? null,
-            longitude: schoolData?.longitude ?? null,
+            latitude: toNumberOrNull(schoolData?.latitude),
+            longitude: toNumberOrNull(schoolData?.longitude),
             attendanceRadiusMeters: schoolData?.attendanceRadiusMeters ?? 200,
         }
     });
 
+    // Simpan profil: update kalau sudah ada, insert sekolah baru kalau belum
     const saveSchoolMutation = useMutation({
         mutationFn: async (payload: SchoolFormValues) => {
             if (isEdit) {
@@ -99,8 +134,11 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                 const { data: newSchool, error: schoolErr } = await supabase.from('schools').insert({ ...payload, id: newSchoolId }).select().single();
                 if (schoolErr) throw new Error(schoolErr.message);
 
+                // Hubungkan akun pembuat sekolah (selain Super Admin) sebagai ADMIN sekolah baru
                 if (authUser?.id && authUser?.role !== 'SUPER_ADMIN') {
-                    await supabase.from('users').upsert({ id: authUser.id, schoolId: newSchoolId, email: authUser.email || '', fullName: authUser.user_metadata?.full_name || 'Administrator', role: 'ADMIN' });
+                    const { error: linkErr } = await supabase.from('users').upsert({ id: authUser.id, schoolId: newSchoolId, email: authUser.email || '', fullName: authUser.user_metadata?.full_name || 'Administrator', role: 'ADMIN' });
+                    // Tidak dilempar sebagai error karena sekolah sudah terlanjur dibuat; cukup beri peringatan
+                    if (linkErr) toast.warning(t.warnLinkUser, { description: linkErr.message });
                 }
                 return newSchool;
             }
@@ -110,6 +148,7 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
             onSuccess(data);
             queryClient.setQueryData(['school-profile', data.id], data);
 
+            // Setelah membuat sekolah baru, muat ulang profil user agar schoolId-nya ikut terbaru
             if (!isEdit && authUser?.id && authUser?.role !== 'SUPER_ADMIN') {
                 const { data: updatedProfile } = await supabase.from('users').select('*').eq('id', authUser.id).single();
                 if (updatedProfile) useAuthStore.getState().setUser(updatedProfile);
@@ -125,12 +164,15 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
     return (
         <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmitSchool)} className="space-y-6">
+                {/* Pesan untuk pengguna yang belum punya data sekolah */}
                 {!isEdit && (
                     <div className="bg-blue-50 text-blue-800 p-4 rounded-lg text-sm mb-6 border border-blue-200 flex items-start gap-3">
                         <AlertCircle className="w-5 h-5 mt-0.5 shrink-0" />
                         <p>{t.alert}</p>
                     </div>
                 )}
+
+                {/* IDENTITAS: nama, NPSN, jenjang, status */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="name" render={({ field }) => (<FormItem><FormLabel>{t.nameLabel}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
                     <FormField control={form.control} name="npsn" render={({ field }) => (<FormItem><FormLabel>NPSN</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
@@ -156,6 +198,7 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                     )} />
                 </div>
 
+                {/* ALAMAT & KONTAK */}
                 <div className="space-y-4 pt-4 border-t border-border">
                     <h4 className="font-medium">{t.contactLabel}</h4>
                     <FormField control={form.control} name="address" render={({ field }) => (<FormItem><FormLabel>{t.address}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
@@ -167,6 +210,7 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                     </div>
                 </div>
 
+                {/* LOKASI GPS UNTUK ABSENSI: peta + koordinat + radius toleransi */}
                 <div className="space-y-4 pt-4 border-t border-border">
                     <h4 className="font-medium text-emerald-600">{t.gpsLabel}</h4>
                     <div className="mb-6">
@@ -178,8 +222,8 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
                         />
                     </div>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                        <FormField control={form.control} name="latitude" render={({ field }) => (<FormItem><FormLabel>Latitude</FormLabel><FormControl><Input type="number" step="any" {...field} value={field.value ?? ''} /></FormControl><FormMessage /></FormItem>)} />
-                        <FormField control={form.control} name="longitude" render={({ field }) => (<FormItem><FormLabel>Longitude</FormLabel><FormControl><Input type="number" step="any" {...field} value={field.value ?? ''} /></FormControl><FormMessage /></FormItem>)} />
+                        <FormField control={form.control} name="latitude" render={({ field }) => (<FormItem><FormLabel>Latitude</FormLabel><FormControl><Input type="number" step="any" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(toNumberOrNull(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
+                        <FormField control={form.control} name="longitude" render={({ field }) => (<FormItem><FormLabel>Longitude</FormLabel><FormControl><Input type="number" step="any" {...field} value={field.value ?? ''} onChange={(e) => field.onChange(toNumberOrNull(e.target.value))} /></FormControl><FormMessage /></FormItem>)} />
                         <FormField control={form.control} name="attendanceRadiusMeters" render={({ field }) => (<FormItem><FormLabel>{t.radiusLabel}</FormLabel><FormControl><Input type="number" {...field} /></FormControl><FormMessage /></FormItem>)} />
                     </div>
                 </div>
@@ -200,20 +244,35 @@ function SchoolProfileForm({ schoolData, authUser, onSuccess }: { schoolData: an
     );
 }
 
+// ==========================================
+// HALAMAN UTAMA: DATA MASTER SEKOLAH
+// Tab: Profil Sekolah | Tahun Ajaran | Data Kelas
+// ==========================================
 export function MasterSettingsPage() {
     const { locale } = useTranslation();
     const queryClient = useQueryClient();
     const location = useLocation();
     const { school: authSchool, setSchool, user } = useAuthStore();
-    const isSuperAdmin = ['SUPER_ADMIN', 'SUPERADMIN', 'ADMIN'].includes(user?.role as string);
 
+    // ------------------------------------------
+    // HAK AKSES (disamakan dengan halaman Siswa, Guru, dan Manajemen Pengguna)
+    // - Super Admin : semua fitur, termasuk "kosongkan semua"
+    // - Admin       : boleh menghapus satu / beberapa tahun ajaran, TIDAK bisa "kosongkan semua"
+    // - Role lain   : tidak melihat tombol hapus sama sekali
+    // ------------------------------------------
+    const role = user?.role as string | undefined;
+    const isSuperAdmin = role === 'SUPER_ADMIN';
+    const canDeleteData = role === 'SUPER_ADMIN' || role === 'ADMIN';
+
+    // ------------------------------------------
+    // STATES
+    // ------------------------------------------
     const [activeTab, setActiveTab] = useState(location.state?.tab || 'profil');
-    const [ayToDelete, setAyToDelete] = useState<{ id: string; name: string } | null>(null);
-    const [deleteModalType, setDeleteModalType] = useState<'single' | 'bulk' | 'all'>('single');
-
+    const [deleteModal, setDeleteModal] = useState<DeleteModalState>({ isOpen: false, type: 'single' });
     const [selectedAys, setSelectedAys] = useState<string[]>([]);
     const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>({ key: 'startYear', direction: 'desc' });
 
+    // Teks dua bahasa untuk halaman ini
     const t = {
         title: locale === 'id' ? 'Data Master Sekolah' : 'Master School Data',
         desc: locale === 'id' ? 'Pengaturan terpusat untuk Profil Institusi, Tahun Ajaran, dan Kelas.' : 'Centralized settings for Institution Profile, Academic Years, and Classes.',
@@ -232,6 +291,7 @@ export function MasterSettingsPage() {
         statusActive: locale === 'id' ? 'SEDANG AKTIF' : 'CURRENTLY ACTIVE',
         statusInactive: locale === 'id' ? 'Tidak Aktif' : 'Inactive',
         btnSetActive: locale === 'id' ? 'Jadikan Aktif' : 'Set Active',
+        titleActiveNoDelete: locale === 'id' ? 'Tahun ajaran aktif tidak dapat dihapus' : 'The active academic year cannot be deleted',
         confirmDelTitle: locale === 'id' ? 'Konfirmasi Hapus' : 'Confirm Deletion',
         confirmDelBulk: (n: number) => locale === 'id' ? `Yakin ingin menghapus ${n} data?` : `Are you sure you want to delete ${n} items?`,
         confirmDelAll: locale === 'id' ? 'Yakin ingin mengosongkan SEMUA data tahun ajaran?' : 'Are you sure you want to delete ALL academic year data?',
@@ -241,9 +301,16 @@ export function MasterSettingsPage() {
         toastAyCreated: locale === 'id' ? 'Tahun ajaran berhasil dibuat' : 'Academic year successfully created',
         toastAyActive: locale === 'id' ? 'Tahun ajaran aktif diperbarui' : 'Active academic year updated',
         toastAyDeleted: locale === 'id' ? 'Data terpilih berhasil dihapus' : 'Selected data successfully deleted',
+        toastActiveBlocked: locale === 'id' ? 'Tahun ajaran yang sedang aktif tidak boleh dihapus. Jadikan tahun ajaran lain aktif terlebih dahulu.' : 'The active academic year cannot be deleted. Set another academic year as active first.',
+        toastSuperOnly: locale === 'id' ? 'Hanya Super Admin yang dapat mengosongkan semua data.' : 'Only Super Admin can clear all data.',
         identitas: locale === 'id' ? 'Identitas Institusi' : 'Institution Identity'
     };
 
+    // ------------------------------------------
+    // DATA FETCHING
+    // ------------------------------------------
+
+    // Profil sekolah
     const { data: schoolData, isLoading: isSchoolLoading } = useQuery({
         queryKey: ['school-profile', authSchool?.id],
         queryFn: async () => {
@@ -253,6 +320,7 @@ export function MasterSettingsPage() {
         },
     });
 
+    // Daftar tahun ajaran
     const { data: academicYearsResponse, isLoading: isAyLoading } = useQuery({
         queryKey: ['academic-years', authSchool?.id],
         queryFn: () => academicService.getAcademicYears(authSchool?.id || ''),
@@ -260,6 +328,16 @@ export function MasterSettingsPage() {
     });
     const academicYears = academicYearsResponse?.data || [];
 
+    // Tahun ajaran yang boleh dihapus (yang sedang aktif tidak boleh)
+    const deletableAys = academicYears.filter(ay => !ay.isActive);
+
+    // Sekolah sudah terdaftar? Tab Tahun Ajaran & Kelas hanya bisa dibuka kalau sudah.
+    const hasSchool = !!schoolData;
+    // Kalau belum ada sekolah, paksa tetap di tab Profil (mencegah halaman kosong
+    // saat tab awal dari navigasi adalah tab yang dikunci)
+    const currentTab = hasSchool ? activeTab : 'profil';
+
+    // Urutkan daftar tahun ajaran sesuai kolom yang diklik
     const sortedAcademicYears = useMemo(() => {
         let sortable = [...academicYears];
         if (sortConfig !== null) {
@@ -274,18 +352,31 @@ export function MasterSettingsPage() {
         return sortable;
     }, [academicYears, sortConfig]);
 
+    // ------------------------------------------
+    // HANDLERS
+    // ------------------------------------------
+
+    // Klik header kolom: asc -> desc
     const handleSort = (key: string) => {
         let direction: 'asc' | 'desc' = 'asc';
         if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') direction = 'desc';
         setSortConfig({ key, direction });
     };
 
+    // Checkbox baris; tahun ajaran aktif tidak bisa dicentang karena tidak boleh dihapus
     const toggleRow = (id: string) => setSelectedAys(prev => prev.includes(id) ? prev.filter(r => r !== id) : [...prev, id]);
     const toggleAll = () => {
-        if (selectedAys.length === academicYears.length && academicYears.length > 0) setSelectedAys([]);
-        else setSelectedAys(academicYears.map(ay => ay.id));
+        if (selectedAys.length === deletableAys.length && deletableAys.length > 0) setSelectedAys([]);
+        else setSelectedAys(deletableAys.map(ay => ay.id));
     };
 
+    const closeDeleteModal = () => setDeleteModal({ isOpen: false, type: 'single' });
+
+    // ------------------------------------------
+    // MUTATIONS
+    // ------------------------------------------
+
+    // Buat tahun ajaran baru otomatis (tahun terakhir + 1)
     const generateNewAcademicYear = useMutation({
         mutationFn: async () => {
             let nextStartYear = new Date().getFullYear();
@@ -307,37 +398,86 @@ export function MasterSettingsPage() {
         onError: (e: Error) => toast.error(e.message)
     });
 
+    // Jadikan satu tahun ajaran sebagai yang aktif (hanya boleh ada satu yang aktif)
     const setActiveAcademicYear = useMutation({
         mutationFn: async (id: string) => {
-            await supabase.from('academic_years').update({ isActive: false }).eq('schoolId', authSchool?.id || '');
+            const previousActiveId = academicYears.find(ay => ay.isActive)?.id;
+
+            // 1) Nonaktifkan semua tahun ajaran sekolah ini
+            const { error: offError } = await supabase.from('academic_years').update({ isActive: false }).eq('schoolId', authSchool?.id || '');
+            if (offError) throw new Error(offError.message);
+
+            // 2) Aktifkan yang dipilih; kalau gagal, kembalikan tahun ajaran aktif sebelumnya
+            //    supaya tidak berakhir dengan nol tahun ajaran aktif
             const { error } = await supabase.from('academic_years').update({ isActive: true }).eq('id', id);
-            if (error) throw new Error(error.message);
+            if (error) {
+                if (previousActiveId) await supabase.from('academic_years').update({ isActive: true }).eq('id', previousActiveId);
+                throw new Error(error.message);
+            }
         },
-        onSuccess: () => { toast.success(t.toastAyActive); queryClient.invalidateQueries({ queryKey: ['academic-years'] }); }
+        onSuccess: () => {
+            toast.success(t.toastAyActive);
+            queryClient.invalidateQueries({ queryKey: ['academic-years'] });
+            // Halaman Siswa memakai tahun ajaran aktif saat import, jadi cache-nya ikut disegarkan
+            queryClient.invalidateQueries({ queryKey: ['active-academic-year'] });
+        },
+        onError: (e: Error) => toast.error(e.message)
     });
 
+    // Hapus satu / beberapa / semua tahun ajaran
     const deleteBulkAyMutation = useMutation({
         mutationFn: (ids: string[]) => academicService.deleteBulkAcademicYears(ids),
         onSuccess: () => {
             toast.success(t.toastAyDeleted);
             queryClient.invalidateQueries({ queryKey: ['academic-years'] });
-            setSelectedAys([]); setAyToDelete(null);
+            queryClient.invalidateQueries({ queryKey: ['active-academic-year'] });
+            queryClient.invalidateQueries({ queryKey: ['classes-list'] }); // kelas terkait tahun ajaran
+            setSelectedAys([]); closeDeleteModal();
         },
-        onError: (e: Error) => { toast.error(e.message); setAyToDelete(null); }
+        onError: (e: Error) => { toast.error(e.message); closeDeleteModal(); }
     });
 
+    // Eksekusi hapus setelah user menekan tombol di modal konfirmasi
     const confirmDelete = () => {
-        if (deleteModalType === 'single' && ayToDelete) deleteBulkAyMutation.mutate([ayToDelete.id]);
-        else if (deleteModalType === 'bulk') deleteBulkAyMutation.mutate(selectedAys);
-        else if (deleteModalType === 'all') deleteBulkAyMutation.mutate(academicYears.map(ay => ay.id));
+        // Pengaman: role tanpa hak hapus tidak boleh menjalankan apa pun
+        if (!canDeleteData) { closeDeleteModal(); return; }
+
+        let ids: string[] = [];
+        if (deleteModal.type === 'single' && deleteModal.id) {
+            ids = [deleteModal.id];
+        } else if (deleteModal.type === 'bulk') {
+            ids = selectedAys;
+        } else if (deleteModal.type === 'all') {
+            // "Kosongkan semua" khusus Super Admin
+            if (!isSuperAdmin) { toast.error(t.toastSuperOnly); closeDeleteModal(); return; }
+            ids = academicYears.map(ay => ay.id);
+        }
+        if (ids.length === 0) { closeDeleteModal(); return; }
+
+        // Tahun ajaran aktif tidak boleh dihapus (kecuali "kosongkan semua"), karena
+        // tanpa tahun ajaran aktif fitur seperti import siswa tidak bisa membuat kelas otomatis
+        if (deleteModal.type !== 'all' && academicYears.some(ay => ids.includes(ay.id) && ay.isActive)) {
+            toast.error(t.toastActiveBlocked);
+            closeDeleteModal();
+            return;
+        }
+
+        deleteBulkAyMutation.mutate(ids);
     };
 
-    const hasSchool = !!schoolData;
+    // Daftar tab; tab selain Profil terkunci sampai sekolah terdaftar
+    const TAB_ITEMS = [
+        { value: 'profil', label: t.tabProfile, needsSchool: false },
+        { value: 'tahun-ajaran', label: t.tabAy, needsSchool: true },
+        { value: 'kelas', label: t.tabClass, needsSchool: true },
+    ];
 
     return (
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+            {/* ================= MODAL KONFIRMASI HAPUS =================
+                Modal tipe "all" hanya bisa terbuka untuk Super Admin */}
             <AnimatePresence>
-                {ayToDelete && (
+                {deleteModal.isOpen && canDeleteData && (deleteModal.type !== 'all' || isSuperAdmin) && (
                     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
                         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-background rounded-2xl shadow-2xl border border-border max-w-md w-full p-6">
                             <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center mb-4 border border-red-200">
@@ -345,10 +485,10 @@ export function MasterSettingsPage() {
                             </div>
                             <h3 className="text-xl font-bold mb-2">{t.confirmDelTitle}</h3>
                             <p className="text-muted-foreground text-sm mb-6">
-                                {deleteModalType === 'bulk' ? t.confirmDelBulk(selectedAys.length) : deleteModalType === 'all' ? t.confirmDelAll : t.confirmDelSingle(ayToDelete.name)}
+                                {deleteModal.type === 'bulk' ? t.confirmDelBulk(selectedAys.length) : deleteModal.type === 'all' ? t.confirmDelAll : t.confirmDelSingle(deleteModal.name || '')}
                             </p>
                             <div className="flex justify-end gap-3">
-                                <Button variant="outline" onClick={() => setAyToDelete(null)} disabled={deleteBulkAyMutation.isPending}>{t.btnCancel}</Button>
+                                <Button variant="outline" onClick={closeDeleteModal} disabled={deleteBulkAyMutation.isPending}>{t.btnCancel}</Button>
                                 <Button variant="destructive" onClick={confirmDelete} disabled={deleteBulkAyMutation.isPending}>
                                     {deleteBulkAyMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} {t.btnDelete}
                                 </Button>
@@ -358,38 +498,26 @@ export function MasterSettingsPage() {
                 )}
             </AnimatePresence>
 
+            {/* ================= JUDUL HALAMAN ================= */}
             <div>
                 <h1 className="text-2xl font-bold">{t.title}</h1>
                 <p className="text-sm text-muted-foreground mt-1">{t.desc}</p>
             </div>
 
-            <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-                {/* TABS MENU: Dibuat responsif dan bisa discroll secara mendatar */}
+            <Tabs value={currentTab} onValueChange={setActiveTab} className="w-full">
+                {/* ================= MENU TAB =================
+                    Dibuat responsif dan bisa discroll mendatar; tab aktif berwarna hijau penuh */}
                 <div className="w-full overflow-x-auto pb-1">
                     <TabsList className="h-auto gap-1 bg-muted/50 p-1 w-max min-w-full sm:min-w-0 flex">
-                        <TabsTrigger
-                            value="profil"
-                            className="flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
-                        >
-                            {t.tabProfile}
-                        </TabsTrigger>
-                        <TabsTrigger
-                            value="tahun-ajaran"
-                            disabled={!hasSchool}
-                            className="flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white disabled:opacity-50"
-                        >
-                            {t.tabAy}
-                        </TabsTrigger>
-                        <TabsTrigger
-                            value="kelas"
-                            disabled={!hasSchool}
-                            className="flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white disabled:opacity-50"
-                        >
-                            {t.tabClass}
-                        </TabsTrigger>
+                        {TAB_ITEMS.map(({ value, label, needsSchool }) => (
+                            <TabsTrigger key={value} value={value} disabled={needsSchool && !hasSchool} className={TAB_TRIGGER_CLASS}>
+                                {label}
+                            </TabsTrigger>
+                        ))}
                     </TabsList>
                 </div>
 
+                {/* ================= TAB: PROFIL SEKOLAH ================= */}
                 <TabsContent value="profil" className="mt-6">
                     <Card className="border-border shadow-sm max-w-4xl">
                         <CardHeader className="bg-muted/20 border-b border-border">
@@ -403,9 +531,10 @@ export function MasterSettingsPage() {
 
                 {hasSchool && (
                     <>
+                        {/* ================= TAB: TAHUN AJARAN ================= */}
                         <TabsContent value="tahun-ajaran" className="mt-6">
                             <Card className="border-border shadow-sm max-w-4xl">
-                                {/* TOOLBAR AKSI: Flexbox responsif (grow) */}
+                                {/* TOOLBAR AKSI: flexbox responsif ("grow" di HP, ukuran sesuai isi di layar >= sm) */}
                                 <CardHeader className="bg-muted/20 border-b border-border p-4 sm:p-6">
                                     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                                         <div>
@@ -413,16 +542,18 @@ export function MasterSettingsPage() {
                                             <CardDescription className="mt-1">{t.ayListDesc}</CardDescription>
                                         </div>
                                         <div className="flex flex-wrap items-center gap-2 sm:shrink-0 sm:flex-nowrap">
-                                            {selectedAys.length > 0 && (
+                                            {/* Hapus Pilihan: hanya Super Admin & Admin, dan hanya saat ada yang dicentang */}
+                                            {canDeleteData && selectedAys.length > 0 && (
                                                 <Button
                                                     variant="destructive"
-                                                    onClick={() => { setDeleteModalType('bulk'); setAyToDelete({ id: 'bulk', name: 'bulk' }); }}
+                                                    onClick={() => setDeleteModal({ isOpen: true, type: 'bulk' })}
                                                     className="h-10 grow justify-center gap-2 whitespace-nowrap sm:grow-0 sm:px-4"
                                                 >
                                                     <Trash2 className="h-4 w-4 shrink-0" />
                                                     <span>{t.btnDeleteSel} ({selectedAys.length})</span>
                                                 </Button>
                                             )}
+                                            {/* Buat tahun ajaran baru */}
                                             <Button
                                                 onClick={() => generateNewAcademicYear.mutate()}
                                                 disabled={generateNewAcademicYear.isPending}
@@ -439,10 +570,14 @@ export function MasterSettingsPage() {
                                         <table className="w-full text-left border-collapse">
                                             <thead>
                                                 <tr className="border-b border-border/50 bg-muted/30 whitespace-nowrap">
-                                                    <th className="p-4 w-12 text-center">
-                                                        <input type="checkbox" checked={selectedAys.length === academicYears.length && academicYears.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer" />
-                                                    </th>
+                                                    {/* Checkbox pilih semua: hanya untuk yang boleh menghapus */}
+                                                    {canDeleteData && (
+                                                        <th className="p-4 w-12 text-center">
+                                                            <input type="checkbox" checked={selectedAys.length === deletableAys.length && deletableAys.length > 0} onChange={toggleAll} className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer" />
+                                                        </th>
+                                                    )}
                                                     <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase w-16">{t.colNo}</th>
+                                                    {/* Kolom yang bisa diklik untuk mengurutkan */}
                                                     <th className="px-6 py-4 text-xs font-semibold text-muted-foreground uppercase cursor-pointer hover:bg-muted/50 select-none" onClick={() => handleSort('name')}>
                                                         <div className="flex items-center gap-1">{t.colAy} {sortConfig?.key === 'name' ? (sortConfig.direction === 'asc' ? <ArrowUp size={14} /> : <ArrowDown size={14} />) : <ArrowUpDown size={14} className="opacity-40" />}</div>
                                                     </th>
@@ -454,17 +589,21 @@ export function MasterSettingsPage() {
                                             </thead>
                                             <tbody className="divide-y divide-border/50">
                                                 {isAyLoading ? (
-                                                    <tr><td colSpan={5} className="px-6 py-12 text-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-600 mx-auto" /></td></tr>
+                                                    <tr><td colSpan={canDeleteData ? 5 : 4} className="px-6 py-12 text-center"><Loader2 className="w-8 h-8 animate-spin text-emerald-600 mx-auto" /></td></tr>
                                                 ) : sortedAcademicYears.length === 0 ? (
-                                                    <tr><td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">{t.emptyData}</td></tr>
+                                                    <tr><td colSpan={canDeleteData ? 5 : 4} className="px-6 py-8 text-center text-muted-foreground">{t.emptyData}</td></tr>
                                                 ) : (
                                                     sortedAcademicYears.map((ay, idx) => (
                                                         <tr key={ay.id} className="hover:bg-muted/30 transition-colors whitespace-nowrap">
-                                                            <td className="p-4 text-center">
-                                                                <input type="checkbox" checked={selectedAys.includes(ay.id)} onChange={() => toggleRow(ay.id)} className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer" />
-                                                            </td>
+                                                            {/* Checkbox baris (dikunci untuk tahun ajaran aktif) */}
+                                                            {canDeleteData && (
+                                                                <td className="p-4 text-center">
+                                                                    <input type="checkbox" checked={selectedAys.includes(ay.id)} onChange={() => toggleRow(ay.id)} disabled={ay.isActive} title={ay.isActive ? t.titleActiveNoDelete : undefined} className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40" />
+                                                                </td>
+                                                            )}
                                                             <td className="px-6 py-4 text-sm text-muted-foreground font-medium">{idx + 1}</td>
                                                             <td className="px-6 py-4 font-semibold text-foreground text-base">{ay.name}</td>
+                                                            {/* Status aktif / tidak aktif */}
                                                             <td className="px-6 py-4 text-center">
                                                                 {ay.isActive ? (
                                                                     <span className="inline-flex items-center bg-emerald-500/10 text-emerald-600 border border-emerald-500/20 px-3 py-1 rounded-full text-xs font-bold"><CheckCircle2 className="w-3.5 h-3.5 mr-1.5" /> {t.statusActive}</span>
@@ -472,6 +611,7 @@ export function MasterSettingsPage() {
                                                                     <span className="inline-flex items-center bg-muted text-muted-foreground border border-border px-3 py-1 rounded-full text-xs font-medium">{t.statusInactive}</span>
                                                                 )}
                                                             </td>
+                                                            {/* Aksi: jadikan aktif & hapus satu data */}
                                                             <td className="px-6 py-4 text-right">
                                                                 <div className="flex items-center justify-end gap-2 flex-wrap">
                                                                     {!ay.isActive && (
@@ -479,8 +619,16 @@ export function MasterSettingsPage() {
                                                                             {t.btnSetActive}
                                                                         </Button>
                                                                     )}
-                                                                    {isSuperAdmin && (
-                                                                        <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 hover:bg-red-50 hover:text-red-600 shrink-0" onClick={() => { setDeleteModalType('single'); setAyToDelete({ id: ay.id, name: ay.name }); }}>
+                                                                    {/* Hapus satu tahun ajaran: Super Admin & Admin; tahun ajaran aktif tidak bisa dihapus */}
+                                                                    {canDeleteData && (
+                                                                        <Button
+                                                                            variant="ghost"
+                                                                            size="icon"
+                                                                            disabled={ay.isActive}
+                                                                            title={ay.isActive ? t.titleActiveNoDelete : undefined}
+                                                                            className="h-8 w-8 text-red-500 hover:bg-red-50 hover:text-red-600 shrink-0 disabled:opacity-30"
+                                                                            onClick={() => setDeleteModal({ isOpen: true, type: 'single', id: ay.id, name: ay.name })}
+                                                                        >
                                                                             <Trash2 className="w-4 h-4 shrink-0" />
                                                                         </Button>
                                                                     )}
@@ -496,6 +644,7 @@ export function MasterSettingsPage() {
                             </Card>
                         </TabsContent>
 
+                        {/* ================= TAB: DATA KELAS ================= */}
                         <TabsContent value="kelas" className="mt-6">
                             <div className="bg-card border border-border rounded-xl p-4 sm:p-6 shadow-sm">
                                 <ClassListPage />

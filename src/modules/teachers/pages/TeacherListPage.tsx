@@ -267,10 +267,14 @@ function SortableHeader({ columnKey, label, sortConfig, onSort, className }: Sor
 export function TeacherListPage() {
   const { locale } = useTranslation();
   const queryClient = useQueryClient();
-  const { school } = useAuthStore();
+  const { school, user } = useAuthStore();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const tr = (id: string, en: string) => (locale === 'id' ? id : en);
+
+  // "Kosongkan Data" (hapus SEMUA guru) HANYA untuk Super Admin.
+  // Role lain tidak melihat tombolnya.
+  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
   const [searchQuery, setSearchQuery] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
@@ -367,6 +371,12 @@ export function TeacherListPage() {
   };
 
   const handleDeleteAll = async () => {
+    // Pengaman tambahan: role lain tidak boleh menjalankan hapus semua
+    if (!isSuperAdmin) {
+      toast.error(tr('Hanya Super Admin yang dapat mengosongkan data.', 'Only Super Admin can clear all data.'));
+      closeDeleteModal();
+      return;
+    }
     setIsPreparingDeleteAll(true);
     try {
       const res = await teacherService.exportAll();
@@ -527,13 +537,16 @@ export function TeacherListPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
-          >
-            <Trash2 size={16} />
-            <span className="hidden sm:inline">{tr('Kosongkan Data', 'Clear All')}</span>
-          </button>
+          {/* Kosongkan Data: hanya tampil untuk Super Admin */}
+          {isSuperAdmin && (
+            <button
+              onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
+            >
+              <Trash2 size={16} />
+              <span className="hidden sm:inline">{tr('Kosongkan Data', 'Clear All')}</span>
+            </button>
+          )}
 
           <button
             onClick={handleExport}
@@ -746,7 +759,7 @@ export function TeacherListPage() {
 
       {/* --- CONFIRMATION MODAL --- */}
       <AnimatePresence>
-        {deleteModal.isOpen && (
+        {deleteModal.isOpen && (deleteModal.type !== 'all' || isSuperAdmin) && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/40 backdrop-blur-[2px]" onClick={() => !isDeleteBusy && closeDeleteModal()} />
             <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95, y: 10 }} className="relative bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm p-6 overflow-hidden z-10">
