@@ -1,5 +1,4 @@
-
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -199,7 +198,8 @@ export function ClassListPage() {
     const { school, user } = useAuthStore();
 
     const schoolId = school?.id;
-    const role = user?.role as string | undefined;
+    // (A) Perbaikan: Menggunakan tipe bawaan store, menghapus 'as string'
+    const role = user?.role;
     const isId = locale === 'id';
 
     // --------------------------------------------------------
@@ -257,8 +257,8 @@ export function ClassListPage() {
         cancel: isId ? 'Batal' : 'Cancel',
         deleteBtn: isId ? 'Hapus' : 'Delete',
         delWarning: isId
-            ? 'Kelas yang sudah memiliki siswa tidak dapat dihapus.'
-            : 'Classes with enrolled students cannot be deleted.',
+            ? '*Kelas yang sudah memiliki siswa tidak dapat dihapus.'
+            : '*Classes with enrolled students cannot be deleted.',
         delMsgBulk: (count) => isId
             ? `Yakin ingin menghapus ${count} kelas terpilih?`
             : `Delete ${count} selected classes?`,
@@ -299,7 +299,7 @@ export function ClassListPage() {
     }), [isId]);
 
     // --------------------------------------------------------
-    // STATE
+    // STATE & REFS
     // --------------------------------------------------------
 
     const [selectedAcademicYear, setSelectedAcademicYear] = useState('all');
@@ -312,6 +312,10 @@ export function ClassListPage() {
     const [pageInputValue, setPageInputValue] = useState('1');
     const [deleteModal, setDeleteModal] = useState<DeleteModalState>(null);
 
+    // (E) Perbaikan Aksesibilitas: Ref untuk modal
+    const modalRef = useRef<HTMLDivElement>(null);
+    const previousFocusRef = useRef<HTMLElement | null>(null);
+
     // Reset pagination and selection when the year filter changes.
     useEffect(() => {
         setCurrentPage(1);
@@ -320,41 +324,28 @@ export function ClassListPage() {
     }, [selectedAcademicYear]);
 
     // --------------------------------------------------------
-    // ACADEMIC YEAR QUERY
+    // QUERIES
     // --------------------------------------------------------
 
     const academicYearsQuery = useQuery({
         queryKey: ['academic-years', schoolId],
         queryFn: () => {
-            if (!schoolId) {
-                throw new Error(t.noSchool);
-            }
-
+            if (!schoolId) throw new Error(t.noSchool);
             return academicService.getAcademicYears(schoolId);
         },
         enabled: Boolean(schoolId),
         staleTime: 5 * 60 * 1000,
     });
 
-    const academicYears: AcademicYear[] =
-        academicYearsQuery.data?.data ?? [];
-
-    // --------------------------------------------------------
-    // CLASS QUERY
-    // --------------------------------------------------------
+    const academicYears: AcademicYear[] = academicYearsQuery.data?.data ?? [];
 
     const classesQuery = useQuery({
         queryKey: ['classes', schoolId, selectedAcademicYear],
         queryFn: () => {
-            if (!schoolId) {
-                throw new Error(t.noSchool);
-            }
-
+            if (!schoolId) throw new Error(t.noSchool);
             return academicService.getClasses(
                 schoolId,
-                selectedAcademicYear === 'all'
-                    ? undefined
-                    : selectedAcademicYear,
+                selectedAcademicYear === 'all' ? undefined : selectedAcademicYear,
             );
         },
         enabled: Boolean(schoolId),
@@ -363,46 +354,31 @@ export function ClassListPage() {
 
     const classes: ClassItem[] = classesQuery.data?.data ?? [];
 
+    // (B) Perbaikan: Mengunci interaksi ketika data sedang sinkronisasi ulang
+    const isDataBusy = classesQuery.isLoading || classesQuery.isFetching;
+
     // --------------------------------------------------------
-    // SORTING
+    // SORTING & PAGINATION
     // --------------------------------------------------------
 
     const sortedClasses = useMemo(() => {
         const result = [...classes];
-
         result.sort((first, second) => {
             const comparison = compareValues(
                 getSortValue(first, sortConfig.key),
                 getSortValue(second, sortConfig.key),
             );
-
-            return sortConfig.direction === 'asc'
-                ? comparison
-                : -comparison;
+            return sortConfig.direction === 'asc' ? comparison : -comparison;
         });
-
         return result;
     }, [classes, sortConfig]);
 
-    // --------------------------------------------------------
-    // PAGINATION
-    // --------------------------------------------------------
-
     const totalItems = sortedClasses.length;
-    const totalPages = Math.max(
-        1,
-        Math.ceil(totalItems / ITEMS_PER_PAGE),
-    );
-
-    const safeCurrentPage = Math.min(
-        Math.max(currentPage, 1),
-        totalPages,
-    );
+    const totalPages = Math.max(1, Math.ceil(totalItems / ITEMS_PER_PAGE));
+    const safeCurrentPage = Math.min(Math.max(currentPage, 1), totalPages);
 
     useEffect(() => {
-        if (currentPage !== safeCurrentPage) {
-            setCurrentPage(safeCurrentPage);
-        }
+        if (currentPage !== safeCurrentPage) setCurrentPage(safeCurrentPage);
     }, [currentPage, safeCurrentPage]);
 
     useEffect(() => {
@@ -410,15 +386,8 @@ export function ClassListPage() {
     }, [safeCurrentPage]);
 
     const startIndex = (safeCurrentPage - 1) * ITEMS_PER_PAGE;
-    const endIndex = Math.min(
-        startIndex + ITEMS_PER_PAGE,
-        totalItems,
-    );
-
-    const paginatedClasses = sortedClasses.slice(
-        startIndex,
-        endIndex,
-    );
+    const endIndex = Math.min(startIndex + ITEMS_PER_PAGE, totalItems);
+    const paginatedClasses = sortedClasses.slice(startIndex, endIndex);
 
     // --------------------------------------------------------
     // SELECTION
@@ -429,16 +398,10 @@ export function ClassListPage() {
         [classes],
     );
 
-    // Remove IDs that no longer exist in the current query result.
     useEffect(() => {
         setSelectedClasses((previous) => {
-            const next = previous.filter((id) =>
-                availableClassIds.has(id),
-            );
-
-            return next.length === previous.length
-                ? previous
-                : next;
+            const next = previous.filter((id) => availableClassIds.has(id));
+            return next.length === previous.length ? previous : next;
         });
     }, [availableClassIds]);
 
@@ -447,168 +410,128 @@ export function ClassListPage() {
         [paginatedClasses],
     );
 
-    const selectedVisibleCount = visibleIds.filter((id) =>
-        selectedClasses.includes(id),
-    ).length;
-
-    const allVisibleSelected =
-        visibleIds.length > 0 &&
-        selectedVisibleCount === visibleIds.length;
-
-    const someVisibleSelected =
-        selectedVisibleCount > 0 && !allVisibleSelected;
+    const selectedVisibleCount = visibleIds.filter((id) => selectedClasses.includes(id)).length;
+    const allVisibleSelected = visibleIds.length > 0 && selectedVisibleCount === visibleIds.length;
+    const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
 
     const toggleRow = useCallback((id: string) => {
         setSelectedClasses((previous) => (
-            previous.includes(id)
-                ? previous.filter((item) => item !== id)
-                : [...previous, id]
+            previous.includes(id) ? previous.filter((item) => item !== id) : [...previous, id]
         ));
     }, []);
 
     const toggleAllVisible = useCallback(() => {
         setSelectedClasses((previous) => {
-            if (allVisibleSelected) {
-                return previous.filter(
-                    (id) => !visibleIds.includes(id),
-                );
-            }
-
+            if (allVisibleSelected) return previous.filter((id) => !visibleIds.includes(id));
             return [...new Set([...previous, ...visibleIds])];
         });
     }, [allVisibleSelected, visibleIds]);
 
     // --------------------------------------------------------
-    // SORT HANDLER
+    // HANDLERS
     // --------------------------------------------------------
 
     const handleSort = useCallback((key: SortKey) => {
         setSortConfig((previous) => ({
             key,
-            direction:
-                previous.key === key && previous.direction === 'asc'
-                    ? 'desc'
-                    : 'asc',
+            direction: previous.key === key && previous.direction === 'asc' ? 'desc' : 'asc',
         }));
-
         setCurrentPage(1);
     }, []);
 
     const renderSortIcon = (key: SortKey) => {
         if (sortConfig.key !== key) {
-            return (
-                <ArrowUpDown
-                    size={14}
-                    className="opacity-40"
-                    aria-hidden="true"
-                />
-            );
+            return <ArrowUpDown size={14} className="opacity-40" aria-hidden="true" />;
         }
-
         return sortConfig.direction === 'asc'
             ? <ArrowUp size={14} aria-hidden="true" />
             : <ArrowDown size={14} aria-hidden="true" />;
     };
 
-    // --------------------------------------------------------
-    // PAGE HANDLERS
-    // --------------------------------------------------------
-
     const handlePageSubmit = useCallback(() => {
         const parsed = Number.parseInt(pageInputValue, 10);
-
-        const nextPage = Number.isFinite(parsed)
-            ? Math.min(Math.max(parsed, 1), totalPages)
-            : 1;
-
+        const nextPage = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), totalPages) : 1;
         setCurrentPage(nextPage);
         setPageInputValue(String(nextPage));
     }, [pageInputValue, totalPages]);
 
     // --------------------------------------------------------
-    // DELETE MUTATION
+    // MUTATIONS & MODAL
     // --------------------------------------------------------
+
+    const closeDeleteModal = useCallback(() => {
+        setDeleteModal(null);
+        // (E) Perbaikan Aksesibilitas: Mengembalikan fokus setelah modal tertutup
+        if (previousFocusRef.current) {
+            setTimeout(() => {
+                previousFocusRef.current?.focus();
+            }, 100);
+        }
+    }, []);
+
+    // (E) Perbaikan Aksesibilitas: Keyboard Trap (Escape)
+    useEffect(() => {
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && deleteModal) closeDeleteModal();
+        };
+
+        if (deleteModal) {
+            previousFocusRef.current = document.activeElement as HTMLElement;
+            window.addEventListener('keydown', handleKeyDown);
+            // Fokus otomatis ke modal saat dirender
+            setTimeout(() => modalRef.current?.focus(), 100);
+        }
+
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [deleteModal, closeDeleteModal]);
 
     const deleteMutation = useMutation({
         mutationFn: async (ids: string[]) => {
-            if (!schoolId) {
-                throw new Error(t.noSchool);
-            }
+            if (!schoolId) throw new Error(t.noSchool);
+            if (!canDeleteData) throw new Error(t.superAdminOnly);
 
-            if (!canDeleteData) {
-                throw new Error(t.superAdminOnly);
-            }
+            const uniqueIds = [...new Set(ids)].filter((id) => typeof id === 'string' && id.trim().length > 0);
+            if (uniqueIds.length === 0) throw new Error(t.noSelection);
 
-            const uniqueIds = [...new Set(ids)].filter(
-                (id) => typeof id === 'string' && id.trim().length > 0,
-            );
-
-            if (uniqueIds.length === 0) {
-                throw new Error(t.noSelection);
-            }
-
-            // IMPORTANT:
-            // Keep schoolId in the service call to enforce tenant scoping.
-            // Database RLS must still enforce authorization independently.
-            return academicService.deleteBulkClasses(
-                schoolId,
-                uniqueIds,
-            );
+            return academicService.deleteBulkClasses(schoolId, uniqueIds);
         },
-
-        onSuccess: async () => {
-            toast.success(t.toastDelSuccess);
+        onSuccess: async (data: any) => {
+            // (C & D) Perbaikan Notifikasi: Handling skipped response dari API
+            if (data?.skippedCount > 0) {
+                toast.success(
+                    isId
+                        ? `${data.deletedCount} kelas dihapus. *${data.skippedCount} kelas dilewati karena masih memiliki siswa.`
+                        : `${data.deletedCount} classes deleted. *${data.skippedCount} skipped due to enrolled students.`
+                );
+            } else {
+                toast.success(t.toastDelSuccess);
+            }
 
             setSelectedClasses([]);
-            setDeleteModal(null);
+            closeDeleteModal();
 
             await Promise.all([
-                queryClient.invalidateQueries({
-                    queryKey: ['classes', schoolId],
-                }),
-                queryClient.invalidateQueries({
-                    queryKey: ['class', schoolId],
-                }),
-                queryClient.invalidateQueries({
-                    queryKey: ['classes-list'],
-                }),
-                queryClient.invalidateQueries({
-                    queryKey: ['students'],
-                }),
+                queryClient.invalidateQueries({ queryKey: ['classes', schoolId] }),
+                queryClient.invalidateQueries({ queryKey: ['class', schoolId] }),
+                queryClient.invalidateQueries({ queryKey: ['classes-list'] }),
+                queryClient.invalidateQueries({ queryKey: ['students'] }),
             ]);
         },
-
         onError: (error: Error) => {
             toast.error(getErrorMessage(error, t.error));
         },
     });
 
-    // --------------------------------------------------------
-    // DELETE MODAL HANDLERS
-    // --------------------------------------------------------
-
     const openSingleDelete = useCallback(
         (item: ClassItem) => {
             if (!canDeleteData) return;
-
-            setDeleteModal({
-                type: 'single',
-                id: item.id,
-                name: item.name,
-            });
+            setDeleteModal({ type: 'single', id: item.id, name: item.name });
         },
         [canDeleteData],
     );
 
-    const closeDeleteModal = useCallback(() => {
-        if (deleteMutation.isPending) return;
-        setDeleteModal(null);
-    }, [deleteMutation.isPending]);
-
     const confirmDelete = useCallback(() => {
-        if (!canDeleteData || deleteMutation.isPending || !deleteModal) {
-            return;
-        }
+        if (!canDeleteData || deleteMutation.isPending || !deleteModal) return;
 
         if (deleteModal.type === 'single') {
             deleteMutation.mutate([deleteModal.id]);
@@ -620,7 +543,6 @@ export function ClassListPage() {
                 toast.error(t.noSelection);
                 return;
             }
-
             deleteMutation.mutate(selectedClasses);
             return;
         }
@@ -630,92 +552,49 @@ export function ClassListPage() {
                 toast.error(t.superAdminOnly);
                 return;
             }
-
-            // "All" means all classes in the currently displayed result,
-            // respecting the selected academic-year filter.
             const ids = classes.map((item) => item.id);
-
             if (ids.length === 0) {
-                setDeleteModal(null);
+                closeDeleteModal();
                 return;
             }
-
             deleteMutation.mutate(ids);
         }
-    }, [
-        canDeleteData,
-        deleteMutation,
-        deleteModal,
-        selectedClasses,
-        t,
-        isSuperAdmin,
-        classes,
-    ]);
+    }, [canDeleteData, deleteMutation, deleteModal, selectedClasses, t, isSuperAdmin, classes, closeDeleteModal]);
 
-    // --------------------------------------------------------
-    // DELETE MESSAGE
-    // --------------------------------------------------------
-
-    const selectedYearName =
-        academicYears.find(
-            (year) => year.id === selectedAcademicYear,
-        )?.name ?? '';
+    const selectedYearName = academicYears.find((year) => year.id === selectedAcademicYear)?.name ?? '';
 
     const deleteMessage = useMemo(() => {
         if (!deleteModal) return '';
-
-        if (deleteModal.type === 'single') {
-            return t.delMsgSingle(deleteModal.name);
-        }
-
-        if (deleteModal.type === 'bulk') {
-            return t.delMsgBulk(selectedClasses.length);
-        }
-
+        if (deleteModal.type === 'single') return t.delMsgSingle(deleteModal.name);
+        if (deleteModal.type === 'bulk') return t.delMsgBulk(selectedClasses.length);
         return t.delMsgAll(classes.length, selectedYearName);
-    }, [
-        deleteModal,
-        selectedClasses.length,
-        classes.length,
-        selectedYearName,
-        t,
-    ]);
+    }, [deleteModal, selectedClasses.length, classes.length, selectedYearName, t]);
 
-    // --------------------------------------------------------
-    // TABLE CONFIGURATION
-    // --------------------------------------------------------
-
-    const columnCount =
-        6 +
-        (canDeleteData ? 1 : 0) +
-        (canManageData ? 1 : 0);
+    const columnCount = 6 + (canDeleteData ? 1 : 0) + (canManageData ? 1 : 0);
 
     // --------------------------------------------------------
     // RENDER
     // --------------------------------------------------------
 
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="relative space-y-6"
-        >
-            {/* ================================================
-                DELETE CONFIRMATION MODAL
-            ================================================= */}
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="relative space-y-6">
 
+            {/* ================= MODAL HAPUS ================= */}
             <AnimatePresence>
                 {deleteModal && (
                     <div
                         className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4 backdrop-blur-sm"
                         role="presentation"
                         onMouseDown={(event) => {
-                            if (event.target === event.currentTarget) {
+                            if (event.target === event.currentTarget && !deleteMutation.isPending) {
                                 closeDeleteModal();
                             }
                         }}
                     >
                         <motion.div
+                            // (E) Aksesibilitas: Menambahkan Ref dan TabIndex untuk Focus Trap
+                            ref={modalRef}
+                            tabIndex={-1}
                             role="alertdialog"
                             aria-modal="true"
                             aria-labelledby="class-delete-title"
@@ -723,31 +602,19 @@ export function ClassListPage() {
                             initial={{ opacity: 0, scale: 0.95 }}
                             animate={{ opacity: 1, scale: 1 }}
                             exit={{ opacity: 0, scale: 0.95 }}
-                            className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-2xl"
+                            className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-2xl outline-none"
                         >
                             <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-red-200 bg-red-100">
-                                <AlertCircle
-                                    className="h-6 w-6 text-red-600"
-                                    aria-hidden="true"
-                                />
+                                <AlertCircle className="h-6 w-6 text-red-600" aria-hidden="true" />
                             </div>
 
-                            <h2
-                                id="class-delete-title"
-                                className="mb-2 text-xl font-bold"
-                            >
+                            <h2 id="class-delete-title" className="mb-2 text-xl font-bold">
                                 {t.confirmDelTitle}
                             </h2>
 
-                            <p
-                                id="class-delete-description"
-                                className="mb-6 text-sm text-muted-foreground"
-                            >
+                            <p id="class-delete-description" className="mb-6 text-sm text-muted-foreground">
                                 {deleteMessage}
-
-                                <span className="mt-2 block text-xs text-red-500">
-                                    {t.delWarning}
-                                </span>
+                                <span className="mt-2 block text-xs text-red-500">{t.delWarning}</span>
                             </p>
 
                             <div className="flex justify-end gap-3">
@@ -766,10 +633,8 @@ export function ClassListPage() {
                                     onClick={confirmDelete}
                                     disabled={
                                         deleteMutation.isPending ||
-                                        (deleteModal.type === 'bulk' &&
-                                            selectedClasses.length === 0) ||
-                                        (deleteModal.type === 'all' &&
-                                            classes.length === 0)
+                                        (deleteModal.type === 'bulk' && selectedClasses.length === 0) ||
+                                        (deleteModal.type === 'all' && classes.length === 0)
                                     }
                                 >
                                     {deleteMutation.isPending ? (
@@ -777,7 +642,6 @@ export function ClassListPage() {
                                     ) : (
                                         <Trash2 className="mr-2 h-4 w-4" />
                                     )}
-
                                     {t.deleteBtn}
                                 </Button>
                             </div>
@@ -786,19 +650,11 @@ export function ClassListPage() {
                 )}
             </AnimatePresence>
 
-            {/* ================================================
-                HEADER
-            ================================================= */}
-
+            {/* ================= HEADER ================= */}
             <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
                 <div>
-                    <h1 className="text-2xl font-bold text-foreground">
-                        {t.title}
-                    </h1>
-
-                    <p className="mt-1 text-sm text-muted-foreground">
-                        {t.subtitle}
-                    </p>
+                    <h1 className="text-2xl font-bold text-foreground">{t.title}</h1>
+                    <p className="mt-1 text-sm text-muted-foreground">{t.subtitle}</p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3">
@@ -808,18 +664,9 @@ export function ClassListPage() {
                             variant="outline"
                             className="border-red-200 text-red-600 shadow-sm transition-colors hover:bg-red-50 hover:text-red-700"
                             onClick={() => setDeleteModal({ type: 'all' })}
-                            disabled={
-                                classes.length === 0 ||
-                                classesQuery.isLoading ||
-                                deleteMutation.isPending ||
-                                !schoolId
-                            }
+                            disabled={classes.length === 0 || isDataBusy || deleteMutation.isPending || !schoolId}
                         >
-                            <AlertCircle
-                                size={16}
-                                className="mr-2"
-                                aria-hidden="true"
-                            />
+                            <AlertCircle size={16} className="mr-2" aria-hidden="true" />
                             {t.clearAll}
                         </Button>
                     )}
@@ -827,13 +674,11 @@ export function ClassListPage() {
                     {canManageData && (
                         <Link
                             to="/academic/classes/new"
-                            aria-disabled={!schoolId}
-                            onClick={(event) => {
-                                if (!schoolId) event.preventDefault();
-                            }}
+                            aria-disabled={!schoolId || isDataBusy}
+                            onClick={(event) => { if (!schoolId || isDataBusy) event.preventDefault(); }}
                             className={cn(
                                 'flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-emerald-700',
-                                !schoolId && 'pointer-events-none opacity-50',
+                                (!schoolId || isDataBusy) && 'pointer-events-none opacity-50'
                             )}
                         >
                             <Plus size={16} aria-hidden="true" />
@@ -843,73 +688,47 @@ export function ClassListPage() {
                 </div>
             </div>
 
-            {/* ================================================
-                SCHOOL CONTEXT ERROR
-            ================================================= */}
-
+            {/* ================= ERROR SEKOLAH ================= */}
             {!schoolId && (
-                <div
-                    role="alert"
-                    className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive"
-                >
+                <div role="alert" className="rounded-lg border border-destructive/30 p-4 text-sm text-destructive">
                     {t.noSchool}
                 </div>
             )}
 
-            {/* ================================================
-                FILTER & SELECTION TOOLBAR
-            ================================================= */}
-
+            {/* ================= TOOLBAR FILTER & SELEKSI ================= */}
             <div className="flex flex-col justify-between gap-4 rounded-xl border border-border/50 bg-card p-4 shadow-sm sm:flex-row sm:items-center">
                 <div className="flex w-full flex-col gap-3 sm:flex-row sm:items-center">
-                    <label
-                        htmlFor="class-academic-year-filter"
-                        className="whitespace-nowrap text-sm font-medium text-muted-foreground"
-                    >
+                    <label htmlFor="class-academic-year-filter" className="whitespace-nowrap text-sm font-medium text-muted-foreground">
                         {t.filterLabel}
                     </label>
 
                     <Select
                         value={selectedAcademicYear}
                         onValueChange={setSelectedAcademicYear}
-                        disabled={!schoolId || academicYearsQuery.isLoading}
+                        disabled={!schoolId || academicYearsQuery.isLoading || isDataBusy}
                     >
-                        <SelectTrigger
-                            id="class-academic-year-filter"
-                            className="w-full sm:w-64"
-                        >
+                        <SelectTrigger id="class-academic-year-filter" className="w-full sm:w-64">
                             <SelectValue placeholder={t.filterLabel} />
                         </SelectTrigger>
-
                         <SelectContent>
-                            <SelectItem value="all">
-                                {t.allYear}
-                            </SelectItem>
-
+                            <SelectItem value="all">{t.allYear}</SelectItem>
                             {academicYears.map((year) => (
-                                <SelectItem
-                                    key={year.id}
-                                    value={year.id}
-                                >
-                                    {year.name}{' '}
-                                    {year.isActive ? t.active : ''}
+                                <SelectItem key={year.id} value={year.id}>
+                                    {year.name} {year.isActive ? t.active : ''}
                                 </SelectItem>
                             ))}
                         </SelectContent>
                     </Select>
 
                     {academicYearsQuery.isError && (
-                        <span
-                            role="alert"
-                            className="text-sm text-destructive"
-                        >
+                        <span role="alert" className="text-sm text-destructive">
                             {t.yearsError}
                         </span>
                     )}
                 </div>
 
                 {canDeleteData && selectedClasses.length > 0 && (
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex shrink-0 items-center justify-end gap-2">
                         <span className="hidden whitespace-nowrap shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 sm:inline-block">
                             {t.selectedCount(selectedClasses.length)}
                         </span>
@@ -919,13 +738,9 @@ export function ClassListPage() {
                             variant="destructive"
                             size="sm"
                             onClick={() => setDeleteModal({ type: 'bulk' })}
-                            disabled={deleteMutation.isPending}
+                            disabled={deleteMutation.isPending || isDataBusy}
                         >
-                            <Trash2
-                                size={16}
-                                className="mr-2"
-                                aria-hidden="true"
-                            />
+                            <Trash2 size={16} className="mr-2" aria-hidden="true" />
                             {t.delSelection}
                         </Button>
 
@@ -943,47 +758,30 @@ export function ClassListPage() {
                 )}
             </div>
 
-            {/* ================================================
-                CLASS TABLE
-            ================================================= */}
-
+            {/* ================= TABEL KELAS ================= */}
             <div className="overflow-hidden rounded-xl border border-border/50 bg-card shadow-sm">
                 <div className="w-full overflow-x-auto">
                     <table className="w-full border-collapse text-left">
                         <thead>
                             <tr className="whitespace-nowrap border-b border-border/50 bg-muted/30">
                                 {canDeleteData && (
-                                    <th
-                                        scope="col"
-                                        className="w-12 p-4 text-center"
-                                    >
+                                    <th scope="col" className="w-12 p-4 text-center">
                                         <input
                                             type="checkbox"
                                             aria-label={t.selectAll}
                                             checked={allVisibleSelected}
                                             ref={(element) => {
-                                                if (element) {
-                                                    element.indeterminate =
-                                                        someVisibleSelected;
-                                                }
+                                                if (element) element.indeterminate = someVisibleSelected;
                                             }}
                                             onChange={toggleAllVisible}
-                                            disabled={
-                                                paginatedClasses.length === 0 ||
-                                                deleteMutation.isPending
-                                            }
+                                            disabled={paginatedClasses.length === 0 || deleteMutation.isPending || isDataBusy}
                                             className="h-4 w-4 cursor-pointer rounded border-border bg-muted accent-emerald-600 disabled:cursor-not-allowed"
                                         />
                                     </th>
                                 )}
-
-                                <th
-                                    scope="col"
-                                    className="w-16 px-6 py-4 text-xs font-semibold uppercase text-muted-foreground"
-                                >
+                                <th scope="col" className="w-16 px-6 py-4 text-xs font-semibold uppercase text-muted-foreground">
                                     {t.thNo}
                                 </th>
-
                                 {([
                                     ['name', t.thName],
                                     ['gradeLevel', t.thGrade],
@@ -993,38 +791,25 @@ export function ClassListPage() {
                                     <th
                                         key={key}
                                         scope="col"
-                                        aria-sort={
-                                            sortConfig.key === key
-                                                ? sortConfig.direction === 'asc'
-                                                    ? 'ascending'
-                                                    : 'descending'
-                                                : 'none'
-                                        }
+                                        aria-sort={sortConfig.key === key ? (sortConfig.direction === 'asc' ? 'ascending' : 'descending') : 'none'}
                                         className="cursor-pointer select-none px-6 py-4 text-xs font-semibold uppercase text-muted-foreground transition-colors hover:bg-muted/50"
                                     >
                                         <button
                                             type="button"
                                             onClick={() => handleSort(key)}
                                             className="flex items-center gap-1 text-left"
+                                            disabled={isDataBusy}
                                         >
                                             {label}
                                             {renderSortIcon(key)}
                                         </button>
                                     </th>
                                 ))}
-
-                                <th
-                                    scope="col"
-                                    className="px-6 py-4 text-center text-xs font-semibold uppercase text-muted-foreground"
-                                >
+                                <th scope="col" className="px-6 py-4 text-center text-xs font-semibold uppercase text-muted-foreground">
                                     {t.thStudents}
                                 </th>
-
                                 {canManageData && (
-                                    <th
-                                        scope="col"
-                                        className="px-6 py-4 text-right text-xs font-semibold uppercase text-muted-foreground"
-                                    >
+                                    <th scope="col" className="px-6 py-4 text-right text-xs font-semibold uppercase text-muted-foreground">
                                         {t.thAction}
                                     </th>
                                 )}
@@ -1034,60 +819,36 @@ export function ClassListPage() {
                         <tbody className="divide-y divide-border/50">
                             {classesQuery.isLoading ? (
                                 <tr>
-                                    <td
-                                        colSpan={columnCount}
-                                        className="px-6 py-12 text-center text-muted-foreground"
-                                    >
+                                    <td colSpan={columnCount} className="px-6 py-12 text-center text-muted-foreground">
                                         <Loader2 className="mx-auto mb-4 h-8 w-8 animate-spin text-emerald-600" />
                                         {t.loading}
                                     </td>
                                 </tr>
                             ) : classesQuery.isError ? (
                                 <tr>
-                                    <td
-                                        colSpan={columnCount}
-                                        className="px-6 py-12 text-center text-destructive"
-                                    >
+                                    <td colSpan={columnCount} className="px-6 py-12 text-center text-destructive">
                                         <p>{getErrorMessage(classesQuery.error, t.error)}</p>
-
-                                        <Button
-                                            type="button"
-                                            className="mt-3"
-                                            variant="outline"
-                                            onClick={() => {
-                                                void classesQuery.refetch();
-                                            }}
-                                        >
+                                        <Button type="button" className="mt-3" variant="outline" onClick={() => void classesQuery.refetch()}>
                                             {t.retry}
                                         </Button>
                                     </td>
                                 </tr>
                             ) : paginatedClasses.length === 0 ? (
                                 <tr>
-                                    <td
-                                        colSpan={columnCount}
-                                        className="px-6 py-12 text-center text-muted-foreground"
-                                    >
+                                    <td colSpan={columnCount} className="px-6 py-12 text-center text-muted-foreground">
                                         {t.empty}
                                     </td>
                                 </tr>
                             ) : (
                                 paginatedClasses.map((item, index) => {
-                                    const isSelected =
-                                        selectedClasses.includes(item.id);
-
+                                    const isSelected = selectedClasses.includes(item.id);
                                     return (
                                         <motion.tr
                                             key={item.id}
                                             initial={{ opacity: 0, y: 8 }}
                                             animate={{ opacity: 1, y: 0 }}
-                                            transition={{
-                                                delay: index * 0.02,
-                                            }}
-                                            className={cn(
-                                                'whitespace-nowrap transition-colors hover:bg-muted/30',
-                                                isSelected && 'bg-emerald-500/5',
-                                            )}
+                                            transition={{ delay: index * 0.02 }}
+                                            className={cn('whitespace-nowrap transition-colors hover:bg-muted/30', isSelected && 'bg-emerald-500/5')}
                                         >
                                             {canDeleteData && (
                                                 <td className="p-4 text-center">
@@ -1096,82 +857,50 @@ export function ClassListPage() {
                                                         aria-label={`${isId ? 'Pilih kelas' : 'Select class'} ${item.name}`}
                                                         checked={isSelected}
                                                         onChange={() => toggleRow(item.id)}
-                                                        disabled={deleteMutation.isPending}
+                                                        disabled={deleteMutation.isPending || isDataBusy}
                                                         className="h-4 w-4 cursor-pointer rounded border-border bg-muted accent-emerald-600 disabled:cursor-not-allowed"
                                                     />
                                                 </td>
                                             )}
-
-                                            <td className="px-6 py-4 text-sm font-medium text-muted-foreground">
-                                                {startIndex + index + 1}
-                                            </td>
-
+                                            <td className="px-6 py-4 text-sm font-medium text-muted-foreground">{startIndex + index + 1}</td>
                                             <td className="px-6 py-4">
-                                                <span className="text-base font-bold text-foreground">
-                                                    {item.name}
-                                                </span>
-
-                                                {item.major && (
-                                                    <p className="mt-0.5 text-xs text-muted-foreground">
-                                                        {item.major}
-                                                    </p>
-                                                )}
+                                                <span className="text-base font-bold text-foreground">{item.name}</span>
+                                                {item.major && <p className="mt-0.5 text-xs text-muted-foreground">{item.major}</p>}
                                             </td>
-
                                             <td className="px-6 py-4">
                                                 <span className="rounded-md border border-border bg-muted px-2.5 py-1 text-sm font-medium">
                                                     {t.gradePrefix} {item.gradeLevel}
                                                 </span>
                                             </td>
-
-                                            <td className="px-6 py-4 text-sm text-foreground">
-                                                {item.academic_years?.name ?? '—'}
-                                            </td>
-
+                                            <td className="px-6 py-4 text-sm text-foreground">{item.academic_years?.name ?? '—'}</td>
                                             <td className="px-6 py-4 text-sm text-muted-foreground">
-                                                {item.teachers?.fullName || (
-                                                    <span className="italic">
-                                                        {t.noTeacher}
-                                                    </span>
-                                                )}
+                                                {item.teachers?.fullName || <span className="italic">{t.noTeacher}</span>}
                                             </td>
-
                                             <td className="px-6 py-4 text-center">
                                                 <div className="inline-flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-sm font-semibold text-blue-700">
-                                                    <Users
-                                                        size={14}
-                                                        aria-hidden="true"
-                                                    />
+                                                    <Users size={14} aria-hidden="true" />
                                                     {item.studentCount ?? 0} / {item.capacity}
                                                 </div>
                                             </td>
-
                                             {canManageData && (
                                                 <td className="px-6 py-4 text-right">
                                                     <div className="flex items-center justify-end gap-2">
                                                         <Link
                                                             aria-label={`${t.editClass} ${item.name}`}
                                                             to={`/academic/classes/${encodeURIComponent(item.id)}/edit`}
-                                                            className="rounded-md p-2 text-emerald-600 transition-colors hover:bg-emerald-50"
+                                                            className={cn("rounded-md p-2 text-emerald-600 transition-colors hover:bg-emerald-50", isDataBusy && "pointer-events-none opacity-50")}
                                                         >
-                                                            <Edit
-                                                                className="h-4 w-4"
-                                                                aria-hidden="true"
-                                                            />
+                                                            <Edit className="h-4 w-4" aria-hidden="true" />
                                                         </Link>
-
                                                         {canDeleteData && (
                                                             <button
                                                                 type="button"
                                                                 aria-label={`${t.deleteClass} ${item.name}`}
                                                                 onClick={() => openSingleDelete(item)}
-                                                                disabled={deleteMutation.isPending}
+                                                                disabled={deleteMutation.isPending || isDataBusy}
                                                                 className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
                                                             >
-                                                                <Trash2
-                                                                    className="h-4 w-4"
-                                                                    aria-hidden="true"
-                                                                />
+                                                                <Trash2 className="h-4 w-4" aria-hidden="true" />
                                                             </button>
                                                         )}
                                                     </div>
@@ -1185,10 +914,7 @@ export function ClassListPage() {
                     </table>
                 </div>
 
-                {/* ============================================
-                    PAGINATION
-                ============================================= */}
-
+                {/* ================= PAGINATION ================= */}
                 {totalItems > 0 && !classesQuery.isError && (
                     <div className="flex flex-col items-center justify-between gap-4 border-t border-border bg-background p-4 text-sm lg:flex-row">
                         <div className="w-full text-center text-muted-foreground lg:w-auto lg:text-left">
@@ -1197,13 +923,7 @@ export function ClassListPage() {
 
                         <div className="flex max-w-full shrink-0 items-center justify-center gap-2 overflow-x-auto py-1 sm:gap-3 lg:justify-end">
                             <div className="flex shrink-0 items-center gap-2">
-                                <label
-                                    htmlFor="class-page-jump"
-                                    className="whitespace-nowrap text-muted-foreground"
-                                >
-                                    {t.jumpTo}
-                                </label>
-
+                                <label htmlFor="class-page-jump" className="whitespace-nowrap text-muted-foreground">{t.jumpTo}</label>
                                 <input
                                     id="class-page-jump"
                                     type="number"
@@ -1212,16 +932,10 @@ export function ClassListPage() {
                                     max={totalPages}
                                     step={1}
                                     value={pageInputValue}
-                                    onChange={(event) => {
-                                        setPageInputValue(event.target.value);
-                                    }}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter') {
-                                            handlePageSubmit();
-                                        }
-                                    }}
+                                    onChange={(event) => setPageInputValue(event.target.value)}
+                                    onKeyDown={(event) => { if (event.key === 'Enter') handlePageSubmit(); }}
                                     onBlur={handlePageSubmit}
-                                    disabled={classesQuery.isLoading}
+                                    disabled={classesQuery.isLoading || isDataBusy}
                                     className="h-9 w-14 rounded-md border border-border bg-background text-center font-medium shadow-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                                 />
                             </div>
@@ -1234,10 +948,7 @@ export function ClassListPage() {
                                     title={isId ? 'Halaman pertama' : 'First page'}
                                     aria-label={isId ? 'Halaman pertama' : 'First page'}
                                     onClick={() => setCurrentPage(1)}
-                                    disabled={
-                                        safeCurrentPage === 1 ||
-                                        classesQuery.isLoading
-                                    }
+                                    disabled={safeCurrentPage === 1 || classesQuery.isLoading || isDataBusy}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronsLeft size={16} />
@@ -1247,48 +958,23 @@ export function ClassListPage() {
                                     type="button"
                                     title={isId ? 'Halaman sebelumnya' : 'Previous page'}
                                     aria-label={isId ? 'Halaman sebelumnya' : 'Previous page'}
-                                    onClick={() => {
-                                        setCurrentPage((page) =>
-                                            Math.max(1, page - 1),
-                                        );
-                                    }}
-                                    disabled={
-                                        safeCurrentPage === 1 ||
-                                        classesQuery.isLoading
-                                    }
+                                    onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+                                    disabled={safeCurrentPage === 1 || classesQuery.isLoading || isDataBusy}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronLeft size={16} />
                                 </button>
 
-                                {generatePagination(
-                                    safeCurrentPage,
-                                    totalPages,
-                                ).map((page, index) => (
+                                {generatePagination(safeCurrentPage, totalPages).map((page, index) => (
                                     <button
                                         type="button"
                                         key={`${page}-${index}`}
-                                        disabled={
-                                            page === '...' ||
-                                            classesQuery.isLoading
-                                        }
-                                        onClick={() => {
-                                            if (typeof page === 'number') {
-                                                setCurrentPage(page);
-                                            }
-                                        }}
-                                        aria-current={
-                                            page === safeCurrentPage
-                                                ? 'page'
-                                                : undefined
-                                        }
+                                        disabled={page === '...' || classesQuery.isLoading || isDataBusy}
+                                        onClick={() => { if (typeof page === 'number') setCurrentPage(page); }}
+                                        aria-current={page === safeCurrentPage ? 'page' : undefined}
                                         className={cn(
                                             'flex h-9 min-w-9 items-center justify-center rounded-md px-2 text-sm font-medium shadow-sm transition-colors',
-                                            page === '...'
-                                                ? 'cursor-default border-transparent text-muted-foreground shadow-none'
-                                                : page === safeCurrentPage
-                                                    ? 'border-transparent bg-emerald-600 text-white'
-                                                    : 'border border-border text-foreground hover:bg-muted',
+                                            page === '...' ? 'cursor-default border-transparent text-muted-foreground shadow-none' : page === safeCurrentPage ? 'border-transparent bg-emerald-600 text-white' : 'border border-border text-foreground hover:bg-muted'
                                         )}
                                     >
                                         {page}
@@ -1299,15 +985,8 @@ export function ClassListPage() {
                                     type="button"
                                     title={isId ? 'Halaman berikutnya' : 'Next page'}
                                     aria-label={isId ? 'Halaman berikutnya' : 'Next page'}
-                                    onClick={() => {
-                                        setCurrentPage((page) =>
-                                            Math.min(totalPages, page + 1),
-                                        );
-                                    }}
-                                    disabled={
-                                        safeCurrentPage === totalPages ||
-                                        classesQuery.isLoading
-                                    }
+                                    onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+                                    disabled={safeCurrentPage === totalPages || classesQuery.isLoading || isDataBusy}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronRight size={16} />
@@ -1318,10 +997,7 @@ export function ClassListPage() {
                                     title={isId ? 'Halaman terakhir' : 'Last page'}
                                     aria-label={isId ? 'Halaman terakhir' : 'Last page'}
                                     onClick={() => setCurrentPage(totalPages)}
-                                    disabled={
-                                        safeCurrentPage === totalPages ||
-                                        classesQuery.isLoading
-                                    }
+                                    disabled={safeCurrentPage === totalPages || classesQuery.isLoading || isDataBusy}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronsRight size={16} />
