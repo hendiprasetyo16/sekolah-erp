@@ -110,7 +110,47 @@ type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
 // Hitung hasil sukses/gagal dari banyak pemanggilan edge function sekaligus.
 // supabase.functions.invoke TIDAK melempar error, ia mengembalikan { data, error },
 // jadi hasilnya harus dicek satu per satu.
-type InvokeResult = { data: any; error: { message: string } | null };
+// Bentuk isi respons edge function Supabase yang dipakai di halaman ini
+interface EdgeFunctionBody {
+    error?: string;
+    message?: string;
+}
+type InvokeResult = { data: EdgeFunctionBody | null; error: { message: string } | null };
+
+// Respons endpoint generate-accounts-from-master (dipanggil lewat fetch)
+interface BulkGenerateResponse {
+    error?: string;
+    message?: string;
+    failed?: number;
+    remaining?: number;
+}
+// Panggil edge function dan SELALU kembalikan { data, error }; kegagalan jaringan tidak melempar error,
+// supaya satu permintaan yang gagal tidak membatalkan seluruh proses massal.
+const invokeSafe = async (name: string, body: Record<string, unknown>): Promise<InvokeResult> => {
+    try {
+        const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(name, { body });
+        return { data, error: error ? { message: error.message } : null };
+    } catch (e) {
+        return { data: null, error: { message: e instanceof Error ? e.message : 'Network error' } };
+    }
+};
+
+// Jalankan proses per item dengan batas jumlah yang berjalan bersamaan.
+// Tanpa batas ini, menghapus / membuat ratusan akun sekaligus membanjiri edge function dan terkena rate limit.
+const BULK_CONCURRENCY = 5;
+const runWithConcurrency = async <T, R>(items: readonly T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> => {
+    const results = new Array<R>(items.length);
+    let cursor = 0;
+    const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+        while (cursor < items.length) {
+            const index = cursor++;
+            results[index] = await worker(items[index]);
+        }
+    });
+    await Promise.all(runners);
+    return results;
+};
+
 const summarizeResults = (results: InvokeResult[]) => {
     const failures = results.filter(r => r.error || r.data?.error);
     return {
@@ -204,7 +244,7 @@ export function UserManagementPage() {
     const tGlobal = (key: keyof typeof translations.id.common): string => translations[lang].common[key];
 
     // Ambil teks terjemahan khusus halaman ini; {count} dst. diganti nilai di parameter `replace`
-    const tUM = (key: keyof typeof translations.id.userManagement, replace?: Record<string, any>): string => {
+    const tUM = (key: keyof typeof translations.id.userManagement, replace?: Record<string, string | number>): string => {
         let text: string = translations[lang].userManagement[key];
         if (replace) {
             Object.keys(replace).forEach(k => { text = text.replace(`{${k}}`, String(replace[k])); });
@@ -309,7 +349,7 @@ export function UserManagementPage() {
     // Tambah satu pengguna baru (lewat edge function create-user)
     const addUserMutation = useMutation({
         mutationFn: async (payload: CreateUserFormValues) => {
-            const { data, error } = await supabase.functions.invoke('create-user', { body: { ...payload, schoolId: school?.id } });
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('create-user', { body: { ...payload, schoolId: school?.id } });
             if (error || data?.error) throw new Error(error?.message || data?.error);
             return data;
         },
@@ -337,7 +377,7 @@ export function UserManagementPage() {
     // Reset password satu pengguna
     const resetPasswordMutation = useMutation({
         mutationFn: async (payload: { userId: string, newPass: string }) => {
-            const { data, error } = await supabase.functions.invoke('reset-password', { body: { targetUserId: payload.userId, newPassword: payload.newPass } });
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('reset-password', { body: { targetUserId: payload.userId, newPassword: payload.newPass } });
             if (error || data?.error) throw new Error(error?.message || data?.error);
         },
         onSuccess: () => {
@@ -360,7 +400,7 @@ export function UserManagementPage() {
     // Hapus satu pengguna
     const deleteUserMutation = useMutation({
         mutationFn: async (userId: string) => {
-            const { data, error } = await supabase.functions.invoke('delete-user', { body: { targetUserId: userId } });
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('delete-user', { body: { targetUserId: userId } });
             if (error || data?.error) throw new Error(error?.message || data?.error);
         },
         onSuccess: () => { toast.success(tUM('toastDelSuccess')); setUserToDelete(null); queryClient.invalidateQueries({ queryKey: ['users-list'] }); },
@@ -370,12 +410,10 @@ export function UserManagementPage() {
     // Buatkan akun login untuk data (guru/siswa/ortu) yang dicentang, memakai password default
     const generateSelectedMutation = useMutation({
         mutationFn: async (usersTarget: AppUser[]) => {
-            const results = await Promise.all(
-                usersTarget.map(user => supabase.functions.invoke('create-user', {
-                    body: { email: user.email, password: DEFAULT_PASSWORD, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id }
-                }))
+            const results = await runWithConcurrency(usersTarget, BULK_CONCURRENCY, user =>
+                invokeSafe('create-user', { email: user.email, password: DEFAULT_PASSWORD, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id })
             );
-            const summary = summarizeResults(results as InvokeResult[]);
+            const summary = summarizeResults(results);
             if (summary.success === 0) throw new Error(summary.firstMessage); // semua gagal -> tampilkan error
             return summary;
         },
@@ -397,15 +435,18 @@ export function UserManagementPage() {
                 headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
                 body: JSON.stringify({ targetGroup, schoolId: school?.id })
             });
-            const data = await response.json();
+            const data = (await response.json()) as BulkGenerateResponse;
             if (!response.ok || data.error) throw new Error(data.error || 'Terjadi kesalahan sistem');
             return data;
         },
         onSuccess: (data) => {
             toast.success('Proses Selesai', { description: data.message });
-            if (data.failed > 0) toast.warning(`${data.failed} akun gagal diproses.`);
+            // Field boleh tidak ada di respons, jadi dianggap 0 kalau kosong
+            const failedCount = data.failed ?? 0;
+            const remainingCount = data.remaining ?? 0;
+            if (failedCount > 0) toast.warning(`${failedCount} akun gagal diproses.`);
             // Masih ada antrean -> modal dibiarkan terbuka agar user bisa klik lagi untuk melanjutkan
-            if (data.remaining > 0) toast.info(`Tersisa ${data.remaining} antrean.`, { description: 'Klik Generate Data lagi.' });
+            if (remainingCount > 0) toast.info(`Tersisa ${remainingCount} antrean.`, { description: 'Klik Generate Data lagi.' });
             else setIsGenerateAllModalOpen(false);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
@@ -415,8 +456,8 @@ export function UserManagementPage() {
     // Hapus akun yang dicentang
     const deleteSelectedMutation = useMutation({
         mutationFn: async (userIds: string[]) => {
-            const results = await Promise.all(userIds.map(id => supabase.functions.invoke('delete-user', { body: { targetUserId: id } })));
-            const summary = summarizeResults(results as InvokeResult[]);
+            const results = await runWithConcurrency(userIds, BULK_CONCURRENCY, id => invokeSafe('delete-user', { targetUserId: id }));
+            const summary = summarizeResults(results);
             if (summary.success === 0) throw new Error(summary.firstMessage);
             return summary;
         },
@@ -431,12 +472,12 @@ export function UserManagementPage() {
     // Hapus SEMUA akun pada tab aktif (staff / siswa / orang tua)
     const deleteAllBulkMutation = useMutation({
         mutationFn: async (targetGroup: string) => {
-            const { data, error } = await supabase.functions.invoke('delete-users-by-role', { body: { targetGroup, schoolId: school?.id } });
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('delete-users-by-role', { body: { targetGroup, schoolId: school?.id } });
             if (error || data?.error) throw new Error(error?.message || data?.error);
             return data;
         },
         onSuccess: (data) => {
-            toast.success(tGlobal('info'), { description: data.message || "Done!" });
+            toast.success(tGlobal('info'), { description: data?.message || 'Done!' });
             setIsDeleteAllModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
         onError: (error: Error) => toast.error(error.message)
@@ -450,8 +491,8 @@ export function UserManagementPage() {
         if (!users) return [];
 
         // 1) FILTER: cocokkan kata pencarian (nama/email) dan tab yang aktif
+        const q = searchQuery.trim().toLowerCase();
         let filtered = users.filter((u) => {
-            const q = searchQuery.toLowerCase();
             const matchesSearch = u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
 
             let matchesTab = true;
@@ -503,7 +544,7 @@ export function UserManagementPage() {
 
     // Tombol nomor halaman: maksimal 5 nomor, bergeser mengikuti halaman aktif
     const getPageNumbers = () => {
-        const pages = [];
+        const pages: number[] = [];
         let start = Math.max(1, currentPage - 2);
         const end = Math.min(totalPages, start + 4);
         if (end - start < 4) start = Math.max(1, end - 4);
@@ -599,7 +640,7 @@ export function UserManagementPage() {
                         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-md w-full p-6">
                             <div className="flex justify-between mb-4">
                                 <div><h3 className="text-xl font-bold">{tUM('modalAddTitle')}</h3><p className="text-muted-foreground text-sm">{tUM('modalAddSub')}</p></div>
-                                <Button variant="ghost" size="icon" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}><X className="w-5 h-5" /></Button>
+                                <Button variant="ghost" size="icon" aria-label={tGlobal('cancel')} onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}><X className="w-5 h-5" /></Button>
                             </div>
                             <Form {...addUserForm}>
                                 <form onSubmit={addUserForm.handleSubmit((data) => addUserMutation.mutate(data))} className="space-y-4">
@@ -624,7 +665,7 @@ export function UserManagementPage() {
                                                 <div className="relative flex items-center">
                                                     <Input type={showAddPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
                                                     {/* Tombol mata: tampilkan / sembunyikan password */}
-                                                    <button type="button" onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground">
+                                                    <button type="button" aria-label={lang === 'id' ? 'Tampilkan atau sembunyikan password' : 'Show or hide password'} onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground">
                                                         {showAddPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                                                     </button>
                                                 </div>
@@ -648,7 +689,7 @@ export function UserManagementPage() {
                         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-md w-full p-6">
                             <div className="flex justify-between mb-4">
                                 <div><h3 className="text-xl font-bold">{tUM('modalEditTitle')}</h3><p className="text-muted-foreground text-sm">{tUM('modalEditSub')}</p></div>
-                                <Button variant="ghost" size="icon" onClick={() => setUserToEdit(null)}><X className="w-5 h-5" /></Button>
+                                <Button variant="ghost" size="icon" aria-label={tGlobal('cancel')} onClick={() => setUserToEdit(null)}><X className="w-5 h-5" /></Button>
                             </div>
                             <Form {...editUserForm}>
                                 <form onSubmit={editUserForm.handleSubmit((data) => editUserMutation.mutate({ id: userToEdit.id, data }))} className="space-y-4">
@@ -682,7 +723,7 @@ export function UserManagementPage() {
                         <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-sm w-full p-6">
                             <div className="flex justify-between mb-4">
                                 <div className="w-12 h-12 bg-blue-100 flex items-center justify-center rounded-full"><KeyRound className="w-6 h-6 text-blue-600" /></div>
-                                <Button variant="ghost" size="icon" onClick={() => { setUserToReset(null); setShowResetPassword(false); }}><X className="w-5 h-5" /></Button>
+                                <Button variant="ghost" size="icon" aria-label={tGlobal('cancel')} onClick={() => { setUserToReset(null); setShowResetPassword(false); }}><X className="w-5 h-5" /></Button>
                             </div>
                             <h3 className="text-xl font-bold mb-1">{tUM('modalResetTitle')}</h3>
                             <p className="text-muted-foreground text-sm mb-6">{tUM('modalResetSub')} <strong>{userToReset.email}</strong></p>
@@ -695,7 +736,7 @@ export function UserManagementPage() {
                                                 <div className="relative flex items-center">
                                                     <Input type={showResetPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
                                                     {/* Tombol mata: tampilkan / sembunyikan password */}
-                                                    <button type="button" onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground">
+                                                    <button type="button" aria-label={lang === 'id' ? 'Tampilkan atau sembunyikan password' : 'Show or hide password'} onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground">
                                                         {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
                                                     </button>
                                                 </div>
@@ -987,7 +1028,7 @@ export function UserManagementPage() {
                         <thead>
                             <tr className="border-b border-border bg-muted/20">
                                 {/* Checkbox pilih semua (halaman aktif) */}
-                                <th className="px-4 py-3 w-10 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length} onChange={handleSelectAll} /></th>
+                                <th className="px-4 py-3 w-10 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" aria-label={lang === 'id' ? 'Pilih semua di halaman ini' : 'Select all on this page'} checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length} onChange={handleSelectAll} /></th>
                                 {/* Nomor urut: tidak bisa diklik / diurutkan */}
                                 <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">{tUM('colNo')}</th>
                                 {/* Kolom yang bisa diklik untuk mengurutkan */}
@@ -1010,7 +1051,7 @@ export function UserManagementPage() {
                                 paginatedUsers.map((user: AppUser, index: number) => (
                                     <tr key={user.id} className={`hover:bg-muted/30 transition-colors ${selectedUserIds.includes(user.id) ? 'bg-primary/5' : ''}`}>
                                         {/* Checkbox baris */}
-                                        <td className="px-4 py-3 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" checked={selectedUserIds.includes(user.id)} onChange={() => handleToggleSelect(user.id)} /></td>
+                                        <td className="px-4 py-3 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" aria-label={user.fullName} checked={selectedUserIds.includes(user.id)} onChange={() => handleToggleSelect(user.id)} /></td>
                                         {/* Nomor urut berlanjut antar halaman */}
                                         <td className="px-4 py-3 text-center text-sm text-muted-foreground font-medium">{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</td>
                                         {/* Avatar inisial + nama + email */}
@@ -1032,7 +1073,7 @@ export function UserManagementPage() {
                                         {/* Menu aksi per baris (titik tiga) */}
                                         <td className="px-4 py-3 text-right">
                                             <DropdownMenu>
-                                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
+                                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={tUM('colAction')} className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
                                                 <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground">
                                                     <DropdownMenuItem onClick={() => setUserToEdit(user)}><Edit className="w-4 h-4 mr-2" /> {tUM('actionEdit')}</DropdownMenuItem>
                                                     {/* Aksi di bawah ini hanya untuk Super Admin */}
