@@ -1,20 +1,18 @@
 import { Outlet, useLocation } from 'react-router-dom';
-import { motion } from 'framer-motion';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { useUIStore } from '@/stores/ui.store';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { TenantSelector } from '@/modules/auth/components/TenantSelector';
+import { cn } from '@/utils/cn';
 
 export function MainLayout() {
   const { sidebarCollapsed } = useUIStore();
   const location = useLocation();
-
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-
   const isMasterDataPage = location.pathname === '/academic/master-data';
 
   if (isSuperAdmin && !school && !isMasterDataPage) {
@@ -22,28 +20,17 @@ export function MainLayout() {
   }
 
   return (
-    // Tambahkan class "relative" di sini
-    <div className="min-h-screen bg-background relative">
-
-      {/* KELUARKAN SIDEBAR: Hapus div hidden pembungkus sebelumnya */}
+    <div className="min-h-screen bg-muted/30 text-foreground">
       <Sidebar />
 
-      <motion.div
-        initial={false}
-        animate={{ marginLeft: sidebarCollapsed ? 72 : 280 }}
-        transition={{ duration: 0.2, ease: 'easeInOut' }}
-        className="hidden lg:block"
-        style={{ minHeight: '100vh' }}
+      <div
+        className={cn(
+          'flex min-h-screen flex-col transition-[padding] duration-200 ease-out',
+          sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'
+        )}
       >
         <Header />
-        <main className="p-4 lg:p-6">
-          <Outlet />
-        </main>
-      </motion.div>
-
-      <div className="lg:hidden">
-        <Header />
-        <main className="p-4">
+        <main className="mx-auto w-full max-w-[1600px] flex-1 p-4 sm:p-6">
           <Outlet />
         </main>
       </div>

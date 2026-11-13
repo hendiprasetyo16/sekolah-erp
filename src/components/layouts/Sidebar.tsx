@@ -1,10 +1,9 @@
 import { useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { motion, AnimatePresence } from 'framer-motion';
 import {
   LayoutDashboard, Users, GraduationCap, Calendar, Wallet,
-  Package, FileText, Award, BarChart3, Settings, ChevronLeft,
-  ChevronRight, School, ChevronDown, BookOpen, CreditCard, Receipt,
+  Package, FileText, Award, BarChart3, Settings, PanelLeftClose,
+  PanelLeftOpen, School, ChevronDown, BookOpen, CreditCard, Receipt,
   Building2, ShieldCheck, ClipboardCheck, UserCheck
 } from 'lucide-react';
 import { cn } from '@/utils/cn';
@@ -19,7 +18,6 @@ interface NavItem {
   icon: React.ReactNode;
   href: string;
   module?: Module;
-  badge?: number;
   allowedRoles?: string[];
 }
 
@@ -31,248 +29,220 @@ interface NavGroup {
 
 export function Sidebar() {
   const { t, locale } = useTranslation();
-  // 1. PANGGIL sidebarOpen & setSidebarOpen DARI STORE
   const { sidebarCollapsed, setSidebarCollapsed, sidebarOpen, setSidebarOpen } = useUIStore();
   const { hasAnyPermission } = usePermission();
   const location = useLocation();
-
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
 
-  const schoolName = school?.name;
-
-  const [expandedGroups, setExpandedGroups] = useState<string[]>(['main', 'academic', 'management', 'attendance']);
+  const [expandedGroups, setExpandedGroups] = useState<string[]>([
+    'main',
+    'academic',
+    'attendance',
+    'management',
+    'system',
+  ]);
 
   const toggleGroup = (groupId: string) => {
-    setExpandedGroups(prev =>
-      prev.includes(groupId) ? prev.filter(g => g !== groupId) : [...prev, groupId]
+    setExpandedGroups((prev) =>
+      prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
     );
   };
 
-  // 2. FUNGSI MENUTUP SIDEBAR OTOMATIS SAAT MENU DIKLIK DI HP
   const handleLinkClick = () => {
     if (window.innerWidth < 1024) {
       setSidebarOpen(false);
     }
   };
 
-  const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'];
-  const guruRoles = [...adminRoles, 'GURU'];
+  const coreAdmin = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'];
+  const academicStaff = [...coreAdmin, 'WALI_KELAS', 'GURU', 'STAFF_TU'];
+  const financeRoles = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'];
+  const inventoryRoles = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'];
+  const tuRoles = [...coreAdmin, 'STAFF_TU'];
 
   const navGroups: NavGroup[] = [
     {
       id: 'main',
-      title: 'main',
+      title: '',
       items: [
-        { label: t('sidebar.dashboard'), icon: <LayoutDashboard size={20} />, href: '/dashboard' },
+        { label: t('sidebar.dashboard'), icon: <LayoutDashboard size={17} />, href: '/dashboard' },
       ],
     },
     {
       id: 'academic',
       title: t('sidebar.academic'),
       items: [
-        { label: t('sidebar.masterData'), icon: <Building2 size={20} />, href: '/academic/master-data', allowedRoles: adminRoles },
-        { label: t('sidebar.students'), icon: <Users size={20} />, href: '/students', allowedRoles: guruRoles },
-        { label: t('sidebar.teachers'), icon: <GraduationCap size={20} />, href: '/teachers', allowedRoles: guruRoles },
-        { label: t('sidebar.schedules'), icon: <Calendar size={20} />, href: '/schedules', allowedRoles: guruRoles },
+        { label: t('sidebar.masterData'), icon: <Building2 size={17} />, href: '/academic/master-data', allowedRoles: coreAdmin },
+        { label: t('sidebar.students'), icon: <Users size={17} />, href: '/students', allowedRoles: academicStaff },
+        { label: t('sidebar.teachers'), icon: <GraduationCap size={17} />, href: '/teachers', allowedRoles: academicStaff },
+        { label: t('sidebar.schedules'), icon: <Calendar size={17} />, href: '/schedules', allowedRoles: academicStaff },
       ],
     },
     {
       id: 'attendance',
-      title: locale === 'id' ? 'Absensi' : 'Attendance',
+      title: locale === 'id' ? 'Presensi' : 'Attendance',
       items: [
-        { label: locale === 'id' ? 'Rekap Absensi' : 'Attendance Report', icon: <ClipboardCheck size={20} />, href: '/attendance', allowedRoles: adminRoles },
-        { label: locale === 'id' ? 'Absen Saya (GPS)' : 'My Attendance (GPS)', icon: <UserCheck size={20} />, href: '/attendance/teacher' },
+        { label: locale === 'id' ? 'Rekap Presensi' : 'Attendance Report', icon: <ClipboardCheck size={17} />, href: '/attendance', allowedRoles: [...coreAdmin, 'WALI_KELAS'] },
+        { label: locale === 'id' ? 'Presensi GPS' : 'GPS Check-In', icon: <UserCheck size={17} />, href: '/attendance/teacher', allowedRoles: ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS', 'BENDAHARA'] },
       ],
     },
     {
       id: 'management',
       title: t('sidebar.management'),
       items: [
-        { label: t('sidebar.finance'), icon: <Wallet size={20} />, href: '/finance', allowedRoles: adminRoles },
-        { label: t('sidebar.feeMaster'), icon: <FileText size={20} />, href: '/finance/fee-templates', allowedRoles: adminRoles },
-        { label: t('sidebar.studentBills'), icon: <CreditCard size={20} />, href: '/finance/bills', badge: 15, allowedRoles: adminRoles },
-        { label: t('sidebar.payments'), icon: <Receipt size={20} />, href: '/finance/payments', allowedRoles: adminRoles },
-        { label: t('sidebar.inventory'), icon: <Package size={20} />, href: '/inventory', allowedRoles: adminRoles },
-        { label: t('sidebar.administration'), icon: <BookOpen size={20} />, href: '/admin', badge: 5, allowedRoles: adminRoles },
-        { label: t('sidebar.scholarships'), icon: <Award size={20} />, href: '/scholarships', allowedRoles: adminRoles },
+        { label: t('sidebar.finance'), icon: <Wallet size={17} />, href: '/finance', allowedRoles: financeRoles },
+        { label: t('sidebar.feeMaster'), icon: <FileText size={17} />, href: '/finance/fee-templates', allowedRoles: financeRoles },
+        { label: t('sidebar.studentBills'), icon: <CreditCard size={17} />, href: '/finance/bills', allowedRoles: financeRoles },
+        { label: t('sidebar.payments'), icon: <Receipt size={17} />, href: '/finance/payments', allowedRoles: financeRoles },
+        { label: t('sidebar.inventory'), icon: <Package size={17} />, href: '/inventory', allowedRoles: inventoryRoles },
+        { label: t('sidebar.administration'), icon: <BookOpen size={17} />, href: '/admin', allowedRoles: tuRoles },
+        { label: t('sidebar.scholarships'), icon: <Award size={17} />, href: '/scholarships', allowedRoles: tuRoles },
       ],
     },
     {
-      id: 'reports',
-      title: '',
+      id: 'system',
+      title: locale === 'id' ? 'Sistem' : 'System',
       items: [
-        { label: t('sidebar.reports'), icon: <BarChart3 size={20} />, href: '/reports', allowedRoles: adminRoles },
-        { label: locale === 'id' ? 'Akses Pengguna' : 'User Access', icon: <ShieldCheck size={20} />, href: '/admin/users', allowedRoles: ['SUPER_ADMIN', 'ADMIN'] },
-        { label: t('sidebar.settings'), icon: <Settings size={20} />, href: '/settings', allowedRoles: adminRoles },
+        { label: t('sidebar.reports'), icon: <BarChart3 size={17} />, href: '/reports', allowedRoles: [...coreAdmin, 'BENDAHARA'] },
+        { label: locale === 'id' ? 'Manajemen Akun' : 'User Accounts', icon: <ShieldCheck size={17} />, href: '/admin/users', allowedRoles: ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'STAFF_TU'] },
+        { label: t('sidebar.settings'), icon: <Settings size={17} />, href: '/settings', allowedRoles: coreAdmin },
       ],
     },
   ];
 
-  const filteredGroups = navGroups.map(group => ({
-    ...group,
-    items: group.items.filter(item => {
-      const hasModule = !item.module || hasAnyPermission(item.module);
-      const hasRole = !item.allowedRoles || (user?.role && item.allowedRoles.includes(user.role));
-      return hasModule && hasRole;
-    }),
-  })).filter(group => group.items.length > 0);
+  const filteredGroups = navGroups
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => {
+        const hasModule = !item.module || hasAnyPermission(item.module);
+        const hasRole = !item.allowedRoles || (user?.role && item.allowedRoles.includes(user.role));
+        return hasModule && hasRole;
+      }),
+    }))
+    .filter((group) => group.items.length > 0);
 
   return (
     <>
-      {/* 3. LATAR BELAKANG GELAP (BACKDROP) UNTUK TAMPILAN HP */}
-      <AnimatePresence>
-        {sidebarOpen && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setSidebarOpen(false)}
-            className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm lg:hidden"
-          />
-        )}
-      </AnimatePresence>
+      {sidebarOpen && (
+        <div
+          onClick={() => setSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+        />
+      )}
 
-      <motion.aside
-        initial={false}
-        animate={{ width: sidebarCollapsed ? 72 : 280 }}
-        transition={{ duration: 0.2, ease: 'easeInOut' }}
+      <aside
         className={cn(
-          'fixed left-0 top-0 bottom-0 z-50 flex flex-col border-r border-border/50',
-          'bg-sidebar/95 backdrop-blur-xl',
-          // 4. EFEK SLIDE IN/OUT BERDASARKAN STATUS sidebarOpen
-          'transition-transform duration-300 lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex flex-col border-r border-border bg-card',
+          'transition-[width,transform] duration-200 ease-out lg:translate-x-0',
+          sidebarCollapsed ? 'w-16' : 'w-60',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         )}
       >
-        <div className={cn("flex items-center h-16 border-b border-border/50 transition-all", sidebarCollapsed ? "justify-center px-0" : "px-4 gap-3")}>
-          <div className="shrink-0 w-9 h-9 rounded-lg bg-linear-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-            <School size={20} className="text-white" />
-          </div>
-          <AnimatePresence>
-            {!sidebarCollapsed && (
-              <motion.div
-                initial={{ opacity: 0, width: 0 }}
-                animate={{ opacity: 1, width: 'auto' }}
-                exit={{ opacity: 0, width: 0 }}
-                transition={{ duration: 0.2 }}
-                className="flex-1 overflow-hidden"
-              >
-                <h1 className="font-bold text-sm text-foreground">SekolahERP</h1>
-                <p className="text-xs text-muted-foreground truncate w-full" title={schoolName || 'Belum ada data'}>
-                  {schoolName || '-'}
-                </p>
-              </motion.div>
-            )}
-          </AnimatePresence>
+        {/* Identitas Institusi */}
+        <div
+          className={cn(
+            'flex h-14 shrink-0 items-center border-b border-border',
+            sidebarCollapsed ? 'justify-center px-2' : 'gap-2.5 px-4'
+          )}
+        >
+          {school?.logoUrl ? (
+            <img
+              src={school.logoUrl}
+              alt={school.name}
+              className="h-8 w-8 shrink-0 rounded-md border border-border object-cover"
+            />
+          ) : (
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-primary text-primary-foreground">
+              <School size={17} />
+            </div>
+          )}
+
+          {!sidebarCollapsed && (
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-semibold leading-tight text-foreground" title={school?.name}>
+                {school?.name || 'Portal Akademik'}
+              </p>
+              <p className="truncate font-mono text-[11px] text-muted-foreground">
+                {school?.npsn ? `NPSN ${school.npsn}` : 'Administrator'}
+              </p>
+            </div>
+          )}
         </div>
 
-        <nav className={cn(
-          "flex-1 overflow-y-auto overflow-x-hidden py-4",
-          "[&::-webkit-scrollbar]:w-1.5 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-muted-foreground/20 [&::-webkit-scrollbar-thumb]:rounded-full hover:[&::-webkit-scrollbar-thumb]:bg-muted-foreground/40",
-          sidebarCollapsed ? "px-2" : "px-4"
-        )}>
-          {filteredGroups.map((group) => (
-            <div key={group.id} className={cn("mb-4", sidebarCollapsed && "mb-2")}>
-              {group.title && group.title !== 'main' && !sidebarCollapsed && (
-                <button
-                  onClick={() => toggleGroup(group.id)}
-                  className="flex items-center justify-between w-full px-2 mb-1"
-                >
-                  <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-                    {group.title}
-                  </span>
-                  <ChevronDown
-                    size={14}
-                    className={cn(
-                      'text-muted-foreground transition-transform',
-                      expandedGroups.includes(group.id) && 'rotate-180'
-                    )}
-                  />
-                </button>
-              )}
+        {/* Navigasi */}
+        <nav className={cn('flex-1 overflow-y-auto py-3', sidebarCollapsed ? 'px-2' : 'px-3')}>
+          {filteredGroups.map((group) => {
+            const isExpanded = !group.title || sidebarCollapsed || expandedGroups.includes(group.id);
 
-              <AnimatePresence initial={false}>
-                {(group.title === 'main' || !group.title || sidebarCollapsed || expandedGroups.includes(group.id)) && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2 }}
-                    className={cn("space-y-1 overflow-hidden", sidebarCollapsed && "flex flex-col items-center")}
+            return (
+              <div key={group.id} className="mb-3">
+                {group.title && !sidebarCollapsed && (
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.id)}
+                    className="mb-1 flex w-full items-center justify-between px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
                   >
+                    <span>{group.title}</span>
+                    <ChevronDown
+                      size={13}
+                      className={cn('transition-transform duration-150', isExpanded && 'rotate-180')}
+                    />
+                  </button>
+                )}
+
+                {isExpanded && (
+                  <div className="space-y-0.5">
                     {group.items.map((item) => {
-                      const isActive = location.pathname === item.href || location.pathname.startsWith(item.href + '/');
+                      const isActive =
+                        location.pathname === item.href ||
+                        (item.href !== '/admin' && location.pathname.startsWith(item.href + '/'));
 
                       return (
                         <NavLink
                           key={item.href}
                           to={item.href}
-                          onClick={handleLinkClick} // PANGGIL FUNGSI TUTUP SAAT DIKLIK
+                          onClick={handleLinkClick}
                           title={sidebarCollapsed ? item.label : undefined}
                           className={cn(
-                            'flex items-center rounded-lg transition-all duration-200 group relative',
-                            sidebarCollapsed ? 'justify-center w-10 h-10 mx-auto' : 'px-3 py-2.5 gap-3 w-full',
+                            'flex items-center rounded-md text-[13px] transition-colors',
+                            sidebarCollapsed ? 'mx-auto h-9 w-9 justify-center' : 'gap-2.5 px-2.5 py-1.5',
                             isActive
-                              ? 'bg-primary/10 text-primary font-medium'
-                              : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+                              ? 'bg-primary text-primary-foreground font-medium'
+                              : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                           )}
                         >
-                          <span className={cn(
-                            'shrink-0 transition-colors',
-                            isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-primary'
-                          )}>
-                            {item.icon}
-                          </span>
-
-                          <AnimatePresence>
-                            {!sidebarCollapsed && (
-                              <motion.span
-                                initial={{ opacity: 0, width: 0 }}
-                                animate={{ opacity: 1, width: 'auto' }}
-                                exit={{ opacity: 0, width: 0 }}
-                                className="flex-1 truncate text-sm"
-                              >
-                                {item.label}
-                              </motion.span>
-                            )}
-                          </AnimatePresence>
-
-                          {!sidebarCollapsed && item.badge && (
-                            <span className="shrink-0 text-xs bg-primary/20 text-primary px-2 py-0.5 rounded-full font-medium">
-                              {item.badge}
-                            </span>
-                          )}
-                          {sidebarCollapsed && item.badge && (
-                            <span className="absolute top-1 right-1 w-2.5 h-2.5 bg-primary rounded-full ring-2 ring-background" />
-                          )}
+                          <span className="shrink-0">{item.icon}</span>
+                          {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
                         </NavLink>
                       );
                     })}
-                  </motion.div>
+                  </div>
                 )}
-              </AnimatePresence>
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </nav>
 
-        <div className="border-t border-border/50 p-3 hidden lg:block">
+        {/* Toggle Collapse */}
+        <div className="hidden border-t border-border p-2 lg:block">
           <button
+            type="button"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
             className={cn(
-              "flex items-center rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-all text-sm py-2",
-              sidebarCollapsed ? "justify-center w-full" : "w-full justify-center gap-2"
+              'flex w-full items-center rounded-md py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground',
+              sidebarCollapsed ? 'justify-center' : 'gap-2 px-2.5'
             )}
           >
-            {sidebarCollapsed ? <ChevronRight size={18} /> : (
+            {sidebarCollapsed ? <PanelLeftOpen size={16} /> : (
               <>
-                <ChevronLeft size={18} />
-                <span className="font-medium">{t('sidebar.collapse')}</span>
+                <PanelLeftClose size={16} />
+                <span>{t('sidebar.collapse')}</span>
               </>
             )}
           </button>
         </div>
-      </motion.aside>
+      </aside>
     </>
   );
 }

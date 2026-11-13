@@ -1,25 +1,28 @@
-# Nama aksi ini di GitHub
 name: Supabase Keep Alive Robot
 
-# 1. Kapan robot ini harus berjalan?
 on:
   schedule:
-    # Menggunakan format CRON. 
-    # Jadwal di bawah ini berarti: "Jalankan pada menit 0, jam 0, setiap 3 hari sekali"
-    - cron: '0 0 */3 * *' 
-  
-  # Ini memungkinkan kita menjalankan skrip secara manual dari tombol di GitHub jika diperlukan
-  workflow_dispatch: 
+    # Berjalan setiap 3 hari sekali pukul 00:00 UTC (07:00 WIB)
+    - cron: '0 0 */3 * *'
+  workflow_dispatch:
 
 jobs:
   ping-supabase:
     runs-on: ubuntu-latest
-    
     steps:
-      - name: Melakukan Request ke API Supabase
-        # 2. Skrip untuk mengetuk (ping) tabel 'users' di database kita
-        # Kita hanya meminta 1 data (limit=1) agar sangat ringan dan cepat.
+      - name: Ping Database PostgreSQL via RPC
         run: |
-          curl -X GET '${{ secrets.VITE_SUPABASE_URL }}/rest/v1/users?select=id&limit=1' \
-          -H 'apikey: ${{ secrets.VITE_SUPABASE_ANON_KEY }}' \
-          -H 'Authorization: Bearer ${{ secrets.VITE_SUPABASE_ANON_KEY }}'
+          HTTP_STATUS=$(curl -s -o /tmp/response.txt -w "%{http_code}" \
+            -X POST "${{ secrets.VITE_SUPABASE_URL }}/rest/v1/rpc/resolve_user_email" \
+            -H "apikey: ${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.VITE_SUPABASE_ANON_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"identifier": "keepalive-ping"}')
+
+          echo "HTTP Status: $HTTP_STATUS"
+          cat /tmp/response.txt
+
+          if [ "$HTTP_STATUS" -ne 200 ]; then
+            echo "Gagal ping Supabase!"
+            exit 1
+          fi
