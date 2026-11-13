@@ -23,7 +23,7 @@ import { toast } from 'sonner';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { academicService } from '../services/academic.service';
-import type { AcademicYear, ClassItem } from '../types/academic.types';
+import type { AcademicYear, BulkDeleteClassesResult, ClassItem } from '../types/academic.types';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -78,6 +78,7 @@ type Translation = {
     empty: string;
     noSchool: string;
     gradePrefix: string;
+    gradeTk: string;
     noTeacher: string;
     toastDelSuccess: string;
     confirmDelTitle: string;
@@ -198,7 +199,6 @@ export function ClassListPage() {
     const { school, user } = useAuthStore();
 
     const schoolId = school?.id;
-    // (A) Perbaikan: Menggunakan tipe bawaan store, menghapus 'as string'
     const role = user?.role;
     const isId = locale === 'id';
 
@@ -247,6 +247,7 @@ export function ClassListPage() {
             ? 'Sekolah tidak ditemukan. Silakan masuk kembali.'
             : 'School context is missing. Please sign in again.',
         gradePrefix: isId ? 'Kelas' : 'Grade',
+        gradeTk: isId ? 'TK / PAUD' : 'Kindergarten',
         noTeacher: isId ? 'Belum diatur' : 'Not set',
         toastDelSuccess: isId
             ? 'Kelas berhasil dihapus.'
@@ -312,11 +313,9 @@ export function ClassListPage() {
     const [pageInputValue, setPageInputValue] = useState('1');
     const [deleteModal, setDeleteModal] = useState<DeleteModalState>(null);
 
-    // (E) Perbaikan Aksesibilitas: Ref untuk modal
     const modalRef = useRef<HTMLDivElement>(null);
     const previousFocusRef = useRef<HTMLElement | null>(null);
 
-    // Reset pagination and selection when the year filter changes.
     useEffect(() => {
         setCurrentPage(1);
         setPageInputValue('1');
@@ -352,9 +351,11 @@ export function ClassListPage() {
         staleTime: 60 * 1000,
     });
 
-    const classes: ClassItem[] = classesQuery.data?.data ?? [];
+    const classes: ClassItem[] = useMemo(
+        () => classesQuery.data?.data ?? [],
+        [classesQuery.data?.data]
+    );
 
-    // (B) Perbaikan: Mengunci interaksi ketika data sedang sinkronisasi ulang
     const isDataBusy = classesQuery.isLoading || classesQuery.isFetching;
 
     // --------------------------------------------------------
@@ -449,11 +450,17 @@ export function ClassListPage() {
     };
 
     const handlePageSubmit = useCallback(() => {
+        if (pageInputValue.trim() === '') {
+            setPageInputValue(String(safeCurrentPage));
+            return;
+        }
         const parsed = Number.parseInt(pageInputValue, 10);
-        const nextPage = Number.isFinite(parsed) ? Math.min(Math.max(parsed, 1), totalPages) : 1;
+        const nextPage = Number.isFinite(parsed)
+            ? Math.min(Math.max(parsed, 1), totalPages)
+            : safeCurrentPage;
         setCurrentPage(nextPage);
         setPageInputValue(String(nextPage));
-    }, [pageInputValue, totalPages]);
+    }, [pageInputValue, safeCurrentPage, totalPages]);
 
     // --------------------------------------------------------
     // MUTATIONS & MODAL
@@ -461,7 +468,6 @@ export function ClassListPage() {
 
     const closeDeleteModal = useCallback(() => {
         setDeleteModal(null);
-        // (E) Perbaikan Aksesibilitas: Mengembalikan fokus setelah modal tertutup
         if (previousFocusRef.current) {
             setTimeout(() => {
                 previousFocusRef.current?.focus();
@@ -469,7 +475,6 @@ export function ClassListPage() {
         }
     }, []);
 
-    // (E) Perbaikan Aksesibilitas: Keyboard Trap (Escape)
     useEffect(() => {
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key === 'Escape' && deleteModal) closeDeleteModal();
@@ -478,7 +483,6 @@ export function ClassListPage() {
         if (deleteModal) {
             previousFocusRef.current = document.activeElement as HTMLElement;
             window.addEventListener('keydown', handleKeyDown);
-            // Fokus otomatis ke modal saat dirender
             setTimeout(() => modalRef.current?.focus(), 100);
         }
 
@@ -495,13 +499,16 @@ export function ClassListPage() {
 
             return academicService.deleteBulkClasses(schoolId, uniqueIds);
         },
-        onSuccess: async (data: any) => {
-            // (C & D) Perbaikan Notifikasi: Handling skipped response dari API
-            if (data?.skippedCount > 0) {
+        onSuccess: async (response) => {
+            const result: BulkDeleteClassesResult | undefined = response.data;
+            if (result && result.skippedCount > 0) {
                 toast.success(
                     isId
-                        ? `${data.deletedCount} kelas dihapus. *${data.skippedCount} kelas dilewati karena masih memiliki siswa.`
-                        : `${data.deletedCount} classes deleted. *${data.skippedCount} skipped due to enrolled students.`
+                        ? `${result.deletedCount} kelas dihapus. ${result.skippedCount} kelas dilewati karena masih memiliki siswa.`
+                        : `${result.deletedCount} classes deleted. ${result.skippedCount} skipped due to enrolled students.`,
+                    {
+                        description: result.skippedNames.join(', '),
+                    }
                 );
             } else {
                 toast.success(t.toastDelSuccess);
@@ -592,7 +599,6 @@ export function ClassListPage() {
                         }}
                     >
                         <motion.div
-                            // (E) Aksesibilitas: Menambahkan Ref dan TabIndex untuk Focus Trap
                             ref={modalRef}
                             tabIndex={-1}
                             role="alertdialog"
@@ -604,8 +610,8 @@ export function ClassListPage() {
                             exit={{ opacity: 0, scale: 0.95 }}
                             className="w-full max-w-md rounded-2xl border border-border bg-background p-6 shadow-2xl outline-none"
                         >
-                            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-red-200 bg-red-100">
-                                <AlertCircle className="h-6 w-6 text-red-600" aria-hidden="true" />
+                            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-red-200 bg-red-100 dark:border-red-500/30 dark:bg-red-500/20">
+                                <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" aria-hidden="true" />
                             </div>
 
                             <h2 id="class-delete-title" className="mb-2 text-xl font-bold">
@@ -614,7 +620,7 @@ export function ClassListPage() {
 
                             <p id="class-delete-description" className="mb-6 text-sm text-muted-foreground">
                                 {deleteMessage}
-                                <span className="mt-2 block text-xs text-red-500">{t.delWarning}</span>
+                                <span className="mt-2 block text-xs text-red-500 dark:text-red-400">{t.delWarning}</span>
                             </p>
 
                             <div className="flex justify-end gap-3">
@@ -662,7 +668,7 @@ export function ClassListPage() {
                         <Button
                             type="button"
                             variant="outline"
-                            className="border-red-200 text-red-600 shadow-sm transition-colors hover:bg-red-50 hover:text-red-700"
+                            className="border-red-200 text-red-600 shadow-sm transition-colors hover:bg-red-50 hover:text-red-700 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10"
                             onClick={() => setDeleteModal({ type: 'all' })}
                             disabled={classes.length === 0 || isDataBusy || deleteMutation.isPending || !schoolId}
                         >
@@ -729,7 +735,7 @@ export function ClassListPage() {
 
                 {canDeleteData && selectedClasses.length > 0 && (
                     <div className="flex shrink-0 items-center justify-end gap-2">
-                        <span className="hidden whitespace-nowrap shrink-0 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 sm:inline-block">
+                        <span className="hidden shrink-0 whitespace-nowrap rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300 sm:inline-block">
                             {t.selectedCount(selectedClasses.length)}
                         </span>
 
@@ -869,7 +875,7 @@ export function ClassListPage() {
                                             </td>
                                             <td className="px-6 py-4">
                                                 <span className="rounded-md border border-border bg-muted px-2.5 py-1 text-sm font-medium">
-                                                    {t.gradePrefix} {item.gradeLevel}
+                                                    {item.gradeLevel === 0 ? t.gradeTk : `${t.gradePrefix} ${item.gradeLevel}`}
                                                 </span>
                                             </td>
                                             <td className="px-6 py-4 text-sm text-foreground">{item.academic_years?.name ?? '—'}</td>
@@ -877,7 +883,7 @@ export function ClassListPage() {
                                                 {item.teachers?.fullName || <span className="italic">{t.noTeacher}</span>}
                                             </td>
                                             <td className="px-6 py-4 text-center">
-                                                <div className="inline-flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-sm font-semibold text-blue-700">
+                                                <div className="inline-flex items-center gap-1.5 rounded-full border border-blue-500/20 bg-blue-500/10 px-3 py-1 text-sm font-semibold text-blue-700 dark:text-blue-300">
                                                     <Users size={14} aria-hidden="true" />
                                                     {item.studentCount ?? 0} / {item.capacity}
                                                 </div>
@@ -888,7 +894,10 @@ export function ClassListPage() {
                                                         <Link
                                                             aria-label={`${t.editClass} ${item.name}`}
                                                             to={`/academic/classes/${encodeURIComponent(item.id)}/edit`}
-                                                            className={cn("rounded-md p-2 text-emerald-600 transition-colors hover:bg-emerald-50", isDataBusy && "pointer-events-none opacity-50")}
+                                                            className={cn(
+                                                                'rounded-md p-2 text-emerald-600 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-500/10',
+                                                                isDataBusy && 'pointer-events-none opacity-50'
+                                                            )}
                                                         >
                                                             <Edit className="h-4 w-4" aria-hidden="true" />
                                                         </Link>
@@ -898,7 +907,7 @@ export function ClassListPage() {
                                                                 aria-label={`${t.deleteClass} ${item.name}`}
                                                                 onClick={() => openSingleDelete(item)}
                                                                 disabled={deleteMutation.isPending || isDataBusy}
-                                                                className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                                                                className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-500/10"
                                                             >
                                                                 <Trash2 className="h-4 w-4" aria-hidden="true" />
                                                             </button>
@@ -933,7 +942,9 @@ export function ClassListPage() {
                                     step={1}
                                     value={pageInputValue}
                                     onChange={(event) => setPageInputValue(event.target.value)}
-                                    onKeyDown={(event) => { if (event.key === 'Enter') handlePageSubmit(); }}
+                                    onKeyDown={(event) => {
+                                        if (event.key === 'Enter') event.currentTarget.blur();
+                                    }}
                                     onBlur={handlePageSubmit}
                                     disabled={classesQuery.isLoading || isDataBusy}
                                     className="h-9 w-14 rounded-md border border-border bg-background text-center font-medium shadow-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
@@ -974,7 +985,11 @@ export function ClassListPage() {
                                         aria-current={page === safeCurrentPage ? 'page' : undefined}
                                         className={cn(
                                             'flex h-9 min-w-9 items-center justify-center rounded-md px-2 text-sm font-medium shadow-sm transition-colors',
-                                            page === '...' ? 'cursor-default border-transparent text-muted-foreground shadow-none' : page === safeCurrentPage ? 'border-transparent bg-emerald-600 text-white' : 'border border-border text-foreground hover:bg-muted'
+                                            page === '...'
+                                                ? 'cursor-default border-transparent text-muted-foreground shadow-none'
+                                                : page === safeCurrentPage
+                                                    ? 'border-transparent bg-emerald-600 text-white'
+                                                    : 'border border-border text-foreground hover:bg-muted'
                                         )}
                                     >
                                         {page}

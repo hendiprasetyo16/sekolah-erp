@@ -69,6 +69,20 @@ export interface CreateClassPayload {
 
 /**
  * Payload (Data yang dikirim) saat MENGUBAH (Update) kelas.
+ * schoolId tidak boleh diubah melalui payload update.
+ */
+export type UpdateClassPayload = Partial<Omit<CreateClassPayload, 'schoolId'>>;
+
+/**
+ * Hasil penghapusan massal kelas (mendukung penghapusan parsial jika sebagian kelas masih berisi siswa).
+ */
+export interface BulkDeleteClassesResult {
+    deletedCount: number;
+    skippedCount: number;
+    skippedNames: string[];
+}
+/**
+ * Payload (Data yang dikirim) saat MENGUBAH (Update) kelas.
  * Kita menggunakan utilitas TypeScript:
  * 1. Omit<..., 'schoolId'> : Membuang properti schoolId agar tidak bisa diubah.
  * 2. Partial<...> : Membuat semua properti yang tersisa menjadi opsional.
@@ -78,4 +92,3 @@ export interface CreateClassPayload {
  * Identitas sekolah ditentukan dari parameter service
  * dan tetap harus divalidasi oleh RLS di Supabase.
  */
-export type UpdateClassPayload = Partial<Omit<CreateClassPayload, 'schoolId'>>;

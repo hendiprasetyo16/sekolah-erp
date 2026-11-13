@@ -137,12 +137,18 @@ function ClassFormInner({
         [isId],
     );
 
+    const defaultAcademicYearId = useMemo(() => {
+        if (initialData?.academicYearId) return initialData.academicYearId;
+        const activeYear = academicYears.find((y) => y.isActive);
+        return activeYear?.id ?? academicYears[0]?.id ?? '';
+    }, [initialData?.academicYearId, academicYears]);
+
     const form = useForm<ClassFormValues>({
         resolver: zodResolver(classSchema),
         defaultValues: {
             name: initialData?.name ?? '',
             gradeLevel: Number(initialData?.gradeLevel ?? 1),
-            academicYearId: initialData?.academicYearId ?? '',
+            academicYearId: defaultAcademicYearId,
             homeroomTeacherId: initialData?.homeroomTeacherId ?? 'none',
             capacity: Number(initialData?.capacity ?? 36),
             major: initialData?.major ?? '',
@@ -153,14 +159,13 @@ function ClassFormInner({
         mutationFn: async (values: ClassFormValues) => {
             if (!schoolId) throw new Error(t.noSchool);
 
-            // Validasi referensi dilakukan lagi sebelum mutation; validasi otoritatif
-            // tetap wajib diterapkan di service/database dan melalui RLS.
             const selectedYear = academicYears.find((year) => year.id === values.academicYearId);
             if (!selectedYear) throw new Error(t.invalidYear);
 
-            const selectedTeacherId = values.homeroomTeacherId && values.homeroomTeacherId !== 'none'
-                ? values.homeroomTeacherId
-                : null;
+            const selectedTeacherId =
+                values.homeroomTeacherId && values.homeroomTeacherId !== 'none'
+                    ? values.homeroomTeacherId
+                    : null;
             if (selectedTeacherId && !teachers.some((teacher) => teacher.id === selectedTeacherId)) {
                 throw new Error(t.invalidTeacher);
             }
@@ -191,7 +196,7 @@ function ClassFormInner({
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['classes', schoolId] }),
                 queryClient.invalidateQueries({ queryKey: ['class', schoolId, classId] }),
-                queryClient.invalidateQueries({ queryKey: ['classes-list', schoolId] }),
+                queryClient.invalidateQueries({ queryKey: ['classes-list'] }),
                 queryClient.invalidateQueries({ queryKey: ['academic-years', schoolId] }),
             ]);
             navigate(CLASS_LIST_ROUTE, { ...CLASS_LIST_STATE, replace: true });
@@ -377,9 +382,11 @@ export function ClassFormPage() {
     const { id } = useParams<{ id: string }>();
     const isEdit = Boolean(id);
     const navigate = useNavigate();
-    const { school } = useAuthStore();
+    const { school, user } = useAuthStore();
     const schoolId = school?.id;
     const isId = locale === 'id';
+
+    const canManageData = user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
     const t = useMemo(
         () => ({
@@ -389,6 +396,9 @@ export function ClassFormPage() {
                 ? 'Atur rombongan belajar berdasarkan tingkat dan tahun ajaran.'
                 : 'Manage classes by grade level and academic year.',
             infoCard: isId ? 'Informasi Kelas' : 'Class Information',
+            noAccess: isId
+                ? 'Anda tidak memiliki izin untuk mengelola data kelas.'
+                : 'You do not have permission to manage class data.',
             noSchool: isId ? 'Sekolah tidak ditemukan. Silakan masuk kembali.' : 'School context is missing. Please sign in again.',
             loading: isId ? 'Memuat data...' : 'Loading data...',
             loadError: isId ? 'Data kelas gagal dimuat.' : 'Failed to load class data.',
@@ -411,7 +421,7 @@ export function ClassFormPage() {
             if (!schoolId) throw new Error(t.noSchool);
             return academicService.getAcademicYears(schoolId);
         },
-        enabled: Boolean(schoolId),
+        enabled: Boolean(schoolId && canManageData),
     });
 
     const teachersQuery = useQuery({
@@ -431,7 +441,7 @@ export function ClassFormPage() {
                 fullName: teacher.fullName,
             }));
         },
-        enabled: Boolean(schoolId),
+        enabled: Boolean(schoolId && canManageData),
     });
 
     const classQuery = useQuery({
@@ -440,7 +450,7 @@ export function ClassFormPage() {
             if (!schoolId || !id) throw new Error(t.missingClass);
             return academicService.getClassById(schoolId, id);
         },
-        enabled: Boolean(isEdit && schoolId && id),
+        enabled: Boolean(isEdit && schoolId && id && canManageData),
         retry: 1,
     });
 
@@ -453,6 +463,7 @@ export function ClassFormPage() {
     const queryError = academicYearsQuery.error || teachersQuery.error || (isEdit ? classQuery.error : null);
     const classMissing = isEdit && !isLoading && !queryError && !classData;
     const canRenderForm =
+        canManageData &&
         Boolean(schoolId) &&
         !isLoading &&
         !queryError &&
@@ -491,7 +502,12 @@ export function ClassFormPage() {
                     <CardTitle className="text-lg">{t.infoCard}</CardTitle>
                 </CardHeader>
                 <CardContent className="pt-6">
-                    {!schoolId ? (
+                    {!canManageData ? (
+                        <div role="alert" className="flex items-start gap-3 rounded-lg border border-destructive/30 p-4 text-sm text-destructive">
+                            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
+                            {t.noAccess}
+                        </div>
+                    ) : !schoolId ? (
                         <div role="alert" className="flex items-start gap-3 rounded-lg border border-destructive/30 p-4 text-sm text-destructive">
                             <AlertCircle className="mt-0.5 h-5 w-5 shrink-0" />
                             {t.noSchool}
@@ -516,7 +532,7 @@ export function ClassFormPage() {
                             {t.missingClass}
                         </div>
                     ) : academicYears.length === 0 ? (
-                        <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-4 text-sm text-amber-900">
+                        <div className="rounded-lg border border-amber-300/50 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200">
                             {t.missingYears}
                             <div>
                                 <Button
