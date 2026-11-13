@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft, Edit, User, MapPin, Phone,
   GraduationCap, Building2, UserCircle2,
-  Briefcase, HeartPulse, Home, CreditCard, Wallet
+  Briefcase, HeartPulse, Home, CreditCard, Wallet, Loader2, RefreshCw
 } from 'lucide-react';
 import { studentService } from '../services/student.service';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -12,140 +12,112 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-
-// 1. IMPORT USEAUTHSTORE UNTUK MENGAMBIL ROLE PENGGUNA
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import type { StudentParent, StudentEconomic } from '../types/student.types';
 
-// Definisi Strict Type lokal untuk menangkap field tambahan Dapodik
-interface ExtendedStudentData {
-  id: string;
-  nis: string;
-  nisn: string;
-  nik: string;
-  noKk: string;
-  fullName: string;
-  nickname?: string;
-  gender: 'L' | 'P';
-  birthPlace: string;
-  birthDate: string;
-  religion: string;
-  address: string;
-  dusun?: string; // BARU
-  rt?: string;
-  rw?: string;
-  kelurahan?: string;
-  kecamatan?: string;
-  city: string;
-  province: string;
-  postalCode?: string;
-  telepon?: string; // BARU
-  phone?: string;
-  email?: string;
-  status: string;
-  entryDate: string;
-  className: string;
-  gradeLevel: number;
-  parents?: (StudentParent & { birthYear?: string })[]; // BARU: Tahun Lahir
-  economic?: StudentEconomic & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number; hasKks?: boolean; kksNumber?: string }; // BARU: KKS
-  noAktaLahir?: string;
-  anakKe?: number;
-  jmlSaudara?: number;
-  beratBadan?: number;
-  tinggiBadan?: number;
-  lingkarKepala?: number;
-  jarakSekolah?: number;
-  jenisTinggal?: string;
-  alatTransportasi?: string;
-  sekolahAsal?: string;
-  bank?: string;
-  noRekening?: string;
-  namaRekening?: string;
-  // FIX: Menambahkan properti yang sebelumnya error di TypeScript
-  kebutuhanKhusus?: string;
-  lintang?: string;
-  bujur?: string;
-  skhun?: string;
-  noIjazah?: string;
-  noPesertaUn?: string;
-}
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning';
+
+const ALLOWED_MANAGE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'STAFF_TU', 'KEPALA_SEKOLAH'];
 
 export function StudentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { locale } = useTranslation();
 
-  // 2. AMBIL DATA USER DAN BUAT LOGIKA IZIN (RBAC)
   const { user } = useAuthStore();
-  const allowedRolesToManage = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'];
-  const canManageData = user?.role ? allowedRolesToManage.includes(user.role) : false;
+  const canManageData = user?.role ? ALLOWED_MANAGE_ROLES.includes(user.role) : false;
 
-  const { data: studentResponse, isLoading, isError } = useQuery({
+  const { data: studentResponse, isLoading, isError, refetch } = useQuery({
     queryKey: ['student', id],
     queryFn: () => studentService.getById(id!),
+    enabled: !!id,
   });
 
-  const student = studentResponse?.data as unknown as ExtendedStudentData;
-
-  const parentsList = student?.parents || (student as any)?.student_parents || [];
-  const rawEco = student?.economic || (student as any)?.student_economics;
-  const ecoData = (Array.isArray(rawEco) ? rawEco[0] : rawEco) || {};
+  const student = studentResponse?.data;
 
   if (isLoading) {
     return (
-      <div className="flex h-[60vh] items-center justify-center text-muted-foreground">
-        {locale === 'id' ? 'Memuat data...' : 'Loading data...'}
+      <div className="flex h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+        <p>{locale === 'id' ? 'Memuat data siswa...' : 'Loading student data...'}</p>
       </div>
     );
   }
 
   if (isError || !student) {
     return (
-      <div className="flex h-[60vh] items-center justify-center text-destructive font-medium">
-        {locale === 'id' ? 'Gagal memuat data siswa' : 'Failed to load student data'}
+      <div className="flex h-[60vh] flex-col items-center justify-center gap-4 text-center">
+        <p className="text-destructive font-medium">
+          {locale === 'id' ? 'Gagal memuat data siswa.' : 'Failed to load student data.'}
+        </p>
+        <div className="flex items-center gap-3">
+          <Button variant="outline" onClick={() => navigate('/students')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            {locale === 'id' ? 'Kembali' : 'Back'}
+          </Button>
+          <Button onClick={() => refetch()} className="bg-emerald-600 hover:bg-emerald-700 text-white">
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {locale === 'id' ? 'Coba Lagi' : 'Retry'}
+          </Button>
+        </div>
       </div>
     );
   }
 
-  const getStatusColor = (status: string) => {
+  const parentsList = student.parents || [];
+  const ecoData = student.economic;
+
+  const getStatusColor = (status: string): BadgeVariant => {
     switch (status) {
-      case 'AKTIF': return 'success';
-      case 'MUTASI_KELUAR': return 'warning';
-      case 'LULUS': return 'default';
-      case 'DO': return 'destructive';
-      case 'CUTI': return 'secondary';
-      default: return 'secondary';
+      case 'AKTIF':
+        return 'success';
+      case 'MUTASI_KELUAR':
+        return 'warning';
+      case 'LULUS':
+        return 'default';
+      case 'DO':
+        return 'destructive';
+      case 'CUTI':
+      default:
+        return 'secondary';
     }
   };
 
-  const getStatusLabel = (status: string) => {
-    if (locale === 'id') return status;
+  const getStatusLabel = (status: string): string => {
+    if (locale === 'id') {
+      return status === 'MUTASI_KELUAR' ? 'MUTASI KELUAR' : status;
+    }
     switch (status) {
-      case 'AKTIF': return 'ACTIVE';
-      case 'MUTASI_KELUAR': return 'TRANSFERRED';
-      case 'LULUS': return 'GRADUATED';
-      case 'DO': return 'DROPPED OUT';
-      case 'CUTI': return 'ON LEAVE';
-      default: return status;
+      case 'AKTIF':
+        return 'ACTIVE';
+      case 'MUTASI_KELUAR':
+        return 'TRANSFERRED';
+      case 'LULUS':
+        return 'GRADUATED';
+      case 'DO':
+        return 'DROPPED OUT';
+      case 'CUTI':
+        return 'ON LEAVE';
+      default:
+        return status;
     }
   };
 
-  const formatCurrency = (amount?: number | string) => {
-    if (!amount) return '-';
+  const formatCurrency = (amount?: number | string | null): string => {
+    if (amount === undefined || amount === null || String(amount).trim() === '') return '-';
     const num = Number(amount);
-    if (isNaN(num)) {
+    if (Number.isNaN(num)) {
       return String(amount);
     }
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
       currency: 'IDR',
-      maximumFractionDigits: 0
+      maximumFractionDigits: 0,
     }).format(num);
   };
 
-  const formatBool = (val?: boolean) => {
+  const formatBool = (val?: boolean): string => {
     if (val === undefined || val === null) return '-';
-    return val ? (locale === 'id' ? 'Ya' : 'Yes') : (locale === 'id' ? 'Tidak' : 'No');
+    return val ? (locale === 'id' ? 'Ya' : 'Yes') : locale === 'id' ? 'Tidak' : 'No';
   };
 
   return (
@@ -163,7 +135,6 @@ export function StudentDetailPage() {
           </div>
         </div>
 
-        {/* 3. SEMBUNYIKAN TOMBOL EDIT DARI GURU/SISWA/ORTU */}
         {canManageData && (
           <Button asChild className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700">
             <Link to={`/students/${id}/edit`} className="flex justify-center items-center">
@@ -184,19 +155,27 @@ export function StudentDetailPage() {
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-2xl font-bold text-foreground truncate">{student.fullName}</h2>
-                <Badge variant={getStatusColor(student.status) as any} className="shrink-0">
+                <Badge variant={getStatusColor(student.status)} className="shrink-0">
                   {getStatusLabel(student.status)}
                 </Badge>
               </div>
 
               <div className="mt-2 text-sm font-medium bg-muted/40 inline-block px-3 py-1.5 rounded-md border border-border">
-                NIS / NIPD: <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1 mr-4">{student.nis || '-'}</span>
-                NISN: <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1">{student.nisn}</span>
+                NIS / NIPD:{' '}
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1 mr-4">
+                  {student.nis || '-'}
+                </span>
+                NISN:{' '}
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1">
+                  {student.nisn}
+                </span>
               </div>
               <p className="text-xs text-muted-foreground mt-1.5 ml-1 flex flex-wrap items-center gap-2">
                 <span>NIK: {student.nik}</span>
                 <span className="hidden sm:inline">•</span>
-                <span>{locale === 'id' ? 'Panggilan:' : 'Nickname:'} {student.nickname || '-'}</span>
+                <span>
+                  {locale === 'id' ? 'Panggilan:' : 'Nickname:'} {student.nickname || '-'}
+                </span>
               </p>
 
               <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-muted-foreground">
@@ -206,7 +185,9 @@ export function StudentDetailPage() {
                 </div>
                 <div className="flex items-center">
                   <MapPin className="mr-2 h-4 w-4 shrink-0" />
-                  <span className="truncate">{student.city}, {student.province}</span>
+                  <span className="truncate">
+                    {student.city}, {student.province}
+                  </span>
                 </div>
                 <div className="flex items-center">
                   <Phone className="mr-2 h-4 w-4 shrink-0" />
@@ -218,10 +199,8 @@ export function StudentDetailPage() {
         </CardContent>
       </Card>
 
-      {/* ================= RIGHT CONTENT (Tabs Detail) ================= */}
+      {/* ================= TABS DETAIL ================= */}
       <Tabs defaultValue="pribadi" className="w-full min-w-0">
-
-        {/* Menu Tabs: Scrollable mendatar di HP, teks tidak patah (whitespace-nowrap) */}
         <div className="w-full overflow-x-auto pb-1 mb-4">
           <TabsList className="h-auto gap-1 bg-muted/50 p-1 flex w-max min-w-full sm:min-w-0">
             <TabsTrigger
@@ -292,13 +271,28 @@ export function StudentDetailPage() {
                     { label: 'NIS / NISN', value: `${student.nis || '-'} / ${student.nisn}` },
                     { label: 'NIK', value: student.nik },
                     { label: locale === 'id' ? 'No. Kartu Keluarga' : 'Family Card No.', value: student.noKk || '-' },
-                    { label: locale === 'id' ? 'Tempat, Tgl Lahir' : 'Place, Date of Birth', value: `${student.birthPlace}, ${formatDate(student.birthDate)}` },
-                    { label: locale === 'id' ? 'Jenis Kelamin' : 'Gender', value: student.gender === 'L' ? (locale === 'id' ? 'Laki-laki' : 'Male') : (locale === 'id' ? 'Perempuan' : 'Female') },
-                    { label: locale === 'id' ? 'Agama' : 'Religion', value: student.religion, capitalize: true },
+                    {
+                      label: locale === 'id' ? 'Tempat, Tgl Lahir' : 'Place, Date of Birth',
+                      value: `${student.birthPlace}, ${formatDate(student.birthDate)}`,
+                    },
+                    {
+                      label: locale === 'id' ? 'Jenis Kelamin' : 'Gender',
+                      value:
+                        student.gender === 'L'
+                          ? locale === 'id'
+                            ? 'Laki-laki'
+                            : 'Male'
+                          : locale === 'id'
+                            ? 'Perempuan'
+                            : 'Female',
+                    },
+                    { label: locale === 'id' ? 'Agama' : 'Religion', value: student.religion || '-', capitalize: true },
                   ].map((item, idx) => (
                     <div key={idx} className="grid grid-cols-3 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium">{item.label}</dt>
-                      <dd className={`col-span-2 text-foreground font-medium wrap-break-word ${item.capitalize ? 'capitalize' : ''}`}>{item.value}</dd>
+                      <dd className={`col-span-2 text-foreground font-medium wrap-break-word ${item.capitalize ? 'capitalize' : ''}`}>
+                        {item.value}
+                      </dd>
                     </div>
                   ))}
                 </dl>
@@ -350,10 +344,18 @@ export function StudentDetailPage() {
               <dl className="divide-y divide-border">
                 <div className="grid grid-cols-3 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                   <dt className="text-muted-foreground font-medium">Status</dt>
-                  <dd className="col-span-2"><Badge variant={getStatusColor(student.status) as any}>{getStatusLabel(student.status)}</Badge></dd>
+                  <dd className="col-span-2">
+                    <Badge variant={getStatusColor(student.status)}>{getStatusLabel(student.status)}</Badge>
+                  </dd>
                 </div>
                 {[
-                  { label: locale === 'id' ? 'Kelas Saat Ini' : 'Current Class', value: `${student.className} (Tingkat ${student.gradeLevel})` },
+                  {
+                    label: locale === 'id' ? 'Kelas Saat Ini' : 'Current Class',
+                    value:
+                      student.gradeLevel > 0
+                        ? `${student.className} (${locale === 'id' ? 'Tingkat' : 'Grade'} ${student.gradeLevel})`
+                        : student.className,
+                  },
                   { label: locale === 'id' ? 'Tanggal Masuk' : 'Entry Date', value: formatDate(student.entryDate) },
                   { label: locale === 'id' ? 'Sekolah Asal' : 'Previous School', value: student.sekolahAsal || '-' },
                 ].map((item, idx) => (
@@ -370,19 +372,22 @@ export function StudentDetailPage() {
         {/* TAB 3: ORANG TUA */}
         <TabsContent value="orangtua" className="m-0">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {['AYAH', 'IBU', 'WALI'].map((relation) => {
-              const parent = parentsList.find((p: any) => p.relation === relation);
+            {(['AYAH', 'IBU', 'WALI'] as const).map((relation) => {
+              const parent = parentsList.find((p) => p.relation === relation);
               if (relation === 'WALI' && !parent) return null;
 
               const isFather = relation === 'AYAH';
-              const titleID = relation === 'AYAH' ? 'Data Ayah' : (relation === 'IBU' ? 'Data Ibu' : 'Data Wali');
-              const titleEN = relation === 'AYAH' ? 'Father Data' : (relation === 'IBU' ? 'Mother Data' : 'Guardian Data');
+              const titleID = relation === 'AYAH' ? 'Data Ayah' : relation === 'IBU' ? 'Data Ibu' : 'Data Wali';
+              const titleEN = relation === 'AYAH' ? 'Father Data' : relation === 'IBU' ? 'Mother Data' : 'Guardian Data';
 
               return (
                 <Card key={relation} className="shadow-sm border-border">
                   <CardHeader className="bg-muted/20 border-b border-border pb-4">
                     <CardTitle className="text-lg flex items-center text-primary">
-                      <Briefcase className={`mr-2 h-5 w-5 shrink-0 ${isFather ? 'text-blue-500' : (relation === 'IBU' ? 'text-pink-500' : 'text-amber-500')}`} />
+                      <Briefcase
+                        className={`mr-2 h-5 w-5 shrink-0 ${isFather ? 'text-blue-500' : relation === 'IBU' ? 'text-pink-500' : 'text-amber-500'
+                          }`}
+                      />
                       {locale === 'id' ? titleID : titleEN}
                     </CardTitle>
                   </CardHeader>
@@ -392,6 +397,7 @@ export function StudentDetailPage() {
                         { label: locale === 'id' ? 'Nama Lengkap' : 'Full Name', value: parent?.fullName || '-' },
                         { label: locale === 'id' ? 'Tahun Lahir' : 'Birth Year', value: parent?.birthYear || '-' },
                         { label: 'NIK', value: parent?.nik || '-' },
+                        { label: locale === 'id' ? 'Pendidikan' : 'Education', value: parent?.education || '-' },
                         { label: locale === 'id' ? 'Pekerjaan' : 'Occupation', value: parent?.occupation || '-' },
                         { label: locale === 'id' ? 'No. Handphone' : 'Phone', value: parent?.phone || '-' },
                         { label: 'Email', value: parent?.email || '-' },
@@ -408,18 +414,19 @@ export function StudentDetailPage() {
               );
             })}
 
-            {(!parentsList || parentsList.length === 0) && (
+            {parentsList.length === 0 && (
               <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
-                {locale === 'id' ? 'Data orang tua/wali belum dilengkapi.' : 'Parent/guardian data has not been provided yet.'}
+                {locale === 'id'
+                  ? 'Data orang tua/wali belum dilengkapi.'
+                  : 'Parent/guardian data has not been provided yet.'}
               </div>
             )}
           </div>
         </TabsContent>
 
-        {/* TAB 4: KESEJAHTERAAN (EKONOMI) */}
+        {/* TAB 4: KESEJAHTERAAN */}
         <TabsContent value="ekonomi" className="m-0 space-y-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-
             <Card className="shadow-sm border-border">
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-lg flex items-center text-primary">
@@ -454,9 +461,7 @@ export function StudentDetailPage() {
                             Desil {ecoData.desil} ({locale === 'id' ? 'Prioritas PIP' : 'PIP Priority'})
                           </Badge>
                         ) : (
-                          <Badge variant="outline">
-                            Desil {ecoData.desil}
-                          </Badge>
+                          <Badge variant="outline">Desil {ecoData.desil}</Badge>
                         )
                       ) : (
                         <span className="text-muted-foreground">-</span>
@@ -489,7 +494,11 @@ export function StudentDetailPage() {
                   <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima KKS / KPS' : 'Has KKS / KPS'}</dt>
                     <dd className="text-foreground font-bold">
-                      {ecoData?.hasKks ? <Badge variant="default">{ecoData.kksNumber || 'Ya'}</Badge> : '-'}
+                      {ecoData?.hasKks ? (
+                        <Badge variant="default">{ecoData.kksNumber || (locale === 'id' ? 'Ya' : 'Yes')}</Badge>
+                      ) : (
+                        '-'
+                      )}
                     </dd>
                   </div>
                   <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
@@ -542,11 +551,14 @@ export function StudentDetailPage() {
                 <dl className="divide-y divide-border">
                   {[
                     { label: locale === 'id' ? 'Anak Ke' : 'Birth Order', value: student.anakKe || '-' },
-                    { label: locale === 'id' ? 'Jml. Saudara' : 'Siblings', value: student.jmlSaudara || '-' },
-                    { label: locale === 'id' ? 'Jarak Sekolah' : 'Distance', value: student.jarakSekolah ? `${student.jarakSekolah} km` : '-' },
+                    { label: locale === 'id' ? 'Jml. Saudara' : 'Siblings', value: student.jmlSaudara ?? '-' },
+                    { label: locale === 'id' ? 'Jarak Sekolah' : 'Distance', value: student.jarakSekolah !== null && student.jarakSekolah !== undefined ? `${student.jarakSekolah} km` : '-' },
                     { label: locale === 'id' ? 'Transportasi' : 'Transport', value: student.alatTransportasi || '-' },
                     { label: locale === 'id' ? 'Jenis Tinggal' : 'Residence Type', value: student.jenisTinggal || '-' },
-                    { label: locale === 'id' ? 'Koordinat (Lat, Long)' : 'Coordinates', value: (student.lintang || student.bujur) ? `${student.lintang || '-'}, ${student.bujur || '-'}` : '-' },
+                    {
+                      label: locale === 'id' ? 'Koordinat (Lat, Long)' : 'Coordinates',
+                      value: student.lintang || student.bujur ? `${student.lintang || '-'}, ${student.bujur || '-'}` : '-',
+                    },
                   ].map((item, idx) => (
                     <div key={idx} className="flex justify-between px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium shrink-0 mr-4">{item.label}</dt>
@@ -586,7 +598,7 @@ export function StudentDetailPage() {
           </div>
         </TabsContent>
 
-        {/* TAB 6: DOKUMEN (Placeholder) */}
+        {/* TAB 6: DOKUMEN */}
         <TabsContent value="dokumen" className="m-0">
           <Card className="shadow-sm border-border">
             <CardContent className="p-12 text-center text-muted-foreground bg-muted/10 rounded-lg border border-dashed mt-6">
@@ -596,7 +608,6 @@ export function StudentDetailPage() {
             </CardContent>
           </Card>
         </TabsContent>
-
       </Tabs>
     </div>
   );

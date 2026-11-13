@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import type { FieldErrors } from 'react-hook-form';
@@ -6,8 +6,10 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { toast } from 'sonner';
-// Menambahkan ikon untuk menu tab agar seragam
-import { Save, X, ArrowLeft, ArrowRight, Loader2, User, GraduationCap, Briefcase, Wallet, HeartPulse } from 'lucide-react';
+import {
+  Save, X, ArrowLeft, ArrowRight, Loader2,
+  User, GraduationCap, Briefcase, Wallet, HeartPulse
+} from 'lucide-react';
 import { studentService } from '../services/student.service';
 import { supabase } from '@/services/supabase.client';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -19,27 +21,48 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-import type { StudentParent, CreateStudentPayload, StudentEconomic } from '../types/student.types';
+import type {
+  CreateStudentPayload,
+  CreateStudentParentPayload,
+} from '../types/student.types';
 
 // ==========================================
-// SKEMA ZOD (VALIDASI FORM)
+// SKEMA ZOD (VALIDASI FORM + KOMPATIBEL TK/PAUD)
 // ==========================================
 const studentSchema = z.object({
   // Data Pribadi
-  nis: z.string().min(1, 'NIS wajib diisi'),
-  nisn: z.string().min(10, 'NISN minimal 10 karakter').max(10),
-  nik: z.string().min(16, 'NIK minimal 16 karakter').max(16),
-  noKk: z.string().min(16, 'No KK minimal 16 karakter').max(16),
-  fullName: z.string().min(3, 'Nama lengkap wajib diisi'),
+  nis: z.string().optional(),
+  nisn: z
+    .string()
+    .min(1, 'NISN wajib diisi')
+    .refine(
+      (val) => /^TK-[A-Z0-9]+$/i.test(val) || /^\d{10}$/.test(val),
+      'NISN harus 10 digit angka atau kode sementara TK-XXXX'
+    ),
+  nik: z
+    .string()
+    .min(1, 'NIK wajib diisi')
+    .refine(
+      (val) => /^NONIK-[A-Z0-9]+$/i.test(val) || /^\d{16}$/.test(val),
+      'NIK harus 16 digit angka atau kode sementara NONIK-XXXX'
+    ),
+  noKk: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || val === '-' || /^\d{16}$/.test(val),
+      'No. KK harus 16 digit angka atau tanda (-)'
+    ),
+  fullName: z.string().min(3, 'Nama lengkap minimal 3 karakter'),
   nickname: z.string().optional(),
   gender: z.enum(['L', 'P']),
   birthDate: z.string().min(1, 'Tanggal lahir wajib diisi'),
-  birthPlace: z.string().min(3, 'Tempat lahir wajib diisi'),
+  birthPlace: z.string().min(2, 'Tempat lahir wajib diisi'),
   religion: z.string().min(1, 'Agama wajib diisi'),
 
   // Alamat & Kontak Terpadu Dapodik
-  address: z.string().min(5, 'Alamat wajib diisi'),
-  dusun: z.string().optional(), // BARU: Dusun
+  address: z.string().min(1, 'Alamat wajib diisi'),
+  dusun: z.string().optional(),
   rt: z.string().optional(),
   rw: z.string().optional(),
   kelurahan: z.string().optional(),
@@ -47,40 +70,44 @@ const studentSchema = z.object({
   city: z.string().min(1, 'Kota wajib diisi'),
   province: z.string().min(1, 'Provinsi wajib diisi'),
   postalCode: z.string().optional(),
-  telepon: z.string().optional(), // BARU: Telepon Rumah
-  phone: z.string().optional(),   // Khusus HP
+  telepon: z.string().optional(),
+  phone: z.string().optional(),
   email: z.string().email('Email tidak valid').optional().or(z.literal('')),
 
   // Akademik
   classId: z.string().min(1, 'Kelas wajib dipilih'),
   entryDate: z.string().min(1, 'Tanggal masuk wajib diisi'),
+  status: z.enum(['AKTIF', 'MUTASI_KELUAR', 'LULUS', 'DO', 'CUTI']),
 
-  // Data Orang Tua (Penambahan Tahun Lahir)
+  // Data Orang Tua
   fatherName: z.string().optional(),
-  fatherBirthYear: z.string().optional(), // BARU
+  fatherBirthYear: z.string().optional(),
   fatherNik: z.string().optional(),
+  fatherEducation: z.string().optional(),
   fatherPhone: z.string().optional(),
   fatherEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   fatherOccupation: z.string().optional(),
   fatherIncome: z.string().optional(),
 
   motherName: z.string().optional(),
-  motherBirthYear: z.string().optional(), // BARU
+  motherBirthYear: z.string().optional(),
   motherNik: z.string().optional(),
+  motherEducation: z.string().optional(),
   motherPhone: z.string().optional(),
   motherEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   motherOccupation: z.string().optional(),
   motherIncome: z.string().optional(),
 
   guardianName: z.string().optional(),
-  guardianBirthYear: z.string().optional(), // BARU
+  guardianBirthYear: z.string().optional(),
   guardianNik: z.string().optional(),
+  guardianEducation: z.string().optional(),
   guardianPhone: z.string().optional(),
   guardianEmail: z.string().email('Email tidak valid').optional().or(z.literal('')),
   guardianOccupation: z.string().optional(),
   guardianIncome: z.string().optional(),
 
-  // Kesejahteraan (KPS/KKS sudah digabung)
+  // Kesejahteraan
   hasKip: z.boolean().optional(),
   kipNumber: z.string().optional(),
   namaKip: z.string().optional(),
@@ -118,16 +145,14 @@ const studentSchema = z.object({
 
 type StudentFormValues = z.infer<typeof studentSchema>;
 
-type CombinedStudentPayload = Omit<CreateStudentPayload, 'parents' | 'economic'> & {
-  schoolId: string;
-  parents: (Omit<StudentParent, 'id'> & { schoolId: string })[];
-  economic?: Omit<StudentEconomic, 'studentId' | 'id'> & { namaKip?: string; layakPip?: boolean; alasanLayakPip?: string; desil?: number | null };
-  skhun?: string; noPesertaUn?: string; noIjazah?: string; noAktaLahir?: string;
-  anakKe?: number; jmlSaudara?: number; lintang?: string; bujur?: string;
-  beratBadan?: number; tinggiBadan?: number; lingkarKepala?: number;
-  jarakSekolah?: number; jenisTinggal?: string; alatTransportasi?: string;
-  kebutuhanKhusus?: string; sekolahAsal?: string; bank?: string;
-  noRekening?: string; namaRekening?: string;
+const toNullablePositive = (val?: number): number | null => {
+  if (val === undefined || val === null || Number.isNaN(val) || val <= 0) return null;
+  return val;
+};
+
+const toNullableNonNegative = (val?: number): number | null => {
+  if (val === undefined || val === null || Number.isNaN(val) || val < 0) return null;
+  return val;
 };
 
 // ==========================================
@@ -142,17 +167,27 @@ export function StudentFormPage() {
   const { school } = useAuthStore();
 
   const [activeTab, setActiveTab] = useState('pribadi');
-
-  const { data: classesData, isLoading: isLoadingClasses } = useQuery({
-    queryKey: ['classes-list'],
-    queryFn: async () => {
-      const { data, error } = await supabase.from('classes').select('id, name, gradeLevel').order('gradeLevel', { ascending: true });
-      if (error) throw error;
-      return data;
-    }
+  const parentAliveMapRef = useRef<{ AYAH: boolean; IBU: boolean; WALI: boolean }>({
+    AYAH: true,
+    IBU: true,
+    WALI: true,
   });
 
-  const { data: student, isLoading: isFetching } = useQuery({
+  const { data: classesData, isLoading: isLoadingClasses } = useQuery({
+    queryKey: ['classes-list', school?.id],
+    queryFn: async () => {
+      let query = supabase
+        .from('classes')
+        .select('id, name, gradeLevel')
+        .order('gradeLevel', { ascending: true });
+      if (school?.id) query = query.eq('schoolId', school.id);
+      const { data, error } = await query;
+      if (error) throw error;
+      return data;
+    },
+  });
+
+  const { data: studentResponse, isLoading: isFetching } = useQuery({
     queryKey: ['student', id],
     queryFn: () => studentService.getById(id!),
     enabled: isEdit,
@@ -161,111 +196,321 @@ export function StudentFormPage() {
   const form = useForm<StudentFormValues>({
     resolver: zodResolver(studentSchema),
     defaultValues: {
-      nis: '', nisn: '', nik: '', noKk: '', fullName: '', nickname: '', gender: 'L',
-      birthDate: '', birthPlace: '', religion: '', address: '',
-      dusun: '', rt: '', rw: '', kelurahan: '', kecamatan: '', city: '', province: '', postalCode: '',
-      telepon: '', phone: '', email: '', classId: '', entryDate: new Date().toISOString().split('T')[0],
+      nis: '',
+      nisn: '',
+      nik: '',
+      noKk: '',
+      fullName: '',
+      nickname: '',
+      gender: 'L',
+      birthDate: '',
+      birthPlace: '',
+      religion: 'ISLAM',
+      address: '',
+      dusun: '',
+      rt: '',
+      rw: '',
+      kelurahan: '',
+      kecamatan: '',
+      city: school?.city || '',
+      province: school?.province || '',
+      postalCode: '',
+      telepon: '',
+      phone: '',
+      email: '',
+      classId: '',
+      entryDate: new Date().toISOString().split('T')[0],
+      status: 'AKTIF',
 
-      fatherName: '', fatherBirthYear: '', fatherNik: '', fatherPhone: '', fatherEmail: '', fatherOccupation: '', fatherIncome: '',
-      motherName: '', motherBirthYear: '', motherNik: '', motherPhone: '', motherEmail: '', motherOccupation: '', motherIncome: '',
-      guardianName: '', guardianBirthYear: '', guardianNik: '', guardianPhone: '', guardianEmail: '', guardianOccupation: '', guardianIncome: '',
+      fatherName: '',
+      fatherBirthYear: '',
+      fatherNik: '',
+      fatherEducation: '',
+      fatherPhone: '',
+      fatherEmail: '',
+      fatherOccupation: '',
+      fatherIncome: '',
 
-      hasKip: false, kipNumber: '', namaKip: '', layakPip: false, alasanLayakPip: '', desil: 0,
-      hasPkh: false, hasKks: false, kksNumber: '', isDtks: false, houseOwnership: '', dependentsCount: 0,
+      motherName: '',
+      motherBirthYear: '',
+      motherNik: '',
+      motherEducation: '',
+      motherPhone: '',
+      motherEmail: '',
+      motherOccupation: '',
+      motherIncome: '',
 
-      skhun: '', noPesertaUn: '', noIjazah: '', noAktaLahir: '', anakKe: 0, jmlSaudara: 0, lintang: '', bujur: '',
-      beratBadan: 0, tinggiBadan: 0, lingkarKepala: 0, jarakSekolah: 0, jenisTinggal: '', alatTransportasi: '',
-      kebutuhanKhusus: '', sekolahAsal: '', bank: '', noRekening: '', namaRekening: ''
+      guardianName: '',
+      guardianBirthYear: '',
+      guardianNik: '',
+      guardianEducation: '',
+      guardianPhone: '',
+      guardianEmail: '',
+      guardianOccupation: '',
+      guardianIncome: '',
+
+      hasKip: false,
+      kipNumber: '',
+      namaKip: '',
+      layakPip: false,
+      alasanLayakPip: '',
+      desil: 0,
+      hasPkh: false,
+      hasKks: false,
+      kksNumber: '',
+      isDtks: false,
+      houseOwnership: '',
+      dependentsCount: 0,
+
+      skhun: '',
+      noPesertaUn: '',
+      noIjazah: '',
+      noAktaLahir: '',
+      anakKe: 0,
+      jmlSaudara: 0,
+      lintang: '',
+      bujur: '',
+      beratBadan: 0,
+      tinggiBadan: 0,
+      lingkarKepala: 0,
+      jarakSekolah: 0,
+      jenisTinggal: '',
+      alatTransportasi: '',
+      kebutuhanKhusus: '',
+      sekolahAsal: '',
+      bank: '',
+      noRekening: '',
+      namaRekening: '',
     },
   });
 
   useEffect(() => {
-    if (student?.data) {
-      const d = student.data as unknown as Record<string, unknown>;
+    const d = studentResponse?.data;
+    if (!d) return;
 
-      const parentsData = ((d.parents || d.student_parents) as StudentParent[]) || [];
-      const ecoRaw = d.economic || d.student_economics;
-      const eco = ((Array.isArray(ecoRaw) ? ecoRaw[0] : ecoRaw) as Record<string, unknown>) || {};
+    const parentsData = d.parents || [];
+    const eco = d.economic;
 
-      const ayah = parentsData.find((p) => p.relation === 'AYAH');
-      const ibu = parentsData.find((p) => p.relation === 'IBU');
-      const wali = parentsData.find((p) => p.relation === 'WALI');
+    const ayah = parentsData.find((p) => p.relation === 'AYAH');
+    const ibu = parentsData.find((p) => p.relation === 'IBU');
+    const wali = parentsData.find((p) => p.relation === 'WALI');
 
-      form.reset({
-        nis: (d.nis as string) || '', nisn: (d.nisn as string) || '', nik: (d.nik as string) || '', noKk: (d.noKk as string) || '',
-        fullName: (d.fullName as string) || '', nickname: (d.nickname as string) || '', gender: (d.gender as 'L' | 'P') || 'L',
-        birthDate: (d.birthDate as string)?.split('T')[0] || '', birthPlace: (d.birthPlace as string) || '', religion: (d.religion as string) || '',
-        address: (d.address as string) || '', dusun: (d.dusun as string) || '', rt: (d.rt as string) || '', rw: (d.rw as string) || '',
-        kelurahan: (d.kelurahan as string) || '', kecamatan: (d.kecamatan as string) || '', city: (d.city as string) || '',
-        province: (d.province as string) || '', postalCode: (d.postalCode as string) || '',
-        telepon: (d.telepon as string) || '', phone: (d.phone as string) || '', email: (d.email as string) || '',
-        classId: (d.classId as string) || '', entryDate: (d.entryDate as string)?.split('T')[0] || '',
+    parentAliveMapRef.current = {
+      AYAH: ayah?.isAlive ?? true,
+      IBU: ibu?.isAlive ?? true,
+      WALI: wali?.isAlive ?? true,
+    };
 
-        fatherName: ayah?.fullName || '', fatherBirthYear: (ayah?.birthYear as string) || '', fatherNik: ayah?.nik || '', fatherPhone: ayah?.phone || '', fatherEmail: ayah?.email || '', fatherOccupation: ayah?.occupation || '', fatherIncome: (ayah?.monthlyIncome as string) || '',
-        motherName: ibu?.fullName || '', motherBirthYear: (ibu?.birthYear as string) || '', motherNik: ibu?.nik || '', motherPhone: ibu?.phone || '', motherEmail: ibu?.email || '', motherOccupation: ibu?.occupation || '', motherIncome: (ibu?.monthlyIncome as string) || '',
-        guardianName: wali?.fullName || '', guardianBirthYear: (wali?.birthYear as string) || '', guardianNik: wali?.nik || '', guardianPhone: wali?.phone || '', guardianEmail: wali?.email || '', guardianOccupation: wali?.occupation || '', guardianIncome: (wali?.monthlyIncome as string) || '',
+    form.reset({
+      nis: d.nis === '-' ? '' : d.nis || '',
+      nisn: d.nisn || '',
+      nik: d.nik || '',
+      noKk: d.noKk || '',
+      fullName: d.fullName || '',
+      nickname: d.nickname || '',
+      gender: d.gender || 'L',
+      birthDate: d.birthDate?.split('T')[0] || '',
+      birthPlace: d.birthPlace || '',
+      religion: d.religion || 'ISLAM',
+      address: d.address || '',
+      dusun: d.dusun || '',
+      rt: d.rt || '',
+      rw: d.rw || '',
+      kelurahan: d.kelurahan || '',
+      kecamatan: d.kecamatan || '',
+      city: d.city || '',
+      province: d.province || '',
+      postalCode: d.postalCode || '',
+      telepon: d.telepon || '',
+      phone: d.phone || '',
+      email: d.email || '',
+      classId: d.classId || '',
+      entryDate: d.entryDate?.split('T')[0] || '',
+      status: d.status || 'AKTIF',
 
-        hasKip: (eco?.hasKip as boolean) || false, kipNumber: (eco?.kipNumber as string) || '', namaKip: (eco?.namaKip as string) || '',
-        layakPip: (eco?.layakPip as boolean) || false, alasanLayakPip: (eco?.alasanLayakPip as string) || '', desil: (eco?.desil as number) || 0,
-        hasPkh: (eco?.hasPkh as boolean) || false, hasKks: (eco?.hasKks as boolean) || false, kksNumber: (eco?.kksNumber as string) || '',
-        isDtks: (eco?.isDtks as boolean) || false, houseOwnership: (eco?.houseOwnership as string) || '', dependentsCount: (eco?.dependentsCount as number) || 0,
+      fatherName: ayah?.fullName || '',
+      fatherBirthYear: ayah?.birthYear || '',
+      fatherNik: ayah?.nik || '',
+      fatherEducation: ayah?.education || '',
+      fatherPhone: ayah?.phone || '',
+      fatherEmail: ayah?.email || '',
+      fatherOccupation: ayah?.occupation || '',
+      fatherIncome: ayah?.monthlyIncome || '',
 
-        skhun: (d.skhun as string) || '', noPesertaUn: (d.noPesertaUn as string) || '', noIjazah: (d.noIjazah as string) || '',
-        noAktaLahir: (d.noAktaLahir as string) || '', anakKe: (d.anakKe as number) || 0, jmlSaudara: (d.jmlSaudara as number) || 0,
-        lintang: (d.lintang as string) || '', bujur: (d.bujur as string) || '', beratBadan: (d.beratBadan as number) || 0,
-        tinggiBadan: (d.tinggiBadan as number) || 0, lingkarKepala: (d.lingkarKepala as number) || 0, jarakSekolah: (d.jarakSekolah as number) || 0,
-        jenisTinggal: (d.jenisTinggal as string) || '', alatTransportasi: (d.alatTransportasi as string) || '', kebutuhanKhusus: (d.kebutuhanKhusus as string) || '',
-        sekolahAsal: (d.sekolahAsal as string) || '', bank: (d.bank as string) || '', noRekening: (d.noRekening as string) || '', namaRekening: (d.namaRekening as string) || ''
-      });
-    }
-  }, [student, form]);
+      motherName: ibu?.fullName || '',
+      motherBirthYear: ibu?.birthYear || '',
+      motherNik: ibu?.nik || '',
+      motherEducation: ibu?.education || '',
+      motherPhone: ibu?.phone || '',
+      motherEmail: ibu?.email || '',
+      motherOccupation: ibu?.occupation || '',
+      motherIncome: ibu?.monthlyIncome || '',
+
+      guardianName: wali?.fullName || '',
+      guardianBirthYear: wali?.birthYear || '',
+      guardianNik: wali?.nik || '',
+      guardianEducation: wali?.education || '',
+      guardianPhone: wali?.phone || '',
+      guardianEmail: wali?.email || '',
+      guardianOccupation: wali?.occupation || '',
+      guardianIncome: wali?.monthlyIncome || '',
+
+      hasKip: eco?.hasKip || false,
+      kipNumber: eco?.kipNumber || '',
+      namaKip: eco?.namaKip || '',
+      layakPip: eco?.layakPip || false,
+      alasanLayakPip: eco?.alasanLayakPip || '',
+      desil: eco?.desil || 0,
+      hasPkh: eco?.hasPkh || false,
+      hasKks: eco?.hasKks || false,
+      kksNumber: eco?.kksNumber || '',
+      isDtks: eco?.isDtks || false,
+      houseOwnership: eco?.houseOwnership || '',
+      dependentsCount: eco?.dependentsCount || 0,
+
+      skhun: d.skhun || '',
+      noPesertaUn: d.noPesertaUn || '',
+      noIjazah: d.noIjazah || '',
+      noAktaLahir: d.noAktaLahir || '',
+      anakKe: d.anakKe || 0,
+      jmlSaudara: d.jmlSaudara || 0,
+      lintang: d.lintang || '',
+      bujur: d.bujur || '',
+      beratBadan: d.beratBadan || 0,
+      tinggiBadan: d.tinggiBadan || 0,
+      lingkarKepala: d.lingkarKepala || 0,
+      jarakSekolah: d.jarakSekolah || 0,
+      jenisTinggal: d.jenisTinggal || '',
+      alatTransportasi: d.alatTransportasi || '',
+      kebutuhanKhusus: d.kebutuhanKhusus || '',
+      sekolahAsal: d.sekolahAsal || '',
+      bank: d.bank || '',
+      noRekening: d.noRekening || '',
+      namaRekening: d.namaRekening || '',
+    });
+  }, [studentResponse, form]);
 
   const mutation = useMutation({
-    mutationFn: (data: CombinedStudentPayload) => {
-      return isEdit
-        ? studentService.update(id!, data as Parameters<typeof studentService.update>[1])
-        : studentService.create(data as Parameters<typeof studentService.create>[0]);
-    },
+    mutationFn: (data: CreateStudentPayload) =>
+      isEdit ? studentService.update(id!, data) : studentService.create(data),
     onSuccess: () => {
-      toast.success(isEdit ? (locale === 'id' ? 'Data berhasil diperbarui' : 'Data updated successfully') : (locale === 'id' ? 'Siswa berhasil ditambahkan' : 'Student added successfully'));
+      toast.success(
+        isEdit
+          ? locale === 'id'
+            ? 'Data berhasil diperbarui'
+            : 'Data updated successfully'
+          : locale === 'id'
+            ? 'Siswa berhasil ditambahkan'
+            : 'Student added successfully'
+      );
       queryClient.invalidateQueries({ queryKey: ['students'] });
+      queryClient.invalidateQueries({ queryKey: ['student', id] });
       navigate('/students');
     },
     onError: (error: Error) => {
       const errorMessage = error?.message || (locale === 'id' ? 'Terjadi kesalahan' : 'An error occurred');
       toast.error(errorMessage);
-      if (errorMessage.includes('NIK')) { setActiveTab('pribadi'); form.setError('nik', { type: 'server', message: errorMessage }); }
-      else if (errorMessage.includes('NISN')) { setActiveTab('pribadi'); form.setError('nisn', { type: 'server', message: errorMessage }); }
-      else if (errorMessage.includes('NIS')) { setActiveTab('pribadi'); form.setError('nis', { type: 'server', message: errorMessage }); }
+      if (errorMessage.includes('NIK')) {
+        setActiveTab('pribadi');
+        form.setError('nik', { type: 'server', message: errorMessage });
+      } else if (errorMessage.includes('NISN')) {
+        setActiveTab('pribadi');
+        form.setError('nisn', { type: 'server', message: errorMessage });
+      } else if (errorMessage.includes('NIS')) {
+        setActiveTab('pribadi');
+        form.setError('nis', { type: 'server', message: errorMessage });
+      }
     },
   });
 
   const onSubmit = (data: StudentFormValues) => {
-    const parentsArray: (Omit<StudentParent, 'id'> & { schoolId: string })[] = [];
+    const schoolId = school?.id || studentResponse?.data?.schoolId || '';
+    const parentsArray: CreateStudentParentPayload[] = [];
 
-    if (data.fatherName) parentsArray.push({ relation: 'AYAH', fullName: data.fatherName, birthYear: data.fatherBirthYear, nik: data.fatherNik, phone: data.fatherPhone, email: data.fatherEmail, occupation: data.fatherOccupation, monthlyIncome: data.fatherIncome, isAlive: true, schoolId: school?.id || '' });
-    if (data.motherName) parentsArray.push({ relation: 'IBU', fullName: data.motherName, birthYear: data.motherBirthYear, nik: data.motherNik, phone: data.motherPhone, email: data.motherEmail, occupation: data.motherOccupation, monthlyIncome: data.motherIncome, isAlive: true, schoolId: school?.id || '' });
-    if (data.guardianName) parentsArray.push({ relation: 'WALI', fullName: data.guardianName, birthYear: data.guardianBirthYear, nik: data.guardianNik, phone: data.guardianPhone, email: data.guardianEmail, occupation: data.guardianOccupation, monthlyIncome: data.guardianIncome, isAlive: true, schoolId: school?.id || '' });
+    if (data.fatherName?.trim()) {
+      parentsArray.push({
+        relation: 'AYAH',
+        fullName: data.fatherName.trim(),
+        birthYear: data.fatherBirthYear || null,
+        nik: data.fatherNik || null,
+        education: data.fatherEducation || null,
+        phone: data.fatherPhone || null,
+        email: data.fatherEmail || null,
+        occupation: data.fatherOccupation || null,
+        monthlyIncome: data.fatherIncome || null,
+        isAlive: parentAliveMapRef.current.AYAH,
+      });
+    }
+    if (data.motherName?.trim()) {
+      parentsArray.push({
+        relation: 'IBU',
+        fullName: data.motherName.trim(),
+        birthYear: data.motherBirthYear || null,
+        nik: data.motherNik || null,
+        education: data.motherEducation || null,
+        phone: data.motherPhone || null,
+        email: data.motherEmail || null,
+        occupation: data.motherOccupation || null,
+        monthlyIncome: data.motherIncome || null,
+        isAlive: parentAliveMapRef.current.IBU,
+      });
+    }
+    if (data.guardianName?.trim()) {
+      parentsArray.push({
+        relation: 'WALI',
+        fullName: data.guardianName.trim(),
+        birthYear: data.guardianBirthYear || null,
+        nik: data.guardianNik || null,
+        education: data.guardianEducation || null,
+        phone: data.guardianPhone || null,
+        email: data.guardianEmail || null,
+        occupation: data.guardianOccupation || null,
+        monthlyIncome: data.guardianIncome || null,
+        isAlive: parentAliveMapRef.current.WALI,
+      });
+    }
 
     const {
-      fatherName, fatherBirthYear, fatherNik, fatherPhone, fatherEmail, fatherOccupation, fatherIncome,
-      motherName, motherBirthYear, motherNik, motherPhone, motherEmail, motherOccupation, motherIncome,
-      guardianName, guardianBirthYear, guardianNik, guardianPhone, guardianEmail, guardianOccupation, guardianIncome,
-      hasKip, kipNumber, namaKip, layakPip, alasanLayakPip, desil, hasPkh, hasKks, kksNumber, isDtks, houseOwnership, dependentsCount,
-      skhun, noPesertaUn, noIjazah, noAktaLahir, anakKe, jmlSaudara, lintang, bujur, beratBadan, tinggiBadan, lingkarKepala, jarakSekolah, jenisTinggal, alatTransportasi, kebutuhanKhusus, sekolahAsal, bank, noRekening, namaRekening,
+      fatherName: _fn, fatherBirthYear: _fby, fatherNik: _fnik, fatherEducation: _fedu,
+      fatherPhone: _fp, fatherEmail: _fe, fatherOccupation: _fo, fatherIncome: _fi,
+      motherName: _mn, motherBirthYear: _mby, motherNik: _mnik, motherEducation: _medu,
+      motherPhone: _mp, motherEmail: _me, motherOccupation: _mo, motherIncome: _mi,
+      guardianName: _gn, guardianBirthYear: _gby, guardianNik: _gnik, guardianEducation: _gedu,
+      guardianPhone: _gp, guardianEmail: _ge, guardianOccupation: _go, guardianIncome: _gi,
+      hasKip, kipNumber, namaKip, layakPip, alasanLayakPip, desil,
+      hasPkh, hasKks, kksNumber, isDtks, houseOwnership, dependentsCount,
+      anakKe, jmlSaudara, beratBadan, tinggiBadan, lingkarKepala, jarakSekolah,
+      nis, noKk,
       ...studentCoreData
     } = data;
 
-    const economicData = {
-      hasKip: !!hasKip, kipNumber: hasKip ? kipNumber : undefined, namaKip, layakPip: !!layakPip, alasanLayakPip,
-      desil: desil ? Number(desil) : null,
-      hasPkh: !!hasPkh, hasKks: !!hasKks, kksNumber: hasKks ? kksNumber : undefined, isDtks: !!isDtks, houseOwnership, dependentsCount, isOrphan: false,
-    };
-
-    const dapodikData = { skhun, noPesertaUn, noIjazah, noAktaLahir, anakKe, jmlSaudara, lintang, bujur, beratBadan, tinggiBadan, lingkarKepala, jarakSekolah, jenisTinggal, alatTransportasi, kebutuhanKhusus, sekolahAsal, bank, noRekening, namaRekening };
-
-    const payload: CombinedStudentPayload = {
-      ...studentCoreData, ...dapodikData, schoolId: school?.id || '', parents: parentsArray, economic: economicData
+    const payload: CreateStudentPayload = {
+      ...studentCoreData,
+      nis: nis?.trim() ? nis.trim() : null,
+      noKk: noKk?.trim() ? noKk.trim() : null,
+      anakKe: toNullablePositive(anakKe),
+      jmlSaudara: toNullableNonNegative(jmlSaudara),
+      beratBadan: toNullablePositive(beratBadan),
+      tinggiBadan: toNullablePositive(tinggiBadan),
+      lingkarKepala: toNullablePositive(lingkarKepala),
+      jarakSekolah: toNullableNonNegative(jarakSekolah),
+      schoolId,
+      parents: parentsArray,
+      economic: {
+        hasKip: !!hasKip,
+        kipNumber: hasKip ? kipNumber || null : null,
+        namaKip: hasKip ? namaKip || null : null,
+        layakPip: !!layakPip,
+        alasanLayakPip: layakPip ? alasanLayakPip || null : null,
+        desil: desil && desil >= 1 && desil <= 10 ? Number(desil) : null,
+        hasPkh: !!hasPkh,
+        hasKks: !!hasKks,
+        kksNumber: hasKks ? kksNumber || null : null,
+        isDtks: !!isDtks,
+        houseOwnership: houseOwnership || null,
+        dependentsCount: toNullableNonNegative(dependentsCount),
+        isOrphan: false,
+      },
     };
 
     mutation.mutate(payload);
@@ -273,33 +518,52 @@ export function StudentFormPage() {
 
   const onInvalid = (errors: FieldErrors<StudentFormValues>) => {
     const errorKeys = Object.keys(errors);
-    const tabFields = {
-      pribadi: ['fullName', 'nickname', 'nis', 'nisn', 'nik', 'noKk', 'gender', 'birthPlace', 'birthDate', 'religion', 'address', 'dusun', 'rt', 'rw', 'kelurahan', 'kecamatan', 'city', 'province', 'postalCode', 'telepon', 'phone', 'email'],
-      akademik: ['classId', 'entryDate'],
-      orangtua: ['fatherName', 'fatherBirthYear', 'motherName', 'motherBirthYear', 'guardianName', 'guardianBirthYear'],
-      ekonomi: ['hasKip', 'kipNumber', 'hasKks', 'kksNumber'],
-      dapodik: ['skhun', 'noPesertaUn', 'noIjazah', 'noAktaLahir', 'anakKe', 'jmlSaudara', 'lintang', 'bujur', 'beratBadan', 'tinggiBadan', 'lingkarKepala', 'jarakSekolah', 'jenisTinggal', 'alatTransportasi', 'kebutuhanKhusus', 'sekolahAsal', 'bank', 'noRekening', 'namaRekening']
+    const tabFields: Record<string, string[]> = {
+      pribadi: [
+        'fullName', 'nickname', 'nis', 'nisn', 'nik', 'noKk', 'gender',
+        'birthPlace', 'birthDate', 'religion', 'address', 'dusun', 'rt', 'rw',
+        'kelurahan', 'kecamatan', 'city', 'province', 'postalCode', 'telepon', 'phone', 'email',
+      ],
+      akademik: ['classId', 'entryDate', 'status'],
+      orangtua: [
+        'fatherName', 'fatherBirthYear', 'fatherNik', 'fatherEducation', 'fatherPhone', 'fatherEmail', 'fatherOccupation', 'fatherIncome',
+        'motherName', 'motherBirthYear', 'motherNik', 'motherEducation', 'motherPhone', 'motherEmail', 'motherOccupation', 'motherIncome',
+        'guardianName', 'guardianBirthYear', 'guardianNik', 'guardianEducation', 'guardianPhone', 'guardianEmail', 'guardianOccupation', 'guardianIncome',
+      ],
+      ekonomi: ['hasKip', 'kipNumber', 'namaKip', 'layakPip', 'alasanLayakPip', 'desil', 'hasPkh', 'hasKks', 'kksNumber'],
+      dapodik: [
+        'skhun', 'noPesertaUn', 'noIjazah', 'noAktaLahir', 'anakKe', 'jmlSaudara',
+        'lintang', 'bujur', 'beratBadan', 'tinggiBadan', 'lingkarKepala', 'jarakSekolah',
+        'jenisTinggal', 'alatTransportasi', 'kebutuhanKhusus', 'sekolahAsal', 'bank', 'noRekening', 'namaRekening',
+      ],
     };
 
     for (const [tab, fields] of Object.entries(tabFields)) {
-      if (fields.some(field => errorKeys.includes(field))) {
-        setActiveTab(tab); break;
+      if (fields.some((field) => errorKeys.includes(field))) {
+        setActiveTab(tab);
+        break;
       }
     }
-    toast.error(locale === 'id' ? 'Gagal menyimpan! Mohon lengkapi isian yang berwarna merah.' : 'Failed to save! Please complete the highlighted fields.');
+    toast.error(
+      locale === 'id'
+        ? 'Gagal menyimpan! Mohon lengkapi isian yang berwarna merah.'
+        : 'Failed to save! Please complete the highlighted fields.'
+    );
   };
 
   const handleNextTab = async (e: React.MouseEvent) => {
     e.preventDefault();
     if (activeTab === 'pribadi') {
-      const isValid = await form.trigger(['nis', 'fullName', 'nisn', 'nik', 'noKk', 'gender', 'birthDate', 'religion', 'address', 'city', 'province']);
-      if (isValid) setActiveTab('akademik'); else toast.warning(locale === 'id' ? 'Lengkapi Data Pribadi terlebih dahulu' : 'Complete Personal Data first');
-    }
-    else if (activeTab === 'akademik') {
-      const isValid = await form.trigger(['classId', 'entryDate']);
-      if (isValid) setActiveTab('orangtua'); else toast.warning(locale === 'id' ? 'Lengkapi Data Akademik' : 'Complete Academic Data');
-    }
-    else if (activeTab === 'orangtua') setActiveTab('ekonomi');
+      const isValid = await form.trigger([
+        'fullName', 'nisn', 'nik', 'noKk', 'gender', 'birthPlace', 'birthDate', 'religion', 'address', 'city', 'province',
+      ]);
+      if (isValid) setActiveTab('akademik');
+      else toast.warning(locale === 'id' ? 'Lengkapi Data Pribadi terlebih dahulu' : 'Complete Personal Data first');
+    } else if (activeTab === 'akademik') {
+      const isValid = await form.trigger(['classId', 'entryDate', 'status']);
+      if (isValid) setActiveTab('orangtua');
+      else toast.warning(locale === 'id' ? 'Lengkapi Data Akademik' : 'Complete Academic Data');
+    } else if (activeTab === 'orangtua') setActiveTab('ekonomi');
     else if (activeTab === 'ekonomi') setActiveTab('dapodik');
   };
 
@@ -315,7 +579,13 @@ export function StudentFormPage() {
     if (e.key === 'Enter' && (e.target as HTMLElement).tagName !== 'TEXTAREA') e.preventDefault();
   };
 
-  if (isEdit && isFetching) return <div className="flex items-center justify-center h-[60vh]"><Loader2 className="h-8 w-8 animate-spin text-emerald-600" /></div>;
+  if (isEdit && isFetching) {
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -325,20 +595,25 @@ export function StudentFormPage() {
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{isEdit ? (locale === 'id' ? 'Edit Data Siswa' : 'Edit Student') : (locale === 'id' ? 'Tambah Siswa Baru' : 'Add New Student')}</h1>
-          <p className="text-muted-foreground">{locale === 'id' ? 'Formulir Pendaftaran & Pendataan terintegrasi struktur Verval PD (Dapodik).' : 'Registration form integrated with Dapodik structure.'}</p>
+          <h1 className="text-2xl font-bold tracking-tight">
+            {isEdit
+              ? locale === 'id' ? 'Edit Data Siswa' : 'Edit Student'
+              : locale === 'id' ? 'Tambah Siswa Baru' : 'Add New Student'}
+          </h1>
+          <p className="text-muted-foreground">
+            {locale === 'id'
+              ? 'Formulir Pendaftaran & Pendataan terintegrasi struktur Verval PD (Dapodik).'
+              : 'Registration form integrated with Dapodik structure.'}
+          </p>
         </div>
       </div>
 
       <Form {...form}>
         <form onSubmit={form.handleSubmit(onSubmit, onInvalid)} onKeyDown={preventAutoSubmitOnEnter} className="space-y-6">
           <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full min-w-0">
-
-            {/* PEMBUNGKUS UTAMA: Menggabungkan Tabs & Tombol Navigasi/Simpan di satu Card yang sama */}
             <Card className="shadow-sm border-border overflow-hidden">
               <CardContent className="p-4 sm:p-6">
-
-                {/* TAB MENU: Menggunakan styling highlight aktif hijau zamrud seperti sebelumnya */}
+                {/* TAB MENU */}
                 <div className="w-full overflow-x-auto pb-1 mb-6">
                   <TabsList className="h-auto gap-1 bg-muted/50 p-1 flex w-max min-w-full sm:min-w-0">
                     <TabsTrigger
@@ -388,16 +663,41 @@ export function StudentFormPage() {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     <FormField control={form.control} name="fullName" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Nama Lengkap' : 'Full Name'}</FormLabel><FormControl><Input placeholder={locale === 'id' ? 'Sesuai Ijazah/Akta' : 'As in certificate'} {...field} /></FormControl><FormMessage /></FormItem>)} />
                     <FormField control={form.control} name="nickname" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Nama Panggilan' : 'Nickname'}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
-                    <FormField control={form.control} name="nis" render={({ field }) => (<FormItem><FormLabel>NIS / NIPD</FormLabel><FormControl><Input placeholder={locale === 'id' ? 'Nomor Induk Siswa' : 'Student ID'} {...field} /></FormControl><FormMessage /></FormItem>)} />
+                    <FormField control={form.control} name="nis" render={({ field }) => (<FormItem><FormLabel>NIS / NIPD</FormLabel><FormControl><Input placeholder={locale === 'id' ? 'Nomor Induk Sekolah (opsional)' : 'School ID (optional)'} {...field} /></FormControl><FormMessage /></FormItem>)} />
                     <FormField control={form.control} name="nisn" render={({ field }) => (<FormItem><FormLabel>NISN</FormLabel><FormControl><Input placeholder="10 Digit" {...field} /></FormControl><FormMessage /></FormItem>)} />
                     <FormField control={form.control} name="nik" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'NIK (16 Digit)' : 'National ID Number'}</FormLabel><FormControl><Input placeholder="16 Digit NIK" {...field} /></FormControl><FormMessage /></FormItem>)} />
                     <FormField control={form.control} name="noKk" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'No. Kartu Keluarga' : 'Family Card Number'}</FormLabel><FormControl><Input placeholder="16 Digit No. KK" {...field} /></FormControl><FormMessage /></FormItem>)} />
 
                     <FormField control={form.control} name="gender" render={({ field }) => (
-                      <FormItem><FormLabel>{locale === 'id' ? 'Jenis Kelamin' : 'Gender'}</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih' : 'Select'} /></SelectTrigger></FormControl><SelectContent><SelectItem value="L">{locale === 'id' ? 'Laki-laki' : 'Male'}</SelectItem><SelectItem value="P">{locale === 'id' ? 'Perempuan' : 'Female'}</SelectItem></SelectContent></Select><FormMessage /></FormItem>
+                      <FormItem>
+                        <FormLabel>{locale === 'id' ? 'Jenis Kelamin' : 'Gender'}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl><SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih' : 'Select'} /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="L">{locale === 'id' ? 'Laki-laki' : 'Male'}</SelectItem>
+                            <SelectItem value="P">{locale === 'id' ? 'Perempuan' : 'Female'}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
                     )} />
+
                     <FormField control={form.control} name="religion" render={({ field }) => (
-                      <FormItem><FormLabel>{locale === 'id' ? 'Agama' : 'Religion'}</FormLabel><Select onValueChange={field.onChange} defaultValue={field.value}><FormControl><SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih' : 'Select'} /></SelectTrigger></FormControl><SelectContent><SelectItem value="ISLAM">Islam</SelectItem><SelectItem value="KRISTEN">Kristen</SelectItem><SelectItem value="KATOLIK">Katolik</SelectItem><SelectItem value="HINDU">Hindu</SelectItem><SelectItem value="BUDDHA">Buddha</SelectItem><SelectItem value="KONGHUCU">Konghucu</SelectItem></SelectContent></Select><FormMessage /></FormItem>
+                      <FormItem>
+                        <FormLabel>{locale === 'id' ? 'Agama' : 'Religion'}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl><SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih' : 'Select'} /></SelectTrigger></FormControl>
+                          <SelectContent>
+                            <SelectItem value="ISLAM">Islam</SelectItem>
+                            <SelectItem value="KRISTEN">Kristen</SelectItem>
+                            <SelectItem value="KATOLIK">Katolik</SelectItem>
+                            <SelectItem value="HINDU">Hindu</SelectItem>
+                            <SelectItem value="BUDDHA">Buddha</SelectItem>
+                            <SelectItem value="KONGHUCU">Konghucu</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
                     )} />
 
                     <FormField control={form.control} name="birthPlace" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tempat Lahir' : 'Birth Place'}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
@@ -419,26 +719,27 @@ export function StudentFormPage() {
                       <FormField control={form.control} name="province" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Provinsi' : 'Province'}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
                       <FormField control={form.control} name="postalCode" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Kode Pos' : 'Postal Code'}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
 
-                      <FormField control={form.control} name="telepon" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Telepon Rumah' : 'Home Phone'}</FormLabel><FormControl><Input placeholder="Cth: 021-xxxx" {...field} /></FormControl><FormMessage /></FormItem>)} />
+                      <FormField control={form.control} name="telepon" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Telepon Rumah' : 'Home Phone'}</FormLabel><FormControl><Input placeholder="Cth: 0274-xxxx" {...field} /></FormControl><FormMessage /></FormItem>)} />
                       <FormField control={form.control} name="phone" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'No. HP' : 'Mobile Phone'}</FormLabel><FormControl><Input placeholder="08xxx" {...field} /></FormControl><FormMessage /></FormItem>)} />
+                      <FormField control={form.control} name="email" render={({ field }) => (<FormItem className="col-span-2"><FormLabel>Email</FormLabel><FormControl><Input type="email" placeholder="siswa@email.com" {...field} /></FormControl><FormMessage /></FormItem>)} />
                     </div>
                   </div>
                 </TabsContent>
 
                 {/* --- TAB 2: AKADEMIK --- */}
                 <TabsContent value="akademik" className="m-0 space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     <FormField control={form.control} name="classId" render={({ field }) => (
                       <FormItem>
-                        <FormLabel>{locale === 'id' ? 'Kelas' : 'Class'}</FormLabel>
-                        <Select onValueChange={field.onChange} defaultValue={field.value} disabled={isLoadingClasses}>
+                        <FormLabel>{locale === 'id' ? 'Kelas / Rombel' : 'Class'}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value} disabled={isLoadingClasses}>
                           <FormControl>
                             <SelectTrigger><SelectValue placeholder={locale === 'id' ? 'Pilih Kelas' : 'Select Class'} /></SelectTrigger>
                           </FormControl>
                           <SelectContent>
                             {classesData?.map((cls) => (
                               <SelectItem key={cls.id} value={cls.id}>
-                                {locale === 'id' ? 'Kelas' : 'Grade'} {cls.gradeLevel} {cls.name}
+                                {cls.gradeLevel > 0 ? `${locale === 'id' ? 'Tingkat' : 'Grade'} ${cls.gradeLevel} - ` : ''}{cls.name}
                               </SelectItem>
                             ))}
                           </SelectContent>
@@ -446,7 +747,27 @@ export function StudentFormPage() {
                         <FormMessage />
                       </FormItem>
                     )} />
+
                     <FormField control={form.control} name="entryDate" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tanggal Masuk' : 'Entry Date'}</FormLabel><FormControl><Input type="date" {...field} /></FormControl><FormMessage /></FormItem>)} />
+
+                    <FormField control={form.control} name="status" render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>{locale === 'id' ? 'Status Siswa' : 'Student Status'}</FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger><SelectValue /></SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="AKTIF">{locale === 'id' ? 'Aktif' : 'Active'}</SelectItem>
+                            <SelectItem value="MUTASI_KELUAR">{locale === 'id' ? 'Mutasi Keluar' : 'Transferred'}</SelectItem>
+                            <SelectItem value="LULUS">{locale === 'id' ? 'Lulus' : 'Graduated'}</SelectItem>
+                            <SelectItem value="DO">DO</SelectItem>
+                            <SelectItem value="CUTI">{locale === 'id' ? 'Cuti' : 'On Leave'}</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )} />
                   </div>
                 </TabsContent>
 
@@ -456,21 +777,27 @@ export function StudentFormPage() {
                     <div className="space-y-4">
                       <h4 className="text-sm font-semibold text-primary border-b border-border pb-2">{locale === 'id' ? 'Data Ayah' : 'Father Data'}</h4>
                       <FormField control={form.control} name="fatherName" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Nama Lengkap Ayah' : 'Father Full Name'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="fatherBirthYear" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tahun Lahir' : 'Birth Year'}</FormLabel><FormControl><Input placeholder="Cth: 1980" {...field} /></FormControl></FormItem>)} />
+                      <div className="grid grid-cols-2 gap-4">
+                        <FormField control={form.control} name="fatherBirthYear" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tahun Lahir' : 'Birth Year'}</FormLabel><FormControl><Input placeholder="Cth: 1980" {...field} /></FormControl></FormItem>)} />
+                        <FormField control={form.control} name="fatherEducation" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Pendidikan' : 'Education'}</FormLabel><FormControl><Input placeholder="Cth: S1, SMA" {...field} /></FormControl></FormItem>)} />
+                      </div>
                       <FormField control={form.control} name="fatherNik" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'NIK Ayah' : 'Father NIK'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="fatherOccupation" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Pekerjaan' : 'Occupation'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="fatherPhone" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'No. Handphone' : 'Phone Number'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="fatherIncome" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Penghasilan Bulanan (Rp)' : 'Monthly Income'}</FormLabel><FormControl><Input type="number" {...field} /></FormControl></FormItem>)} />
+                      <FormField control={form.control} name="fatherIncome" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Penghasilan Bulanan' : 'Monthly Income'}</FormLabel><FormControl><Input placeholder="Cth: Rp 2.000.000 - Rp 4.999.999" {...field} /></FormControl></FormItem>)} />
                     </div>
 
                     <div className="space-y-4">
                       <h4 className="text-sm font-semibold text-primary border-b border-border pb-2">{locale === 'id' ? 'Data Ibu' : 'Mother Data'}</h4>
                       <FormField control={form.control} name="motherName" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Nama Lengkap Ibu' : 'Mother Full Name'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="motherBirthYear" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tahun Lahir' : 'Birth Year'}</FormLabel><FormControl><Input placeholder="Cth: 1982" {...field} /></FormControl></FormItem>)} />
+                      <div className="grid grid-cols-2 gap-4">
+                        <FormField control={form.control} name="motherBirthYear" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tahun Lahir' : 'Birth Year'}</FormLabel><FormControl><Input placeholder="Cth: 1982" {...field} /></FormControl></FormItem>)} />
+                        <FormField control={form.control} name="motherEducation" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Pendidikan' : 'Education'}</FormLabel><FormControl><Input placeholder="Cth: S1, SMA" {...field} /></FormControl></FormItem>)} />
+                      </div>
                       <FormField control={form.control} name="motherNik" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'NIK Ibu' : 'Mother NIK'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="motherOccupation" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Pekerjaan' : 'Occupation'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="motherPhone" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'No. Handphone' : 'Phone Number'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="motherIncome" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Penghasilan Bulanan (Rp)' : 'Monthly Income'}</FormLabel><FormControl><Input type="number" {...field} /></FormControl></FormItem>)} />
+                      <FormField control={form.control} name="motherIncome" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Penghasilan Bulanan' : 'Monthly Income'}</FormLabel><FormControl><Input placeholder="Cth: Tidak Berpenghasilan" {...field} /></FormControl></FormItem>)} />
                     </div>
                   </div>
 
@@ -480,11 +807,14 @@ export function StudentFormPage() {
                     </h4>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                       <FormField control={form.control} name="guardianName" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Nama Lengkap Wali' : 'Guardian Name'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="guardianBirthYear" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tahun Lahir' : 'Birth Year'}</FormLabel><FormControl><Input placeholder="Cth: 1975" {...field} /></FormControl></FormItem>)} />
+                      <div className="grid grid-cols-2 gap-4">
+                        <FormField control={form.control} name="guardianBirthYear" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Tahun Lahir' : 'Birth Year'}</FormLabel><FormControl><Input placeholder="Cth: 1975" {...field} /></FormControl></FormItem>)} />
+                        <FormField control={form.control} name="guardianEducation" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Pendidikan' : 'Education'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
+                      </div>
                       <FormField control={form.control} name="guardianNik" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'NIK Wali' : 'Guardian NIK'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="guardianOccupation" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Pekerjaan Wali' : 'Guardian Occupation'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="guardianPhone" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'No. Handphone Wali' : 'Guardian Phone'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="guardianIncome" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Penghasilan Bulanan Wali (Rp)' : 'Guardian Monthly Income'}</FormLabel><FormControl><Input type="number" {...field} /></FormControl></FormItem>)} />
+                      <FormField control={form.control} name="guardianIncome" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Penghasilan Bulanan Wali' : 'Guardian Monthly Income'}</FormLabel><FormControl><Input {...field} /></FormControl></FormItem>)} />
                     </div>
                   </div>
                 </TabsContent>
@@ -544,7 +874,9 @@ export function StudentFormPage() {
                               <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                               <SelectContent>
                                 <SelectItem value="0">{locale === 'id' ? 'Tidak Terdata / Non-Desil' : 'Not Recorded'}</SelectItem>
-                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(n => <SelectItem key={n} value={String(n)}>Desil {n}</SelectItem>)}
+                                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map((n) => (
+                                  <SelectItem key={n} value={String(n)}>Desil {n}</SelectItem>
+                                ))}
                               </SelectContent>
                             </Select>
                           </FormItem>
@@ -559,19 +891,18 @@ export function StudentFormPage() {
                       </div>
                     </div>
 
-                    {/* Bantuan Lainnya */}
                     <div className="space-y-4 border border-border p-5 rounded-xl bg-muted/10">
                       <h4 className="font-semibold text-primary pb-2">{locale === 'id' ? 'Bantuan Lainnya' : 'Other Aids'}</h4>
                       <FormField control={form.control} name="hasPkh" render={({ field }) => (
                         <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm">
                           <div className="space-y-0.5"><FormLabel>Penerima PKH</FormLabel></div>
-                          <FormControl><input type="checkbox" className="h-4 w-4 rounded border-gray-300 accent-emerald-600" checked={field.value} onChange={field.onChange} /></FormControl>
+                          <FormControl><input type="checkbox" className="h-4 w-4 rounded border-gray-300 accent-emerald-600" checked={!!field.value} onChange={field.onChange} /></FormControl>
                         </FormItem>
                       )} />
                       <FormField control={form.control} name="hasKks" render={({ field }) => (
                         <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3 shadow-sm">
                           <div className="space-y-0.5"><FormLabel>Penerima KKS / KPS</FormLabel></div>
-                          <FormControl><input type="checkbox" className="h-4 w-4 rounded border-gray-300 accent-emerald-600" checked={field.value} onChange={field.onChange} /></FormControl>
+                          <FormControl><input type="checkbox" className="h-4 w-4 rounded border-gray-300 accent-emerald-600" checked={!!field.value} onChange={field.onChange} /></FormControl>
                         </FormItem>
                       )} />
                       <FormField control={form.control} name="kksNumber" render={({ field }) => (
@@ -605,7 +936,7 @@ export function StudentFormPage() {
                       </div>
                       <FormField control={form.control} name="jenisTinggal" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Jenis Tinggal' : 'Residence Type'}</FormLabel><FormControl><Input placeholder={locale === 'id' ? 'Cth: Bersama Orang Tua' : 'e.g. With Parents'} {...field} /></FormControl></FormItem>)} />
                       <FormField control={form.control} name="alatTransportasi" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Alat Transportasi' : 'Transportation'}</FormLabel><FormControl><Input placeholder={locale === 'id' ? 'Cth: Jalan Kaki, Motor' : 'e.g. Walk'} {...field} /></FormControl></FormItem>)} />
-                      <FormField control={form.control} name="jarakSekolah" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Jarak ke Sekolah (km)' : 'Distance to School (km)'}</FormLabel><FormControl><Input type="number" {...field} /></FormControl></FormItem>)} />
+                      <FormField control={form.control} name="jarakSekolah" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Jarak ke Sekolah (km)' : 'Distance to School (km)'}</FormLabel><FormControl><Input type="number" step="0.1" {...field} /></FormControl></FormItem>)} />
                       <div className="grid grid-cols-2 gap-4">
                         <FormField control={form.control} name="lintang" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Lintang (Lat)' : 'Latitude'}</FormLabel><FormControl><Input placeholder="-7.xxxx" {...field} /></FormControl></FormItem>)} />
                         <FormField control={form.control} name="bujur" render={({ field }) => (<FormItem><FormLabel>{locale === 'id' ? 'Bujur (Long)' : 'Longitude'}</FormLabel><FormControl><Input placeholder="110.xxxx" {...field} /></FormControl></FormItem>)} />
@@ -628,11 +959,9 @@ export function StudentFormPage() {
                     </div>
                   </div>
                 </TabsContent>
-
               </CardContent>
 
-              {/* ================= ACTION BUTTONS (Sama Persis seperti Screenshot & Logika Tidak Berubah) ================= */}
-              {/* Dibungkus sebagai Footer dari Card sehingga warnanya menyatu dengan form input */}
+              {/* ================= ACTION BUTTONS ================= */}
               <div className="flex flex-wrap items-center justify-end gap-3 border-t border-border bg-card p-4 sm:p-6 rounded-b-xl">
                 <Button
                   type="button"
@@ -645,11 +974,7 @@ export function StudentFormPage() {
                 </Button>
 
                 {activeTab !== 'pribadi' && (
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={handlePrevTab}
-                  >
+                  <Button type="button" variant="outline" onClick={handlePrevTab}>
                     <ArrowLeft className="mr-2 h-4 w-4 shrink-0" />
                     {locale === 'id' ? 'Sebelumnya' : 'Previous'}
                   </Button>
@@ -670,12 +995,21 @@ export function StudentFormPage() {
                     disabled={mutation.isPending}
                     className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
                   >
-                    {mutation.isPending ? <Loader2 className="mr-2 h-4 w-4 shrink-0 animate-spin" /> : <Save className="mr-2 h-4 w-4 shrink-0" />}
-                    {isEdit ? (locale === 'id' ? 'Simpan Perubahan' : 'Save Changes') : (locale === 'id' ? 'Simpan Seluruh Data' : 'Save All Data')}
+                    {mutation.isPending ? (
+                      <Loader2 className="mr-2 h-4 w-4 shrink-0 animate-spin" />
+                    ) : (
+                      <Save className="mr-2 h-4 w-4 shrink-0" />
+                    )}
+                    {isEdit
+                      ? locale === 'id'
+                        ? 'Simpan Perubahan'
+                        : 'Save Changes'
+                      : locale === 'id'
+                        ? 'Simpan Seluruh Data'
+                        : 'Save All Data'}
                   </Button>
                 )}
               </div>
-
             </Card>
           </Tabs>
         </form>
