@@ -1,15 +1,40 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, type KeyboardEvent, type ChangeEvent } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import {
-    Users, ShieldCheck, UserCog, GraduationCap, Users2,
-    Search, Plus, MoreVertical, Edit, KeyRound, Ban, CheckCircle2,
-    Loader2, AlertCircle, X, Eye, EyeOff, ChevronLeft, ChevronRight,
-    ChevronsLeft, ChevronsRight, UserPlus, Trash2, DatabaseZap, ChevronDown,
-    ArrowDownAZ, ArrowUpZA, ArrowUpDown, ArrowUp, ArrowDown
+    Users,
+    ShieldCheck,
+    UserCog,
+    GraduationCap,
+    Users2,
+    Search,
+    Plus,
+    MoreVertical,
+    Edit,
+    KeyRound,
+    Ban,
+    CheckCircle2,
+    Loader2,
+    AlertCircle,
+    X,
+    Eye,
+    EyeOff,
+    ChevronLeft,
+    ChevronRight,
+    ChevronsLeft,
+    ChevronsRight,
+    UserPlus,
+    Trash2,
+    DatabaseZap,
+    ChevronDown,
+    ArrowDownAZ,
+    ArrowUpZA,
+    ArrowUpDown,
+    ArrowUp,
+    ArrowDown,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -21,8 +46,21 @@ import { translations } from '@/constants/translations';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import {
+    Form,
+    FormControl,
+    FormField,
+    FormItem,
+    FormLabel,
+    FormMessage,
+} from '@/components/ui/form';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -33,16 +71,21 @@ import {
 
 // ==========================================
 // TYPES & INTERFACES
-// Bentuk data yang dipakai di halaman ini
 // ==========================================
 
-// Daftar role (jabatan/hak akses) akun yang tersedia di sistem
 export type AppUserRole =
-    | 'SUPER_ADMIN' | 'ADMIN' | 'KEPALA_SEKOLAH' | 'OPERATOR'
-    | 'BENDAHARA' | 'WALI_KELAS' | 'GURU' | 'STAFF_TU'
-    | 'STAFF_SARPRAS' | 'ORANG_TUA' | 'SISWA';
+    | 'SUPER_ADMIN'
+    | 'ADMIN'
+    | 'KEPALA_SEKOLAH'
+    | 'OPERATOR'
+    | 'BENDAHARA'
+    | 'WALI_KELAS'
+    | 'GURU'
+    | 'STAFF_TU'
+    | 'STAFF_SARPRAS'
+    | 'ORANG_TUA'
+    | 'SISWA';
 
-// Satu baris data di tabel "users" Supabase
 export interface AppUser {
     id: string;
     schoolId: string | null;
@@ -56,89 +99,88 @@ export interface AppUser {
     updatedAt: string;
 }
 
-// Kolom yang boleh dijadikan dasar pengurutan ('none' = urutan bawaan database)
 type SortKey = 'fullName' | 'role' | 'isActive' | 'none';
 type SortConfig = { key: SortKey; direction: 'asc' | 'desc' };
 
-// ==========================================
-// KONSTANTA & SCHEMA
-// Diletakkan di luar komponen supaya tidak dibuat ulang setiap render
-// ==========================================
+interface CreateUserFormValues {
+    fullName: string;
+    email: string;
+    password: string;
+    role: AppUserRole;
+}
 
-// Jumlah baris per halaman di tabel
-const ITEMS_PER_PAGE = 10;
+interface EditUserFormValues {
+    fullName: string;
+    role: AppUserRole;
+}
 
-// Password sementara untuk fitur "Generate Akun Terpilih".
-// TODO: sebaiknya diganti password acak per user / wajib ganti saat login pertama
-const DEFAULT_PASSWORD = 'Password123!';
+interface ResetPasswordFormValues {
+    newPassword: string;
+}
 
-// Sumber tunggal daftar role: dipakai oleh schema zod DAN isi dropdown role
-const ROLE_VALUES = [
-    'SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR', 'BENDAHARA',
-    'WALI_KELAS', 'GURU', 'STAFF_TU', 'STAFF_SARPRAS', 'ORANG_TUA', 'SISWA',
-] as const satisfies readonly AppUserRole[];
-
-// Pengelompokan role untuk filter tab
-const MANAGEMENT_ROLES: AppUserRole[] = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'];
-const STAFF_ROLES: AppUserRole[] = ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'];
-
-// Tab yang menampilkan tombol aksi massal (Generate Data / Hapus Semua)
-const BULK_TABS = ['staff', 'siswa', 'orangtua'];
-
-// Validasi form "Tambah Pengguna"
-const createUserSchema = z.object({
-    fullName: z.string().min(3, 'Minimal 3 char'),
-    email: z.string().email('Invalid email'),
-    password: z.string().min(6, 'Minimal 6 char'),
-    role: z.enum(ROLE_VALUES),
-});
-type CreateUserFormValues = z.infer<typeof createUserSchema>;
-
-// Validasi form "Edit Pengguna" (email tidak bisa diubah)
-const editUserSchema = z.object({
-    fullName: z.string().min(3, 'Minimal 3 char'),
-    role: z.enum(ROLE_VALUES),
-});
-type EditUserFormValues = z.infer<typeof editUserSchema>;
-
-// Validasi form "Reset Password"
-const resetPasswordSchema = z.object({
-    newPassword: z.string().min(6, 'Minimal 6 char'),
-});
-type ResetPasswordFormValues = z.infer<typeof resetPasswordSchema>;
-
-// Hitung hasil sukses/gagal dari banyak pemanggilan edge function sekaligus.
-// supabase.functions.invoke TIDAK melempar error, ia mengembalikan { data, error },
-// jadi hasilnya harus dicek satu per satu.
-// Bentuk isi respons edge function Supabase yang dipakai di halaman ini
 interface EdgeFunctionBody {
     error?: string;
     message?: string;
 }
-type InvokeResult = { data: EdgeFunctionBody | null; error: { message: string } | null };
 
-// Respons endpoint generate-accounts-from-master (dipanggil lewat fetch)
+type InvokeResult = {
+    data: EdgeFunctionBody | null;
+    error: { message: string } | null;
+};
+
 interface BulkGenerateResponse {
     error?: string;
     message?: string;
     failed?: number;
     remaining?: number;
 }
-// Panggil edge function dan SELALU kembalikan { data, error }; kegagalan jaringan tidak melempar error,
-// supaya satu permintaan yang gagal tidak membatalkan seluruh proses massal.
-const invokeSafe = async (name: string, body: Record<string, unknown>): Promise<InvokeResult> => {
+
+// ==========================================
+// KONSTANTA & HELPER
+// ==========================================
+
+const ITEMS_PER_PAGE = 10;
+const DEFAULT_PASSWORD = 'Password123!';
+const BULK_CONCURRENCY = 5;
+
+const ROLE_VALUES = [
+    'SUPER_ADMIN',
+    'ADMIN',
+    'KEPALA_SEKOLAH',
+    'OPERATOR',
+    'BENDAHARA',
+    'WALI_KELAS',
+    'GURU',
+    'STAFF_TU',
+    'STAFF_SARPRAS',
+    'ORANG_TUA',
+    'SISWA',
+] as const satisfies readonly AppUserRole[];
+
+const MANAGEMENT_ROLES: AppUserRole[] = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'];
+const STAFF_ROLES: AppUserRole[] = ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'];
+const BULK_TABS = ['staff', 'siswa', 'orangtua'];
+
+const invokeSafe = async (
+    name: string,
+    body: Record<string, unknown>
+): Promise<InvokeResult> => {
     try {
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(name, { body });
         return { data, error: error ? { message: error.message } : null };
     } catch (e) {
-        return { data: null, error: { message: e instanceof Error ? e.message : 'Network error' } };
+        return {
+            data: null,
+            error: { message: e instanceof Error ? e.message : 'Network error' },
+        };
     }
 };
 
-// Jalankan proses per item dengan batas jumlah yang berjalan bersamaan.
-// Tanpa batas ini, menghapus / membuat ratusan akun sekaligus membanjiri edge function dan terkena rate limit.
-const BULK_CONCURRENCY = 5;
-const runWithConcurrency = async <T, R>(items: readonly T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> => {
+const runWithConcurrency = async <T, R>(
+    items: readonly T[],
+    limit: number,
+    worker: (item: T) => Promise<R>
+): Promise<R[]> => {
     const results = new Array<R>(items.length);
     let cursor = 0;
     const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -152,45 +194,49 @@ const runWithConcurrency = async <T, R>(items: readonly T[], limit: number, work
 };
 
 const summarizeResults = (results: InvokeResult[]) => {
-    const failures = results.filter(r => r.error || r.data?.error);
+    const failures = results.filter((r) => r.error || r.data?.error);
     return {
         total: results.length,
         success: results.length - failures.length,
         failed: failures.length,
-        firstMessage: failures[0]?.error?.message || failures[0]?.data?.error || 'Unknown error',
+        firstMessage:
+            failures[0]?.error?.message || failures[0]?.data?.error || 'Unknown error',
     };
 };
 
-// Ambil SEMUA akun dari tabel users.
-// Supabase membatasi 1000 baris per query, jadi diambil bertahap (per 1000 baris)
-// supaya daftar siswa + orang tua yang jumlahnya besar tidak terpotong.
-const fetchAllUsers = async (schoolId: string | null, isSuperAdmin: boolean): Promise<AppUser[]> => {
+const fetchAllUsers = async (
+    schoolId: string | null,
+    isSuperAdmin: boolean
+): Promise<AppUser[]> => {
     const size = 1000;
     const all: AppUser[] = [];
+
     for (let from = 0; ; from += size) {
         let query = supabase
             .from('users')
             .select('*')
             .order('createdAt', { ascending: false })
-            .order('id', { ascending: true }) // urutan kedua agar hasil antar halaman stabil
+            .order('id', { ascending: true })
             .range(from, from + size - 1);
 
-        // Selain Super Admin, hanya boleh melihat akun milik sekolahnya sendiri
-        if (!isSuperAdmin && schoolId) query = query.eq('schoolId', schoolId);
+        if (!isSuperAdmin && schoolId) {
+            query = query.eq('schoolId', schoolId);
+        }
 
         const { data, error } = await query;
         if (error) throw new Error(error.message);
 
         all.push(...((data as AppUser[]) || []));
-        if (!data || data.length < size) break; // halaman terakhir
+        if (!data || data.length < size) break;
     }
+
     return all;
 };
 
 // ==========================================
 // SUB-KOMPONEN HEADER TABEL
-// Header kolom yang bisa diklik untuk mengurutkan (asc -> desc -> reset)
 // ==========================================
+
 interface SortableHeaderProps {
     columnKey: SortKey;
     label: string;
@@ -199,25 +245,27 @@ interface SortableHeaderProps {
 }
 
 function SortableHeader({ columnKey, label, sortConfig, onSort }: SortableHeaderProps) {
-    // Pilih ikon sesuai kondisi urutan kolom ini
     const renderIcon = () => {
-        // Kolom ini sedang tidak dipakai mengurutkan -> ikon pudar
-        if (sortConfig.key !== columnKey) return <ArrowUpDown className="w-3 h-3 opacity-30 ml-1" />;
-        // Kolom nama memakai ikon A-Z / Z-A
-        if (columnKey === 'fullName') {
-            return sortConfig.direction === 'asc'
-                ? <ArrowDownAZ className="w-3 h-3 text-primary ml-1" />
-                : <ArrowUpZA className="w-3 h-3 text-primary ml-1" />;
+        if (sortConfig.key !== columnKey) {
+            return <ArrowUpDown className="ml-1 h-3 w-3 opacity-30" />;
         }
-        // Kolom lain memakai panah atas/bawah
-        return sortConfig.direction === 'asc'
-            ? <ArrowDown className="w-3 h-3 text-primary ml-1" />
-            : <ArrowUp className="w-3 h-3 text-primary ml-1" />;
+        if (columnKey === 'fullName') {
+            return sortConfig.direction === 'asc' ? (
+                <ArrowDownAZ className="ml-1 h-3 w-3 text-primary" />
+            ) : (
+                <ArrowUpZA className="ml-1 h-3 w-3 text-primary" />
+            );
+        }
+        return sortConfig.direction === 'asc' ? (
+            <ArrowDown className="ml-1 h-3 w-3 text-primary" />
+        ) : (
+            <ArrowUp className="ml-1 h-3 w-3 text-primary" />
+        );
     };
 
     return (
         <th
-            className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase hover:bg-muted/50 cursor-pointer transition-colors select-none"
+            className="cursor-pointer select-none px-4 py-3 text-xs font-semibold uppercase text-muted-foreground transition-colors hover:bg-muted/50"
             onClick={() => onSort(columnKey)}
         >
             <div className="flex items-center gap-1">
@@ -231,43 +279,100 @@ function SortableHeader({ columnKey, label, sortConfig, onSort }: SortableHeader
 // ==========================================
 // KOMPONEN UTAMA
 // ==========================================
+
 export function UserManagementPage() {
     const { school, user: currentUser } = useAuthStore();
     const queryClient = useQueryClient();
     const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+    const activeSchoolId = school?.id ?? currentUser?.schoolId ?? null;
 
-    // Bahasa aktif (id / en)
     const { locale } = useUIStore();
     const lang = locale === 'en' ? 'en' : 'id';
 
-    // Ambil teks terjemahan umum (tombol Simpan, Batal, dsb.)
-    const tGlobal = (key: keyof typeof translations.id.common): string => translations[lang].common[key];
+    const tGlobal = (key: keyof typeof translations.id.common): string =>
+        translations[lang].common[key];
 
-    // Ambil teks terjemahan khusus halaman ini; {count} dst. diganti nilai di parameter `replace`
-    const tUM = (key: keyof typeof translations.id.userManagement, replace?: Record<string, string | number>): string => {
+    const tUM = (
+        key: keyof typeof translations.id.userManagement,
+        replace?: Record<string, string | number>
+    ): string => {
         let text: string = translations[lang].userManagement[key];
         if (replace) {
-            Object.keys(replace).forEach(k => { text = text.replace(`{${k}}`, String(replace[k])); });
+            Object.keys(replace).forEach((k) => {
+                text = text.replace(`{${k}}`, String(replace[k]));
+            });
         }
         return text;
     };
+
+    // ------------------------------------------
+    // VALIDASI ZOD DWIBAHASA
+    // ------------------------------------------
+    const createUserSchema = useMemo(
+        () =>
+            z.object({
+                fullName: z
+                    .string()
+                    .trim()
+                    .min(3, lang === 'id' ? 'Minimal 3 karakter' : 'Minimum 3 characters'),
+                email: z
+                    .string()
+                    .trim()
+                    .email(lang === 'id' ? 'Format email tidak valid' : 'Invalid email format'),
+                password: z
+                    .string()
+                    .min(6, lang === 'id' ? 'Minimal 6 karakter' : 'Minimum 6 characters'),
+                role: z.enum(ROLE_VALUES),
+            }),
+        [lang]
+    );
+
+    const editUserSchema = useMemo(
+        () =>
+            z.object({
+                fullName: z
+                    .string()
+                    .trim()
+                    .min(3, lang === 'id' ? 'Minimal 3 karakter' : 'Minimum 3 characters'),
+                role: z.enum(ROLE_VALUES),
+            }),
+        [lang]
+    );
+
+    const resetPasswordSchema = useMemo(
+        () =>
+            z.object({
+                newPassword: z
+                    .string()
+                    .min(6, lang === 'id' ? 'Minimal 6 karakter' : 'Minimum 6 characters'),
+            }),
+        [lang]
+    );
 
     // ------------------------------------------
     // STATES
     // ------------------------------------------
     const [activeTab, setActiveTab] = useState<string>('semua');
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'none', direction: 'asc' });
+    const [sortConfig, setSortConfig] = useState<SortConfig>({
+        key: 'none',
+        direction: 'asc',
+    });
     const [currentPage, setCurrentPage] = useState<number>(1);
-    const [pageInput, setPageInput] = useState<string>('1');         // isi kotak "Ke Halaman"
-    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]); // checkbox yang dicentang
+    const [pageInput, setPageInput] = useState<string>('1');
+    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
 
-    // Kembali ke halaman 1 & kosongkan pilihan ketika filter, pencarian, atau urutan berubah
-    useEffect(() => { setCurrentPage(1); setPageInput('1'); setSelectedUserIds([]); }, [searchQuery, activeTab, sortConfig]);
-    // Sinkronkan kotak "Ke Halaman" dengan halaman yang sedang aktif
-    useEffect(() => { setPageInput(currentPage.toString()); }, [currentPage]);
+    useEffect(() => {
+        setCurrentPage(1);
+        setPageInput('1');
+        setSelectedUserIds([]);
+    }, [searchQuery, activeTab, sortConfig]);
 
-    // State untuk membuka/menutup setiap modal (popup)
+    useEffect(() => {
+        setPageInput(currentPage.toString());
+    }, [currentPage]);
+
+    // Modal states
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
     const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
@@ -276,43 +381,49 @@ export function UserManagementPage() {
     const [isGenerateAllModalOpen, setIsGenerateAllModalOpen] = useState(false);
     const [isDeleteSelectedModalOpen, setIsDeleteSelectedModalOpen] = useState(false);
     const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
-    const [showAddPassword, setShowAddPassword] = useState(false);     // tampilkan/sembunyikan password di form tambah
-    const [showResetPassword, setShowResetPassword] = useState(false); // tampilkan/sembunyikan password di form reset
+    const [showAddPassword, setShowAddPassword] = useState(false);
+    const [showResetPassword, setShowResetPassword] = useState(false);
 
     // ------------------------------------------
-    // FORMS (react-hook-form + validasi zod)
+    // FORMS
     // ------------------------------------------
-    const addUserForm = useForm<CreateUserFormValues>({ resolver: zodResolver(createUserSchema), defaultValues: { fullName: '', email: '', password: '', role: 'GURU' } });
-    const editUserForm = useForm<EditUserFormValues>({ resolver: zodResolver(editUserSchema), defaultValues: { fullName: '', role: 'GURU' } });
-    const resetPassForm = useForm<ResetPasswordFormValues>({ resolver: zodResolver(resetPasswordSchema), defaultValues: { newPassword: '' } });
+    const addUserForm = useForm<CreateUserFormValues>({
+        resolver: zodResolver(createUserSchema),
+        defaultValues: { fullName: '', email: '', password: '', role: 'GURU' },
+    });
 
-    // Isi form edit dengan data user yang dipilih setiap kali modal edit dibuka
-    useEffect(() => { if (userToEdit) editUserForm.reset({ fullName: userToEdit.fullName, role: userToEdit.role }); }, [userToEdit, editUserForm]);
+    const editUserForm = useForm<EditUserFormValues>({
+        resolver: zodResolver(editUserSchema),
+        defaultValues: { fullName: '', role: 'GURU' },
+    });
+
+    const resetPassForm = useForm<ResetPasswordFormValues>({
+        resolver: zodResolver(resetPasswordSchema),
+        defaultValues: { newPassword: '' },
+    });
+
+    useEffect(() => {
+        if (userToEdit) {
+            editUserForm.reset({ fullName: userToEdit.fullName, role: userToEdit.role });
+        }
+    }, [userToEdit, editUserForm]);
 
     // ------------------------------------------
-    // DATA FETCHING
+    // DATA FETCHING & REALTIME
     // ------------------------------------------
-
-    // Ambil daftar akun. Daftar bisa berubah dari halaman lain (hapus guru/siswa, import, dsb.),
-    // jadi selalu diambil ulang saat halaman dibuka, tab difokuskan, atau koneksi kembali.
     const { data: users, isLoading } = useQuery<AppUser[], Error>({
-        queryKey: ['users-list', school?.id, isSuperAdmin],
+        queryKey: ['users-list', activeSchoolId, isSuperAdmin],
         queryFn: async () => {
-            if (!isSuperAdmin && !school?.id) return [];
-            return fetchAllUsers(school?.id ?? null, isSuperAdmin);
+            if (!isSuperAdmin && !activeSchoolId) return [];
+            return fetchAllUsers(activeSchoolId, isSuperAdmin);
         },
-        enabled: isSuperAdmin || !!school?.id,
+        enabled: isSuperAdmin || Boolean(activeSchoolId),
         staleTime: 0,
         refetchOnMount: 'always',
         refetchOnWindowFocus: true,
         refetchOnReconnect: true,
     });
 
-    // REALTIME: begitu tabel users berubah (dari halaman/perangkat mana pun), daftar ikut diperbarui.
-    // BUGFIX: nama channel dibuat unik (UUID) supaya tidak bentrok saat React Strict Mode
-    // menjalankan effect dua kali (error "cannot add postgres_changes callbacks ... after subscribe()").
-    // Realtime hanya pelengkap, jadi kegagalannya cukup dicatat dan tidak boleh membuat halaman crash.
-    // Catatan: tabel "users" harus diaktifkan untuk Realtime di dashboard Supabase.
     useEffect(() => {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let channel: ReturnType<typeof supabase.channel> | null = null;
@@ -321,9 +432,11 @@ export function UserManagementPage() {
             channel = supabase
                 .channel(`users-list-${crypto.randomUUID()}`)
                 .on('postgres_changes', { event: '*', schema: 'public', table: 'users' }, () => {
-                    // Debounce: hapus massal memicu ratusan event, cukup satu kali refetch
                     clearTimeout(timer);
-                    timer = setTimeout(() => queryClient.invalidateQueries({ queryKey: ['users-list'] }), 500);
+                    timer = setTimeout(
+                        () => queryClient.invalidateQueries({ queryKey: ['users-list'] }),
+                        500
+                    );
                 })
                 .subscribe((status, err) => {
                     if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -334,7 +447,6 @@ export function UserManagementPage() {
             console.warn('Realtime gagal dipasang:', e);
         }
 
-        // Bersihkan saat halaman ditutup
         return () => {
             clearTimeout(timer);
             if (channel) supabase.removeChannel(channel);
@@ -342,158 +454,332 @@ export function UserManagementPage() {
     }, [queryClient]);
 
     // ------------------------------------------
-    // MUTATIONS (aksi yang mengubah data)
-    // Semua punya onError supaya user selalu melihat pesan kalau gagal
+    // MUTATIONS
     // ------------------------------------------
-
-    // Tambah satu pengguna baru (lewat edge function create-user)
     const addUserMutation = useMutation({
         mutationFn: async (payload: CreateUserFormValues) => {
-            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('create-user', { body: { ...payload, schoolId: school?.id } });
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
+                'create-user',
+                {
+                    body: { ...payload, schoolId: activeSchoolId },
+                }
+            );
             if (error || data?.error) throw new Error(error?.message || data?.error);
             return data;
         },
         onSuccess: () => {
             toast.success(tUM('toastAddSuccess'));
-            setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false);
+            setIsAddUserModalOpen(false);
+            addUserForm.reset();
+            setShowAddPassword(false);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Ubah nama & role pengguna
     const editUserMutation = useMutation({
-        mutationFn: async (payload: { id: string, data: EditUserFormValues }) => {
-            const { error } = await supabase.from('users').update({ fullName: payload.data.fullName, role: payload.data.role }).eq('id', payload.id);
+        mutationFn: async (payload: { id: string; data: EditUserFormValues }) => {
+            if (!isSuperAdmin && userToEdit?.role === 'SUPER_ADMIN') {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Anda tidak memiliki izin mengubah akun Super Admin.'
+                        : 'You are not allowed to modify a Super Admin account.'
+                );
+            }
+
+            // Non-SuperAdmin hanya diperbolehkan memperbarui nama lengkap, bukan role
+            const updateFields = isSuperAdmin
+                ? { fullName: payload.data.fullName, role: payload.data.role }
+                : { fullName: payload.data.fullName };
+
+            let query = supabase.from('users').update(updateFields).eq('id', payload.id);
+
+            if (!isSuperAdmin && activeSchoolId) {
+                query = query.eq('schoolId', activeSchoolId);
+            }
+
+            const { error } = await query;
             if (error) throw new Error(error.message);
+
+            // Sinkronkan state global jika pengguna yang diedit adalah pengguna yang sedang login
+            if (currentUser && currentUser.id === payload.id) {
+                useAuthStore.setState({
+                    user: {
+                        ...currentUser,
+                        fullName: payload.data.fullName,
+                        role: isSuperAdmin ? payload.data.role : currentUser.role,
+                    },
+                });
+            }
         },
         onSuccess: () => {
             toast.success(tUM('toastEditSuccess'));
-            setUserToEdit(null); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setUserToEdit(null);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Reset password satu pengguna
     const resetPasswordMutation = useMutation({
-        mutationFn: async (payload: { userId: string, newPass: string }) => {
-            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('reset-password', { body: { targetUserId: payload.userId, newPassword: payload.newPass } });
+        mutationFn: async (payload: { userId: string; newPass: string }) => {
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
+                'reset-password',
+                {
+                    body: { targetUserId: payload.userId, newPassword: payload.newPass },
+                }
+            );
             if (error || data?.error) throw new Error(error?.message || data?.error);
         },
         onSuccess: () => {
             toast.success(tUM('toastResetSuccess'));
-            setUserToReset(null); resetPassForm.reset(); setShowResetPassword(false);
+            setUserToReset(null);
+            resetPassForm.reset();
+            setShowResetPassword(false);
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Blokir / aktifkan kembali akun
     const toggleStatusMutation = useMutation({
-        mutationFn: async (payload: { userId: string, currentStatus: boolean }) => {
-            const { error } = await supabase.from('users').update({ isActive: !payload.currentStatus }).eq('id', payload.userId);
+        mutationFn: async (payload: { userId: string; currentStatus: boolean }) => {
+            if (!isSuperAdmin) {
+                throw new Error(
+                    lang === 'id' ? 'Hanya Super Admin yang dapat mengubah status akun.' : 'Unauthorized action.'
+                );
+            }
+            if (currentUser?.id === payload.userId) {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Anda tidak dapat memblokir akun Anda sendiri.'
+                        : 'You cannot block your own account.'
+                );
+            }
+
+            const { error } = await supabase
+                .from('users')
+                .update({ isActive: !payload.currentStatus })
+                .eq('id', payload.userId);
             if (error) throw new Error(error.message);
         },
-        onSuccess: () => { toast.success(tUM('toastStatusSuccess')); queryClient.invalidateQueries({ queryKey: ['users-list'] }); },
-        onError: (error: Error) => toast.error(error.message)
+        onSuccess: () => {
+            toast.success(tUM('toastStatusSuccess'));
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Hapus satu pengguna
     const deleteUserMutation = useMutation({
         mutationFn: async (userId: string) => {
-            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('delete-user', { body: { targetUserId: userId } });
+            if (currentUser?.id === userId) {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Anda tidak dapat menghapus akun Anda sendiri.'
+                        : 'You cannot delete your own account.'
+                );
+            }
+
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
+                'delete-user',
+                {
+                    body: { targetUserId: userId },
+                }
+            );
             if (error || data?.error) throw new Error(error?.message || data?.error);
         },
-        onSuccess: () => { toast.success(tUM('toastDelSuccess')); setUserToDelete(null); queryClient.invalidateQueries({ queryKey: ['users-list'] }); },
-        onError: (error: Error) => toast.error(error.message)
+        onSuccess: () => {
+            toast.success(tUM('toastDelSuccess'));
+            setUserToDelete(null);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        },
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Buatkan akun login untuk data (guru/siswa/ortu) yang dicentang, memakai password default
     const generateSelectedMutation = useMutation({
         mutationFn: async (usersTarget: AppUser[]) => {
-            const results = await runWithConcurrency(usersTarget, BULK_CONCURRENCY, user =>
-                invokeSafe('create-user', { email: user.email, password: DEFAULT_PASSWORD, fullName: user.fullName, role: user.role, schoolId: user.schoolId, existingUserId: user.id })
+            const results = await runWithConcurrency(usersTarget, BULK_CONCURRENCY, (user) =>
+                invokeSafe('create-user', {
+                    email: user.email,
+                    password: DEFAULT_PASSWORD,
+                    fullName: user.fullName,
+                    role: user.role,
+                    schoolId: user.schoolId ?? activeSchoolId,
+                    existingUserId: user.id,
+                })
             );
             const summary = summarizeResults(results);
-            if (summary.success === 0) throw new Error(summary.firstMessage); // semua gagal -> tampilkan error
+            if (summary.success === 0) throw new Error(summary.firstMessage);
             return summary;
         },
         onSuccess: (summary) => {
-            toast.success(tUM('toastGenSelSuccess', { count: summary.success }), { description: `Password: ${DEFAULT_PASSWORD}` });
-            // Sebagian gagal -> beri peringatan
-            if (summary.failed > 0) toast.warning(`${summary.failed} akun gagal diproses.`, { description: summary.firstMessage });
-            setIsGenerateSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            toast.success(tUM('toastGenSelSuccess', { count: summary.success }), {
+                description: `Password: ${DEFAULT_PASSWORD}`,
+            });
+            if (summary.failed > 0) {
+                toast.warning(`${summary.failed} akun gagal diproses.`, {
+                    description: summary.firstMessage,
+                });
+            }
+            setIsGenerateSelectedModalOpen(false);
+            setSelectedUserIds([]);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Buatkan akun login untuk SEMUA data di tab aktif (diproses bertahap oleh edge function)
     const generateBulkMasterMutation = useMutation({
         mutationFn: async (targetGroup: string) => {
-            const { data: { session } } = await supabase.auth.getSession();
-            const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-accounts-from-master`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${session?.access_token}` },
-                body: JSON.stringify({ targetGroup, schoolId: school?.id })
-            });
-            const data = (await response.json()) as BulkGenerateResponse;
-            if (!response.ok || data.error) throw new Error(data.error || 'Terjadi kesalahan sistem');
+            if (!activeSchoolId) {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Pilih sekolah terlebih dahulu sebelum menjalankan generate massal.'
+                        : 'Please select a school first before running bulk generation.'
+                );
+            }
+
+            const {
+                data: { session },
+            } = await supabase.auth.getSession();
+
+            if (!session?.access_token) {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Sesi login telah berakhir. Silakan muat ulang halaman.'
+                        : 'Session expired. Please reload the page.'
+                );
+            }
+
+            const response = await fetch(
+                `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-accounts-from-master`,
+                {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${session.access_token}`,
+                    },
+                    body: JSON.stringify({ targetGroup, schoolId: activeSchoolId }),
+                }
+            );
+
+            let data: BulkGenerateResponse = {};
+            try {
+                data = (await response.json()) as BulkGenerateResponse;
+            } catch {
+                if (!response.ok) {
+                    throw new Error(`Server error (${response.status})`);
+                }
+            }
+
+            if (!response.ok || data.error) {
+                throw new Error(data.error || 'Terjadi kesalahan sistem');
+            }
             return data;
         },
         onSuccess: (data) => {
-            toast.success('Proses Selesai', { description: data.message });
-            // Field boleh tidak ada di respons, jadi dianggap 0 kalau kosong
+            toast.success(lang === 'id' ? 'Proses Selesai' : 'Process Completed', {
+                description: data.message,
+            });
             const failedCount = data.failed ?? 0;
             const remainingCount = data.remaining ?? 0;
-            if (failedCount > 0) toast.warning(`${failedCount} akun gagal diproses.`);
-            // Masih ada antrean -> modal dibiarkan terbuka agar user bisa klik lagi untuk melanjutkan
-            if (remainingCount > 0) toast.info(`Tersisa ${remainingCount} antrean.`, { description: 'Klik Generate Data lagi.' });
-            else setIsGenerateAllModalOpen(false);
+            if (failedCount > 0) {
+                toast.warning(
+                    lang === 'id'
+                        ? `${failedCount} akun gagal diproses.`
+                        : `${failedCount} accounts failed to process.`
+                );
+            }
+            if (remainingCount > 0) {
+                toast.info(
+                    lang === 'id'
+                        ? `Tersisa ${remainingCount} antrean.`
+                        : `${remainingCount} items remaining in queue.`,
+                    {
+                        description:
+                            lang === 'id'
+                                ? 'Klik Generate Data lagi untuk melanjutkan.'
+                                : 'Click Generate Data again to continue.',
+                    }
+                );
+            } else {
+                setIsGenerateAllModalOpen(false);
+            }
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error('Gagal Generate', { description: error.message })
+        onError: (error: Error) =>
+            toast.error(lang === 'id' ? 'Gagal Generate' : 'Generation Failed', {
+                description: error.message,
+            }),
     });
 
-    // Hapus akun yang dicentang
     const deleteSelectedMutation = useMutation({
         mutationFn: async (userIds: string[]) => {
-            const results = await runWithConcurrency(userIds, BULK_CONCURRENCY, id => invokeSafe('delete-user', { targetUserId: id }));
+            // Jangan pernah menghapus akun sendiri secara tidak sengaja melalui seleksi massal
+            const safeIds = userIds.filter((id) => id !== currentUser?.id);
+            if (safeIds.length === 0) {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Tidak ada akun valid yang dapat dihapus.'
+                        : 'No valid accounts selected for deletion.'
+                );
+            }
+
+            const results = await runWithConcurrency(safeIds, BULK_CONCURRENCY, (id) =>
+                invokeSafe('delete-user', { targetUserId: id })
+            );
             const summary = summarizeResults(results);
             if (summary.success === 0) throw new Error(summary.firstMessage);
             return summary;
         },
         onSuccess: (summary) => {
             toast.success(tUM('toastDelSelSuccess', { count: summary.success }));
-            if (summary.failed > 0) toast.warning(`${summary.failed} akun gagal dihapus.`, { description: summary.firstMessage });
-            setIsDeleteSelectedModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            if (summary.failed > 0) {
+                toast.warning(`${summary.failed} akun gagal dihapus.`, {
+                    description: summary.firstMessage,
+                });
+            }
+            setIsDeleteSelectedModalOpen(false);
+            setSelectedUserIds([]);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // Hapus SEMUA akun pada tab aktif (staff / siswa / orang tua)
     const deleteAllBulkMutation = useMutation({
         mutationFn: async (targetGroup: string) => {
-            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('delete-users-by-role', { body: { targetGroup, schoolId: school?.id } });
+            if (!activeSchoolId) {
+                throw new Error(
+                    lang === 'id'
+                        ? 'Pilih sekolah terlebih dahulu sebelum menghapus data massal.'
+                        : 'Please select a school first before bulk deletion.'
+                );
+            }
+
+            const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
+                'delete-users-by-role',
+                {
+                    body: { targetGroup, schoolId: activeSchoolId },
+                }
+            );
             if (error || data?.error) throw new Error(error?.message || data?.error);
             return data;
         },
         onSuccess: (data) => {
             toast.success(tGlobal('info'), { description: data?.message || 'Done!' });
-            setIsDeleteAllModalOpen(false); setSelectedUserIds([]); queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setIsDeleteAllModalOpen(false);
+            setSelectedUserIds([]);
+            queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
-        onError: (error: Error) => toast.error(error.message)
+        onError: (error: Error) => toast.error(error.message),
     });
 
-    // ==========================================
-    // OPTIMASI PERFORMA: MEMOIZATION
-    // Filter (tab + pencarian) lalu urutkan; hanya dihitung ulang kalau salah satu inputnya berubah
-    // ==========================================
+    // ------------------------------------------
+    // FILTER & SORT
+    // ------------------------------------------
     const processedUsers = useMemo(() => {
         if (!users) return [];
 
-        // 1) FILTER: cocokkan kata pencarian (nama/email) dan tab yang aktif
         const q = searchQuery.trim().toLowerCase();
-        let filtered = users.filter((u) => {
-            const matchesSearch = u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+        const filtered = users.filter((u) => {
+            const matchesSearch =
+                u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
 
             let matchesTab = true;
             if (activeTab === 'manajemen') matchesTab = MANAGEMENT_ROLES.includes(u.role);
@@ -504,14 +790,20 @@ export function UserManagementPage() {
             return matchesSearch && matchesTab;
         });
 
-        // 2) SORT: 'none' = biarkan urutan bawaan database
         if (sortConfig.key !== 'none') {
-            filtered = filtered.sort((a, b) => {
+            filtered.sort((a, b) => {
                 let comparison = 0;
-                if (sortConfig.key === 'fullName') comparison = a.fullName.localeCompare(b.fullName);
-                else if (sortConfig.key === 'role') comparison = a.role.localeCompare(b.role);
-                else if (sortConfig.key === 'isActive') comparison = (a.isActive === b.isActive) ? 0 : a.isActive ? -1 : 1; // asc = aktif di atas
-
+                if (sortConfig.key === 'fullName') {
+                    comparison = a.fullName.localeCompare(b.fullName, undefined, {
+                        sensitivity: 'base',
+                    });
+                } else if (sortConfig.key === 'role') {
+                    comparison = a.role.localeCompare(b.role, undefined, {
+                        sensitivity: 'base',
+                    });
+                } else if (sortConfig.key === 'isActive') {
+                    comparison = a.isActive === b.isActive ? 0 : a.isActive ? -1 : 1;
+                }
                 return sortConfig.direction === 'asc' ? comparison : -comparison;
             });
         }
@@ -520,29 +812,35 @@ export function UserManagementPage() {
     }, [users, searchQuery, activeTab, sortConfig]);
 
     // ------------------------------------------
-    // PAGINATION
+    // PAGINATION & SELECTION
     // ------------------------------------------
     const totalPages = Math.ceil(processedUsers.length / ITEMS_PER_PAGE);
 
-    // Kalau data menyusut (mis. dihapus dari tab lain), mundur ke halaman terakhir yang ada
     useEffect(() => {
-        if (totalPages > 0 && currentPage > totalPages) setCurrentPage(totalPages);
+        if (totalPages > 0 && currentPage > totalPages) {
+            setCurrentPage(totalPages);
+        }
     }, [currentPage, totalPages]);
 
-    // Buang ID terpilih yang akunnya sudah tidak ada (mis. sudah terhapus lewat Realtime)
     useEffect(() => {
         if (!users) return;
-        const ids = new Set(users.map(u => u.id));
-        setSelectedUserIds(prev => {
-            const next = prev.filter(id => ids.has(id));
-            return next.length === prev.length ? prev : next; // tidak berubah -> hindari render ulang
+        const ids = new Set(users.map((u) => u.id));
+        setSelectedUserIds((prev) => {
+            const next = prev.filter((id) => ids.has(id));
+            return next.length === prev.length ? prev : next;
         });
     }, [users]);
 
-    // Potong data sesuai halaman aktif
-    const paginatedUsers = processedUsers.slice((currentPage - 1) * ITEMS_PER_PAGE, currentPage * ITEMS_PER_PAGE);
+    const paginatedUsers = processedUsers.slice(
+        (currentPage - 1) * ITEMS_PER_PAGE,
+        currentPage * ITEMS_PER_PAGE
+    );
 
-    // Tombol nomor halaman: maksimal 5 nomor, bergeser mengikuti halaman aktif
+    // Periksa apakah SELURUH baris pada halaman aktif sedang terpilih
+    const isAllPageSelected =
+        paginatedUsers.length > 0 &&
+        paginatedUsers.every((u) => selectedUserIds.includes(u.id));
+
     const getPageNumbers = () => {
         const pages: number[] = [];
         let start = Math.max(1, currentPage - 2);
@@ -555,73 +853,107 @@ export function UserManagementPage() {
     // ------------------------------------------
     // HANDLERS
     // ------------------------------------------
-
-    // Klik header kolom: asc -> desc -> reset (kembali ke urutan bawaan)
     const handleSort = (key: SortKey) => {
         if (sortConfig.key === key) {
-            setSortConfig({ key: sortConfig.direction === 'asc' ? key : 'none', direction: sortConfig.direction === 'asc' ? 'desc' : 'asc' });
+            setSortConfig({
+                key: sortConfig.direction === 'asc' ? key : 'none',
+                direction: sortConfig.direction === 'asc' ? 'desc' : 'asc',
+            });
         } else {
             setSortConfig({ key, direction: 'asc' });
         }
     };
 
-    // Lompat ke halaman yang diketik manual (Enter / klik di luar kotak)
-    const handleManualPageSubmit = (e?: React.KeyboardEvent<HTMLInputElement>) => {
-        if (e && e.key !== 'Enter') return;
+    const handleManualPageKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter') {
+            e.currentTarget.blur();
+        }
+    };
+
+    const commitManualPage = () => {
+        if (pageInput.trim() === '' || totalPages === 0) {
+            setPageInput(currentPage.toString());
+            return;
+        }
         let targetPage = parseInt(pageInput, 10);
         if (isNaN(targetPage) || targetPage < 1) targetPage = 1;
-        if (targetPage > totalPages && totalPages > 0) targetPage = totalPages;
+        if (targetPage > totalPages) targetPage = totalPages;
         setCurrentPage(targetPage);
         setPageInput(targetPage.toString());
     };
 
-    // Checkbox "pilih semua": hanya memilih baris di halaman yang sedang tampil
-    const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
-        setSelectedUserIds(e.target.checked ? paginatedUsers.map(u => u.id) : []);
+    const handleSelectAll = (e: ChangeEvent<HTMLInputElement>) => {
+        const pageIds = paginatedUsers.map((u) => u.id);
+        if (e.target.checked) {
+            setSelectedUserIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+        } else {
+            const pageIdSet = new Set(pageIds);
+            setSelectedUserIds((prev) => prev.filter((id) => !pageIdSet.has(id)));
+        }
     };
-    // Checkbox per baris
+
     const handleToggleSelect = (userId: string) => {
-        setSelectedUserIds(prev => prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]);
+        setSelectedUserIds((prev) =>
+            prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
+        );
     };
 
     // ------------------------------------------
     // HELPER TAMPILAN
     // ------------------------------------------
+    const formatRoleName = (role: AppUserRole): string =>
+        tUM(('role_' + role) as keyof typeof translations.id.userManagement);
 
-    // Nama role sesuai bahasa aktif
-    const formatRoleName = (role: AppUserRole): string => tUM(('role_' + role) as keyof typeof translations.id.userManagement);
-
-    // Warna badge role di tabel
     const getRoleBadgeColor = (role: AppUserRole): string => {
-        if (role === 'SUPER_ADMIN') return 'bg-rose-100 text-rose-700 border-rose-200';
-        if (['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(role)) return 'bg-purple-100 text-purple-700 border-purple-200';
-        if (STAFF_ROLES.includes(role)) return 'bg-blue-100 text-blue-700 border-blue-200';
-        if (role === 'SISWA') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-        return 'bg-slate-100 text-slate-700 border-slate-200';
+        if (role === 'SUPER_ADMIN') {
+            return 'bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-500/20 dark:text-rose-300 dark:border-rose-500/30';
+        }
+        if (['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'].includes(role)) {
+            return 'bg-purple-100 text-purple-700 border-purple-200 dark:bg-purple-500/20 dark:text-purple-300 dark:border-purple-500/30';
+        }
+        if (STAFF_ROLES.includes(role)) {
+            return 'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-500/20 dark:text-blue-300 dark:border-blue-500/30';
+        }
+        if (role === 'SISWA') {
+            return 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-500/20 dark:text-emerald-300 dark:border-emerald-500/30';
+        }
+        return 'bg-slate-100 text-slate-700 border-slate-200 dark:bg-slate-500/20 dark:text-slate-300 dark:border-slate-500/30';
     };
 
-    // Isi dropdown role, dipakai bersama oleh form tambah & edit
-    const roleSelectItems = ROLE_VALUES.map(r => (
-        <SelectItem key={r} value={r}>{tUM(('role_' + r) as keyof typeof translations.id.userManagement)}</SelectItem>
+    const roleSelectItems = ROLE_VALUES.map((r) => (
+        <SelectItem key={r} value={r}>
+            {tUM(('role_' + r) as keyof typeof translations.id.userManagement)}
+        </SelectItem>
     ));
 
-    // Teks pada tombol Sortir sesuai urutan yang aktif
-    const sortLabel = sortConfig.key === 'fullName' ? 'Sortir Nama' : sortConfig.key === 'role' ? 'Sortir Role' : sortConfig.key === 'isActive' ? 'Sortir Status' : 'Sortir';
+    const sortLabel =
+        sortConfig.key === 'fullName'
+            ? lang === 'id'
+                ? 'Sortir Nama'
+                : 'Sort Name'
+            : sortConfig.key === 'role'
+                ? lang === 'id'
+                    ? 'Sortir Role'
+                    : 'Sort Role'
+                : sortConfig.key === 'isActive'
+                    ? lang === 'id'
+                        ? 'Sortir Status'
+                        : 'Sort Status'
+                    : lang === 'id'
+                        ? 'Sortir'
+                        : 'Sort';
 
-    // Jumlah akun per tab (ditampilkan sebagai angka kecil di tiap tab).
-    // Dihitung dari semua data, tidak terpengaruh kata pencarian.
     const tabCounts = useMemo<Record<string, number>>(() => {
         const list = users ?? [];
         return {
             semua: list.length,
-            manajemen: list.filter(u => MANAGEMENT_ROLES.includes(u.role)).length,
-            staff: list.filter(u => STAFF_ROLES.includes(u.role)).length,
-            siswa: list.filter(u => u.role === 'SISWA').length,
-            orangtua: list.filter(u => u.role === 'ORANG_TUA').length,
+            manajemen: list.filter((u) => MANAGEMENT_ROLES.includes(u.role)).length,
+            staff: list.filter((u) => STAFF_ROLES.includes(u.role)).length,
+            siswa: list.filter((u) => u.role === 'SISWA').length,
+            orangtua: list.filter((u) => u.role === 'ORANG_TUA').length,
         };
     }, [users]);
 
-    // Daftar tab: value harus sama dengan nilai yang dicek di processedUsers & BULK_TABS
     const TAB_ITEMS = [
         { value: 'semua', label: tUM('tabAll'), icon: Users },
         { value: 'manajemen', label: tUM('tabManagement'), icon: ShieldCheck },
@@ -631,51 +963,161 @@ export function UserManagementPage() {
     ];
 
     return (
-        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 relative">
-            {/* ================= MODALS (popup) ================= */}
+        <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="relative space-y-6"
+        >
+            {/* ================= MODALS ================= */}
             <AnimatePresence>
-                {/* Modal: Tambah Pengguna (hanya Super Admin) */}
+                {/* Modal: Tambah Pengguna */}
                 {isAddUserModalOpen && isSuperAdmin && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-md w-full p-6">
-                            <div className="flex justify-between mb-4">
-                                <div><h3 className="text-xl font-bold">{tUM('modalAddTitle')}</h3><p className="text-muted-foreground text-sm">{tUM('modalAddSub')}</p></div>
-                                <Button variant="ghost" size="icon" aria-label={tGlobal('cancel')} onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}><X className="w-5 h-5" /></Button>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-2xl"
+                        >
+                            <div className="mb-4 flex justify-between">
+                                <div>
+                                    <h3 className="text-xl font-bold">{tUM('modalAddTitle')}</h3>
+                                    <p className="text-sm text-muted-foreground">{tUM('modalAddSub')}</p>
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label={tGlobal('cancel')}
+                                    onClick={() => {
+                                        setIsAddUserModalOpen(false);
+                                        addUserForm.reset();
+                                        setShowAddPassword(false);
+                                    }}
+                                >
+                                    <X className="h-5 w-5" />
+                                </Button>
                             </div>
                             <Form {...addUserForm}>
-                                <form onSubmit={addUserForm.handleSubmit((data) => addUserMutation.mutate(data))} className="space-y-4">
-                                    <FormField control={addUserForm.control} name="fullName" render={({ field }) => (<FormItem><FormLabel>{tGlobal('name')}</FormLabel><FormControl><Input placeholder="John Doe" {...field} /></FormControl><FormMessage /></FormItem>)} />
-                                    <FormField control={addUserForm.control} name="email" render={({ field }) => (<FormItem><FormLabel>Email</FormLabel><FormControl><Input type="email" placeholder="john@sekolah.com" {...field} /></FormControl><FormMessage /></FormItem>)} />
-                                    <FormField control={addUserForm.control} name="role" render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>{tUM('colRole')}</FormLabel>
-                                            <Select value={field.value} onValueChange={field.onChange}>
-                                                <FormControl><SelectTrigger><SelectValue placeholder={tUM('roleReq')} /></SelectTrigger></FormControl>
-                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto">
-                                                    {roleSelectItems}
-                                                </SelectContent>
-                                            </Select>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )} />
-                                    <FormField control={addUserForm.control} name="password" render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>Password</FormLabel>
-                                            <FormControl>
-                                                <div className="relative flex items-center">
-                                                    <Input type={showAddPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
-                                                    {/* Tombol mata: tampilkan / sembunyikan password */}
-                                                    <button type="button" aria-label={lang === 'id' ? 'Tampilkan atau sembunyikan password' : 'Show or hide password'} onClick={() => setShowAddPassword(!showAddPassword)} className="absolute right-3 text-muted-foreground">
-                                                        {showAddPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                                    </button>
-                                                </div>
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )} />
-                                    <div className="flex justify-end gap-3 pt-4 border-t mt-6">
-                                        <Button type="button" variant="outline" onClick={() => { setIsAddUserModalOpen(false); addUserForm.reset(); setShowAddPassword(false); }}>{tGlobal('cancel')}</Button>
-                                        <Button type="submit" className="bg-emerald-600 hover:bg-emerald-700 text-white" disabled={addUserMutation.isPending}>{addUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Plus className="w-4 h-4 mr-2" />} {tGlobal('save')}</Button>
+                                <form
+                                    onSubmit={addUserForm.handleSubmit((data) =>
+                                        addUserMutation.mutate(data)
+                                    )}
+                                    className="space-y-4"
+                                >
+                                    <FormField
+                                        control={addUserForm.control}
+                                        name="fullName"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>{tGlobal('name')}</FormLabel>
+                                                <FormControl>
+                                                    <Input placeholder="John Doe" {...field} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={addUserForm.control}
+                                        name="email"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Email</FormLabel>
+                                                <FormControl>
+                                                    <Input
+                                                        type="email"
+                                                        placeholder="john@sekolah.com"
+                                                        {...field}
+                                                    />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={addUserForm.control}
+                                        name="role"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>{tUM('colRole')}</FormLabel>
+                                                <Select value={field.value} onValueChange={field.onChange}>
+                                                    <FormControl>
+                                                        <SelectTrigger>
+                                                            <SelectValue placeholder={tUM('roleReq')} />
+                                                        </SelectTrigger>
+                                                    </FormControl>
+                                                    <SelectContent
+                                                        position="popper"
+                                                        side="bottom"
+                                                        className="max-h-50 overflow-y-auto"
+                                                    >
+                                                        {roleSelectItems}
+                                                    </SelectContent>
+                                                </Select>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={addUserForm.control}
+                                        name="password"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>Password</FormLabel>
+                                                <FormControl>
+                                                    <div className="relative flex items-center">
+                                                        <Input
+                                                            type={showAddPassword ? 'text' : 'password'}
+                                                            placeholder="••••••••"
+                                                            {...field}
+                                                            className="pr-10"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            aria-label={
+                                                                lang === 'id'
+                                                                    ? 'Tampilkan atau sembunyikan password'
+                                                                    : 'Show or hide password'
+                                                            }
+                                                            onClick={() => setShowAddPassword(!showAddPassword)}
+                                                            className="absolute right-3 text-muted-foreground hover:text-foreground"
+                                                        >
+                                                            {showAddPassword ? (
+                                                                <EyeOff size={16} />
+                                                            ) : (
+                                                                <Eye size={16} />
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <div className="mt-6 flex justify-end gap-3 border-t pt-4">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => {
+                                                setIsAddUserModalOpen(false);
+                                                addUserForm.reset();
+                                                setShowAddPassword(false);
+                                            }}
+                                        >
+                                            {tGlobal('cancel')}
+                                        </Button>
+                                        <Button
+                                            type="submit"
+                                            className="bg-emerald-600 text-white hover:bg-emerald-700"
+                                            disabled={addUserMutation.isPending}
+                                        >
+                                            {addUserMutation.isPending ? (
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <Plus className="mr-2 h-4 w-4" />
+                                            )}{' '}
+                                            {tGlobal('save')}
+                                        </Button>
                                     </div>
                                 </form>
                             </Form>
@@ -683,33 +1125,101 @@ export function UserManagementPage() {
                     </div>
                 )}
 
-                {/* Modal: Edit Pengguna (email dikunci, role hanya bisa diubah Super Admin) */}
+                {/* Modal: Edit Pengguna */}
                 {userToEdit && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-md w-full p-6">
-                            <div className="flex justify-between mb-4">
-                                <div><h3 className="text-xl font-bold">{tUM('modalEditTitle')}</h3><p className="text-muted-foreground text-sm">{tUM('modalEditSub')}</p></div>
-                                <Button variant="ghost" size="icon" aria-label={tGlobal('cancel')} onClick={() => setUserToEdit(null)}><X className="w-5 h-5" /></Button>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-2xl"
+                        >
+                            <div className="mb-4 flex justify-between">
+                                <div>
+                                    <h3 className="text-xl font-bold">{tUM('modalEditTitle')}</h3>
+                                    <p className="text-sm text-muted-foreground">{tUM('modalEditSub')}</p>
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label={tGlobal('cancel')}
+                                    onClick={() => setUserToEdit(null)}
+                                >
+                                    <X className="h-5 w-5" />
+                                </Button>
                             </div>
                             <Form {...editUserForm}>
-                                <form onSubmit={editUserForm.handleSubmit((data) => editUserMutation.mutate({ id: userToEdit.id, data }))} className="space-y-4">
-                                    <div className="space-y-2"><FormLabel>Email</FormLabel><Input value={userToEdit.email} disabled className="bg-muted" /></div>
-                                    <FormField control={editUserForm.control} name="fullName" render={({ field }) => (<FormItem><FormLabel>{tGlobal('name')}</FormLabel><FormControl><Input {...field} /></FormControl><FormMessage /></FormItem>)} />
-                                    <FormField control={editUserForm.control} name="role" render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>{tUM('colRole')}</FormLabel>
-                                            <Select value={field.value} onValueChange={field.onChange} disabled={!isSuperAdmin}>
-                                                <FormControl><SelectTrigger><SelectValue placeholder={tUM('roleReq')} /></SelectTrigger></FormControl>
-                                                <SelectContent position="popper" side="bottom" className="max-h-50 overflow-y-auto">
-                                                    {roleSelectItems}
-                                                </SelectContent>
-                                            </Select>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )} />
-                                    <div className="flex justify-end gap-3 pt-4 border-t mt-6">
-                                        <Button type="button" variant="outline" onClick={() => setUserToEdit(null)}>{tGlobal('cancel')}</Button>
-                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={editUserMutation.isPending}>{editUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Edit className="w-4 h-4 mr-2" />} {tGlobal('save')}</Button>
+                                <form
+                                    onSubmit={editUserForm.handleSubmit((data) =>
+                                        editUserMutation.mutate({ id: userToEdit.id, data })
+                                    )}
+                                    className="space-y-4"
+                                >
+                                    <div className="space-y-2">
+                                        <FormLabel>Email</FormLabel>
+                                        <Input value={userToEdit.email} disabled className="bg-muted" />
+                                    </div>
+                                    <FormField
+                                        control={editUserForm.control}
+                                        name="fullName"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>{tGlobal('name')}</FormLabel>
+                                                <FormControl>
+                                                    <Input {...field} />
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <FormField
+                                        control={editUserForm.control}
+                                        name="role"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>{tUM('colRole')}</FormLabel>
+                                                <Select
+                                                    value={field.value}
+                                                    onValueChange={field.onChange}
+                                                    disabled={!isSuperAdmin}
+                                                >
+                                                    <FormControl>
+                                                        <SelectTrigger>
+                                                            <SelectValue placeholder={tUM('roleReq')} />
+                                                        </SelectTrigger>
+                                                    </FormControl>
+                                                    <SelectContent
+                                                        position="popper"
+                                                        side="bottom"
+                                                        className="max-h-50 overflow-y-auto"
+                                                    >
+                                                        {roleSelectItems}
+                                                    </SelectContent>
+                                                </Select>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <div className="mt-6 flex justify-end gap-3 border-t pt-4">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => setUserToEdit(null)}
+                                        >
+                                            {tGlobal('cancel')}
+                                        </Button>
+                                        <Button
+                                            type="submit"
+                                            className="bg-blue-600 text-white hover:bg-blue-700"
+                                            disabled={editUserMutation.isPending}
+                                        >
+                                            {editUserMutation.isPending ? (
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <Edit className="mr-2 h-4 w-4" />
+                                            )}{' '}
+                                            {tGlobal('save')}
+                                        </Button>
                                     </div>
                                 </form>
                             </Form>
@@ -717,36 +1227,104 @@ export function UserManagementPage() {
                     </div>
                 )}
 
-                {/* Modal: Reset Password (hanya Super Admin) */}
+                {/* Modal: Reset Password */}
                 {userToReset && isSuperAdmin && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-sm w-full p-6">
-                            <div className="flex justify-between mb-4">
-                                <div className="w-12 h-12 bg-blue-100 flex items-center justify-center rounded-full"><KeyRound className="w-6 h-6 text-blue-600" /></div>
-                                <Button variant="ghost" size="icon" aria-label={tGlobal('cancel')} onClick={() => { setUserToReset(null); setShowResetPassword(false); }}><X className="w-5 h-5" /></Button>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-sm rounded-2xl border bg-card p-6 shadow-2xl"
+                        >
+                            <div className="mb-4 flex justify-between">
+                                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-500/20">
+                                    <KeyRound className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                                </div>
+                                <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    aria-label={tGlobal('cancel')}
+                                    onClick={() => {
+                                        setUserToReset(null);
+                                        setShowResetPassword(false);
+                                    }}
+                                >
+                                    <X className="h-5 w-5" />
+                                </Button>
                             </div>
-                            <h3 className="text-xl font-bold mb-1">{tUM('modalResetTitle')}</h3>
-                            <p className="text-muted-foreground text-sm mb-6">{tUM('modalResetSub')} <strong>{userToReset.email}</strong></p>
+                            <h3 className="mb-1 text-xl font-bold">{tUM('modalResetTitle')}</h3>
+                            <p className="mb-6 text-sm text-muted-foreground">
+                                {tUM('modalResetSub')} <strong>{userToReset.email}</strong>
+                            </p>
                             <Form {...resetPassForm}>
-                                <form onSubmit={resetPassForm.handleSubmit((data) => resetPasswordMutation.mutate({ userId: userToReset.id, newPass: data.newPassword }))} className="space-y-4">
-                                    <FormField control={resetPassForm.control} name="newPassword" render={({ field }) => (
-                                        <FormItem>
-                                            <FormLabel>{tUM('newPassword')}</FormLabel>
-                                            <FormControl>
-                                                <div className="relative flex items-center">
-                                                    <Input type={showResetPassword ? "text" : "password"} placeholder="••••••••" {...field} className="pr-10" />
-                                                    {/* Tombol mata: tampilkan / sembunyikan password */}
-                                                    <button type="button" aria-label={lang === 'id' ? 'Tampilkan atau sembunyikan password' : 'Show or hide password'} onClick={() => setShowResetPassword(!showResetPassword)} className="absolute right-3 text-muted-foreground">
-                                                        {showResetPassword ? <EyeOff size={16} /> : <Eye size={16} />}
-                                                    </button>
-                                                </div>
-                                            </FormControl>
-                                            <FormMessage />
-                                        </FormItem>
-                                    )} />
-                                    <div className="flex justify-end gap-3 pt-4 border-t mt-6">
-                                        <Button type="button" variant="outline" onClick={() => { setUserToReset(null); setShowResetPassword(false); }}>{tGlobal('cancel')}</Button>
-                                        <Button type="submit" className="bg-blue-600 hover:bg-blue-700 text-white" disabled={resetPasswordMutation.isPending}>{resetPasswordMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <KeyRound className="w-4 h-4 mr-2" />} {tGlobal('save')}</Button>
+                                <form
+                                    onSubmit={resetPassForm.handleSubmit((data) =>
+                                        resetPasswordMutation.mutate({
+                                            userId: userToReset.id,
+                                            newPass: data.newPassword,
+                                        })
+                                    )}
+                                    className="space-y-4"
+                                >
+                                    <FormField
+                                        control={resetPassForm.control}
+                                        name="newPassword"
+                                        render={({ field }) => (
+                                            <FormItem>
+                                                <FormLabel>{tUM('newPassword')}</FormLabel>
+                                                <FormControl>
+                                                    <div className="relative flex items-center">
+                                                        <Input
+                                                            type={showResetPassword ? 'text' : 'password'}
+                                                            placeholder="••••••••"
+                                                            {...field}
+                                                            className="pr-10"
+                                                        />
+                                                        <button
+                                                            type="button"
+                                                            aria-label={
+                                                                lang === 'id'
+                                                                    ? 'Tampilkan atau sembunyikan password'
+                                                                    : 'Show or hide password'
+                                                            }
+                                                            onClick={() => setShowResetPassword(!showResetPassword)}
+                                                            className="absolute right-3 text-muted-foreground hover:text-foreground"
+                                                        >
+                                                            {showResetPassword ? (
+                                                                <EyeOff size={16} />
+                                                            ) : (
+                                                                <Eye size={16} />
+                                                            )}
+                                                        </button>
+                                                    </div>
+                                                </FormControl>
+                                                <FormMessage />
+                                            </FormItem>
+                                        )}
+                                    />
+                                    <div className="mt-6 flex justify-end gap-3 border-t pt-4">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            onClick={() => {
+                                                setUserToReset(null);
+                                                setShowResetPassword(false);
+                                            }}
+                                        >
+                                            {tGlobal('cancel')}
+                                        </Button>
+                                        <Button
+                                            type="submit"
+                                            className="bg-blue-600 text-white hover:bg-blue-700"
+                                            disabled={resetPasswordMutation.isPending}
+                                        >
+                                            {resetPasswordMutation.isPending ? (
+                                                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                            ) : (
+                                                <KeyRound className="mr-2 h-4 w-4" />
+                                            )}{' '}
+                                            {tGlobal('save')}
+                                        </Button>
                                     </div>
                                 </form>
                             </Form>
@@ -754,86 +1332,200 @@ export function UserManagementPage() {
                     </div>
                 )}
 
-                {/* Modal: Konfirmasi hapus satu pengguna (hanya Super Admin) */}
+                {/* Modal: Hapus Satu Pengguna */}
                 {userToDelete && isSuperAdmin && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border max-w-sm w-full p-6 text-center">
-                            <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
-                            <h3 className="text-xl font-bold mb-2">{tUM('modalDelTitle')}</h3>
-                            <p className="text-muted-foreground text-sm mb-1">{tUM('modalDelSub')}</p>
-                            <p className="font-semibold text-foreground mb-6">{userToDelete.fullName}</p>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-sm rounded-2xl border bg-card p-6 text-center shadow-2xl"
+                        >
+                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-500/20">
+                                <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                            </div>
+                            <h3 className="mb-2 text-xl font-bold">{tUM('modalDelTitle')}</h3>
+                            <p className="mb-1 text-sm text-muted-foreground">{tUM('modalDelSub')}</p>
+                            <p className="mb-6 font-semibold text-foreground">{userToDelete.fullName}</p>
                             <div className="flex justify-center gap-3">
-                                <Button variant="outline" onClick={() => setUserToDelete(null)}>{tGlobal('cancel')}</Button>
-                                <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => deleteUserMutation.mutate(userToDelete.id)} disabled={deleteUserMutation.isPending}>
-                                    {deleteUserMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} {tGlobal('delete')}
+                                <Button variant="outline" onClick={() => setUserToDelete(null)}>
+                                    {tGlobal('cancel')}
+                                </Button>
+                                <Button
+                                    className="bg-red-600 text-white hover:bg-red-700"
+                                    onClick={() => deleteUserMutation.mutate(userToDelete.id)}
+                                    disabled={deleteUserMutation.isPending}
+                                >
+                                    {deleteUserMutation.isPending ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                    )}{' '}
+                                    {tGlobal('delete')}
                                 </Button>
                             </div>
                         </motion.div>
                     </div>
                 )}
 
-                {/* Modal: Konfirmasi generate akun untuk data yang dicentang */}
+                {/* Modal: Generate Akun Terpilih */}
                 {isGenerateSelectedModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border p-6 text-center max-w-sm w-full">
-                            <div className="w-12 h-12 bg-blue-100 flex items-center justify-center rounded-full mx-auto mb-4"><UserPlus className="w-6 h-6 text-blue-600" /></div>
-                            <h3 className="text-xl font-bold mb-2">{tUM('modalGenSelTitle', { count: selectedUserIds.length })}</h3>
-                            <p className="text-muted-foreground text-sm mb-6">{tUM('modalGenSelSub', { count: selectedUserIds.length })}</p>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-sm rounded-2xl border bg-card p-6 text-center shadow-2xl"
+                        >
+                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-500/20">
+                                <UserPlus className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                            </div>
+                            <h3 className="mb-2 text-xl font-bold">
+                                {tUM('modalGenSelTitle', { count: selectedUserIds.length })}
+                            </h3>
+                            <p className="mb-6 text-sm text-muted-foreground">
+                                {tUM('modalGenSelSub', { count: selectedUserIds.length })}
+                            </p>
                             <div className="flex justify-center gap-3">
-                                <Button variant="outline" onClick={() => setIsGenerateSelectedModalOpen(false)}>{tGlobal('cancel')}</Button>
-                                <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => generateSelectedMutation.mutate(processedUsers.filter(u => selectedUserIds.includes(u.id)))} disabled={generateSelectedMutation.isPending}>
-                                    {generateSelectedMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <UserPlus className="w-4 h-4 mr-2" />} {tGlobal('yes')}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setIsGenerateSelectedModalOpen(false)}
+                                >
+                                    {tGlobal('cancel')}
+                                </Button>
+                                <Button
+                                    className="bg-blue-600 text-white hover:bg-blue-700"
+                                    onClick={() =>
+                                        generateSelectedMutation.mutate(
+                                            processedUsers.filter((u) => selectedUserIds.includes(u.id))
+                                        )
+                                    }
+                                    disabled={generateSelectedMutation.isPending}
+                                >
+                                    {generateSelectedMutation.isPending ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <UserPlus className="mr-2 h-4 w-4" />
+                                    )}{' '}
+                                    {tGlobal('yes')}
                                 </Button>
                             </div>
                         </motion.div>
                     </div>
                 )}
 
-                {/* Modal: Konfirmasi generate akun untuk SEMUA data di tab aktif */}
+                {/* Modal: Generate Semua Akun di Tab Aktif */}
                 {isGenerateAllModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border p-6 text-center max-w-sm w-full">
-                            <div className="w-12 h-12 bg-emerald-100 flex items-center justify-center rounded-full mx-auto mb-4"><DatabaseZap className="w-6 h-6 text-emerald-600" /></div>
-                            <h3 className="text-xl font-bold mb-2">{tUM('modalGenAllTitle')}</h3>
-                            <p className="text-muted-foreground text-sm mb-6">{tUM('modalGenAllSub')}</p>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-sm rounded-2xl border bg-card p-6 text-center shadow-2xl"
+                        >
+                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20">
+                                <DatabaseZap className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+                            </div>
+                            <h3 className="mb-2 text-xl font-bold">{tUM('modalGenAllTitle')}</h3>
+                            <p className="mb-6 text-sm text-muted-foreground">{tUM('modalGenAllSub')}</p>
                             <div className="flex justify-center gap-3">
-                                <Button variant="outline" onClick={() => setIsGenerateAllModalOpen(false)}>{tGlobal('cancel')}</Button>
-                                <Button className="bg-emerald-600 hover:bg-emerald-700 text-white" onClick={() => generateBulkMasterMutation.mutate(activeTab)} disabled={generateBulkMasterMutation.isPending}>
-                                    {generateBulkMasterMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <DatabaseZap className="w-4 h-4 mr-2" />} {tUM('generateAll')}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setIsGenerateAllModalOpen(false)}
+                                >
+                                    {tGlobal('cancel')}
+                                </Button>
+                                <Button
+                                    className="bg-emerald-600 text-white hover:bg-emerald-700"
+                                    onClick={() => generateBulkMasterMutation.mutate(activeTab)}
+                                    disabled={generateBulkMasterMutation.isPending}
+                                >
+                                    {generateBulkMasterMutation.isPending ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <DatabaseZap className="mr-2 h-4 w-4" />
+                                    )}{' '}
+                                    {tUM('generateAll')}
                                 </Button>
                             </div>
                         </motion.div>
                     </div>
                 )}
 
-                {/* Modal: Konfirmasi hapus akun yang dicentang */}
+                {/* Modal: Hapus Akun Terpilih */}
                 {isDeleteSelectedModalOpen && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border p-6 text-center max-w-sm w-full">
-                            <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><Trash2 className="w-6 h-6 text-red-600" /></div>
-                            <h3 className="text-xl font-bold mb-2">{tUM('modalDelSelTitle', { count: selectedUserIds.length })}</h3>
-                            <p className="text-muted-foreground text-sm mb-6">{tUM('modalDelSelSub', { count: selectedUserIds.length })}</p>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-sm rounded-2xl border bg-card p-6 text-center shadow-2xl"
+                        >
+                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-500/20">
+                                <Trash2 className="h-6 w-6 text-red-600 dark:text-red-400" />
+                            </div>
+                            <h3 className="mb-2 text-xl font-bold">
+                                {tUM('modalDelSelTitle', { count: selectedUserIds.length })}
+                            </h3>
+                            <p className="mb-6 text-sm text-muted-foreground">
+                                {tUM('modalDelSelSub', { count: selectedUserIds.length })}
+                            </p>
                             <div className="flex justify-center gap-3">
-                                <Button variant="outline" onClick={() => setIsDeleteSelectedModalOpen(false)}>{tGlobal('cancel')}</Button>
-                                <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => deleteSelectedMutation.mutate(selectedUserIds)} disabled={deleteSelectedMutation.isPending}>
-                                    {deleteSelectedMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} {tGlobal('delete')}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setIsDeleteSelectedModalOpen(false)}
+                                >
+                                    {tGlobal('cancel')}
+                                </Button>
+                                <Button
+                                    className="bg-red-600 text-white hover:bg-red-700"
+                                    onClick={() => deleteSelectedMutation.mutate(selectedUserIds)}
+                                    disabled={deleteSelectedMutation.isPending}
+                                >
+                                    {deleteSelectedMutation.isPending ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                    )}{' '}
+                                    {tGlobal('delete')}
                                 </Button>
                             </div>
                         </motion.div>
                     </div>
                 )}
 
-                {/* Modal: Konfirmasi hapus SEMUA akun di tab aktif (peringatan keras) */}
+                {/* Modal: Hapus Semua Akun di Tab Aktif */}
                 {isDeleteAllModalOpen && isSuperAdmin && (
-                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm">
-                        <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className="bg-card rounded-2xl shadow-2xl border border-red-200 p-6 text-center max-w-sm w-full">
-                            <div className="w-12 h-12 bg-red-100 flex items-center justify-center rounded-full mx-auto mb-4"><AlertCircle className="w-6 h-6 text-red-600" /></div>
-                            <h3 className="text-xl font-bold mb-2">{tGlobal('warning')}</h3>
-                            <p className="text-muted-foreground text-sm mb-6">{tUM('modalDelAllSub')}</p>
+                    <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/80 p-4 backdrop-blur-sm">
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="w-full max-w-sm rounded-2xl border border-red-200 bg-card p-6 text-center shadow-2xl dark:border-red-500/30"
+                        >
+                            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-100 dark:bg-red-500/20">
+                                <AlertCircle className="h-6 w-6 text-red-600 dark:text-red-400" />
+                            </div>
+                            <h3 className="mb-2 text-xl font-bold">{tGlobal('warning')}</h3>
+                            <p className="mb-6 text-sm text-muted-foreground">{tUM('modalDelAllSub')}</p>
                             <div className="flex justify-center gap-3">
-                                <Button variant="outline" onClick={() => setIsDeleteAllModalOpen(false)}>{tGlobal('cancel')}</Button>
-                                <Button className="bg-red-600 hover:bg-red-700 text-white" onClick={() => deleteAllBulkMutation.mutate(activeTab)} disabled={deleteAllBulkMutation.isPending}>
-                                    {deleteAllBulkMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />} {tGlobal('yes')}
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setIsDeleteAllModalOpen(false)}
+                                >
+                                    {tGlobal('cancel')}
+                                </Button>
+                                <Button
+                                    className="bg-red-600 text-white hover:bg-red-700"
+                                    onClick={() => deleteAllBulkMutation.mutate(activeTab)}
+                                    disabled={deleteAllBulkMutation.isPending}
+                                >
+                                    {deleteAllBulkMutation.isPending ? (
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                    ) : (
+                                        <Trash2 className="mr-2 h-4 w-4" />
+                                    )}{' '}
+                                    {tGlobal('yes')}
                                 </Button>
                             </div>
                         </motion.div>
@@ -842,25 +1534,25 @@ export function UserManagementPage() {
             </AnimatePresence>
 
             {/* ================= HEADER & JUDUL HALAMAN ================= */}
-            <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div className="flex flex-col justify-between gap-4 md:flex-row md:items-end">
                 <div>
-                    <h1 className="text-2xl font-bold flex items-center gap-2">
-                        <Users className="w-6 h-6 text-primary" /> {tUM('pageTitle')}
+                    <h1 className="flex items-center gap-2 text-2xl font-bold">
+                        <Users className="h-6 w-6 text-primary" /> {tUM('pageTitle')}
                     </h1>
-                    <p className="text-sm text-muted-foreground mt-1">{tUM('pageSubtitle')}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">{tUM('pageSubtitle')}</p>
                 </div>
-                {/* Tombol Tambah Pengguna (hanya Super Admin) */}
                 {isSuperAdmin && (
-                    <Button onClick={() => setIsAddUserModalOpen(true)} className="bg-emerald-600 hover:bg-emerald-700 text-white shadow-md">
-                        <Plus className="w-4 h-4 mr-2" /> {tUM('addUser')}
+                    <Button
+                        onClick={() => setIsAddUserModalOpen(true)}
+                        className="bg-emerald-600 text-white shadow-md hover:bg-emerald-700"
+                    >
+                        <Plus className="mr-2 h-4 w-4" /> {tUM('addUser')}
                     </Button>
                 )}
             </div>
 
-            <div className="bg-card text-card-foreground border border-border rounded-xl p-4 shadow-sm space-y-4">
-                {/* ================= TAB FILTER (Semua / Manajemen / Staff / Siswa / Orang Tua) =================
-                    Tab yang sedang aktif diberi warna hijau penuh + teks putih, tab lain tampil redup.
-                    Angka kecil di tiap tab = jumlah akun pada kelompok tersebut. */}
+            <div className="space-y-4 rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm">
+                {/* ================= TAB FILTER ================= */}
                 <div className="w-full overflow-x-auto pb-1">
                     <Tabs value={activeTab} onValueChange={setActiveTab} className="w-max">
                         <TabsList className="h-auto gap-1 bg-muted/50 p-1">
@@ -874,8 +1566,12 @@ export function UserManagementPage() {
                                     >
                                         <Icon size={14} />
                                         {label}
-                                        {/* Jumlah akun di tab ini */}
-                                        <span className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${isActive ? 'bg-white/20 text-white' : 'bg-muted text-muted-foreground'}`}>
+                                        <span
+                                            className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${isActive
+                                                    ? 'bg-white/20 text-white'
+                                                    : 'bg-muted text-muted-foreground'
+                                                }`}
+                                        >
                                             {tabCounts[value] ?? 0}
                                         </span>
                                     </TabsTrigger>
@@ -885,15 +1581,10 @@ export function UserManagementPage() {
                     </Tabs>
                 </div>
 
-                {/* ================= TOOLBAR (pencarian + tombol aksi) =================
-                    Memakai flexbox murni (tanpa grid / lebar tombol yang berubah per breakpoint) supaya hasilnya konsisten:
-                    - Layar >= lg : pencarian di kiri (melebar), tombol aksi di kanan, SATU baris, tidak turun baris
-                    - Layar kecil : pencarian di atas; tombol aksi di bawahnya, otomatis turun baris dan
-                                    melebar mengisi baris (grow) sehingga tidak ada tombol yang "menggantung" */}
+                {/* ================= TOOLBAR ================= */}
                 <div className="border-b border-border pb-4">
                     <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-
-                        {/* SEARCH: cari berdasarkan nama atau email */}
+                        {/* SEARCH */}
                         <div className="relative w-full min-w-0 lg:max-w-md lg:flex-1">
                             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                             <Input
@@ -904,14 +1595,9 @@ export function UserManagementPage() {
                             />
                         </div>
 
-                        {/* ACTIONS: kumpulan tombol aksi.
-                            Catatan kelas tombol: "grow" = melebar mengisi baris di layar kecil, "sm:grow-0" = ukuran sesuai isi
-                            di layar >= sm. "whitespace-nowrap" mencegah teks tombol terpecah jadi dua baris. */}
+                        {/* ACTIONS */}
                         <div className="flex flex-wrap items-center gap-2 lg:shrink-0 lg:flex-nowrap lg:justify-end">
-
-                            {/* SORTIR: dropdown pilihan urutan.
-                                min-w dipasang karena teks tombol berubah (Sortir / Sortir Nama / ...),
-                                supaya tombol lain di sebelahnya tidak ikut bergeser. */}
+                            {/* SORTIR */}
                             <DropdownMenu>
                                 <DropdownMenuTrigger asChild>
                                     <Button
@@ -932,31 +1618,45 @@ export function UserManagementPage() {
                                 </DropdownMenuTrigger>
 
                                 <DropdownMenuContent align="end" className="w-48">
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'asc' })} className="cursor-pointer">
-                                        <ArrowDownAZ className="mr-2 h-4 w-4 shrink-0" /> Nama (A - Z)
+                                    <DropdownMenuItem
+                                        onClick={() => setSortConfig({ key: 'fullName', direction: 'asc' })}
+                                        className="cursor-pointer"
+                                    >
+                                        <ArrowDownAZ className="mr-2 h-4 w-4 shrink-0" />{' '}
+                                        {lang === 'id' ? 'Nama (A - Z)' : 'Name (A - Z)'}
                                     </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'fullName', direction: 'desc' })} className="cursor-pointer">
-                                        <ArrowUpZA className="mr-2 h-4 w-4 shrink-0" /> Nama (Z - A)
+                                    <DropdownMenuItem
+                                        onClick={() => setSortConfig({ key: 'fullName', direction: 'desc' })}
+                                        className="cursor-pointer"
+                                    >
+                                        <ArrowUpZA className="mr-2 h-4 w-4 shrink-0" />{' '}
+                                        {lang === 'id' ? 'Nama (Z - A)' : 'Name (Z - A)'}
                                     </DropdownMenuItem>
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'role', direction: 'asc' })} className="cursor-pointer">
+                                    <DropdownMenuItem
+                                        onClick={() => setSortConfig({ key: 'role', direction: 'asc' })}
+                                        className="cursor-pointer"
+                                    >
                                         <ArrowDown className="mr-2 h-4 w-4 shrink-0" /> Role (A - Z)
                                     </DropdownMenuItem>
-                                    {/* asc = akun aktif ditampilkan lebih dulu */}
-                                    <DropdownMenuItem onClick={() => setSortConfig({ key: 'isActive', direction: 'asc' })} className="cursor-pointer">
-                                        <CheckCircle2 className="mr-2 h-4 w-4 shrink-0" /> Status Aktif
+                                    <DropdownMenuItem
+                                        onClick={() => setSortConfig({ key: 'isActive', direction: 'asc' })}
+                                        className="cursor-pointer"
+                                    >
+                                        <CheckCircle2 className="mr-2 h-4 w-4 shrink-0" />{' '}
+                                        {lang === 'id' ? 'Status Aktif' : 'Active Status'}
                                     </DropdownMenuItem>
                                     <DropdownMenuSeparator />
-                                    {/* Kembali ke urutan bawaan database */}
                                     <DropdownMenuItem
                                         onClick={() => setSortConfig({ key: 'none', direction: 'asc' })}
-                                        className={`cursor-pointer ${sortConfig.key === 'none' ? 'bg-primary/10 text-primary' : ''}`}
+                                        className={`cursor-pointer ${sortConfig.key === 'none' ? 'bg-primary/10 text-primary' : ''
+                                            }`}
                                     >
                                         <ArrowUpDown className="mr-2 h-4 w-4 shrink-0" /> Reset (Default)
                                     </DropdownMenuItem>
                                 </DropdownMenuContent>
                             </DropdownMenu>
 
-                            {/* GENERATE DATA: hanya di tab Staff / Siswa / Orang Tua */}
+                            {/* GENERATE DATA */}
                             {BULK_TABS.includes(activeTab) && (
                                 <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
@@ -971,158 +1671,335 @@ export function UserManagementPage() {
                                     </DropdownMenuTrigger>
 
                                     <DropdownMenuContent align="end" className="w-52">
-                                        {/* Buat akun untuk semua data di tab ini */}
-                                        <DropdownMenuItem className="cursor-pointer" onClick={() => setIsGenerateAllModalOpen(true)}>
+                                        <DropdownMenuItem
+                                            className="cursor-pointer"
+                                            onClick={() => setIsGenerateAllModalOpen(true)}
+                                        >
                                             <DatabaseZap className="mr-2 h-4 w-4 shrink-0" />
                                             {tUM('generateAll')}
                                         </DropdownMenuItem>
                                         <DropdownMenuSeparator />
-                                        {/* Buat akun hanya untuk baris yang dicentang (nonaktif kalau belum ada yang dicentang) */}
                                         <DropdownMenuItem
                                             className="cursor-pointer"
                                             disabled={selectedUserIds.length === 0}
                                             onClick={() => setIsGenerateSelectedModalOpen(true)}
                                         >
                                             <UserPlus className="mr-2 h-4 w-4 shrink-0" />
-                                            <span className="truncate">{tUM('generateSelected')} ({selectedUserIds.length})</span>
+                                            <span className="truncate">
+                                                {tUM('generateSelected')} ({selectedUserIds.length})
+                                            </span>
                                         </DropdownMenuItem>
                                     </DropdownMenuContent>
                                 </DropdownMenu>
                             )}
 
-                            {/* HAPUS (hanya Super Admin):
-                                - ada yang dicentang -> "Hapus Terpilih"
-                                - tidak ada yang dicentang & di tab massal -> "Hapus Semua" */}
-                            {isSuperAdmin && (
-                                selectedUserIds.length > 0 ? (
+                            {/* HAPUS */}
+                            {isSuperAdmin &&
+                                (selectedUserIds.length > 0 ? (
                                     <Button
                                         type="button"
                                         variant="outline"
-                                        className="h-10 grow justify-center gap-2 whitespace-nowrap border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:grow-0 sm:px-4"
+                                        className="h-10 grow justify-center gap-2 whitespace-nowrap border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10 sm:grow-0 sm:px-4"
                                         onClick={() => setIsDeleteSelectedModalOpen(true)}
                                     >
                                         <Trash2 className="h-4 w-4 shrink-0" />
-                                        <span>{tUM('deleteSelected')} ({selectedUserIds.length})</span>
+                                        <span>
+                                            {tUM('deleteSelected')} ({selectedUserIds.length})
+                                        </span>
                                     </Button>
                                 ) : (
                                     BULK_TABS.includes(activeTab) && (
                                         <Button
                                             type="button"
                                             variant="outline"
-                                            className="h-10 grow justify-center gap-2 whitespace-nowrap border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 sm:grow-0 sm:px-4"
+                                            className="h-10 grow justify-center gap-2 whitespace-nowrap border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10 sm:grow-0 sm:px-4"
                                             onClick={() => setIsDeleteAllModalOpen(true)}
                                         >
                                             <AlertCircle className="h-4 w-4 shrink-0" />
                                             <span>{tUM('bulkDeleteAll')}</span>
                                         </Button>
                                     )
-                                )
-                            )}
+                                ))}
                         </div>
                     </div>
                 </div>
 
                 {/* ================= TABEL DATA ================= */}
                 <div className="overflow-x-auto">
-                    <table className="w-full text-left border-collapse">
+                    <table className="w-full border-collapse text-left">
                         <thead>
                             <tr className="border-b border-border bg-muted/20">
-                                {/* Checkbox pilih semua (halaman aktif) */}
-                                <th className="px-4 py-3 w-10 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" aria-label={lang === 'id' ? 'Pilih semua di halaman ini' : 'Select all on this page'} checked={paginatedUsers.length > 0 && selectedUserIds.length === paginatedUsers.length} onChange={handleSelectAll} /></th>
-                                {/* Nomor urut: tidak bisa diklik / diurutkan */}
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-center w-16">{tUM('colNo')}</th>
-                                {/* Kolom yang bisa diklik untuk mengurutkan */}
-                                <SortableHeader columnKey="fullName" label={tUM('colUser')} sortConfig={sortConfig} onSort={handleSort} />
-                                <SortableHeader columnKey="role" label={tUM('colRole')} sortConfig={sortConfig} onSort={handleSort} />
-                                <SortableHeader columnKey="isActive" label={tUM('colStatus')} sortConfig={sortConfig} onSort={handleSort} />
-                                {/* Kolom aksi: tidak perlu diurutkan */}
-                                <th className="px-4 py-3 text-xs font-semibold text-muted-foreground uppercase text-right w-20">{tUM('colAction')}</th>
+                                <th className="w-10 px-4 py-3 text-center">
+                                    <input
+                                        type="checkbox"
+                                        className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary accent-primary"
+                                        aria-label={
+                                            lang === 'id'
+                                                ? 'Pilih semua di halaman ini'
+                                                : 'Select all on this page'
+                                        }
+                                        checked={isAllPageSelected}
+                                        onChange={handleSelectAll}
+                                    />
+                                </th>
+                                <th className="w-16 px-4 py-3 text-center text-xs font-semibold uppercase text-muted-foreground">
+                                    {tUM('colNo')}
+                                </th>
+                                <SortableHeader
+                                    columnKey="fullName"
+                                    label={tUM('colUser')}
+                                    sortConfig={sortConfig}
+                                    onSort={handleSort}
+                                />
+                                <SortableHeader
+                                    columnKey="role"
+                                    label={tUM('colRole')}
+                                    sortConfig={sortConfig}
+                                    onSort={handleSort}
+                                />
+                                <SortableHeader
+                                    columnKey="isActive"
+                                    label={tUM('colStatus')}
+                                    sortConfig={sortConfig}
+                                    onSort={handleSort}
+                                />
+                                <th className="w-20 px-4 py-3 text-right text-xs font-semibold uppercase text-muted-foreground">
+                                    {tUM('colAction')}
+                                </th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-border">
                             {paginatedUsers.length === 0 ? (
-                                // Kosong: tampilkan loading saat mengambil data, atau pesan "tidak ada data"
                                 <tr>
-                                    <td colSpan={6} className="p-8 text-center text-muted-foreground italic">
-                                        {isLoading ? <Loader2 className="w-6 h-6 animate-spin mx-auto text-primary" /> : tUM('noUsers')}
+                                    <td
+                                        colSpan={6}
+                                        className="p-8 text-center italic text-muted-foreground"
+                                    >
+                                        {isLoading ? (
+                                            <Loader2 className="mx-auto h-6 w-6 animate-spin text-primary" />
+                                        ) : (
+                                            tUM('noUsers')
+                                        )}
                                     </td>
                                 </tr>
                             ) : (
-                                paginatedUsers.map((user: AppUser, index: number) => (
-                                    <tr key={user.id} className={`hover:bg-muted/30 transition-colors ${selectedUserIds.includes(user.id) ? 'bg-primary/5' : ''}`}>
-                                        {/* Checkbox baris */}
-                                        <td className="px-4 py-3 text-center"><input type="checkbox" className="rounded border-gray-300 w-4 h-4 text-primary cursor-pointer accent-primary" aria-label={user.fullName} checked={selectedUserIds.includes(user.id)} onChange={() => handleToggleSelect(user.id)} /></td>
-                                        {/* Nomor urut berlanjut antar halaman */}
-                                        <td className="px-4 py-3 text-center text-sm text-muted-foreground font-medium">{(currentPage - 1) * ITEMS_PER_PAGE + index + 1}</td>
-                                        {/* Avatar inisial + nama + email */}
-                                        <td className="px-4 py-3">
-                                            <div className="flex items-center gap-3">
-                                                <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm shrink-0">{user.fullName.charAt(0).toUpperCase()}</div>
-                                                <div><p className="font-semibold text-sm">{user.fullName}</p><p className="text-xs text-muted-foreground">{user.email}</p></div>
-                                            </div>
-                                        </td>
-                                        {/* Badge role */}
-                                        <td className="px-4 py-3"><span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold border ${getRoleBadgeColor(user.role)}`}>{formatRoleName(user.role)}</span></td>
-                                        {/* Status aktif / diblokir */}
-                                        <td className="px-4 py-3">
-                                            <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive ? 'text-emerald-600' : 'text-red-600'}`}>
-                                                <div className={`w-2 h-2 rounded-full ${user.isActive ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
-                                                {user.isActive ? tUM('statusActive') : tUM('statusBlocked')}
-                                            </span>
-                                        </td>
-                                        {/* Menu aksi per baris (titik tiga) */}
-                                        <td className="px-4 py-3 text-right">
-                                            <DropdownMenu>
-                                                <DropdownMenuTrigger asChild><Button variant="ghost" size="icon" aria-label={tUM('colAction')} className="h-8 w-8"><MoreVertical className="w-4 h-4" /></Button></DropdownMenuTrigger>
-                                                <DropdownMenuContent align="end" className="w-48 bg-card text-card-foreground">
-                                                    <DropdownMenuItem onClick={() => setUserToEdit(user)}><Edit className="w-4 h-4 mr-2" /> {tUM('actionEdit')}</DropdownMenuItem>
-                                                    {/* Aksi di bawah ini hanya untuk Super Admin */}
-                                                    {isSuperAdmin && (
-                                                        <>
-                                                            <DropdownMenuItem onClick={() => setUserToReset(user)}><KeyRound className="w-4 h-4 mr-2" /> {tUM('actionResetPass')}</DropdownMenuItem>
-                                                            <DropdownMenuSeparator />
-                                                            {/* Blokir / aktifkan akun */}
-                                                            <DropdownMenuItem className={user.isActive ? 'text-red-600' : 'text-emerald-600'} onClick={() => toggleStatusMutation.mutate({ userId: user.id, currentStatus: user.isActive })}>
-                                                                {user.isActive ? <Ban className="w-4 h-4 mr-2" /> : <CheckCircle2 className="w-4 h-4 mr-2" />}{user.isActive ? tUM('actionBlock') : tUM('actionUnblock')}
+                                paginatedUsers.map((user: AppUser, index: number) => {
+                                    const isSelf = currentUser?.id === user.id;
+                                    const canEditRow = isSuperAdmin || user.role !== 'SUPER_ADMIN';
+
+                                    return (
+                                        <tr
+                                            key={user.id}
+                                            className={`transition-colors hover:bg-muted/30 ${selectedUserIds.includes(user.id) ? 'bg-primary/5' : ''
+                                                }`}
+                                        >
+                                            <td className="px-4 py-3 text-center">
+                                                <input
+                                                    type="checkbox"
+                                                    className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary accent-primary"
+                                                    aria-label={user.fullName}
+                                                    checked={selectedUserIds.includes(user.id)}
+                                                    onChange={() => handleToggleSelect(user.id)}
+                                                />
+                                            </td>
+                                            <td className="px-4 py-3 text-center text-sm font-medium text-muted-foreground">
+                                                {(currentPage - 1) * ITEMS_PER_PAGE + index + 1}
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <div className="flex items-center gap-3">
+                                                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
+                                                        {user.fullName.charAt(0).toUpperCase()}
+                                                    </div>
+                                                    <div>
+                                                        <p className="text-sm font-semibold">{user.fullName}</p>
+                                                        <p className="text-xs text-muted-foreground">{user.email}</p>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span
+                                                    className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-semibold ${getRoleBadgeColor(
+                                                        user.role
+                                                    )}`}
+                                                >
+                                                    {formatRoleName(user.role)}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3">
+                                                <span
+                                                    className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive
+                                                            ? 'text-emerald-600 dark:text-emerald-400'
+                                                            : 'text-red-600 dark:text-red-400'
+                                                        }`}
+                                                >
+                                                    <span
+                                                        className={`h-2 w-2 rounded-full ${user.isActive
+                                                                ? 'animate-pulse bg-emerald-500'
+                                                                : 'bg-red-500'
+                                                            }`}
+                                                    />
+                                                    {user.isActive ? tUM('statusActive') : tUM('statusBlocked')}
+                                                </span>
+                                            </td>
+                                            <td className="px-4 py-3 text-right">
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            aria-label={tUM('colAction')}
+                                                            className="h-8 w-8"
+                                                        >
+                                                            <MoreVertical className="h-4 w-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent
+                                                        align="end"
+                                                        className="w-48 bg-card text-card-foreground"
+                                                    >
+                                                        {canEditRow && (
+                                                            <DropdownMenuItem onClick={() => setUserToEdit(user)}>
+                                                                <Edit className="mr-2 h-4 w-4" /> {tUM('actionEdit')}
                                                             </DropdownMenuItem>
-                                                            {/* Akun sendiri tidak boleh dihapus */}
-                                                            {currentUser?.id !== user.id && (
-                                                                <><DropdownMenuSeparator /><DropdownMenuItem className="text-red-600 focus:text-red-600 focus:bg-red-50" onClick={() => setUserToDelete(user)}><Trash2 className="w-4 h-4 mr-2" /> {tUM('actionDelete')}</DropdownMenuItem></>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                </DropdownMenuContent>
-                                            </DropdownMenu>
-                                        </td>
-                                    </tr>
-                                ))
+                                                        )}
+
+                                                        {isSuperAdmin && (
+                                                            <>
+                                                                <DropdownMenuItem onClick={() => setUserToReset(user)}>
+                                                                    <KeyRound className="mr-2 h-4 w-4" />{' '}
+                                                                    {tUM('actionResetPass')}
+                                                                </DropdownMenuItem>
+
+                                                                {!isSelf && (
+                                                                    <>
+                                                                        <DropdownMenuSeparator />
+                                                                        <DropdownMenuItem
+                                                                            className={
+                                                                                user.isActive
+                                                                                    ? 'text-red-600'
+                                                                                    : 'text-emerald-600'
+                                                                            }
+                                                                            onClick={() =>
+                                                                                toggleStatusMutation.mutate({
+                                                                                    userId: user.id,
+                                                                                    currentStatus: user.isActive,
+                                                                                })
+                                                                            }
+                                                                        >
+                                                                            {user.isActive ? (
+                                                                                <Ban className="mr-2 h-4 w-4" />
+                                                                            ) : (
+                                                                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                                                                            )}
+                                                                            {user.isActive
+                                                                                ? tUM('actionBlock')
+                                                                                : tUM('actionUnblock')}
+                                                                        </DropdownMenuItem>
+                                                                        <DropdownMenuSeparator />
+                                                                        <DropdownMenuItem
+                                                                            className="text-red-600 focus:bg-red-50 focus:text-red-600 dark:focus:bg-red-500/10"
+                                                                            onClick={() => setUserToDelete(user)}
+                                                                        >
+                                                                            <Trash2 className="mr-2 h-4 w-4" />{' '}
+                                                                            {tUM('actionDelete')}
+                                                                        </DropdownMenuItem>
+                                                                    </>
+                                                                )}
+                                                            </>
+                                                        )}
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            </td>
+                                        </tr>
+                                    );
+                                })
                             )}
                         </tbody>
                     </table>
                 </div>
 
-                {/* ================= PAGINATION (dengan input halaman manual) ================= */}
+                {/* ================= PAGINATION ================= */}
                 {processedUsers.length > 0 && (
-                    <div className="flex flex-col xl:flex-row items-center justify-between gap-4 border-t border-border pt-4 mt-4">
-                        {/* Info: "Menampilkan X - Y dari Z data" */}
-                        <span className="text-sm text-muted-foreground text-center xl:text-left">
-                            {tGlobal('showing')} <span className="font-medium text-foreground">{(currentPage - 1) * ITEMS_PER_PAGE + 1}</span> - <span className="font-medium text-foreground">{Math.min(currentPage * ITEMS_PER_PAGE, processedUsers.length)}</span> {tGlobal('of')} <span className="font-medium text-foreground">{processedUsers.length}</span> {tGlobal('entries')}
+                    <div className="mt-4 flex flex-col items-center justify-between gap-4 border-t border-border pt-4 xl:flex-row">
+                        <span className="text-center text-sm text-muted-foreground xl:text-left">
+                            {tGlobal('showing')}{' '}
+                            <span className="font-medium text-foreground">
+                                {(currentPage - 1) * ITEMS_PER_PAGE + 1}
+                            </span>{' '}
+                            -{' '}
+                            <span className="font-medium text-foreground">
+                                {Math.min(currentPage * ITEMS_PER_PAGE, processedUsers.length)}
+                            </span>{' '}
+                            {tGlobal('of')}{' '}
+                            <span className="font-medium text-foreground">{processedUsers.length}</span>{' '}
+                            {tGlobal('entries')}
                         </span>
+
                         <div className="flex flex-wrap items-center justify-center gap-2">
-                            {/* Tombol panah: awal, sebelumnya, nomor halaman, berikutnya, akhir */}
                             <div className="flex items-center gap-1">
-                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(1)} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground"><ChevronsLeft className="w-4 h-4" /></Button>
-                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.max(1, p - 1))} disabled={currentPage === 1} className="h-8 w-8 text-muted-foreground"><ChevronLeft className="w-4 h-4" /></Button>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => setCurrentPage(1)}
+                                    disabled={currentPage === 1}
+                                    className="h-8 w-8 text-muted-foreground"
+                                >
+                                    <ChevronsLeft className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                    disabled={currentPage === 1}
+                                    className="h-8 w-8 text-muted-foreground"
+                                >
+                                    <ChevronLeft className="h-4 w-4" />
+                                </Button>
                                 {getPageNumbers().map((pageNum) => (
-                                    <Button key={pageNum} variant={currentPage === pageNum ? "default" : "outline"} size="icon" onClick={() => setCurrentPage(pageNum)} className={`h-8 w-8 font-medium ${currentPage === pageNum ? 'bg-primary text-primary-foreground font-bold shadow-sm' : 'text-muted-foreground hover:text-foreground hover:bg-muted'}`}>{pageNum}</Button>
+                                    <Button
+                                        key={pageNum}
+                                        variant={currentPage === pageNum ? 'default' : 'outline'}
+                                        size="icon"
+                                        onClick={() => setCurrentPage(pageNum)}
+                                        className={`h-8 w-8 font-medium ${currentPage === pageNum
+                                                ? 'bg-primary font-bold text-primary-foreground shadow-sm'
+                                                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                            }`}
+                                    >
+                                        {pageNum}
+                                    </Button>
                                 ))}
-                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground"><ChevronRight className="w-4 h-4" /></Button>
-                                <Button variant="outline" size="icon" onClick={() => setCurrentPage(totalPages)} disabled={currentPage === totalPages || totalPages === 0} className="h-8 w-8 text-muted-foreground"><ChevronsRight className="w-4 h-4" /></Button>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                                    disabled={currentPage === totalPages || totalPages === 0}
+                                    className="h-8 w-8 text-muted-foreground"
+                                >
+                                    <ChevronRight className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                    variant="outline"
+                                    size="icon"
+                                    onClick={() => setCurrentPage(totalPages)}
+                                    disabled={currentPage === totalPages || totalPages === 0}
+                                    className="h-8 w-8 text-muted-foreground"
+                                >
+                                    <ChevronsRight className="h-4 w-4" />
+                                </Button>
                             </div>
-                            {/* Kotak input halaman manual */}
-                            <div className="flex items-center gap-2 sm:ml-4 sm:border-l sm:pl-4 border-border">
-                                <span className="text-sm text-muted-foreground hidden sm:inline-block">Ke Halaman:</span>
-                                <Input value={pageInput} onChange={(e) => setPageInput(e.target.value)} onKeyDown={handleManualPageSubmit} onBlur={() => handleManualPageSubmit()} className="h-8 w-14 text-center px-1" />
+
+                            <div className="flex items-center gap-2 border-border sm:ml-4 sm:border-l sm:pl-4">
+                                <span className="hidden text-sm text-muted-foreground sm:inline-block">
+                                    {lang === 'id' ? 'Ke Halaman:' : 'Go to Page:'}
+                                </span>
+                                <Input
+                                    value={pageInput}
+                                    onChange={(e) => setPageInput(e.target.value)}
+                                    onKeyDown={handleManualPageKeyDown}
+                                    onBlur={commitManualPage}
+                                    className="h-8 w-14 px-1 text-center"
+                                />
                             </div>
                         </div>
                     </div>
