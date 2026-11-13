@@ -3,16 +3,32 @@ import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
-  Users, GraduationCap, Wallet, AlertTriangle,
-  TrendingUp, TrendingDown, Calendar, CreditCard,
-  ClipboardCheck, Package, Award, FileText,
-  UserPlus, BarChart3, ArrowUpRight, Clock,
-  Pin
+  Users,
+  GraduationCap,
+  Wallet,
+  AlertTriangle,
+  Calendar,
+  CreditCard,
+  ClipboardCheck,
+  Package,
+  Award,
+  FileText,
+  UserPlus,
+  BarChart3,
+  Building2,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer
+  AreaChart,
+  Area,
+  PieChart,
+  Pie,
+  Cell,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip as RechartsTooltip,
+  ResponsiveContainer,
 } from 'recharts';
 
 import { supabase } from '@/services/supabase.client';
@@ -21,79 +37,182 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatCurrency, formatNumber, formatDate } from '@/utils/format';
 
-const container = {
+const containerVariants = {
   hidden: { opacity: 0 },
-  show: { opacity: 1, transition: { staggerChildren: 0.06 } },
+  show: { opacity: 1, transition: { staggerChildren: 0.05 } },
 };
 
-const item = {
-  hidden: { opacity: 0, y: 20 },
+const itemVariants = {
+  hidden: { opacity: 0, y: 16 },
   show: { opacity: 1, y: 0 },
 };
 
-// --- TYPES ---
+// --- TIPE DATA ---
+interface StudentSummaryRow {
+  id: string;
+  gender: 'L' | 'P' | null;
+  status: string | null;
+}
+
+interface PaymentTransactionRow {
+  amount: number | string;
+  paymentDate: string;
+}
+
+interface PendingBillRow {
+  totalAmount: number | string;
+  paidAmount: number | string;
+}
+
+interface AttendanceStatusRow {
+  status: string | null;
+}
+
 interface TooltipPayloadItem {
-  color: string;
+  color?: string;
   value: number;
   name: string;
+  payload?: {
+    color?: string;
+  };
 }
 
 interface CustomTooltipProps {
   active?: boolean;
   payload?: TooltipPayloadItem[];
   label?: string;
+  valueFormat?: 'currency' | 'number';
 }
 
-// Custom Tooltip for charts
-function CustomTooltip({ active, payload, label }: CustomTooltipProps) {
+interface StatCardProps {
+  title: string;
+  value: number;
+  badgeText: string;
+  badgeTone?: 'emerald' | 'teal' | 'violet' | 'amber';
+  icon: LucideIcon;
+  gradient: string;
+  format?: 'number' | 'currency' | 'percentage';
+  isLoading?: boolean;
+}
+
+interface QuickActionItem {
+  id: string;
+  icon: LucideIcon;
+  label: string;
+  tone: 'emerald' | 'teal' | 'sky' | 'amber' | 'violet' | 'rose';
+  path: string;
+  allowed: boolean;
+}
+
+const BADGE_TONE_STYLES: Record<NonNullable<StatCardProps['badgeTone']>, string> = {
+  emerald: 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
+  teal: 'border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300',
+  violet: 'border-violet-500/25 bg-violet-500/10 text-violet-700 dark:text-violet-300',
+  amber: 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300',
+};
+
+const QUICK_ACTION_TONE_STYLES: Record<QuickActionItem['tone'], string> = {
+  emerald: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
+  teal: 'bg-teal-500/10 text-teal-600 dark:text-teal-400',
+  sky: 'bg-sky-500/10 text-sky-600 dark:text-sky-400',
+  amber: 'bg-amber-500/10 text-amber-600 dark:text-amber-400',
+  violet: 'bg-violet-500/10 text-violet-600 dark:text-violet-400',
+  rose: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
+};
+
+/**
+ * Memformat angka nominal besar pada sumbu Y grafik menjadi ringkas (Jt / Rb).
+ */
+function formatCompactAxisValue(value: number): string {
+  if (value === 0) return '0';
+  if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} M`;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} Jt`;
+  if (value >= 1_000) return `${Math.round(value / 1_000)} Rb`;
+  return String(value);
+}
+
+/**
+ * Tooltip adaptif tema (Light & Dark mode) untuk seluruh grafik Recharts.
+ */
+function CustomTooltip({
+  active,
+  payload,
+  label,
+  valueFormat = 'currency',
+}: CustomTooltipProps) {
   if (!active || !payload || payload.length === 0) return null;
+
   return (
-    <div className="bg-card/95 backdrop-blur-xl border border-border/50 rounded-xl p-3 shadow-2xl">
-      <p className="text-xs font-medium text-muted-foreground mb-1.5">{label}</p>
-      {payload.map((entry, i) => (
-        <div key={i} className="flex items-center gap-2 text-sm">
-          <div className="w-2.5 h-2.5 rounded-full" style={{ background: entry.color }} />
-          <span className="text-foreground font-medium">
-            {entry.value > 1000 ? formatCurrency(entry.value) : formatNumber(entry.value)}
-          </span>
-        </div>
-      ))}
+    <div className="rounded-xl border border-border bg-card/95 p-3 shadow-lg backdrop-blur-md">
+      {label && <p className="mb-1.5 text-xs font-medium text-muted-foreground">{label}</p>}
+      {payload.map((entry, idx) => {
+        const dotColor = entry.color || entry.payload?.color || '#10b981';
+        const formattedValue =
+          valueFormat === 'currency'
+            ? formatCurrency(Number(entry.value) || 0)
+            : formatNumber(Number(entry.value) || 0);
+
+        return (
+          <div key={`${entry.name}-${idx}`} className="flex items-center gap-2 text-xs">
+            <span
+              className="h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: dotColor }}
+            />
+            <span className="text-muted-foreground">{entry.name}:</span>
+            <span className="font-bold tabular-nums text-foreground">{formattedValue}</span>
+          </div>
+        );
+      })}
     </div>
   );
 }
 
+/**
+ * Kartu Metrik Utama Dasbor.
+ */
 function StatCard({
-  title, value, change, icon: Icon, gradient, format = 'number',
-}: {
-  title: string;
-  value: number;
-  change: number;
-  icon: LucideIcon;
-  gradient: string;
-  format?: 'number' | 'currency' | 'percentage';
-}) {
-  const isPositive = change >= 0;
-  const displayValue = format === 'currency'
-    ? formatCurrency(value)
-    : format === 'percentage'
-      ? `${value}%`
-      : formatNumber(value);
+  title,
+  value,
+  badgeText,
+  badgeTone = 'emerald',
+  icon: Icon,
+  gradient,
+  format = 'number',
+  isLoading = false,
+}: StatCardProps) {
+  const displayValue =
+    format === 'currency'
+      ? formatCurrency(value)
+      : format === 'percentage'
+        ? `${value}%`
+        : formatNumber(value);
 
   return (
-    <motion.div variants={item} className="glass-card p-5 group hover:scale-[1.02] transition-transform duration-200">
-      <div className="flex items-start justify-between mb-4">
-        <div className={cn('w-11 h-11 rounded-xl flex items-center justify-center', gradient)}>
-          <Icon size={22} className="text-white" />
+    <motion.div
+      variants={itemVariants}
+      className="rounded-2xl border border-border bg-card p-5 shadow-xs transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-500/40 hover:shadow-md"
+    >
+      <div className="mb-4 flex items-start justify-between gap-2">
+        <div className={cn('flex h-11 w-11 shrink-0 items-center justify-center rounded-xl', gradient)}>
+          <Icon size={21} className="text-white" />
         </div>
-        <div className={cn(
-          'flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full',
-          isPositive ? 'text-emerald-400 bg-emerald-500/10' : 'text-red-400 bg-red-500/10'
-        )}>
-          {isPositive ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
-          {Math.abs(change)}%
-        </div>
+        <span
+          className={cn(
+            'rounded-full border px-2.5 py-0.5 text-[11px] font-semibold',
+            BADGE_TONE_STYLES[badgeTone]
+          )}
+        >
+          {badgeText}
+        </span>
       </div>
-      <p className="text-2xl font-bold text-foreground mb-1">{displayValue}</p>
+
+      {isLoading ? (
+        <div className="mb-1.5 h-8 w-28 animate-pulse rounded-lg bg-muted" />
+      ) : (
+        <p className="mb-1 truncate text-2xl font-bold tabular-nums text-foreground" title={displayValue}>
+          {displayValue}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">{title}</p>
     </motion.div>
   );
@@ -102,58 +221,91 @@ function StatCard({
 export function AdminDashboard() {
   const { t, locale } = useTranslation();
 
-  // 1. AMBIL PROFIL PENGGUNA DAN TENTUKAN PERANNYA (RBAC)
-  const { user } = useAuthStore();
-  const isManager = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'].includes(user?.role || '');
-  const isTeacher = user?.role === 'GURU';
+  // 1. KONTEKS PENGGUNA, SEKOLAH AKTIF & HAK AKSES (RBAC)
+  const { user, school, academicYear } = useAuthStore();
+  const schoolId = school?.id ?? null;
+  const role = user?.role ?? '';
 
-  // 2. FETCH DATA SISWA 
-  const { data: studentsData = [] } = useQuery({
-    queryKey: ['dashboard-students-data'],
+  const isManager = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'].includes(role);
+  const canViewFinance = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'].includes(role);
+  const canPrintLetters = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH', 'STAFF_TU'].includes(role);
+
+  // 2. FETCH DATA SISWA AKTIF PER SEKOLAH
+  const { data: studentsData = [], isLoading: isLoadingStudents } = useQuery<StudentSummaryRow[]>({
+    queryKey: ['dashboard-students-data', schoolId],
+    enabled: Boolean(schoolId),
     queryFn: async () => {
-      const { data, error } = await supabase.from('students').select('id, gender, status');
-      if (error) return [];
-      return data as { id: string; gender: 'L' | 'P'; status: string }[];
-    }
+      if (!schoolId) return [];
+      const { data, error } = await supabase
+        .from('students')
+        .select('id, gender, status')
+        .eq('schoolId', schoolId);
+
+      if (error || !data) return [];
+      return data as StudentSummaryRow[];
+    },
   });
 
-  // 3. FETCH DATA PIP
-  const { data: pipCount = 0 } = useQuery({
-    queryKey: ['dashboard-pip-count'],
+  // 3. FETCH DATA PENERIMA PIP PER SEKOLAH
+  const { data: pipCount = 0 } = useQuery<number>({
+    queryKey: ['dashboard-pip-count', schoolId],
+    enabled: Boolean(schoolId),
     queryFn: async () => {
+      if (!schoolId) return 0;
       const { count, error } = await supabase
         .from('student_economics')
         .select('*', { count: 'exact', head: true })
+        .eq('schoolId', schoolId)
         .or('hasKip.eq.true,layakPip.eq.true,desil.lte.4');
+
       if (error) {
         const fallback = await supabase
           .from('student_economics')
           .select('*', { count: 'exact', head: true })
+          .eq('schoolId', schoolId)
           .or('hasKip.eq.true,layakPip.eq.true');
-        return fallback.count || 0;
+        return fallback.count ?? 0;
       }
-      return count || 0;
-    }
+      return count ?? 0;
+    },
   });
 
-  // 4. FETCH DATA GURU
-  const { data: teachersCount = 0 } = useQuery({
-    queryKey: ['dashboard-teachers-count'],
+  // 4. FETCH DATA GURU & STAF PER SEKOLAH
+  const { data: teachersCount = 0, isLoading: isLoadingTeachers } = useQuery<number>({
+    queryKey: ['dashboard-teachers-count', schoolId],
+    enabled: Boolean(schoolId),
     queryFn: async () => {
-      const { count, error } = await supabase.from('teachers').select('*', { count: 'exact', head: true });
+      if (!schoolId) return 0;
+      const { count, error } = await supabase
+        .from('teachers')
+        .select('*', { count: 'exact', head: true })
+        .eq('schoolId', schoolId);
+
       if (error) return 0;
-      return count || 0;
-    }
+      return count ?? 0;
+    },
   });
 
-  // 5. FETCH DATA KEUANGAN REAL-TIME (HANYA JIKA MANAJER)
-  const { data: financeData } = useQuery({
-    queryKey: ['dashboard-finance-data'],
-    enabled: isManager, // Query ini tidak akan dijalankan untuk Guru/Siswa
+  // 5. FETCH DATA KEUANGAN REAL-TIME PER SEKOLAH (KHUSUS MANAJER & BENDAHARA)
+  const { data: financeData, isLoading: isLoadingFinance } = useQuery({
+    queryKey: ['dashboard-finance-data', schoolId],
+    enabled: Boolean(schoolId) && canViewFinance,
     queryFn: async () => {
+      if (!schoolId) {
+        return { monthlyRevenue: 0, pendingPayments: 0, revenueData: [] };
+      }
+
       const [incomeRes, billsRes] = await Promise.all([
-        supabase.from('payment_transactions').select('amount, paymentDate').eq('status', 'BERHASIL'),
-        supabase.from('student_bills').select('totalAmount, paidAmount').in('status', ['BELUM_BAYAR', 'CICILAN'])
+        supabase
+          .from('payment_transactions')
+          .select('amount, paymentDate')
+          .eq('schoolId', schoolId)
+          .eq('status', 'BERHASIL'),
+        supabase
+          .from('student_bills')
+          .select('totalAmount, paidAmount')
+          .eq('schoolId', schoolId)
+          .in('status', ['BELUM_BAYAR', 'CICILAN']),
       ]);
 
       const now = new Date();
@@ -161,212 +313,494 @@ export function AdminDashboard() {
       const currentYear = now.getFullYear();
 
       let currentMonthIncome = 0;
-      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
-      const chartMap: Record<string, number> = {};
+      const monthNamesId = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+      const monthNamesEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const monthLabels = locale === 'id' ? monthNamesId : monthNamesEn;
 
-      for (let i = 4; i >= 0; i--) {
+      // Siapkan 6 bulan terakhir secara berurutan
+      const chartBuckets: { key: string; month: string; pemasukan: number }[] = [];
+      for (let i = 5; i >= 0; i--) {
         const d = new Date(currentYear, currentMonth - i, 1);
-        chartMap[monthNames[d.getMonth()]] = 0;
-      }
-
-      if (incomeRes.data) {
-        incomeRes.data.forEach(trx => {
-          const d = new Date(trx.paymentDate);
-          if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
-            currentMonthIncome += Number(trx.amount);
-          }
-          const m = monthNames[d.getMonth()];
-          if (chartMap[m] !== undefined) {
-            chartMap[m] += Number(trx.amount);
-          }
+        const key = `${d.getFullYear()}-${d.getMonth()}`;
+        chartBuckets.push({
+          key,
+          month: monthLabels[d.getMonth()],
+          pemasukan: 0,
         });
       }
 
-      const pending = billsRes.data
-        ? billsRes.data.reduce((acc, b) => acc + (Number(b.totalAmount) - Number(b.paidAmount)), 0)
-        : 0;
+      const incomeRows = (incomeRes.data as PaymentTransactionRow[] | null) ?? [];
+      for (const trx of incomeRows) {
+        const d = new Date(trx.paymentDate);
+        if (Number.isNaN(d.getTime())) continue;
 
-      const chart = Object.entries(chartMap).map(([month, pemasukan]) => ({
-        month,
-        pemasukan,
-        pengeluaran: 0
-      }));
+        const amountValue = Number(trx.amount) || 0;
+        if (d.getMonth() === currentMonth && d.getFullYear() === currentYear) {
+          currentMonthIncome += amountValue;
+        }
+
+        const bucketKey = `${d.getFullYear()}-${d.getMonth()}`;
+        const bucket = chartBuckets.find((b) => b.key === bucketKey);
+        if (bucket) {
+          bucket.pemasukan += amountValue;
+        }
+      }
+
+      const billRows = (billsRes.data as PendingBillRow[] | null) ?? [];
+      const pending = billRows.reduce(
+        (acc, b) => acc + Math.max(0, (Number(b.totalAmount) || 0) - (Number(b.paidAmount) || 0)),
+        0
+      );
 
       return {
         monthlyRevenue: currentMonthIncome,
         pendingPayments: pending,
-        revenueData: chart
+        revenueData: chartBuckets.map(({ month, pemasukan }) => ({ month, pemasukan })),
       };
-    }
+    },
   });
 
-  // --- KALKULASI DATA REAL DARI DATABASE ---
-  const totalStudents = studentsData.length;
-  const pipRecipientsCount = pipCount;
-  const monthlyRevenue = financeData?.monthlyRevenue || 0;
-  const pendingPayments = financeData?.pendingPayments || 0;
-  const revenueChartData = financeData?.revenueData || [];
+  // 6. FETCH RINGKASAN OPERASIONAL HARIAN (PRESENSI HARI INI, SARPRAS RUSAK, SURAT MASUK)
+  const { data: operationalSummary } = useQuery({
+    queryKey: ['dashboard-operational-summary', schoolId],
+    enabled: Boolean(schoolId),
+    queryFn: async () => {
+      if (!schoolId) {
+        return { attendanceRate: 0, damagedAssets: 0, incomingLetters: 0 };
+      }
+
+      const todayIso = new Date().toISOString().slice(0, 10);
+
+      const [attendanceRes, damagedRes, lettersRes] = await Promise.all([
+        supabase
+          .from('student_attendance')
+          .select('status')
+          .eq('schoolId', schoolId)
+          .eq('date', todayIso),
+        supabase
+          .from('assets')
+          .select('*', { count: 'exact', head: true })
+          .eq('schoolId', schoolId)
+          .in('condition', ['RUSAK', 'RUSAK_RINGAN', 'RUSAK_BERAT']),
+        supabase
+          .from('letters')
+          .select('*', { count: 'exact', head: true })
+          .eq('schoolId', schoolId)
+          .eq('type', 'MASUK'),
+      ]);
+
+      const attendanceRows = (attendanceRes.data as AttendanceStatusRow[] | null) ?? [];
+      const presentCount = attendanceRows.filter((row) => row.status === 'HADIR').length;
+      const attendanceRate =
+        attendanceRows.length > 0 ? Math.round((presentCount / attendanceRows.length) * 100) : 0;
+
+      return {
+        attendanceRate,
+        damagedAssets: damagedRes.error ? 0 : (damagedRes.count ?? 0),
+        incomingLetters: lettersRes.error ? 0 : (lettersRes.count ?? 0),
+      };
+    },
+  });
+
+  // --- KALKULASI DATA SISWA AKTIF ---
+  const activeStudents = useMemo(
+    () => studentsData.filter((s) => !s.status || s.status === 'AKTIF'),
+    [studentsData]
+  );
+
+  const totalStudents = activeStudents.length;
+  const monthlyRevenue = financeData?.monthlyRevenue ?? 0;
+  const pendingPayments = financeData?.pendingPayments ?? 0;
+  const revenueChartData = financeData?.revenueData ?? [];
 
   const studentDistribution = useMemo(() => {
-    const maleCount = studentsData.filter(s => s.gender === 'L').length;
-    const femaleCount = studentsData.filter(s => s.gender === 'P').length;
+    const maleCount = activeStudents.filter((s) => s.gender === 'L').length;
+    const femaleCount = activeStudents.filter((s) => s.gender === 'P').length;
     return [
-      { name: locale === 'id' ? 'Laki-laki' : 'Male', value: maleCount, color: '#3b82f6' },
+      { name: locale === 'id' ? 'Laki-laki' : 'Male', value: maleCount, color: '#0ea5e9' },
       { name: locale === 'id' ? 'Perempuan' : 'Female', value: femaleCount, color: '#ec4899' },
     ];
-  }, [studentsData, locale]);
+  }, [activeStudents, locale]);
 
-  // 6. FILTER QUICK ACTIONS BERDASARKAN ROLE
-  const quickActions = [
-    { id: '1', icon: UserPlus, label: locale === 'id' ? 'Tambah Siswa' : 'Add Student', color: 'indigo', path: '/students/new', allowed: isManager },
-    { id: '2', icon: CreditCard, label: locale === 'id' ? 'Terima SPP' : 'Receive Fee', color: 'emerald', path: '/finance', allowed: isManager },
+  // 7. QUICK ACTIONS DENGAN RUTE YANG VALID SESUAI SIDEBAR
+  const allQuickActions: QuickActionItem[] = [
+    {
+      id: 'add-student',
+      icon: UserPlus,
+      label: locale === 'id' ? 'Data Siswa' : 'Students',
+      tone: 'sky',
+      path: '/students',
+      allowed: isManager,
+    },
+    {
+      id: 'receive-payment',
+      icon: CreditCard,
+      label: locale === 'id' ? 'Terima Pembayaran' : 'Receive Payment',
+      tone: 'emerald',
+      path: '/finance/payments',
+      allowed: canViewFinance,
+    },
+    {
+      id: 'attendance-report',
+      icon: ClipboardCheck,
+      label: locale === 'id' ? 'Rekap Presensi' : 'Attendance',
+      tone: 'amber',
+      path: '/attendance',
+      allowed: true,
+    },
+    {
+      id: 'administration',
+      icon: FileText,
+      label: locale === 'id' ? 'Administrasi Surat' : 'Administration',
+      tone: 'violet',
+      path: '/admin',
+      allowed: canPrintLetters,
+    },
+    {
+      id: 'schedules',
+      icon: Calendar,
+      label: locale === 'id' ? 'Jadwal Pelajaran' : 'Schedules',
+      tone: 'teal',
+      path: '/schedules',
+      allowed: true,
+    },
+    {
+      id: 'reports',
+      icon: BarChart3,
+      label: locale === 'id' ? 'Laporan Terpadu' : 'Reports',
+      tone: 'rose',
+      path: '/reports',
+      allowed: canViewFinance || isManager,
+    },
+  ];
 
-    // PERBAIKAN: Ubah path ini agar mengarah ke Dashboard Absensi Admin, BUKAN ke halaman absen guru
-    { id: '3', icon: ClipboardCheck, label: locale === 'id' ? 'Absensi' : 'Attendance', color: 'amber', path: '/attendance/dashboard', allowed: true },
-
-    { id: '4', icon: FileText, label: locale === 'id' ? 'Cetak Surat' : 'Print Letter', color: 'violet', path: '/letters', allowed: isManager || isTeacher },
-    { id: '5', icon: Calendar, label: locale === 'id' ? 'Jadwal' : 'Schedule', color: 'cyan', path: '/schedules', allowed: true },
-    { id: '6', icon: BarChart3, label: locale === 'id' ? 'Laporan' : 'Reports', color: 'rose', path: '/reports', allowed: isManager },
-  ].filter(action => action.allowed);
+  const quickActions = allQuickActions.filter((action) => action.allowed);
 
   return (
-    <motion.div variants={container} initial="hidden" animate="show" className="space-y-6">
-      {/* Welcome Banner */}
-      <motion.div variants={item} className="relative overflow-hidden rounded-2xl p-6 lg:p-8">
-        <div className="absolute inset-0 bg-linear-to-r from-emerald-600 via-teal-600 to-emerald-800 opacity-90" />
-        <div className="absolute inset-0 opacity-10" style={{ backgroundImage: `radial-gradient(circle at 20% 50%, rgba(255,255,255,0.2) 0%, transparent 50%), radial-gradient(circle at 80% 50%, rgba(255,255,255,0.1) 0%, transparent 50%)` }} />
-        <div className="relative z-10 flex items-center justify-between">
+    <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-6">
+      {/* =====================================================================
+          WELCOME BANNER EMERALD-TEAL DENGAN IDENTITAS SEKOLAH AKTIF
+         ===================================================================== */}
+      <motion.div variants={itemVariants} className="relative overflow-hidden rounded-2xl p-6 lg:p-8">
+        <div className="absolute inset-0 bg-linear-to-r from-emerald-600 via-teal-700 to-emerald-900" />
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-0 opacity-15"
+          style={{
+            backgroundImage:
+              'radial-gradient(circle at 20% 50%, rgba(255,255,255,0.28) 0%, transparent 50%), radial-gradient(circle at 85% 40%, rgba(255,255,255,0.2) 0%, transparent 50%)',
+          }}
+        />
+        <div className="relative z-10 flex flex-col justify-between gap-4 lg:flex-row lg:items-center">
           <div>
-            <h1 className="text-2xl lg:text-3xl font-bold text-white mb-2">
-              {t('dashboard.welcome', { name: user?.fullName?.split(' ')[0] || 'User' })} 👋
+            {school?.name && (
+              <div className="mb-2.5 inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-emerald-50 backdrop-blur-xs">
+                <Building2 size={13} />
+                <span>{school.name}</span>
+                {academicYear?.name && (
+                  <span className="text-emerald-200">• TA {academicYear.name}</span>
+                )}
+              </div>
+            )}
+
+            <h1 className="mb-1.5 text-2xl font-bold tracking-tight text-white lg:text-3xl">
+              {t('dashboard.welcome', { name: user?.fullName?.split(' ')[0] || 'User' })}
             </h1>
-            <p className="text-white/70 text-sm lg:text-base">
-              {locale === 'id' ? 'Berikut ringkasan data sekolah hari ini.' : "Here's the school data summary for today."}
+            <p className="text-sm text-emerald-100/85">
+              {locale === 'id'
+                ? 'Ringkasan operasional akademik, presensi, dan keuangan satuan pendidikan hari ini.'
+                : 'Today’s operational summary for academics, attendance, and school finance.'}
             </p>
           </div>
-          <div className="hidden lg:flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-xl px-4 py-3 border border-white/20">
-            <Calendar size={20} className="text-white/70" />
+
+          <div className="hidden items-center gap-3 rounded-xl border border-white/20 bg-white/10 px-4 py-3 backdrop-blur-md lg:flex">
+            <Calendar size={20} className="text-emerald-100" />
             <div>
-              <p className="text-white text-sm font-medium">{formatDate(new Date(), 'dddd')}</p>
-              <p className="text-white/60 text-xs">{formatDate(new Date())}</p>
+              <p className="text-sm font-semibold text-white">{formatDate(new Date(), 'dddd')}</p>
+              <p className="text-xs text-emerald-100/80">{formatDate(new Date())}</p>
             </div>
           </div>
         </div>
       </motion.div>
 
-      {/* Stats Grid - Menyesuaikan Kolom Berdasarkan Hak Akses */}
-      <div className={cn("grid grid-cols-1 sm:grid-cols-2 gap-4", isManager ? "lg:grid-cols-4" : "lg:grid-cols-2")}>
-        <StatCard title={t('dashboard.totalStudents')} value={totalStudents} change={+2.4} icon={Users} gradient="stat-gradient-indigo" />
-        <StatCard title={t('dashboard.totalTeachers')} value={teachersCount} change={0} icon={GraduationCap} gradient="stat-gradient-emerald" />
+      {/* =====================================================================
+          KARTU STATISTIK UTAMA (MENYESUAIKAN HAK AKSES KEUANGAN)
+         ===================================================================== */}
+      <div
+        className={cn(
+          'grid grid-cols-1 gap-4 sm:grid-cols-2',
+          canViewFinance ? 'lg:grid-cols-4' : 'lg:grid-cols-2'
+        )}
+      >
+        <StatCard
+          title={t('dashboard.totalStudents')}
+          value={totalStudents}
+          badgeText={locale === 'id' ? 'Siswa Aktif' : 'Active'}
+          badgeTone="emerald"
+          icon={Users}
+          gradient="bg-linear-to-br from-emerald-500 to-teal-700"
+          isLoading={isLoadingStudents}
+        />
+        <StatCard
+          title={t('dashboard.totalTeachers')}
+          value={teachersCount}
+          badgeText={locale === 'id' ? 'Terdaftar' : 'Registered'}
+          badgeTone="teal"
+          icon={GraduationCap}
+          gradient="bg-linear-to-br from-teal-500 to-cyan-700"
+          isLoading={isLoadingTeachers}
+        />
 
-        {/* HANYA TAMPIL UNTUK MANAJER */}
-        {isManager && (
+        {canViewFinance && (
           <>
-            <StatCard title={t('dashboard.monthlyRevenue')} value={monthlyRevenue} change={0} icon={Wallet} gradient="stat-gradient-violet" format="currency" />
-            <StatCard title={t('dashboard.pendingPayments')} value={pendingPayments} change={0} icon={AlertTriangle} gradient="stat-gradient-amber" format="currency" />
+            <StatCard
+              title={t('dashboard.monthlyRevenue')}
+              value={monthlyRevenue}
+              badgeText={locale === 'id' ? 'Bulan Ini' : 'This Month'}
+              badgeTone="violet"
+              icon={Wallet}
+              gradient="bg-linear-to-br from-violet-500 to-indigo-700"
+              format="currency"
+              isLoading={isLoadingFinance}
+            />
+            <StatCard
+              title={t('dashboard.pendingPayments')}
+              value={pendingPayments}
+              badgeText={locale === 'id' ? 'Belum Lunas' : 'Unpaid'}
+              badgeTone="amber"
+              icon={AlertTriangle}
+              gradient="bg-linear-to-br from-amber-500 to-orange-600"
+              format="currency"
+              isLoading={isLoadingFinance}
+            />
           </>
         )}
       </div>
 
-      {/* Secondary Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+      {/* =====================================================================
+          KARTU STATISTIK OPERASIONAL SEKUNDER
+         ===================================================================== */}
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
-          { title: t('dashboard.attendanceToday'), value: `0%`, icon: ClipboardCheck, color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-          { title: t('dashboard.damagedItems'), value: '0', icon: Package, color: 'text-red-400', bg: 'bg-red-500/10' },
-          { title: t('dashboard.pipRecipients'), value: pipRecipientsCount.toString(), icon: Award, color: 'text-blue-400', bg: 'bg-blue-500/10' },
-          { title: t('dashboard.incomingLetters'), value: '0', icon: FileText, color: 'text-amber-400', bg: 'bg-amber-500/10' },
-        ].map((stat, i) => (
-          <motion.div key={i} variants={item} className="glass-card p-4 flex items-center gap-3">
-            <div className={cn('w-10 h-10 rounded-lg flex items-center justify-center', stat.bg)}><stat.icon size={18} className={stat.color} /></div>
-            <div>
-              <p className="text-lg font-bold text-foreground">{stat.value}</p>
-              <p className="text-xs text-muted-foreground">{stat.title}</p>
+          {
+            title: t('dashboard.attendanceToday'),
+            value: `${operationalSummary?.attendanceRate ?? 0}%`,
+            icon: ClipboardCheck,
+            color: 'text-emerald-600 dark:text-emerald-400',
+            bg: 'bg-emerald-500/10',
+          },
+          {
+            title: t('dashboard.damagedItems'),
+            value: formatNumber(operationalSummary?.damagedAssets ?? 0),
+            icon: Package,
+            color: 'text-rose-600 dark:text-rose-400',
+            bg: 'bg-rose-500/10',
+          },
+          {
+            title: t('dashboard.pipRecipients'),
+            value: formatNumber(pipCount),
+            icon: Award,
+            color: 'text-sky-600 dark:text-sky-400',
+            bg: 'bg-sky-500/10',
+          },
+          {
+            title: t('dashboard.incomingLetters'),
+            value: formatNumber(operationalSummary?.incomingLetters ?? 0),
+            icon: FileText,
+            color: 'text-amber-600 dark:text-amber-400',
+            bg: 'bg-amber-500/10',
+          },
+        ].map((stat) => (
+          <motion.div
+            key={stat.title}
+            variants={itemVariants}
+            className="flex items-center gap-3 rounded-2xl border border-border bg-card p-4 shadow-xs"
+          >
+            <div className={cn('flex h-10 w-10 shrink-0 items-center justify-center rounded-xl', stat.bg)}>
+              <stat.icon size={18} className={stat.color} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-lg font-bold tabular-nums text-foreground">{stat.value}</p>
+              <p className="truncate text-xs text-muted-foreground">{stat.title}</p>
             </div>
           </motion.div>
         ))}
       </div>
 
-      {/* Charts Row */}
-      <div className={cn("grid gap-4", isManager ? "grid-cols-1 lg:grid-cols-3" : "grid-cols-1 lg:grid-cols-2")}>
-
-        {/* GRAFIK KEUANGAN: HANYA TAMPIL UNTUK MANAJER */}
-        {isManager && (
-          <motion.div variants={item} className="lg:col-span-2 glass-card p-5">
-            <div className="flex items-center justify-between mb-5">
-              <h3 className="text-sm font-semibold text-foreground">{t('dashboard.revenueChart')}</h3>
-              <div className="flex items-center gap-4 text-xs">
-                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-indigo-500" /><span className="text-muted-foreground">{locale === 'id' ? 'Pemasukan' : 'Income'}</span></div>
-                <div className="flex items-center gap-1.5"><div className="w-2.5 h-2.5 rounded-full bg-purple-400" /><span className="text-muted-foreground">{locale === 'id' ? 'Pengeluaran' : 'Expense'}</span></div>
+      {/* =====================================================================
+          BARIS GRAFIK ANALITIK (PEMASUKAN 6 BULAN & DISTRIBUSI GENDER SISWA)
+         ===================================================================== */}
+      <div
+        className={cn(
+          'grid gap-4',
+          canViewFinance ? 'grid-cols-1 lg:grid-cols-3' : 'grid-cols-1 lg:grid-cols-2'
+        )}
+      >
+        {canViewFinance && (
+          <motion.div
+            variants={itemVariants}
+            className="rounded-2xl border border-border bg-card p-5 shadow-xs lg:col-span-2"
+          >
+            <div className="mb-5 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-foreground">{t('dashboard.revenueChart')}</h3>
+                <p className="text-[11px] text-muted-foreground">
+                  {locale === 'id'
+                    ? 'Rekapitulasi transaksi pembayaran terverifikasi 6 bulan terakhir'
+                    : 'Verified payment transactions over the last 6 months'}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs">
+                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
+                <span className="font-medium text-muted-foreground">
+                  {locale === 'id' ? 'Pemasukan' : 'Income'}
+                </span>
               </div>
             </div>
-            <div className="relative w-full h-70">
-              {revenueChartData.length === 0 || revenueChartData.every(d => d.pemasukan === 0) ? (
-                <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/20 backdrop-blur-[1px] rounded-lg">
-                  <div className="text-center bg-card/90 p-4 rounded-xl border border-border/50 shadow-lg">
-                    <Wallet className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm font-medium text-foreground">{locale === 'id' ? 'Belum Ada Transaksi Pembayaran' : 'No Payment Transactions Yet'}</p>
-                    <p className="text-xs text-muted-foreground mt-1 max-w-55">{locale === 'id' ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat di Supabase.' : 'Chart will populate automatically as student payments are recorded.'}</p>
+
+            <div className="relative h-67.5 w-full">
+              {revenueChartData.length === 0 ||
+                revenueChartData.every((d) => d.pemasukan === 0) ? (
+                <div className="absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-background/40 backdrop-blur-[1px]">
+                  <div className="max-w-xs rounded-xl border border-border bg-card/95 p-4 text-center shadow-md">
+                    <Wallet className="mx-auto mb-2 h-7 w-7 text-emerald-600 dark:text-emerald-400" />
+                    <p className="text-xs font-bold text-foreground">
+                      {locale === 'id'
+                        ? 'Belum Ada Transaksi Pembayaran'
+                        : 'No Payment Transactions Yet'}
+                    </p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
+                      {locale === 'id'
+                        ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat.'
+                        : 'Chart will populate automatically as student bill payments are recorded.'}
+                    </p>
                   </div>
                 </div>
               ) : null}
+
               <ResponsiveContainer width="100%" height="100%">
-                <AreaChart data={revenueChartData} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
+                <AreaChart data={revenueChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <defs>
-                    <linearGradient id="gradIncome" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} /><stop offset="95%" stopColor="#6366f1" stopOpacity={0} /></linearGradient>
-                    <linearGradient id="gradExpense" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#a855f7" stopOpacity={0.2} /><stop offset="95%" stopColor="#a855f7" stopOpacity={0} /></linearGradient>
+                    <linearGradient id="gradIncomeEmerald" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10b981" stopOpacity={0.32} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
-                  <XAxis dataKey="month" tick={{ fontSize: 12, fill: '#71717a' }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: '#71717a' }} axisLine={false} tickLine={false} width={45} />
-                  <RechartsTooltip content={<CustomTooltip />} />
-                  <Area type="monotone" dataKey="pemasukan" stroke="#6366f1" fill="url(#gradIncome)" strokeWidth={2.5} />
-                  <Area type="monotone" dataKey="pengeluaran" stroke="#a855f7" fill="url(#gradExpense)" strokeWidth={2} strokeDasharray="5 5" />
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.16)" />
+                  <XAxis
+                    dataKey="month"
+                    tick={{ fontSize: 12, fill: '#71717a' }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 11, fill: '#71717a' }}
+                    axisLine={false}
+                    tickLine={false}
+                    width={52}
+                    tickFormatter={formatCompactAxisValue}
+                  />
+                  <RechartsTooltip
+                    content={
+                      <CustomTooltip
+                        valueFormat="currency"
+                      />
+                    }
+                  />
+                  <Area
+                    type="monotone"
+                    name={locale === 'id' ? 'Pemasukan' : 'Income'}
+                    dataKey="pemasukan"
+                    stroke="#10b981"
+                    fill="url(#gradIncomeEmerald)"
+                    strokeWidth={2.5}
+                  />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </motion.div>
         )}
 
-        {/* GRAFIK DISTRIBUSI SISWA: TAMPIL UNTUK SEMUA */}
-        <motion.div variants={item} className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-4">{t('dashboard.studentDistribution')}</h3>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={studentDistribution} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value" strokeWidth={0}>
-                {studentDistribution.map((entry, index) => <Cell key={`cell-${index}`} fill={entry.color} />)}
-              </Pie>
-              <RechartsTooltip
-                formatter={(value: any) => [formatNumber(Number(value) || 0), locale === 'id' ? 'Siswa' : 'Students']}
-                contentStyle={{ background: 'rgba(10,10,15,0.95)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '12px', fontSize: '12px' }}
-              />
-            </PieChart>
-          </ResponsiveContainer>
-          <div className="grid grid-cols-2 gap-2 mt-2">
+        {/* Grafik Distribusi Gender Siswa */}
+        <motion.div
+          variants={itemVariants}
+          className="flex flex-col justify-between rounded-2xl border border-border bg-card p-5 shadow-xs"
+        >
+          <div>
+            <h3 className="text-sm font-bold text-foreground">
+              {t('dashboard.studentDistribution')}
+            </h3>
+            <p className="text-[11px] text-muted-foreground">
+              {locale === 'id' ? 'Proporsi peserta didik aktif' : 'Active student gender ratio'}
+            </p>
+          </div>
+
+          <div className="my-2 h-50 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={studentDistribution}
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={55}
+                  outerRadius={80}
+                  paddingAngle={3}
+                  dataKey="value"
+                  strokeWidth={0}
+                >
+                  {studentDistribution.map((entry) => (
+                    <Cell key={entry.name} fill={entry.color} />
+                  ))}
+                </Pie>
+                <RechartsTooltip content={<CustomTooltip valueFormat="number" />} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 border-t border-border/70 pt-3">
             {studentDistribution.map((entry) => (
               <div key={entry.name} className="flex items-center gap-2 text-xs">
-                <div className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: entry.color }} />
-                <span className="text-muted-foreground truncate">{entry.name}</span>
-                <span className="text-foreground font-medium ml-auto">{entry.value}</span>
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: entry.color }}
+                />
+                <span className="truncate text-muted-foreground">{entry.name}</span>
+                <span className="ml-auto font-bold tabular-nums text-foreground">
+                  {formatNumber(entry.value)}
+                </span>
               </div>
             ))}
           </div>
         </motion.div>
       </div>
 
-      {/* Quick Actions Terfilter */}
+      {/* =====================================================================
+          AKSES CEPAT MODUL OPERASIONAL (QUICK ACTIONS)
+         ===================================================================== */}
       {quickActions.length > 0 && (
-        <motion.div variants={item} className="glass-card p-5">
-          <h3 className="text-sm font-semibold text-foreground mb-4">{t('dashboard.quickActions')}</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <motion.div
+          variants={itemVariants}
+          className="rounded-2xl border border-border bg-card p-5 shadow-xs"
+        >
+          <h3 className="mb-4 text-sm font-bold text-foreground">{t('dashboard.quickActions')}</h3>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             {quickActions.map((action) => (
               <Link
-                key={action.id} to={action.path}
-                className={cn('flex flex-col items-center gap-2.5 p-4 rounded-xl border border-border/50 bg-muted/20 hover:bg-muted/40 transition-all duration-200 hover:scale-105 hover:shadow-lg group cursor-pointer')}
+                key={action.id}
+                to={action.path}
+                className="group flex flex-col items-center gap-2.5 rounded-xl border border-border bg-muted/25 p-4 transition-all duration-200 hover:-translate-y-0.5 hover:border-emerald-500/40 hover:bg-muted/50 hover:shadow-sm"
               >
-                <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center transition-transform group-hover:scale-110', action.color === 'indigo' && 'bg-indigo-500/10 text-indigo-400', action.color === 'emerald' && 'bg-emerald-500/10 text-emerald-400', action.color === 'amber' && 'bg-amber-500/10 text-amber-400', action.color === 'violet' && 'bg-violet-500/10 text-violet-400', action.color === 'cyan' && 'bg-cyan-500/10 text-cyan-400', action.color === 'rose' && 'bg-rose-500/10 text-rose-400')}>
-                  <action.icon size={20} />
+                <div
+                  className={cn(
+                    'flex h-10 w-10 items-center justify-center rounded-xl transition-transform group-hover:scale-110',
+                    QUICK_ACTION_TONE_STYLES[action.tone]
+                  )}
+                >
+                  <action.icon size={19} />
                 </div>
-                <span className="text-xs font-medium text-foreground text-center">{action.label}</span>
+                <span className="text-center text-xs font-semibold text-foreground">
+                  {action.label}
+                </span>
               </Link>
             ))}
           </div>

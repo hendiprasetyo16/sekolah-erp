@@ -1,10 +1,25 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
-  Bell, Sun, Moon, LogOut, User, Settings, ChevronRight,
-  Menu, Building2, CheckCheck, CalendarRange
+  Bell,
+  Sun,
+  Moon,
+  LogOut,
+  User,
+  Settings,
+  ChevronRight,
+  ChevronDown,
+  Menu,
+  Building2,
+  CheckCheck,
+  CalendarRange,
+  Check,
+  Loader2,
 } from 'lucide-react';
+import { toast } from 'sonner';
+
 import { cn } from '@/utils/cn';
+import { supabase } from '@/services/supabase.client';
 import { useUIStore } from '@/stores/ui.store';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -13,34 +28,262 @@ import { ROLE_LABELS } from '@/constants/app.constants';
 import { getInitials } from '@/utils/format';
 import { Button } from '@/components/ui/button';
 
+/**
+ * Struktur data satu item notifikasi pada panel dropdown Header.
+ */
+interface HeaderNotificationItem {
+  id: string;
+  title: string;
+  message: string;
+  isRead: boolean;
+}
+
+/**
+ * Kontrak slice store notifikasi yang dikonsumsi oleh komponen Header.
+ */
+interface HeaderNotificationStore {
+  unreadCount?: number;
+  notifications?: HeaderNotificationItem[];
+  markAllAsRead?: () => void;
+}
+
+/**
+ * Struktur item navigasi jejak halaman (Breadcrumb).
+ */
+interface BreadcrumbItem {
+  label: string;
+  href: string;
+  isClickable: boolean;
+}
+
+/**
+ * Struktur opsi Tahun Ajaran dari tabel `public.academic_years`.
+ */
+interface AcademicYearOption {
+  id: string;
+  schoolId: string;
+  name: string;
+  semester?: string | null;
+  isActive: boolean;
+  startDate?: string;
+  endDate?: string;
+}
+
+type AuthAcademicYear = ReturnType<typeof useAuthStore.getState>['academicYear'];
+
+/**
+ * Kamus label dwibahasa untuk segmen URL pada Breadcrumb.
+ */
+const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
+  dashboard: { id: 'Dasbor', en: 'Dashboard' },
+  academic: { id: 'Akademik', en: 'Academic' },
+  'master-data': { id: 'Data Induk', en: 'Master Data' },
+  students: { id: 'Data Siswa', en: 'Students' },
+  teachers: { id: 'Guru & Staf', en: 'Teachers & Staff' },
+  schedules: { id: 'Jadwal Pelajaran', en: 'Schedules' },
+  attendance: { id: 'Presensi', en: 'Attendance' },
+  teacher: { id: 'Presensi GPS', en: 'GPS Check-In' },
+  finance: { id: 'Keuangan', en: 'Finance' },
+  'fee-templates': { id: 'Master Biaya', en: 'Fee Templates' },
+  bills: { id: 'Tagihan Siswa', en: 'Student Bills' },
+  payments: { id: 'Pembayaran', en: 'Payments' },
+  inventory: { id: 'Sarpras & Aset', en: 'Inventory' },
+  admin: { id: 'Administrasi', en: 'Administration' },
+  users: { id: 'Manajemen Akun', en: 'User Accounts' },
+  scholarships: { id: 'Beasiswa', en: 'Scholarships' },
+  reports: { id: 'Laporan', en: 'Reports' },
+  settings: { id: 'Pengaturan', en: 'Settings' },
+  profile: { id: 'Profil Saya', en: 'My Profile' },
+  create: { id: 'Tambah Baru', en: 'Create New' },
+  new: { id: 'Tambah Baru', en: 'New' },
+  edit: { id: 'Ubah Data', en: 'Edit' },
+};
+
+/**
+ * Daftar segmen induk yang hanya berfungsi sebagai pengelompokan URL.
+ */
+const NON_ROUTABLE_SEGMENTS = new Set<string>(['academic']);
+
+/**
+ * Komponen Bilah Navigasi Atas (`Header`).
+ */
 export function Header() {
   const { t, locale } = useTranslation();
   const navigate = useNavigate();
   const location = useLocation();
+
   const { theme, setTheme, locale: currentLocale, setLocale, setSidebarOpen } = useUIStore();
-  const { user, school, academicYear, logout } = useAuthStore();
-  const { unreadCount = 0, notifications = [], markAllAsRead } = useNotificationStore() as any;
+  const { user, school, academicYear, logout, setSchool, setAcademicYear } = useAuthStore();
 
-  const [userMenuOpen, setUserMenuOpen] = useState(false);
-  const [notificationOpen, setNotificationOpen] = useState(false);
-  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState(false);
+  // Membaca state notifikasi secara aman tanpa casting `any`
+  const notificationStore = useNotificationStore() as unknown as HeaderNotificationStore;
+  const unreadCount = notificationStore.unreadCount ?? 0;
+  const notifications = notificationStore.notifications ?? [];
+  const markAllAsRead = notificationStore.markAllAsRead;
 
+  // State kontrol popover & modal konfirmasi keluar
+  const [userMenuOpen, setUserMenuOpen] = useState<boolean>(false);
+  const [notificationOpen, setNotificationOpen] = useState<boolean>(false);
+  const [yearMenuOpen, setYearMenuOpen] = useState<boolean>(false);
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
+  const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
+
+  // State daftar tahun ajaran & cache per sekolah agar dibuka instan tanpa delay
+  const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
+  const [isRefreshingYears, setIsRefreshingYears] = useState<boolean>(false);
+  const loadedSchoolIdRef = useRef<string | null>(null);
+
+  /**
+   * Menutup seluruh dropdown dan modal konfirmasi ketika pengguna menekan tombol `Escape`.
+   */
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape' && !isLoggingOut) {
+        setUserMenuOpen(false);
+        setNotificationOpen(false);
+        setYearMenuOpen(false);
+        setIsLogoutModalOpen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isLoggingOut]);
+
+  /**
+   * Memuat daftar Tahun Ajaran milik sekolah aktif dengan kolom ringkas dan batas waktu aman.
+   */
+  const fetchSchoolAcademicYears = useCallback(
+    async (forceRefresh = false): Promise<void> => {
+      const targetSchoolId = school?.id;
+      if (!targetSchoolId) return;
+
+      // Gunakan cache jika data untuk sekolah ini sudah pernah dimuat dan tidak dipaksa refresh
+      if (!forceRefresh && loadedSchoolIdRef.current === targetSchoolId && academicYears.length > 0) {
+        return;
+      }
+
+      setIsRefreshingYears(true);
+
+      // Pengaman timeout 5 detik agar indikator loading tidak pernah berputar terus-menerus
+      const timeoutId = window.setTimeout(() => {
+        setIsRefreshingYears(false);
+      }, 5000);
+
+      try {
+        const { data, error } = await supabase
+          .from('academic_years')
+          .select('id, schoolId, name, semester, isActive, startDate, endDate')
+          .eq('schoolId', targetSchoolId)
+          .order('name', { ascending: false });
+
+        if (!error && Array.isArray(data)) {
+          setAcademicYears(data as AcademicYearOption[]);
+          loadedSchoolIdRef.current = targetSchoolId;
+        }
+      } finally {
+        window.clearTimeout(timeoutId);
+        setIsRefreshingYears(false);
+      }
+    },
+    [school?.id, academicYears.length]
+  );
+
+  /**
+   * Pre-fetch daftar Tahun Ajaran di latar belakang saat sekolah aktif terpilih
+   * sehingga dropdown terbuka seketika (0ms) saat diklik.
+   */
+  useEffect(() => {
+    if (!school?.id) {
+      setAcademicYears([]);
+      loadedSchoolIdRef.current = null;
+      return;
+    }
+
+    if (loadedSchoolIdRef.current !== school.id) {
+      void fetchSchoolAcademicYears(true);
+    }
+  }, [school?.id, fetchSchoolAcademicYears]);
+
+  /**
+   * Membuka/menutup dropdown Tahun Ajaran dan menyegarkan data di latar belakang.
+   */
+  const handleToggleYearMenu = (): void => {
+    const nextState = !yearMenuOpen;
+    setYearMenuOpen(nextState);
+    setNotificationOpen(false);
+    setUserMenuOpen(false);
+
+    if (nextState) {
+      void fetchSchoolAcademicYears(false);
+    }
+  };
+
+  /**
+   * Mengubah konteks Tahun Ajaran yang sedang dilihat pada sesi kerja saat ini.
+   */
+  const handleSelectAcademicYear = (selected: AcademicYearOption): void => {
+    setAcademicYear(selected as unknown as AuthAcademicYear);
+    setYearMenuOpen(false);
+    toast.success(
+      locale === 'id'
+        ? `Konteks dialihkan ke Tahun Ajaran ${selected.name}`
+        : `Switched context to Academic Year ${selected.name}`
+    );
+  };
+
+  // Gabungkan daftar dari server dengan tahun ajaran aktif di store agar tidak pernah kosong
+  const displayedAcademicYears: AcademicYearOption[] = (() => {
+    if (academicYears.length > 0) return academicYears;
+    if (academicYear) {
+      return [academicYear as unknown as AcademicYearOption];
+    }
+    return [];
+  })();
+
+  /**
+   * Membangun daftar breadcrumb dwibahasa dari segmen URL saat ini.
+   */
   const pathSegments = location.pathname.split('/').filter(Boolean);
-  const breadcrumbs = pathSegments.map((segment, idx) => {
+  const breadcrumbs: BreadcrumbItem[] = pathSegments.map((segment, idx) => {
     const isUuid = segment.length >= 24 || /^[0-9a-fA-F-]{36}$/.test(segment);
+    const translated = ROUTE_SEGMENT_LABELS[segment]?.[locale];
+
     const label = isUuid
       ? 'Detail'
-      : segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
+      : translated ?? segment.charAt(0).toUpperCase() + segment.slice(1).replace(/-/g, ' ');
 
     return {
       label,
       href: '/' + pathSegments.slice(0, idx + 1).join('/'),
+      isClickable: !NON_ROUTABLE_SEGMENTS.has(segment),
     };
   });
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
+  const currentPageTitle =
+    breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1].label : t('sidebar.dashboard');
+
+  /**
+   * Mengakhiri sesi autentikasi pengguna secara bersih dan mengarahkan ke halaman login.
+   */
+  const handleConfirmLogout = async (): Promise<void> => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      setIsLogoutModalOpen(false);
+      navigate('/login', { replace: true });
+    } finally {
+      setIsLoggingOut(false);
+    }
+  };
+
+  /**
+   * Mengosongkan konteks sekolah aktif agar `SUPER_ADMIN` kembali ke Konsol Multi-Sekolah.
+   */
+  const handleReturnToTenantConsole = (): void => {
+    setSchool(null);
+    setAcademicYear(null);
+    navigate('/dashboard', { replace: true });
   };
 
   const roleDisplay = user?.role
@@ -49,30 +292,42 @@ export function Header() {
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-border bg-card px-4 sm:px-6">
-        {/* Kiri: Tombol Menu Mobile & Breadcrumb */}
-        <div className="flex min-w-0 items-center gap-3">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-border bg-card/95 px-4 backdrop-blur-xs sm:px-6">
+        {/* =====================================================================
+            BAGIAN KIRI: TOMBOL DRAWER MOBILE, JUDUL MOBILE & BREADCRUMB DESKTOP
+           ===================================================================== */}
+        <div className="flex min-w-0 items-center gap-2.5">
           <button
             type="button"
             onClick={() => setSidebarOpen(true)}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground lg:hidden"
-            aria-label="Menu"
+            className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:hidden"
+            aria-label={locale === 'id' ? 'Buka menu navigasi' : 'Open navigation menu'}
           >
             <Menu size={19} />
           </button>
 
-          <nav className="hidden items-center gap-1.5 text-[13px] md:flex">
+          <span className="truncate text-sm font-semibold text-foreground md:hidden">
+            {currentPageTitle}
+          </span>
+
+          <nav aria-label="Breadcrumb" className="hidden items-center gap-1.5 text-[13px] md:flex">
             {breadcrumbs.map((crumb, idx) => {
               const isLast = idx === breadcrumbs.length - 1;
               return (
                 <div key={crumb.href} className="flex items-center gap-1.5">
                   {idx > 0 && <ChevronRight size={13} className="text-muted-foreground/60" />}
-                  {isLast ? (
-                    <span className="font-medium text-foreground">{crumb.label}</span>
+                  {isLast || !crumb.isClickable ? (
+                    <span
+                      className={cn(
+                        isLast ? 'font-semibold text-foreground' : 'text-muted-foreground'
+                      )}
+                    >
+                      {crumb.label}
+                    </span>
                   ) : (
                     <Link
                       to={crumb.href}
-                      className="text-muted-foreground transition-colors hover:text-foreground"
+                      className="text-muted-foreground transition-colors hover:text-emerald-600 dark:hover:text-emerald-400"
                     >
                       {crumb.label}
                     </Link>
@@ -83,69 +338,142 @@ export function Header() {
           </nav>
         </div>
 
-        {/* Kanan: Konteks Tahun Ajaran, Switcher Tenant, Kontrol & Profil */}
-        <div className="flex items-center gap-2">
-          {/* Indikator Tahun Ajaran Aktif */}
+        {/* =====================================================================
+            BAGIAN KANAN: TAHUN AJARAN, SWITCH TENANT, KONTROL UI & PROFIL AKUN
+           ===================================================================== */}
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Pengalih Cepat Tahun Ajaran Aktif */}
           {academicYear?.name && (
-            <div className="hidden items-center gap-1.5 rounded-md border border-border bg-muted/50 px-2.5 py-1 text-xs font-medium text-foreground sm:flex">
-              <CalendarRange size={13} className="text-primary" />
-              <span className="tabular-nums">TA {academicYear.name}</span>
+            <div className="relative hidden sm:block">
+              <button
+                type="button"
+                onClick={handleToggleYearMenu}
+                className="flex items-center gap-1.5 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-2.5 py-1 text-xs font-medium text-emerald-700 transition-colors hover:bg-emerald-500/15 dark:text-emerald-300"
+                title={
+                  locale === 'id' ? 'Ganti konteks tahun ajaran' : 'Switch academic year context'
+                }
+              >
+                <CalendarRange size={13} className="text-emerald-600 dark:text-emerald-400" />
+                <span className="tabular-nums">TA {academicYear.name}</span>
+                <ChevronDown
+                  size={12}
+                  className={cn(
+                    'text-emerald-600/80 transition-transform duration-150 dark:text-emerald-400/80',
+                    yearMenuOpen && 'rotate-180'
+                  )}
+                />
+              </button>
+
+              {yearMenuOpen && (
+                <>
+                  <div className="fixed inset-0 z-40" onClick={() => setYearMenuOpen(false)} />
+                  <div className="absolute right-0 top-full z-50 mt-2 w-60 overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+                    <div className="flex items-center justify-between border-b border-border bg-muted/30 px-3.5 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {locale === 'id' ? 'Pilih Tahun Ajaran' : 'Select Academic Year'}
+                      </p>
+                      {isRefreshingYears && (
+                        <Loader2 size={12} className="animate-spin text-emerald-600" />
+                      )}
+                    </div>
+
+                    <div className="max-h-60 overflow-y-auto p-1.5">
+                      {displayedAcademicYears.map((item) => {
+                        const isCurrent = item.id === academicYear.id;
+                        return (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => handleSelectAcademicYear(item)}
+                            className={cn(
+                              'flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs transition-colors',
+                              isCurrent
+                                ? 'bg-emerald-500/10 font-semibold text-emerald-700 dark:text-emerald-300'
+                                : 'text-foreground hover:bg-muted'
+                            )}
+                          >
+                            <div>
+                              <p className="tabular-nums">TA {item.name}</p>
+                              {item.isActive && (
+                                <span className="text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                  {locale === 'id' ? 'Tahun Aktif Berjalan' : 'Current Active'}
+                                </span>
+                              )}
+                            </div>
+                            {isCurrent && <Check size={14} className="text-emerald-600" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
-          {/* Tombol Ganti Sekolah (Khusus Super Admin) */}
-          {user?.role === 'SUPER_ADMIN' && school && (
+          {/* Tombol Ganti Sekolah / Kembali ke Konsol Multi-Sekolah (Khusus SUPER_ADMIN) */}
+          {user?.role === 'SUPER_ADMIN' && (
             <button
               type="button"
-              onClick={() => useAuthStore.setState({ school: null, academicYear: null })}
-              className="hidden items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted md:flex"
+              onClick={handleReturnToTenantConsole}
+              className="hidden items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-emerald-500/40 hover:bg-muted md:flex"
             >
-              <Building2 size={13} className="text-muted-foreground" />
-              <span>{locale === 'id' ? 'Ganti Sekolah' : 'Switch School'}</span>
+              <Building2 size={13} className="text-emerald-600 dark:text-emerald-400" />
+              <span>
+                {school
+                  ? locale === 'id'
+                    ? 'Ganti Sekolah'
+                    : 'Switch School'
+                  : locale === 'id'
+                    ? 'Konsol Sekolah'
+                    : 'School Console'}
+              </span>
             </button>
           )}
 
-          {/* Bahasa */}
+          {/* Pengalih Bahasa Antarmuka (ID / EN) */}
           <button
             type="button"
             onClick={() => setLocale(currentLocale === 'id' ? 'en' : 'id')}
-            className="rounded-md px-2 py-1.5 text-xs font-semibold uppercase text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="rounded-lg px-2 py-1.5 text-xs font-semibold uppercase text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title={t('common.language')}
           >
             {currentLocale}
           </button>
 
-          {/* Tema */}
+          {/* Pengalih Mode Tema (Terang / Gelap) */}
           <button
             type="button"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             title={theme === 'dark' ? t('common.lightMode') : t('common.darkMode')}
           >
             {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
           </button>
 
-          {/* Notifikasi */}
+          {/* Dropdown Notifikasi Sistem */}
           <div className="relative">
             <button
               type="button"
               onClick={() => {
-                setNotificationOpen(!notificationOpen);
+                setNotificationOpen((prev) => !prev);
                 setUserMenuOpen(false);
+                setYearMenuOpen(false);
               }}
-              className="relative rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              className="relative rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
               title={t('common.notifications')}
+              aria-label={t('common.notifications')}
             >
               <Bell size={17} />
               {unreadCount > 0 && (
-                <span className="absolute right-1 top-1 h-2 w-2 rounded-full bg-rose-600" />
+                <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-rose-600 ring-2 ring-card" />
               )}
             </button>
 
             {notificationOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setNotificationOpen(false)} />
-                <div className="absolute right-0 top-full z-50 mt-1.5 w-80 overflow-hidden rounded-lg border border-border bg-card shadow-lg">
+                <div className="absolute right-0 top-full z-50 mt-2 w-80 overflow-hidden rounded-xl border border-border bg-card shadow-lg">
                   <div className="flex items-center justify-between border-b border-border px-3.5 py-2.5">
                     <span className="text-xs font-semibold text-foreground">
                       {locale === 'id' ? 'Notifikasi' : 'Notifications'}
@@ -154,7 +482,7 @@ export function Header() {
                       <button
                         type="button"
                         onClick={markAllAsRead}
-                        className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+                        className="flex items-center gap-1 text-[11px] font-medium text-emerald-600 hover:underline dark:text-emerald-400"
                       >
                         <CheckCheck size={13} />
                         {locale === 'id' ? 'Tandai dibaca' : 'Mark read'}
@@ -168,16 +496,18 @@ export function Header() {
                         {locale === 'id' ? 'Tidak ada notifikasi baru' : 'No new notifications'}
                       </p>
                     ) : (
-                      notifications.map((notif: any) => (
+                      notifications.map((notif) => (
                         <div
                           key={notif.id}
                           className={cn(
                             'border-b border-border px-3.5 py-2.5 text-left last:border-b-0',
-                            !notif.isRead && 'bg-muted/40'
+                            !notif.isRead && 'bg-emerald-500/5'
                           )}
                         >
                           <p className="text-xs font-medium text-foreground">{notif.title}</p>
-                          <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">{notif.message}</p>
+                          <p className="mt-0.5 line-clamp-2 text-[11px] text-muted-foreground">
+                            {notif.message}
+                          </p>
                         </div>
                       ))
                     )}
@@ -187,23 +517,24 @@ export function Header() {
             )}
           </div>
 
-          <div className="mx-1 h-5 w-px bg-border" />
+          <div className="mx-0.5 h-5 w-px bg-border" />
 
-          {/* Menu Pengguna */}
+          {/* Dropdown Menu Profil Pengguna */}
           <div className="relative">
             <button
               type="button"
               onClick={() => {
-                setUserMenuOpen(!userMenuOpen);
+                setUserMenuOpen((prev) => !prev);
                 setNotificationOpen(false);
+                setYearMenuOpen(false);
               }}
-              className="flex items-center gap-2 rounded-md py-1 pl-1 pr-2 hover:bg-muted"
+              className="flex items-center gap-2 rounded-lg py-1 pl-1 pr-2 transition-colors hover:bg-muted"
             >
-              <div className="flex h-7 w-7 items-center justify-center rounded-md bg-muted text-xs font-semibold text-foreground border border-border">
+              <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-600/10 text-xs font-bold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
                 {user ? getInitials(user.fullName) : 'U'}
               </div>
               <div className="hidden text-left lg:block">
-                <p className="text-xs font-medium leading-tight text-foreground">
+                <p className="text-xs font-semibold leading-tight text-foreground">
                   {user?.fullName || 'Pengguna'}
                 </p>
                 <p className="text-[11px] leading-tight text-muted-foreground">{roleDisplay}</p>
@@ -213,37 +544,45 @@ export function Header() {
             {userMenuOpen && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
-                <div className="absolute right-0 top-full z-50 mt-1.5 w-52 overflow-hidden rounded-lg border border-border bg-card shadow-lg">
-                  <div className="border-b border-border px-3 py-2.5">
-                    <p className="truncate text-xs font-semibold text-foreground">{user?.fullName}</p>
+                <div className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-border bg-card shadow-lg">
+                  <div className="border-b border-border bg-muted/30 px-3.5 py-2.5">
+                    <p className="truncate text-xs font-semibold text-foreground">
+                      {user?.fullName}
+                    </p>
                     <p className="truncate text-[11px] text-muted-foreground">{user?.email}</p>
                   </div>
-                  <div className="p-1">
+                  <div className="p-1.5">
                     <button
                       type="button"
-                      onClick={() => { navigate('/profile'); setUserMenuOpen(false); }}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground hover:bg-muted"
+                      onClick={() => {
+                        navigate('/profile');
+                        setUserMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
                     >
                       <User size={14} className="text-muted-foreground" />
                       {t('common.profile')}
                     </button>
                     <button
                       type="button"
-                      onClick={() => { navigate('/settings'); setUserMenuOpen(false); }}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs text-foreground hover:bg-muted"
+                      onClick={() => {
+                        navigate('/settings');
+                        setUserMenuOpen(false);
+                      }}
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
                     >
                       <Settings size={14} className="text-muted-foreground" />
                       {t('common.settings')}
                     </button>
                   </div>
-                  <div className="border-t border-border p-1">
+                  <div className="border-t border-border p-1.5">
                     <button
                       type="button"
                       onClick={() => {
                         setUserMenuOpen(false);
                         setIsLogoutModalOpen(true);
                       }}
-                      className="flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30"
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs font-medium text-rose-600 transition-colors hover:bg-rose-50 dark:hover:bg-rose-950/30"
                     >
                       <LogOut size={14} />
                       {t('common.logout')}
@@ -256,23 +595,45 @@ export function Header() {
         </div>
       </header>
 
-      {/* Dialog Konfirmasi Keluar */}
+      {/* =====================================================================
+          MODAL DIALOG KONFIRMASI KELUAR SESI
+         ===================================================================== */}
       {isLogoutModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <div className="w-full max-w-sm rounded-lg border border-border bg-card p-5 shadow-lg">
-            <h3 className="text-base font-semibold text-foreground">
-              {locale === 'id' ? 'Keluar dari Sesi' : 'Sign Out'}
-            </h3>
-            <p className="mt-1.5 text-xs text-muted-foreground">
-              {locale === 'id'
-                ? 'Sesi kerja Anda akan diakhiri. Pastikan perubahan data sudah disimpan.'
-                : 'Your current session will end. Make sure all changes are saved.'}
-            </p>
-            <div className="mt-5 flex justify-end gap-2">
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="header-logout-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
+          onClick={() => {
+            if (!isLoggingOut) setIsLogoutModalOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3.5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <LogOut size={18} />
+              </div>
+              <div>
+                <h3 id="header-logout-title" className="text-base font-bold text-foreground">
+                  {locale === 'id' ? 'Konfirmasi Keluar Sesi' : 'Confirm Sign Out'}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {locale === 'id'
+                    ? 'Sesi kerja Anda akan diakhiri. Pastikan seluruh perubahan data telah disimpan.'
+                    : 'Your current session will end. Make sure all data changes have been saved.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
+                disabled={isLoggingOut}
                 onClick={() => setIsLogoutModalOpen(false)}
               >
                 {locale === 'id' ? 'Batal' : 'Cancel'}
@@ -280,13 +641,12 @@ export function Header() {
               <Button
                 type="button"
                 size="sm"
+                disabled={isLoggingOut}
                 className="bg-rose-600 text-white hover:bg-rose-700"
-                onClick={() => {
-                  setIsLogoutModalOpen(false);
-                  handleLogout();
-                }}
+                onClick={() => void handleConfirmLogout()}
               >
-                {locale === 'id' ? 'Keluar' : 'Sign Out'}
+                {isLoggingOut && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+                {locale === 'id' ? 'Ya, Keluar' : 'Yes, Sign Out'}
               </Button>
             </div>
           </div>
