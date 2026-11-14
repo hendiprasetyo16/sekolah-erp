@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -22,13 +23,16 @@ export function StudentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { locale } = useTranslation();
+  const isId = locale === 'id';
 
-  const { user } = useAuthStore();
+  const [photoError, setPhotoError] = useState(false);
+
+  const { user, school } = useAuthStore();
   const canManageData = user?.role ? ALLOWED_MANAGE_ROLES.includes(user.role) : false;
 
   const { data: studentResponse, isLoading, isError, refetch } = useQuery({
-    queryKey: ['student', id],
-    queryFn: () => studentService.getById(id!),
+    queryKey: ['student', id, school?.id],
+    queryFn: () => studentService.getById(id!, school?.id),
     enabled: !!id,
   });
 
@@ -38,7 +42,7 @@ export function StudentDetailPage() {
     return (
       <div className="flex h-[60vh] flex-col items-center justify-center gap-3 text-muted-foreground">
         <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
-        <p>{locale === 'id' ? 'Memuat data siswa...' : 'Loading student data...'}</p>
+        <p>{isId ? 'Memuat data siswa...' : 'Loading student data...'}</p>
       </div>
     );
   }
@@ -47,16 +51,16 @@ export function StudentDetailPage() {
     return (
       <div className="flex h-[60vh] flex-col items-center justify-center gap-4 text-center">
         <p className="text-destructive font-medium">
-          {locale === 'id' ? 'Gagal memuat data siswa.' : 'Failed to load student data.'}
+          {isId ? 'Gagal memuat data siswa.' : 'Failed to load student data.'}
         </p>
         <div className="flex items-center gap-3">
           <Button variant="outline" onClick={() => navigate('/students')}>
             <ArrowLeft className="mr-2 h-4 w-4" />
-            {locale === 'id' ? 'Kembali' : 'Back'}
+            {isId ? 'Kembali' : 'Back'}
           </Button>
           <Button onClick={() => refetch()} className="bg-emerald-600 hover:bg-emerald-700 text-white">
             <RefreshCw className="mr-2 h-4 w-4" />
-            {locale === 'id' ? 'Coba Lagi' : 'Retry'}
+            {isId ? 'Coba Lagi' : 'Retry'}
           </Button>
         </div>
       </div>
@@ -65,6 +69,7 @@ export function StudentDetailPage() {
 
   const parentsList = student.parents || [];
   const ecoData = student.economic;
+  const formattedNis = student.nis && student.nis !== '-' ? student.nis : '-';
 
   const getStatusColor = (status: string): BadgeVariant => {
     switch (status) {
@@ -83,7 +88,7 @@ export function StudentDetailPage() {
   };
 
   const getStatusLabel = (status: string): string => {
-    if (locale === 'id') {
+    if (isId) {
       return status === 'MUTASI_KELUAR' ? 'MUTASI KELUAR' : status;
     }
     switch (status) {
@@ -104,9 +109,10 @@ export function StudentDetailPage() {
 
   const formatCurrency = (amount?: number | string | null): string => {
     if (amount === undefined || amount === null || String(amount).trim() === '') return '-';
-    const num = Number(amount);
+    const cleaned = String(amount).replace(/â€“/g, '-').trim();
+    const num = Number(cleaned);
     if (Number.isNaN(num)) {
-      return String(amount);
+      return cleaned;
     }
     return new Intl.NumberFormat('id-ID', {
       style: 'currency',
@@ -115,31 +121,61 @@ export function StudentDetailPage() {
     }).format(num);
   };
 
-  const formatBool = (val?: boolean): string => {
+  const formatBool = (val?: boolean | null): string => {
     if (val === undefined || val === null) return '-';
-    return val ? (locale === 'id' ? 'Ya' : 'Yes') : locale === 'id' ? 'Tidak' : 'No';
+    return val ? (isId ? 'Ya' : 'Yes') : isId ? 'Tidak' : 'No';
+  };
+
+  const getOrphanLabel = (): string => {
+    if (!ecoData) return '-';
+    if (ecoData.orphanType && ecoData.orphanType !== 'BUKAN') {
+      const mapID: Record<string, string> = {
+        YATIM: 'Yatim',
+        PIATU: 'Piatu',
+        YATIM_PIATU: 'Yatim Piatu',
+      };
+      const mapEN: Record<string, string> = {
+        YATIM: 'Paternal Orphan (Yatim)',
+        PIATU: 'Maternal Orphan (Piatu)',
+        YATIM_PIATU: 'Double Orphan (Yatim Piatu)',
+      };
+      return isId
+        ? mapID[ecoData.orphanType] || ecoData.orphanType
+        : mapEN[ecoData.orphanType] || ecoData.orphanType;
+    }
+    return ecoData.isOrphan
+      ? isId ? 'Yatim / Piatu' : 'Orphan'
+      : isId ? 'Tidak (Lengkap)' : 'No';
   };
 
   return (
     <div className="space-y-6">
       {/* ================= HEADER ================= */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-center space-x-4">
-          <Button variant="outline" size="icon" className="shrink-0" onClick={() => navigate('/students')}>
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button
+            variant="outline"
+            size="icon"
+            className="shrink-0"
+            onClick={() => navigate('/students')}
+          >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">
-              {locale === 'id' ? 'Detail Siswa' : 'Student Detail'}
-            </h1>
-          </div>
+          <h1 className="text-2xl font-bold tracking-tight whitespace-nowrap">
+            {isId ? 'Detail Siswa' : 'Student Detail'}
+          </h1>
         </div>
 
         {canManageData && (
-          <Button asChild className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700">
-            <Link to={`/students/${id}/edit`} className="flex justify-center items-center">
-              <Edit className="mr-2 h-4 w-4 shrink-0" />
-              <span className="whitespace-nowrap">{locale === 'id' ? 'Edit Data' : 'Edit Data'}</span>
+          <Button
+            asChild
+            className="w-fit shrink-0 bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm"
+          >
+            <Link to={`/students/${id}/edit`} className="inline-flex items-center justify-center gap-2">
+              <Edit className="h-4 w-4 shrink-0" />
+              <span className="whitespace-nowrap">
+                {isId ? 'Edit Data' : 'Edit Data'}
+              </span>
             </Link>
           </Button>
         )}
@@ -149,9 +185,19 @@ export function StudentDetailPage() {
       <Card className="border-border shadow-sm bg-card">
         <CardContent className="p-6">
           <div className="flex flex-col md:flex-row items-start md:items-center space-y-4 md:space-y-0 md:space-x-6">
-            <div className="h-24 w-24 rounded-full bg-emerald-100/50 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
-              <UserCircle2 className="h-12 w-12" />
-            </div>
+            {student.photoUrl && !photoError ? (
+              <img
+                src={student.photoUrl}
+                alt={student.fullName}
+                onError={() => setPhotoError(true)}
+                className="h-24 w-24 rounded-full object-cover border border-emerald-200 dark:border-emerald-800 shrink-0"
+              />
+            ) : (
+              <div className="h-24 w-24 rounded-full bg-emerald-100/50 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800 shrink-0">
+                <UserCircle2 className="h-12 w-12" />
+              </div>
+            )}
+
             <div className="flex-1 min-w-0">
               <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-2xl font-bold text-foreground truncate">{student.fullName}</h2>
@@ -163,7 +209,7 @@ export function StudentDetailPage() {
               <div className="mt-2 text-sm font-medium bg-muted/40 inline-block px-3 py-1.5 rounded-md border border-border">
                 NIS / NIPD:{' '}
                 <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1 mr-4">
-                  {student.nis || '-'}
+                  {formattedNis}
                 </span>
                 NISN:{' '}
                 <span className="text-emerald-600 dark:text-emerald-400 font-bold ml-1">
@@ -174,19 +220,19 @@ export function StudentDetailPage() {
                 <span>NIK: {student.nik}</span>
                 <span className="hidden sm:inline">•</span>
                 <span>
-                  {locale === 'id' ? 'Panggilan:' : 'Nickname:'} {student.nickname || '-'}
+                  {isId ? 'Panggilan:' : 'Nickname:'} {student.nickname || '-'}
                 </span>
               </p>
 
               <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-muted-foreground">
                 <div className="flex items-center">
                   <Building2 className="mr-2 h-4 w-4 shrink-0" />
-                  {locale === 'id' ? 'Kelas: ' : 'Class: '} {student.className}
+                  {isId ? 'Kelas: ' : 'Class: '} {student.className || '-'}
                 </div>
                 <div className="flex items-center">
                   <MapPin className="mr-2 h-4 w-4 shrink-0" />
                   <span className="truncate">
-                    {student.city}, {student.province}
+                    {student.city || '-'}, {student.province || '-'}
                   </span>
                 </div>
                 <div className="flex items-center">
@@ -208,7 +254,7 @@ export function StudentDetailPage() {
               className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
             >
               <User className="w-4 h-4 mr-2 shrink-0" />
-              {locale === 'id' ? 'Pribadi' : 'Personal'}
+              {isId ? 'Pribadi' : 'Personal'}
             </TabsTrigger>
 
             <TabsTrigger
@@ -216,7 +262,7 @@ export function StudentDetailPage() {
               className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
             >
               <GraduationCap className="w-4 h-4 mr-2 shrink-0" />
-              {locale === 'id' ? 'Akademik' : 'Academic'}
+              {isId ? 'Akademik' : 'Academic'}
             </TabsTrigger>
 
             <TabsTrigger
@@ -224,7 +270,7 @@ export function StudentDetailPage() {
               className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
             >
               <Briefcase className="w-4 h-4 mr-2 shrink-0" />
-              {locale === 'id' ? 'Orang Tua' : 'Parents'}
+              {isId ? 'Orang Tua' : 'Parents'}
             </TabsTrigger>
 
             <TabsTrigger
@@ -232,7 +278,7 @@ export function StudentDetailPage() {
               className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
             >
               <Wallet className="w-4 h-4 mr-2 shrink-0" />
-              {locale === 'id' ? 'Kesejahteraan' : 'Welfare'}
+              {isId ? 'Kesejahteraan' : 'Welfare'}
             </TabsTrigger>
 
             <TabsTrigger
@@ -240,7 +286,7 @@ export function StudentDetailPage() {
               className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
             >
               <HeartPulse className="w-4 h-4 mr-2 shrink-0" />
-              {locale === 'id' ? 'Dapodik' : 'Dapodik'}
+              Dapodik
             </TabsTrigger>
 
             <TabsTrigger
@@ -248,7 +294,7 @@ export function StudentDetailPage() {
               className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
             >
               <CreditCard className="w-4 h-4 mr-2 shrink-0" />
-              {locale === 'id' ? 'Dokumen' : 'Documents'}
+              {isId ? 'Dokumen' : 'Documents'}
             </TabsTrigger>
           </TabsList>
         </div>
@@ -260,33 +306,29 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-lg flex items-center text-primary">
                   <User className="mr-2 h-5 w-5 shrink-0" />
-                  {locale === 'id' ? 'Identitas Diri' : 'Personal Identity'}
+                  {isId ? 'Identitas Diri' : 'Personal Identity'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   {[
-                    { label: locale === 'id' ? 'Nama Lengkap' : 'Full Name', value: student.fullName },
-                    { label: locale === 'id' ? 'Nama Panggilan' : 'Nickname', value: student.nickname || '-' },
-                    { label: 'NIS / NISN', value: `${student.nis || '-'} / ${student.nisn}` },
+                    { label: isId ? 'Nama Lengkap' : 'Full Name', value: student.fullName },
+                    { label: isId ? 'Nama Panggilan' : 'Nickname', value: student.nickname || '-' },
+                    { label: 'NIS / NISN', value: `${formattedNis} / ${student.nisn}` },
                     { label: 'NIK', value: student.nik },
-                    { label: locale === 'id' ? 'No. Kartu Keluarga' : 'Family Card No.', value: student.noKk || '-' },
+                    { label: isId ? 'No. Kartu Keluarga' : 'Family Card No.', value: student.noKk || '-' },
                     {
-                      label: locale === 'id' ? 'Tempat, Tgl Lahir' : 'Place, Date of Birth',
-                      value: `${student.birthPlace}, ${formatDate(student.birthDate)}`,
+                      label: isId ? 'Tempat, Tgl Lahir' : 'Place, Date of Birth',
+                      value: `${student.birthPlace || '-'}, ${formatDate(student.birthDate)}`,
                     },
                     {
-                      label: locale === 'id' ? 'Jenis Kelamin' : 'Gender',
+                      label: isId ? 'Jenis Kelamin' : 'Gender',
                       value:
                         student.gender === 'L'
-                          ? locale === 'id'
-                            ? 'Laki-laki'
-                            : 'Male'
-                          : locale === 'id'
-                            ? 'Perempuan'
-                            : 'Female',
+                          ? isId ? 'Laki-laki' : 'Male'
+                          : isId ? 'Perempuan' : 'Female',
                     },
-                    { label: locale === 'id' ? 'Agama' : 'Religion', value: student.religion || '-', capitalize: true },
+                    { label: isId ? 'Agama' : 'Religion', value: student.religion || '-', capitalize: true },
                   ].map((item, idx) => (
                     <div key={idx} className="grid grid-cols-3 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium">{item.label}</dt>
@@ -303,21 +345,21 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-lg flex items-center text-primary">
                   <MapPin className="mr-2 h-5 w-5 shrink-0" />
-                  {locale === 'id' ? 'Alamat & Kontak' : 'Address & Contact'}
+                  {isId ? 'Alamat & Kontak' : 'Address & Contact'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   {[
-                    { label: locale === 'id' ? 'Alamat Jalan' : 'Street Address', value: student.address },
+                    { label: isId ? 'Alamat Jalan' : 'Street Address', value: student.address || '-' },
                     { label: 'RT / RW / Dusun', value: `${student.rt || '-'} / ${student.rw || '-'} / ${student.dusun || '-'}` },
-                    { label: locale === 'id' ? 'Kelurahan' : 'Village', value: student.kelurahan || '-' },
-                    { label: locale === 'id' ? 'Kecamatan' : 'District', value: student.kecamatan || '-' },
-                    { label: locale === 'id' ? 'Kabupaten/Kota' : 'City', value: student.city },
-                    { label: locale === 'id' ? 'Provinsi' : 'Province', value: student.province },
-                    { label: locale === 'id' ? 'Kode Pos' : 'Postal Code', value: student.postalCode || '-' },
-                    { label: locale === 'id' ? 'Telepon Rumah' : 'Home Phone', value: student.telepon || '-' },
-                    { label: locale === 'id' ? 'No. HP' : 'Mobile Phone', value: student.phone || '-' },
+                    { label: isId ? 'Kelurahan' : 'Village', value: student.kelurahan || '-' },
+                    { label: isId ? 'Kecamatan' : 'District', value: student.kecamatan || '-' },
+                    { label: isId ? 'Kabupaten/Kota' : 'City', value: student.city || '-' },
+                    { label: isId ? 'Provinsi' : 'Province', value: student.province || '-' },
+                    { label: isId ? 'Kode Pos' : 'Postal Code', value: student.postalCode || '-' },
+                    { label: isId ? 'Telepon Rumah' : 'Home Phone', value: student.telepon || '-' },
+                    { label: isId ? 'No. HP' : 'Mobile Phone', value: student.phone || '-' },
                     { label: 'Email', value: student.email || '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="grid grid-cols-3 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
@@ -337,7 +379,7 @@ export function StudentDetailPage() {
             <CardHeader className="bg-muted/20 border-b border-border pb-4">
               <CardTitle className="text-lg flex items-center text-primary">
                 <GraduationCap className="mr-2 h-5 w-5 shrink-0" />
-                {locale === 'id' ? 'Informasi Akademik' : 'Academic Information'}
+                {isId ? 'Informasi Akademik' : 'Academic Information'}
               </CardTitle>
             </CardHeader>
             <CardContent className="p-0">
@@ -350,14 +392,17 @@ export function StudentDetailPage() {
                 </div>
                 {[
                   {
-                    label: locale === 'id' ? 'Kelas Saat Ini' : 'Current Class',
+                    label: isId ? 'Kelas Saat Ini' : 'Current Class',
                     value:
-                      student.gradeLevel > 0
-                        ? `${student.className} (${locale === 'id' ? 'Tingkat' : 'Grade'} ${student.gradeLevel})`
-                        : student.className,
+                      (student.gradeLevel ?? 0) > 0
+                        ? `${student.className || '-'} (${isId ? 'Tingkat' : 'Grade'} ${student.gradeLevel})`
+                        : student.className || '-',
                   },
-                  { label: locale === 'id' ? 'Tanggal Masuk' : 'Entry Date', value: formatDate(student.entryDate) },
-                  { label: locale === 'id' ? 'Sekolah Asal' : 'Previous School', value: student.sekolahAsal || '-' },
+                  {
+                    label: isId ? 'Tanggal Masuk' : 'Entry Date',
+                    value: student.entryDate ? formatDate(student.entryDate) : '-',
+                  },
+                  { label: isId ? 'Sekolah Asal' : 'Previous School', value: student.sekolahAsal || '-' },
                 ].map((item, idx) => (
                   <div key={idx} className="grid grid-cols-3 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
                     <dt className="text-muted-foreground font-medium">{item.label}</dt>
@@ -371,57 +416,76 @@ export function StudentDetailPage() {
 
         {/* TAB 3: ORANG TUA */}
         <TabsContent value="orangtua" className="m-0">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {(['AYAH', 'IBU', 'WALI'] as const).map((relation) => {
-              const parent = parentsList.find((p) => p.relation === relation);
-              if (relation === 'WALI' && !parent) return null;
+          {parentsList.length === 0 ? (
+            <div className="p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
+              {isId
+                ? 'Data orang tua/wali belum dilengkapi.'
+                : 'Parent/guardian data has not been provided yet.'}
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {(['AYAH', 'IBU', 'WALI'] as const).map((relation) => {
+                const parent = parentsList.find((p) => p.relation === relation);
+                if (relation === 'WALI' && !parent) return null;
 
-              const isFather = relation === 'AYAH';
-              const titleID = relation === 'AYAH' ? 'Data Ayah' : relation === 'IBU' ? 'Data Ibu' : 'Data Wali';
-              const titleEN = relation === 'AYAH' ? 'Father Data' : relation === 'IBU' ? 'Mother Data' : 'Guardian Data';
+                const isFather = relation === 'AYAH';
+                const titleID = relation === 'AYAH' ? 'Data Ayah' : relation === 'IBU' ? 'Data Ibu' : 'Data Wali';
+                const titleEN = relation === 'AYAH' ? 'Father Data' : relation === 'IBU' ? 'Mother Data' : 'Guardian Data';
 
-              return (
-                <Card key={relation} className="shadow-sm border-border">
-                  <CardHeader className="bg-muted/20 border-b border-border pb-4">
-                    <CardTitle className="text-lg flex items-center text-primary">
-                      <Briefcase
-                        className={`mr-2 h-5 w-5 shrink-0 ${isFather ? 'text-blue-500' : relation === 'IBU' ? 'text-pink-500' : 'text-amber-500'
-                          }`}
-                      />
-                      {locale === 'id' ? titleID : titleEN}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    <dl className="divide-y divide-border">
-                      {[
-                        { label: locale === 'id' ? 'Nama Lengkap' : 'Full Name', value: parent?.fullName || '-' },
-                        { label: locale === 'id' ? 'Tahun Lahir' : 'Birth Year', value: parent?.birthYear || '-' },
-                        { label: 'NIK', value: parent?.nik || '-' },
-                        { label: locale === 'id' ? 'Pendidikan' : 'Education', value: parent?.education || '-' },
-                        { label: locale === 'id' ? 'Pekerjaan' : 'Occupation', value: parent?.occupation || '-' },
-                        { label: locale === 'id' ? 'No. Handphone' : 'Phone', value: parent?.phone || '-' },
-                        { label: 'Email', value: parent?.email || '-' },
-                        { label: locale === 'id' ? 'Penghasilan' : 'Income', value: formatCurrency(parent?.monthlyIncome) },
-                      ].map((item, idx) => (
-                        <div key={idx} className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                          <dt className="text-muted-foreground font-medium shrink-0 mr-4">{item.label}</dt>
-                          <dd className="text-foreground font-medium text-right wrap-break-word">{item.value}</dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </CardContent>
-                </Card>
-              );
-            })}
+                const aliveLabel = !parent
+                  ? '-'
+                  : parent.isAlive
+                    ? isId ? 'Masih Hidup' : 'Alive'
+                    : isId
+                      ? relation === 'IBU' ? 'Almarhumah' : 'Almarhum'
+                      : 'Deceased';
 
-            {parentsList.length === 0 && (
-              <div className="col-span-full p-8 text-center text-muted-foreground bg-muted/20 rounded-lg border border-dashed">
-                {locale === 'id'
-                  ? 'Data orang tua/wali belum dilengkapi.'
-                  : 'Parent/guardian data has not been provided yet.'}
-              </div>
-            )}
-          </div>
+                return (
+                  <Card key={relation} className="shadow-sm border-border">
+                    <CardHeader className="bg-muted/20 border-b border-border pb-4">
+                      <CardTitle className="text-lg flex items-center justify-between text-primary">
+                        <span className="flex items-center">
+                          <Briefcase
+                            className={`mr-2 h-5 w-5 shrink-0 ${isFather ? 'text-blue-500' : relation === 'IBU' ? 'text-pink-500' : 'text-amber-500'
+                              }`}
+                          />
+                          {isId ? titleID : titleEN}
+                        </span>
+                        {parent && !parent.isAlive && (
+                          <Badge variant="secondary" className="text-xs">
+                            {aliveLabel}
+                          </Badge>
+                        )}
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <dl className="divide-y divide-border">
+                        {[
+                          { label: isId ? 'Nama Lengkap' : 'Full Name', value: parent?.fullName || '-' },
+                          { label: isId ? 'Status' : 'Status', value: aliveLabel },
+                          { label: isId ? 'Tahun Lahir' : 'Birth Year', value: parent?.birthYear || '-' },
+                          { label: 'NIK', value: parent?.nik || '-' },
+                          { label: isId ? 'Pendidikan' : 'Education', value: parent?.education || '-' },
+                          { label: isId ? 'Pekerjaan' : 'Occupation', value: parent?.occupation || '-' },
+                          { label: isId ? 'No. Handphone' : 'Phone', value: parent?.phone || '-' },
+                          { label: 'Email', value: parent?.email || '-' },
+                          { label: isId ? 'Penghasilan' : 'Income', value: formatCurrency(parent?.monthlyIncome) },
+                          ...(parent?.address
+                            ? [{ label: isId ? 'Alamat' : 'Address', value: parent.address }]
+                            : []),
+                        ].map((item, idx) => (
+                          <div key={idx} className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
+                            <dt className="text-muted-foreground font-medium shrink-0 mr-4">{item.label}</dt>
+                            <dd className="text-foreground font-medium text-right wrap-break-word">{item.value}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </TabsContent>
 
         {/* TAB 4: KESEJAHTERAAN */}
@@ -431,34 +495,34 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-lg flex items-center text-primary">
                   <Wallet className="mr-2 h-5 w-5 shrink-0 text-blue-500" />
-                  {locale === 'id' ? 'Program Indonesia Pintar (PIP/KIP)' : 'Smart Indonesia Program (PIP/KIP)'}
+                  {isId ? 'Program Indonesia Pintar (PIP/KIP)' : 'Smart Indonesia Program (PIP/KIP)'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   <div className="grid grid-cols-2 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima KIP' : 'Has KIP'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Penerima KIP' : 'Has KIP'}</dt>
                     <dd className="text-foreground font-bold">{formatBool(ecoData?.hasKip)}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Nomor KIP' : 'KIP Number'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Nomor KIP' : 'KIP Number'}</dt>
                     <dd className="text-foreground font-medium wrap-break-word">{ecoData?.kipNumber || '-'}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Nama di KIP' : 'Name on KIP'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Nama di KIP' : 'Name on KIP'}</dt>
                     <dd className="text-foreground font-medium wrap-break-word">{ecoData?.namaKip || '-'}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Usulan Layak PIP' : 'Eligible for PIP'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Usulan Layak PIP' : 'Eligible for PIP'}</dt>
                     <dd className="text-foreground font-bold">{formatBool(ecoData?.layakPip)}</dd>
                   </div>
                   <div className="grid grid-cols-2 px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Desil DTKS / P3KE' : 'DTKS / P3KE Decile'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Desil DTKS / P3KE' : 'DTKS / P3KE Decile'}</dt>
                     <dd className="text-foreground font-medium">
                       {ecoData?.desil ? (
                         ecoData.desil <= 4 ? (
                           <Badge className="bg-emerald-600 text-white hover:bg-emerald-700">
-                            Desil {ecoData.desil} ({locale === 'id' ? 'Prioritas PIP' : 'PIP Priority'})
+                            Desil {ecoData.desil} ({isId ? 'Prioritas PIP' : 'PIP Priority'})
                           </Badge>
                         ) : (
                           <Badge variant="outline">Desil {ecoData.desil}</Badge>
@@ -469,7 +533,7 @@ export function StudentDetailPage() {
                     </dd>
                   </div>
                   <div className="flex flex-col px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium mb-1">{locale === 'id' ? 'Alasan Layak PIP' : 'Reason for PIP'}</dt>
+                    <dt className="text-muted-foreground font-medium mb-1">{isId ? 'Alasan Layak PIP' : 'Reason for PIP'}</dt>
                     <dd className="text-foreground font-medium">{ecoData?.alasanLayakPip || '-'}</dd>
                   </div>
                 </dl>
@@ -480,31 +544,55 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-lg flex items-center text-primary">
                   <HeartPulse className="mr-2 h-5 w-5 shrink-0 text-indigo-500" />
-                  {locale === 'id' ? 'Bantuan Sosial Lainnya' : 'Other Social Assistance'}
+                  {isId ? 'Bantuan Sosial & Kondisi Keluarga' : 'Social Assistance & Family'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima PKH' : 'Has PKH'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Penerima PKH' : 'Has PKH'}</dt>
                     <dd className="text-foreground font-bold">
-                      {ecoData?.hasPkh ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
-                    </dd>
-                  </div>
-                  <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Penerima KKS / KPS' : 'Has KKS / KPS'}</dt>
-                    <dd className="text-foreground font-bold">
-                      {ecoData?.hasKks ? (
-                        <Badge variant="default">{ecoData.kksNumber || (locale === 'id' ? 'Ya' : 'Yes')}</Badge>
+                      {ecoData?.hasPkh ? (
+                        <Badge variant="default">{isId ? 'Ya' : 'Yes'}</Badge>
                       ) : (
-                        '-'
+                        formatBool(ecoData?.hasPkh)
                       )}
                     </dd>
                   </div>
                   <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
-                    <dt className="text-muted-foreground font-medium">{locale === 'id' ? 'Terdaftar DTKS' : 'Registered in DTKS'}</dt>
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Penerima KKS / KPS' : 'Has KKS / KPS'}</dt>
                     <dd className="text-foreground font-bold">
-                      {ecoData?.isDtks ? <Badge variant="default">{locale === 'id' ? 'Ya' : 'Yes'}</Badge> : '-'}
+                      {ecoData?.hasKks ? (
+                        <Badge variant="default">{ecoData.kksNumber || (isId ? 'Ya' : 'Yes')}</Badge>
+                      ) : (
+                        formatBool(ecoData?.hasKks)
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Terdaftar DTKS' : 'Registered in DTKS'}</dt>
+                    <dd className="text-foreground font-bold">
+                      {ecoData?.isDtks ? (
+                        <Badge variant="default">{isId ? 'Ya' : 'Yes'}</Badge>
+                      ) : (
+                        formatBool(ecoData?.isDtks)
+                      )}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Status Yatim/Piatu' : 'Orphan Status'}</dt>
+                    <dd className="text-foreground font-medium">{getOrphanLabel()}</dd>
+                  </div>
+                  <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Kepemilikan Rumah' : 'House Ownership'}</dt>
+                    <dd className="text-foreground font-medium wrap-break-word">{ecoData?.houseOwnership || '-'}</dd>
+                  </div>
+                  <div className="flex justify-between px-4 sm:px-6 py-4 text-sm hover:bg-muted/10 transition-colors">
+                    <dt className="text-muted-foreground font-medium">{isId ? 'Jumlah Tanggungan' : 'Dependents'}</dt>
+                    <dd className="text-foreground font-medium">
+                      {ecoData?.dependentsCount !== null && ecoData?.dependentsCount !== undefined
+                        ? `${ecoData.dependentsCount} ${isId ? 'orang' : 'person(s)'}`
+                        : '-'}
                     </dd>
                   </div>
                 </dl>
@@ -520,16 +608,16 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-base flex items-center text-primary">
                   <HeartPulse className="mr-2 h-4 w-4 shrink-0" />
-                  {locale === 'id' ? 'Kesehatan & Fisik' : 'Physical Health'}
+                  {isId ? 'Kesehatan & Fisik' : 'Physical Health'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   {[
-                    { label: locale === 'id' ? 'Berat Badan' : 'Weight', value: student.beratBadan ? `${student.beratBadan} kg` : '-' },
-                    { label: locale === 'id' ? 'Tinggi Badan' : 'Height', value: student.tinggiBadan ? `${student.tinggiBadan} cm` : '-' },
-                    { label: locale === 'id' ? 'Lingkar Kepala' : 'Head Circum.', value: student.lingkarKepala ? `${student.lingkarKepala} cm` : '-' },
-                    { label: locale === 'id' ? 'Kebutuhan Khusus' : 'Special Needs', value: student.kebutuhanKhusus || '-' },
+                    { label: isId ? 'Berat Badan' : 'Weight', value: student.beratBadan ? `${student.beratBadan} kg` : '-' },
+                    { label: isId ? 'Tinggi Badan' : 'Height', value: student.tinggiBadan ? `${student.tinggiBadan} cm` : '-' },
+                    { label: isId ? 'Lingkar Kepala' : 'Head Circum.', value: student.lingkarKepala ? `${student.lingkarKepala} cm` : '-' },
+                    { label: isId ? 'Kebutuhan Khusus' : 'Special Needs', value: student.kebutuhanKhusus || '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="flex justify-between px-4 py-4 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium shrink-0 mr-4">{item.label}</dt>
@@ -544,19 +632,19 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-base flex items-center text-primary">
                   <Home className="mr-2 h-4 w-4 shrink-0" />
-                  {locale === 'id' ? 'Tempat Tinggal' : 'Residence'}
+                  {isId ? 'Tempat Tinggal' : 'Residence'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   {[
-                    { label: locale === 'id' ? 'Anak Ke' : 'Birth Order', value: student.anakKe || '-' },
-                    { label: locale === 'id' ? 'Jml. Saudara' : 'Siblings', value: student.jmlSaudara ?? '-' },
-                    { label: locale === 'id' ? 'Jarak Sekolah' : 'Distance', value: student.jarakSekolah !== null && student.jarakSekolah !== undefined ? `${student.jarakSekolah} km` : '-' },
-                    { label: locale === 'id' ? 'Transportasi' : 'Transport', value: student.alatTransportasi || '-' },
-                    { label: locale === 'id' ? 'Jenis Tinggal' : 'Residence Type', value: student.jenisTinggal || '-' },
+                    { label: isId ? 'Anak Ke' : 'Birth Order', value: student.anakKe || '-' },
+                    { label: isId ? 'Jml. Saudara' : 'Siblings', value: student.jmlSaudara ?? '-' },
+                    { label: isId ? 'Jarak Sekolah' : 'Distance', value: student.jarakSekolah !== null && student.jarakSekolah !== undefined ? `${student.jarakSekolah} km` : '-' },
+                    { label: isId ? 'Transportasi' : 'Transport', value: student.alatTransportasi || '-' },
+                    { label: isId ? 'Jenis Tinggal' : 'Residence Type', value: student.jenisTinggal || '-' },
                     {
-                      label: locale === 'id' ? 'Koordinat (Lat, Long)' : 'Coordinates',
+                      label: isId ? 'Koordinat (Lat, Long)' : 'Coordinates',
                       value: student.lintang || student.bujur ? `${student.lintang || '-'}, ${student.bujur || '-'}` : '-',
                     },
                   ].map((item, idx) => (
@@ -573,19 +661,19 @@ export function StudentDetailPage() {
               <CardHeader className="bg-muted/20 border-b border-border pb-4">
                 <CardTitle className="text-base flex items-center text-primary">
                   <CreditCard className="mr-2 h-4 w-4 shrink-0" />
-                  {locale === 'id' ? 'Registrasi & Dokumen' : 'Registration & Docs'}
+                  {isId ? 'Registrasi & Dokumen' : 'Registration & Docs'}
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-0">
                 <dl className="divide-y divide-border">
                   {[
-                    { label: locale === 'id' ? 'No. Akta Lahir' : 'Birth Cert No.', value: student.noAktaLahir || '-' },
+                    { label: isId ? 'No. Akta Lahir' : 'Birth Cert No.', value: student.noAktaLahir || '-' },
                     { label: 'SKHUN', value: student.skhun || '-' },
-                    { label: locale === 'id' ? 'No. Ijazah' : 'Certificate No.', value: student.noIjazah || '-' },
-                    { label: locale === 'id' ? 'No. Peserta UN' : 'UN No.', value: student.noPesertaUn || '-' },
+                    { label: isId ? 'No. Ijazah' : 'Certificate No.', value: student.noIjazah || '-' },
+                    { label: isId ? 'No. Peserta UN' : 'UN No.', value: student.noPesertaUn || '-' },
                     { label: 'Bank', value: student.bank || '-' },
-                    { label: locale === 'id' ? 'No. Rekening' : 'Account No.', value: student.noRekening || '-' },
-                    { label: locale === 'id' ? 'Atas Nama' : 'Account Name', value: student.namaRekening || '-' },
+                    { label: isId ? 'No. Rekening' : 'Account No.', value: student.noRekening || '-' },
+                    { label: isId ? 'Atas Nama' : 'Account Name', value: student.namaRekening || '-' },
                   ].map((item, idx) => (
                     <div key={idx} className="flex flex-col px-4 py-3 text-sm hover:bg-muted/10 transition-colors">
                       <dt className="text-muted-foreground font-medium mb-1">{item.label}</dt>
@@ -602,7 +690,7 @@ export function StudentDetailPage() {
         <TabsContent value="dokumen" className="m-0">
           <Card className="shadow-sm border-border">
             <CardContent className="p-12 text-center text-muted-foreground bg-muted/10 rounded-lg border border-dashed mt-6">
-              {locale === 'id'
+              {isId
                 ? 'Modul arsip & unggah dokumen digital (Ijazah, KK, Akta Kelahiran) sedang dalam tahap pengembangan.'
                 : 'Digital document upload module (Certificates, Family Card, Birth Certificate) is under development.'}
             </CardContent>

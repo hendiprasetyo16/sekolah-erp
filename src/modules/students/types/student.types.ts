@@ -5,8 +5,7 @@ import type {
 } from '@/types/common.types';
 
 /**
- * Status keaktifan siswa di sekolah.
- * Sesuai dengan nilai default 'AKTIF' pada tabel `public.students`.
+ * Status keaktifan siswa di sekolah (`public.students.status`).
  */
 export type StudentStatus =
   | 'AKTIF'
@@ -16,8 +15,29 @@ export type StudentStatus =
   | 'CUTI';
 
 /**
+ * Hubungan keluarga pada tabel `public.student_parents.relation`.
+ */
+export type ParentRelation = 'AYAH' | 'IBU' | 'WALI';
+
+/**
+ * Status yatim/piatu pada tabel `public.student_economics.orphanType`.
+ */
+export type OrphanType = 'YATIM' | 'PIATU' | 'YATIM_PIATU' | 'BUKAN';
+
+/**
+ * Kolom yang diizinkan untuk pengurutan pada `studentService.list`.
+ */
+export type StudentSortField =
+  | 'fullName'
+  | 'nisn'
+  | 'nis'
+  | 'status'
+  | 'entryDate'
+  | 'className'
+  | 'createdAt';
+
+/**
  * 1. DATA RINGKAS UNTUK TABEL & EXPORT EXCEL
- * Digunakan pada halaman daftar siswa agar ringan saat memuat ratusan baris data.
  */
 export interface StudentListItem {
   id: string;
@@ -27,8 +47,7 @@ export interface StudentListItem {
   fullName: string;
   gender: Gender;
 
-  // Catatan: `className` & `gradeLevel` bukan kolom di tabel `students`,
-  // melainkan diambil dari relasi tabel `classes` saat query Supabase.
+  // Hasil join dari tabel `classes`
   className: string;
   classId: string | null;
   gradeLevel: number;
@@ -36,18 +55,19 @@ export interface StudentListItem {
   status: StudentStatus;
   photoUrl?: string | null;
   phone?: string | null;
-  entryDate: string;
+  entryDate: string | null;
 
-  // Data tambahan untuk kebutuhan tabel & export Excel
   birthPlace: string;
   birthDate: string;
   religion?: string | null;
   address: string;
+
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /**
- * 2. DATA DETAIL LENGKAP SISWA (STANDAR DAPODIK)
- * Digunakan pada halaman profil detail siswa dan saat mengisi form edit.
+ * 2. DATA DETAIL LENGKAP SISWA (STANDAR DAPODIK - `public.students`)
  */
 export interface StudentDetail extends StudentListItem {
   schoolId: string;
@@ -72,7 +92,7 @@ export interface StudentDetail extends StudentListItem {
   noIjazah?: string | null;
   noAktaLahir?: string | null;
 
-  // Data Periodik, Fisik & Tempat Tinggal (Sesuai kolom SQL `public.students`)
+  // Data Periodik, Fisik & Tempat Tinggal
   anakKe?: number | null;
   jmlSaudara?: number | null;
   lintang?: string | null;
@@ -86,7 +106,7 @@ export interface StudentDetail extends StudentListItem {
   kebutuhanKhusus?: string | null;
   sekolahAsal?: string | null;
 
-  // Data Rekening Bank (Untuk pencairan PIP / Beasiswa)
+  // Data Rekening Bank (Pencairan PIP / Beasiswa)
   bank?: string | null;
   noRekening?: string | null;
   namaRekening?: string | null;
@@ -101,7 +121,9 @@ export interface StudentDetail extends StudentListItem {
  */
 export interface StudentParent {
   id: string;
-  relation: 'AYAH' | 'IBU' | 'WALI';
+  schoolId?: string;
+  studentId?: string;
+  relation: ParentRelation;
   fullName: string;
   birthYear?: string | null;
   nik?: string | null;
@@ -112,6 +134,8 @@ export interface StudentParent {
   monthlyIncome?: string | null;
   isAlive: boolean;
   address?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /**
@@ -119,6 +143,7 @@ export interface StudentParent {
  */
 export interface StudentEconomic {
   id?: string;
+  schoolId?: string;
   studentId?: string;
 
   // Kartu Bantuan & Kelayakan PIP
@@ -138,26 +163,30 @@ export interface StudentEconomic {
   houseCondition?: string | null;
   dependentsCount?: number | null;
   isOrphan: boolean;
-  orphanType?: 'YATIM' | 'PIATU' | 'YATIM_PIATU' | 'BUKAN' | null;
+  orphanType?: OrphanType | null;
 
   // Hasil Skoring Otomatis & Desil DTSEN/DTKS
   pipScore?: number | null;
   economicCategory?: EconomicCategory | null;
   desil?: number | null;
-  scoringDetails?: Record<string, unknown> | null; // Tipe JSONB di Supabase
+  scoringDetails?: Record<string, unknown> | null;
   scoredAt?: string | null;
+
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 /**
  * 5. PAYLOAD UNTUK SIMPAN & UPDATE DATA
- * `schoolId` pada relasi orang tua dan ekonomi diisi otomatis oleh service/RPC,
- * sehingga tidak perlu dikirim dari komponen form.
  */
-export type CreateStudentParentPayload = Omit<StudentParent, 'id'>;
+export type CreateStudentParentPayload = Omit<
+  StudentParent,
+  'id' | 'schoolId' | 'studentId' | 'createdAt' | 'updatedAt'
+>;
 
 export type CreateStudentEconomicPayload = Omit<
   StudentEconomic,
-  'id' | 'studentId'
+  'id' | 'schoolId' | 'studentId' | 'createdAt' | 'updatedAt'
 >;
 
 export interface CreateStudentPayload {
@@ -174,6 +203,7 @@ export interface CreateStudentPayload {
   birthDate: string;
   birthPlace: string;
   religion?: string | null;
+  photoUrl?: string | null;
 
   address: string;
   dusun?: string | null;
@@ -190,7 +220,7 @@ export interface CreateStudentPayload {
   email?: string | null;
 
   classId?: string | null;
-  entryDate: string;
+  entryDate?: string | null;
   status?: StudentStatus;
 
   skhun?: string | null;
@@ -220,21 +250,25 @@ export interface CreateStudentPayload {
 }
 
 /**
- * Saat memperbarui data siswa, `schoolId` dilarang diubah demi menjaga keamanan multi-tenant.
+ * Saat memperbarui data siswa, `schoolId` dilarang diubah demi keamanan multi-tenant.
  */
 export type UpdateStudentPayload = Partial<
   Omit<CreateStudentPayload, 'schoolId'>
 >;
 
 /**
- * 6. DATA UNTUK FITUR IMPORT MASSAL EXCEL DAPODIK
- * Mendukung fungsi RPC `bulk_import_students` di Supabase.
+ * 6. DATA & HASIL UNTUK FITUR IMPORT MASSAL EXCEL DAPODIK
  */
 export interface StudentBulkImportItem extends CreateStudentPayload {
   id?: string;
   rawClassName?: string;
   diffAction?: 'new' | 'updated';
   diffFields?: string[];
+}
+
+export interface StudentBulkImportResult {
+  inserted: number;
+  updated: number;
 }
 
 /**
