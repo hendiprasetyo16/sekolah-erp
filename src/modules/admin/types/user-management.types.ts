@@ -53,9 +53,19 @@ export interface ResetPasswordFormValues {
     newPassword: string;
 }
 
+export interface EdgeFunctionFailureItem {
+    email?: string | null;
+    reason?: string;
+    error?: string;
+}
+
 export interface EdgeFunctionBody {
+    success?: boolean;
     error?: string;
     message?: string;
+    deleted?: number;
+    remaining?: number;
+    failed?: EdgeFunctionFailureItem[];
 }
 
 export interface InvokeResult {
@@ -64,10 +74,16 @@ export interface InvokeResult {
 }
 
 export interface BulkGenerateResponse {
+    success?: boolean;
     error?: string;
     message?: string;
+    created?: number;
+    linked?: number;
+    skipped?: number;
+    invalidEmailCount?: number;
     failed?: number;
     remaining?: number;
+    failures?: Array<{ email: string; reason: string }>;
 }
 
 export interface BatchExecutionSummary {
@@ -83,7 +99,6 @@ export interface BatchExecutionSummary {
 // ==========================================
 
 export const ITEMS_PER_PAGE = 10;
-export const DEFAULT_PASSWORD = 'Password123!';
 export const BULK_CONCURRENCY = 5;
 
 export const ROLE_VALUES = [

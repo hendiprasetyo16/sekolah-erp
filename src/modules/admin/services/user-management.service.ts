@@ -1,7 +1,6 @@
 import { supabase } from '@/services/supabase.client';
 import {
     BULK_CONCURRENCY,
-    DEFAULT_PASSWORD,
     type AppUser,
     type BatchExecutionSummary,
     type BulkGenerateResponse,
@@ -369,6 +368,7 @@ export const userManagementService = {
 
     /**
      * Melakukan generate/reset akun untuk pengguna yang dicentang di tabel.
+     * Kata sandi awal diambil langsung dari secret server (`useDefaultPassword: true`).
      */
     async generateSelectedUsers(params: {
         usersTarget: AppUser[];
@@ -377,7 +377,7 @@ export const userManagementService = {
     }): Promise<BatchExecutionSummary> {
         const { usersTarget, activeSchoolId, currentUserId } = params;
 
-        // Lindungi akun SUPER_ADMIN & akun diri sendiri agar tidak tertimpa password default
+        // Lindungi akun SUPER_ADMIN & akun diri sendiri agar tidak tertimpa password awal
         const eligibleUsers = usersTarget.filter(
             (u) => u.role !== 'SUPER_ADMIN' && u.id !== currentUserId
         );
@@ -392,7 +392,7 @@ export const userManagementService = {
         const results = await runWithConcurrency(eligibleUsers, BULK_CONCURRENCY, (user) =>
             invokeSafe('create-user', {
                 email: user.email,
-                password: DEFAULT_PASSWORD,
+                useDefaultPassword: true,
                 fullName: user.fullName,
                 role: user.role,
                 schoolId: user.schoolId ?? activeSchoolId,

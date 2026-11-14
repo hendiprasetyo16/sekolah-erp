@@ -40,7 +40,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 
 import {
-    DEFAULT_PASSWORD,
     ITEMS_PER_PAGE,
     MANAGEMENT_ROLES,
     STAFF_ROLES,
@@ -255,7 +254,10 @@ export function UserManagementPage() {
             }),
         onSuccess: (summary) => {
             toast.success(tUM('toastGenSelSuccess', { count: summary.success }), {
-                description: `Password: ${DEFAULT_PASSWORD}`,
+                description:
+                    lang === 'id'
+                        ? 'Kata sandi diatur ulang ke sandi awal sistem (wajib diganti saat login).'
+                        : 'Password reset to system initial password (must be changed on login).',
             });
             if (summary.failed > 0) {
                 toast.warning(`${summary.failed} akun gagal diproses.`, {
@@ -278,12 +280,14 @@ export function UserManagementPage() {
             });
             const failedCount = data.failed ?? 0;
             const remainingCount = data.remaining ?? 0;
+            const firstFailureReason = data.failures?.[0]?.reason;
 
             if (failedCount > 0) {
                 toast.warning(
                     lang === 'id'
                         ? `${failedCount} akun gagal diproses.`
-                        : `${failedCount} accounts failed to process.`
+                        : `${failedCount} accounts failed to process.`,
+                    firstFailureReason ? { description: firstFailureReason } : undefined
                 );
             }
             if (remainingCount > 0) {
@@ -294,8 +298,8 @@ export function UserManagementPage() {
                     {
                         description:
                             lang === 'id'
-                                ? 'Klik Generate Data lagi untuk melanjutkan.'
-                                : 'Click Generate Data again to continue.',
+                                ? 'Klik Generate Semua lagi untuk melanjutkan.'
+                                : 'Click Generate All again to continue.',
                     }
                 );
             } else {
@@ -336,7 +340,23 @@ export function UserManagementPage() {
             userManagementService.deleteUsersByRoleGroup(targetGroup, activeSchoolId),
         onSuccess: (data) => {
             toast.success(tGlobal('info'), { description: data?.message || 'Done!' });
-            setIsDeleteAllModalOpen(false);
+            const remainingCount = data?.remaining ?? 0;
+
+            if (remainingCount > 0) {
+                toast.info(
+                    lang === 'id'
+                        ? `Tersisa ${remainingCount} akun untuk dihapus.`
+                        : `${remainingCount} accounts remaining to delete.`,
+                    {
+                        description:
+                            lang === 'id'
+                                ? 'Klik Hapus Semua lagi untuk melanjutkan.'
+                                : 'Click Delete All again to continue.',
+                    }
+                );
+            } else {
+                setIsDeleteAllModalOpen(false);
+            }
             setSelectedUserIds([]);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
         },
@@ -800,7 +820,7 @@ export function UserManagementPage() {
 
                                     <DropdownMenuContent align="end" className="w-56">
                                         <DropdownMenuItem
-                                            className="cursor-pointer"
+                                            className="cursor-pointer font-medium text-blue-600 focus:bg-blue-50 focus:text-blue-700 dark:text-blue-400 dark:focus:bg-blue-500/10"
                                             onClick={() => setIsGenerateAllModalOpen(true)}
                                         >
                                             <DatabaseZap className="mr-2 h-4 w-4 shrink-0" />

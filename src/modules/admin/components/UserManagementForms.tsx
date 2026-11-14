@@ -605,11 +605,6 @@ export function ConfirmUserActionModal({
     onClose,
     onConfirm,
 }: ConfirmUserActionModalProps) {
-    const isDanger =
-        variant === 'delete-single' ||
-        variant === 'delete-selected' ||
-        variant === 'delete-all';
-
     const renderIcon = () => {
         if (variant === 'generate-selected') {
             return (
@@ -620,8 +615,8 @@ export function ConfirmUserActionModal({
         }
         if (variant === 'generate-all') {
             return (
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-emerald-100 dark:bg-emerald-500/20">
-                    <DatabaseZap className="h-6 w-6 text-emerald-600 dark:text-emerald-400" />
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-500/20">
+                    <DatabaseZap className="h-6 w-6 text-blue-600 dark:text-blue-400" />
                 </div>
             );
         }
@@ -640,11 +635,9 @@ export function ConfirmUserActionModal({
     };
 
     const buttonClass =
-        variant === 'generate-selected'
+        variant === 'generate-selected' || variant === 'generate-all'
             ? 'bg-blue-600 text-white hover:bg-blue-700'
-            : variant === 'generate-all'
-                ? 'bg-emerald-600 text-white hover:bg-emerald-700'
-                : 'bg-red-600 text-white hover:bg-red-700';
+            : 'bg-red-600 text-white hover:bg-red-700';
 
     const ActionIcon =
         variant === 'generate-selected'
