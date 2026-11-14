@@ -200,12 +200,13 @@ const handleDbError = (error: unknown): Error => {
   const rowPrefix = rowPrefixMatch ? `${rowPrefixMatch[1]} ` : '';
 
   if (pgError?.code === '23505' || message.includes('unique constraint')) {
-    if (message.includes('nip_key')) {
-      message = `${rowPrefix}NIP tersebut sudah terdaftar pada guru lain di sekolah ini.`;
-    } else if (message.includes('nuptk_key')) {
+    const lowerMsg = message.toLowerCase();
+    if (lowerMsg.includes('nuptk')) {
       message = `${rowPrefix}NUPTK tersebut sudah terdaftar pada guru lain di sekolah ini.`;
-    } else if (message.includes('nik_key')) {
+    } else if (lowerMsg.includes('nik')) {
       message = `${rowPrefix}NIK tersebut sudah terdaftar pada guru lain di sekolah ini.`;
+    } else if (lowerMsg.includes('nip')) {
+      message = `${rowPrefix}NIP tersebut sudah terdaftar pada guru lain di sekolah ini.`;
     } else {
       message = `${rowPrefix}Data guru tersebut sudah terdaftar (Duplikat).`;
     }
@@ -253,7 +254,10 @@ export const teacherService = {
     }
 
     if (search && search.trim()) {
-      const safeSearch = search.trim().replace(/[,()\\]/g, '');
+      const safeSearch = search
+        .trim()
+        .replace(/[,()\\]/g, '')
+        .replace(/[%_]/g, '\\$&');
       if (safeSearch) {
         query = query.or(
           `fullName.ilike.%${safeSearch}%,nip.ilike.%${safeSearch}%,nuptk.ilike.%${safeSearch}%,nik.ilike.%${safeSearch}%,position.ilike.%${safeSearch}%`
@@ -372,7 +376,7 @@ export const teacherService = {
 
     const { data: existing, error: fetchError } = await supabase
       .from('teachers')
-      .select('id, schoolId')
+      .select('id, schoolId, userId, fullName')
       .eq('id', id)
       .single();
 
@@ -386,6 +390,23 @@ export const teacherService = {
         .eq('schoolId', existing.schoolId);
 
       if (updateError) throw handleDbError(updateError);
+
+      // Sinkronkan perubahan nama lengkap ke akun login (public.users) jika sudah tertaut
+      if (
+        existing.userId &&
+        typeof normalized.fullName === 'string' &&
+        normalized.fullName !== existing.fullName
+      ) {
+        try {
+          await supabase
+            .from('users')
+            .update({ fullName: normalized.fullName })
+            .eq('id', existing.userId)
+            .eq('schoolId', existing.schoolId);
+        } catch {
+          // Best-effort sync
+        }
+      }
     }
 
     return this.getById(id, existing.schoolId);

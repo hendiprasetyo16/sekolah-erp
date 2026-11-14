@@ -1,3 +1,4 @@
+// supabase/functions/delete-user/index.ts
 // @ts-nocheck
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
@@ -18,13 +19,21 @@ interface CallerRow {
   id: string
   schoolId: string | null
   role: string
+  additionalRoles?: string[] | null
   isActive: boolean
+}
+
+interface AuthorizedCaller {
+  caller: CallerRow
+  isSuperAdmin: boolean
+  isSchoolAdmin: boolean
 }
 
 interface TargetUserRow {
   id: string
   schoolId: string | null
   role: string
+  additionalRoles?: string[] | null
   email: string
 }
 
@@ -51,8 +60,8 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
 function isValidUuid(value: unknown): value is string {
   return (
     typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value.trim(),
     )
   )
 }
@@ -60,7 +69,7 @@ function isValidUuid(value: unknown): value is string {
 async function authorize(
   req: Request,
   supabaseAdmin: SupabaseClient,
-): Promise<CallerRow> {
+): Promise<AuthorizedCaller> {
   const header = req.headers.get('Authorization') || ''
   const tokenMatch = header.match(/^Bearer\s+(.+)$/i)
 
@@ -77,7 +86,7 @@ async function authorize(
 
   const { data: callerData, error } = await supabaseAdmin
     .from('users')
-    .select('id, "schoolId", role, "isActive"')
+    .select('id, "schoolId", role, "additionalRoles", "isActive"')
     .eq('id', authData.user.id)
     .maybeSingle()
 
@@ -91,19 +100,25 @@ async function authorize(
     throw new HttpError('Akun Anda tidak aktif atau profil tidak ditemukan.', 403)
   }
 
-  if (!['SUPER_ADMIN', 'ADMIN'].includes(caller.role)) {
+  const callerRoles = new Set<string>([
+    caller.role,
+    ...(Array.isArray(caller.additionalRoles) ? caller.additionalRoles : []),
+  ])
+
+  const isSuperAdmin =
+    callerRoles.has('SUPER_ADMIN') &&
+    caller.schoolId === null
+
+  const isSchoolAdmin =
+    callerRoles.has('ADMIN') &&
+    typeof caller.schoolId === 'string' &&
+    caller.schoolId.trim().length > 0
+
+  if (!isSuperAdmin && !isSchoolAdmin) {
     throw new HttpError('Anda tidak memiliki izin menghapus akun.', 403)
   }
 
-  if (caller.role === 'SUPER_ADMIN' && caller.schoolId !== null) {
-    throw new HttpError('Konfigurasi akun SUPER_ADMIN tidak valid.', 403)
-  }
-
-  if (caller.role === 'ADMIN' && !caller.schoolId) {
-    throw new HttpError('Akun ADMIN belum terhubung ke sekolah.', 403)
-  }
-
-  return caller
+  return { caller, isSuperAdmin, isSchoolAdmin }
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -127,7 +142,7 @@ serve(async (req: Request): Promise<Response> => {
   })
 
   try {
-    const caller = await authorize(req, supabaseAdmin)
+    const { caller, isSuperAdmin, isSchoolAdmin } = await authorize(req, supabaseAdmin)
 
     let body: Record<string, unknown>
     try {
@@ -140,15 +155,21 @@ serve(async (req: Request): Promise<Response> => {
       throw new HttpError('Body JSON tidak valid.', 400)
     }
 
-    const { targetUserId, schoolId } = body
+    const rawTargetUserId =
+      typeof body.targetUserId === 'string' ? body.targetUserId.trim() : ''
+    const rawSchoolId =
+      typeof body.schoolId === 'string' ? body.schoolId.trim() : ''
 
-    if (!isValidUuid(targetUserId)) {
+    if (!isValidUuid(rawTargetUserId)) {
       throw new HttpError('ID pengguna tidak valid.', 400)
     }
 
-    if (schoolId !== undefined && schoolId !== null && !isValidUuid(schoolId)) {
+    if (rawSchoolId !== '' && !isValidUuid(rawSchoolId)) {
       throw new HttpError('School ID tidak valid.', 400)
     }
+
+    const targetUserId = rawTargetUserId
+    const schoolId = rawSchoolId || null
 
     if (targetUserId === caller.id) {
       throw new HttpError(
@@ -159,7 +180,7 @@ serve(async (req: Request): Promise<Response> => {
 
     const { data: targetData, error: targetError } = await supabaseAdmin
       .from('users')
-      .select('id, "schoolId", role, email')
+      .select('id, "schoolId", role, "additionalRoles", email')
       .eq('id', targetUserId)
       .maybeSingle()
 
@@ -170,25 +191,26 @@ serve(async (req: Request): Promise<Response> => {
     const target = targetData as TargetUserRow | null
 
     if (target) {
-      if (target.role === 'SUPER_ADMIN') {
+      const targetRoles = new Set<string>([
+        target.role,
+        ...(Array.isArray(target.additionalRoles) ? target.additionalRoles : []),
+      ])
+
+      if (targetRoles.has('SUPER_ADMIN')) {
         throw new HttpError(
           'Akun SUPER_ADMIN tidak dapat dihapus melalui fungsi ini.',
           403,
         )
       }
 
-      if (
-        typeof schoolId === 'string' &&
-        target.schoolId &&
-        target.schoolId !== schoolId
-      ) {
+      if (schoolId && target.schoolId && target.schoolId !== schoolId) {
         throw new HttpError(
           'Akun tujuan tidak berada pada satuan pendidikan yang sedang aktif.',
           403,
         )
       }
 
-      if (caller.role === 'ADMIN') {
+      if (isSchoolAdmin && !isSuperAdmin) {
         if (target.schoolId !== caller.schoolId) {
           throw new HttpError(
             'Anda hanya dapat menghapus akun dari sekolah sendiri.',
@@ -196,7 +218,7 @@ serve(async (req: Request): Promise<Response> => {
           )
         }
 
-        if (target.role === 'ADMIN') {
+        if (targetRoles.has('ADMIN')) {
           throw new HttpError(
             'ADMIN tidak diizinkan menghapus akun ADMIN lain.',
             403,
@@ -205,7 +227,44 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    // Hapus akun dari Supabase Auth; relasi ON DELETE CASCADE akan membersihkan profil & tautan
+    // 1. Lepas tautan di tabel master agar tidak terblokir Foreign Key
+    const { error: unlinkTeacherError } = await supabaseAdmin
+      .from('teachers')
+      .update({ userId: null })
+      .eq('userId', targetUserId)
+
+    if (unlinkTeacherError) {
+      console.error('Unlink teacher failed:', unlinkTeacherError.message)
+      throw new HttpError('Gagal melepas tautan akun pada data guru.', 500)
+    }
+
+    const { error: unlinkStudentError } = await supabaseAdmin
+      .from('user_student_links')
+      .delete()
+      .eq('userId', targetUserId)
+
+    if (unlinkStudentError) {
+      console.error('Unlink student/parent failed:', unlinkStudentError.message)
+      throw new HttpError('Gagal melepas tautan akun pada data siswa/wali.', 500)
+    }
+
+    // 2. Hapus profil di public.users terlebih dahulu
+    if (target) {
+      const { error: profileDeleteError } = await supabaseAdmin
+        .from('users')
+        .delete()
+        .eq('id', targetUserId)
+
+      if (profileDeleteError) {
+        console.error('Profile delete failed:', profileDeleteError.message)
+        throw new HttpError(
+          'Gagal menghapus profil pengguna. Akun Auth tidak dihapus.',
+          500,
+        )
+      }
+    }
+
+    // 3. Hapus akun dari Supabase Auth
     const { error: authDeleteError } =
       await supabaseAdmin.auth.admin.deleteUser(targetUserId)
 
@@ -216,28 +275,9 @@ serve(async (req: Request): Promise<Response> => {
       if (lookupError || authLookup?.user) {
         console.error('Auth delete failed:', authDeleteError.message)
         throw new HttpError(
-          'Gagal menghapus akun Auth. Profil tidak dihapus.',
+          'Gagal menghapus akun Auth sepenuhnya. Periksa log sistem.',
           500,
         )
-      }
-
-      // Jika akun Auth memang sudah tidak ada, bersihkan profil yatim di public.users
-      if (target) {
-        const { error: profileDeleteError } = await supabaseAdmin
-          .from('users')
-          .delete()
-          .eq('id', targetUserId)
-
-        if (profileDeleteError) {
-          console.error(
-            'Orphan profile cleanup failed:',
-            profileDeleteError.message,
-          )
-          throw new HttpError(
-            'Akun Auth tidak ditemukan, tetapi profil gagal dibersihkan.',
-            500,
-          )
-        }
       }
     }
 

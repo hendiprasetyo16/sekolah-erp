@@ -314,10 +314,18 @@ const normCompare = (val: unknown): string => {
   return String(val).replace(/\s+/g, ' ').trim();
 };
 
+const DATE_COMPARE_KEYS = new Set<keyof TeacherBulkImportItem>([
+  'birthDate',
+  'joinDate',
+  'tanggalCpns',
+  'tmtPengangkatan',
+  'tmtPns',
+]);
+
 const computeSmartDiff = (
   incoming: TeacherBulkImportItem[],
   existingList: TeacherDetail[]
-): TeacherBulkImportItem[] => {
+): { rows: TeacherBulkImportItem[]; duplicateCount: number } => {
   const byNip = new Map<string, TeacherDetail>();
   const byNuptk = new Map<string, TeacherDetail>();
   const byNik = new Map<string, TeacherDetail>();
@@ -351,12 +359,15 @@ const computeSmartDiff = (
     'rw',
     'kelurahan',
     'kecamatan',
+    'city',
+    'province',
     'postalCode',
     'telepon',
     'phone',
     'email',
     'status',
     'position',
+    'joinDate',
     'tugasTambahan',
     'skCpns',
     'tanggalCpns',
@@ -388,21 +399,53 @@ const computeSmartDiff = (
     'keahlianBahasaIsyarat',
   ];
 
-  return incoming.map((item) => {
+  // Cegah duplikat baris internal di dalam satu file Excel agar RPC tidak bentrok unique constraint
+  const seenNip = new Set<string>();
+  const seenNuptk = new Set<string>();
+  const seenNik = new Set<string>();
+  const seenNameBirth = new Set<string>();
+
+  let duplicateCount = 0;
+  const rows: TeacherBulkImportItem[] = [];
+
+  for (const item of incoming) {
+    const normNip = item.nip?.trim();
+    const normNuptk = item.nuptk?.trim();
+    const normNik = item.nik?.trim();
+    const normNameBirth =
+      item.fullName && item.birthDate
+        ? `${item.fullName.trim().toLowerCase()}|${item.birthDate}`
+        : undefined;
+
+    const isInternalDuplicate =
+      (normNip && seenNip.has(normNip)) ||
+      (normNuptk && seenNuptk.has(normNuptk)) ||
+      (normNik && seenNik.has(normNik)) ||
+      (normNameBirth && seenNameBirth.has(normNameBirth));
+
+    if (isInternalDuplicate) {
+      duplicateCount++;
+      continue;
+    }
+
+    if (normNip) seenNip.add(normNip);
+    if (normNuptk) seenNuptk.add(normNuptk);
+    if (normNik) seenNik.add(normNik);
+    if (normNameBirth) seenNameBirth.add(normNameBirth);
+
     const matched =
-      (item.nip ? byNip.get(item.nip) : undefined) ||
-      (item.nuptk ? byNuptk.get(item.nuptk) : undefined) ||
-      (item.nik ? byNik.get(item.nik) : undefined) ||
-      (item.fullName && item.birthDate
-        ? byNameBirth.get(`${item.fullName.toLowerCase()}|${item.birthDate}`)
-        : undefined);
+      (normNip ? byNip.get(normNip) : undefined) ||
+      (normNuptk ? byNuptk.get(normNuptk) : undefined) ||
+      (normNik ? byNik.get(normNik) : undefined) ||
+      (normNameBirth ? byNameBirth.get(normNameBirth) : undefined);
 
     if (!matched) {
-      return {
+      rows.push({
         ...item,
         diffAction: 'new' as TeacherDiffAction,
         diffFields: [],
-      };
+      });
+      continue;
     }
 
     const changedLabels: string[] = [];
@@ -414,27 +457,27 @@ const computeSmartDiff = (
         continue;
       }
 
-      const normNext =
-        key === 'birthDate' || key === 'tanggalCpns' || key === 'tmtPengangkatan' || key === 'tmtPns'
-          ? normCompare(nextVal).split('T')[0]
-          : normCompare(nextVal);
-      const normPrev =
-        key === 'birthDate' || key === 'tanggalCpns' || key === 'tmtPengangkatan' || key === 'tmtPns'
-          ? normCompare(prevVal).split('T')[0]
-          : normCompare(prevVal);
+      const normNext = DATE_COMPARE_KEYS.has(key)
+        ? normCompare(nextVal).split('T')[0]
+        : normCompare(nextVal);
+      const normPrev = DATE_COMPARE_KEYS.has(key)
+        ? normCompare(prevVal).split('T')[0]
+        : normCompare(prevVal);
 
       if (normNext !== normPrev) {
         changedLabels.push(DIFF_FIELD_LABELS[key] || String(key));
       }
     }
 
-    return {
+    rows.push({
       ...item,
       id: matched.id,
       diffAction: (changedLabels.length > 0 ? 'updated' : 'unchanged') as TeacherDiffAction,
       diffFields: changedLabels,
-    };
-  });
+    });
+  }
+
+  return { rows, duplicateCount };
 };
 
 const generatePagination = (current: number, total: number): (number | string)[] => {
@@ -520,6 +563,7 @@ export function TeacherListPage() {
   const [importFileName, setImportFileName] = useState('');
   const [importPreviewRows, setImportPreviewRows] = useState<TeacherBulkImportItem[]>([]);
   const [importSkippedCount, setImportSkippedCount] = useState(0);
+  const [importDuplicateCount, setImportDuplicateCount] = useState(0);
   const [diffFilterTab, setDiffFilterTab] = useState<DiffFilterTab>('all');
 
   useEffect(() => {
@@ -748,11 +792,15 @@ export function TeacherListPage() {
       }
 
       const existingRes = await teacherService.exportAll(school.id);
-      const diffedRows = computeSmartDiff(payloads, existingRes.data || []);
+      const { rows: diffedRows, duplicateCount } = computeSmartDiff(
+        payloads,
+        existingRes.data || []
+      );
 
       setImportFileName(file.name);
       setImportPreviewRows(diffedRows);
       setImportSkippedCount(skipped);
+      setImportDuplicateCount(duplicateCount);
       setDiffFilterTab('all');
       setImportModalOpen(true);
 
@@ -974,7 +1022,7 @@ export function TeacherListPage() {
       {/* --- TOOLBAR + TABLE --- */}
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b border-border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-muted/20">
-          {/* Kiri: Pencarian (otomatis melebar & mengecil mengikuti ruang tersedia) */}
+          {/* Kiri: Pencarian */}
           <div className="relative w-full lg:flex-1 lg:min-w-50 transition-all duration-200">
             <Search
               size={16}
@@ -1002,9 +1050,8 @@ export function TeacherListPage() {
             )}
           </div>
 
-          {/* Kanan: Filter (bergeser ke kiri saat ada data dipilih) + Aksi Terpilih */}
+          {/* Kanan: Filter + Aksi Terpilih */}
           <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2.5 shrink-0">
-            {/* Filter Status & Sertifikasi */}
             <div className="flex flex-1 sm:flex-initial items-center gap-2 transition-all duration-200">
               <div className="relative flex-1 sm:flex-initial">
                 <Filter
@@ -1045,7 +1092,6 @@ export function TeacherListPage() {
               </select>
             </div>
 
-            {/* Aksi Terpilih (muncul di paling kanan saat checkbox dipilih & punya izin hapus) */}
             {canDeleteTeacher && selectedRows.length > 0 && (
               <div className="flex items-center gap-2 pl-2 border-l border-border shrink-0 animate-in fade-in zoom-in-95 duration-200">
                 <span className="hidden sm:inline-block text-sm font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/20 whitespace-nowrap">
@@ -1390,7 +1436,7 @@ export function TeacherListPage() {
                     <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
                       <span>SmartDiff Impor Dapodik PTK</span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-500/10 text-emerald-600">
-                        <Sparkles size={12} /> 51 Kolom Dapodik
+                        <Sparkles size={12} /> 54 Kolom Dapodik
                       </span>
                     </h3>
                     <p className="text-xs text-muted-foreground truncate">{importFileName}</p>
@@ -1477,10 +1523,19 @@ export function TeacherListPage() {
                   </button>
                 </div>
 
-                {importSkippedCount > 0 && (
-                  <p className="text-xs text-amber-600 dark:text-amber-400">
-                    * {importSkippedCount} baris kosong/catatan kaki tanpa kolom Nama dilewati otomatis.
-                  </p>
+                {(importSkippedCount > 0 || importDuplicateCount > 0) && (
+                  <div className="space-y-1">
+                    {importSkippedCount > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        * {importSkippedCount} baris kosong/catatan kaki tanpa kolom Nama dilewati otomatis.
+                      </p>
+                    )}
+                    {importDuplicateCount > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">
+                        * {importDuplicateCount} baris duplikat (NIP/NUPTK/NIK ganda) di dalam file Excel dilewati otomatis.
+                      </p>
+                    )}
+                  </div>
                 )}
               </div>
 

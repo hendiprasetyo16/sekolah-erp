@@ -1,3 +1,4 @@
+// src/modules/admin/types/user-management.types.ts
 export type AppUserRole =
     | 'SUPER_ADMIN'
     | 'ADMIN'
@@ -30,7 +31,7 @@ export interface AppUser {
     lastLogin: string | null;
     createdAt: string;
     updatedAt: string;
-    /** Status keterhubungan ke profil master akademik (students.user_id / user_student_links) */
+    /** Status keterhubungan ke profil master akademik (teachers.userId / user_student_links) */
     isLinkedToMaster?: boolean;
     linkedChildrenCount?: number;
 }
@@ -102,12 +103,24 @@ export interface BatchExecutionSummary {
 }
 
 // ==========================================
-// KONSTANTA MODUL MANAJEMEN PENGGUNA
+// KONSTANTA & VALIDATOR MODUL MANAJEMEN PENGGUNA
 // ==========================================
 
 export const ITEMS_PER_PAGE = 10;
 export const DEFAULT_PASSWORD = 'Password123!';
 export const BULK_CONCURRENCY = 5;
+
+export const UUID_REGEX =
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Memastikan nilai schoolId merupakan string UUID yang valid (bukan '', 'all', atau undefined).
+ */
+export function normalizeSchoolId(value?: string | null): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return UUID_REGEX.test(trimmed) ? trimmed : null;
+}
 
 export const ROLE_VALUES = [
     'SUPER_ADMIN',
@@ -140,8 +153,9 @@ export const STAFF_ROLES: readonly AppUserRole[] = [
     'STAFF_PERPUS',
 ];
 
-/** Daftar role yang dapat dipilih sebagai Tugas Tambahan pada form akun */
+/** Daftar role standar yang dapat dipilih sebagai Tugas Tambahan pada form akun */
 export const ADDITIONAL_ROLE_OPTIONS: readonly AppUserRole[] = [
+    'GURU',
     'WALI_KELAS',
     'BENDAHARA',
     'STAFF_TU',
@@ -149,6 +163,14 @@ export const ADDITIONAL_ROLE_OPTIONS: readonly AppUserRole[] = [
     'STAFF_PERPUS',
     'OPERATOR',
 ];
+
+/** Mengembalikan opsi tugas tambahan sesuai kewenangan aktor (Super Admin vs Admin Sekolah) */
+export function getAssignableAdditionalRoles(actorIsSuperAdmin: boolean): AppUserRole[] {
+    if (actorIsSuperAdmin) {
+        return ['KEPALA_SEKOLAH', ...ADDITIONAL_ROLE_OPTIONS, 'ADMIN'];
+    }
+    return [...ADDITIONAL_ROLE_OPTIONS];
+}
 
 export const BULK_TABS: readonly UserTabKey[] = ['staff', 'siswa', 'orangtua'];
 
@@ -174,13 +196,37 @@ export const ROLE_DISPLAY_NAMES: Record<AppUserRole, { id: string; en: string }>
 };
 
 /**
+ * Mengecek apakah akun target memiliki role Admin / Super Admin (baik role utama
+ * maupun additionalRoles) sehingga dilindungi dari modifikasi oleh Admin Sekolah biasa.
+ */
+export function isProtectedAdminAccount(
+    target: {
+        role?: string;
+        additionalRoles?: readonly string[];
+    },
+    actorIsSuperAdmin: boolean
+): boolean {
+    const roles = [
+        target.role,
+        ...(Array.isArray(target.additionalRoles) ? target.additionalRoles : []),
+    ];
+    if (roles.includes('SUPER_ADMIN')) return true;
+    if (!actorIsSuperAdmin && roles.includes('ADMIN')) return true;
+    return false;
+}
+
+/**
  * Mengubah teks tugas tambahan Dapodik menjadi kode AppUserRole sistem.
+ * Selaras 100% dengan fungsi SQL `public.map_tugas_tambahan_to_roles`.
  */
 export function mapTugasTambahanToRoles(tugasTambahan?: string | null): AppUserRole[] {
     if (!tugasTambahan) return [];
     const text = tugasTambahan.toLowerCase().trim();
     const mapped: AppUserRole[] = [];
 
+    if (text.includes('kepala sekolah') && !text.includes('wakil kepala')) {
+        mapped.push('KEPALA_SEKOLAH');
+    }
     if (text.includes('bendahara')) mapped.push('BENDAHARA');
     if (text.includes('sarpras') || text.includes('sarana')) mapped.push('STAFF_SARPRAS');
     if (text.includes('perpustakaan') || text.includes('perpus')) mapped.push('STAFF_PERPUS');

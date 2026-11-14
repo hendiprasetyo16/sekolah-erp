@@ -48,13 +48,25 @@ interface CallerRow {
   id: string
   schoolId: string | null
   role: string
+  additionalRoles?: string[] | null
   isActive: boolean
+}
+
+interface AuthorizedCaller {
+  caller: CallerRow
+  isSuperAdmin: boolean
+  isSchoolAdmin: boolean
 }
 
 interface ExistingProfileRow {
   id: string
   schoolId: string | null
   role: string
+}
+
+interface ParentLinkInput {
+  studentId: string
+  relationship?: string
 }
 
 class HttpError extends Error {
@@ -80,8 +92,8 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
 function isValidUuid(value: unknown): value is string {
   return (
     typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value.trim(),
     )
   )
 }
@@ -131,6 +143,19 @@ async function rollbackAuthUser(
   userId: string,
 ): Promise<boolean> {
   try {
+    const { error: profileDeleteError } = await supabaseAdmin
+      .from('users')
+      .delete()
+      .eq('id', userId)
+
+    if (profileDeleteError) {
+      console.error(
+        'Gagal menghapus profil users saat rollback:',
+        userId,
+        profileDeleteError.message,
+      )
+    }
+
     const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)
     if (error) {
       console.error('Rollback Auth gagal:', userId, error.message)
@@ -143,10 +168,243 @@ async function rollbackAuthUser(
   }
 }
 
+/**
+ * Validasi ketat format UUID, kesesuaian role, dan keberadaan data master
+ * pada sekolah target sebelum akun Auth dibuat atau diperbarui.
+ */
+async function validateMasterReferences(
+  supabaseAdmin: SupabaseClient,
+  params: {
+    schoolId: string | null
+    role: AllowedRole
+    teacherId: string | null
+    studentId: string | null
+    studentLinks?: ParentLinkInput[]
+  },
+): Promise<void> {
+  const { schoolId, role, teacherId, studentId, studentLinks } = params
+
+  if (teacherId) {
+    if (role === 'SUPER_ADMIN' || role === 'SISWA' || role === 'ORANG_TUA') {
+      throw new HttpError(
+        `teacherId tidak dapat digunakan untuk role ${role}.`,
+        400,
+      )
+    }
+
+    if (!isValidUuid(teacherId)) {
+      throw new HttpError('Format teacherId tidak valid.', 400)
+    }
+
+    if (!schoolId) {
+      throw new HttpError('schoolId wajib diisi saat menautkan data guru.', 400)
+    }
+
+    const { data: teacherRow, error: teacherCheckError } = await supabaseAdmin
+      .from('teachers')
+      .select('id')
+      .eq('id', teacherId)
+      .eq('schoolId', schoolId)
+      .maybeSingle()
+
+    if (teacherCheckError) {
+      throw new HttpError('Gagal memverifikasi data master guru.', 500)
+    }
+
+    if (!teacherRow) {
+      throw new HttpError(
+        'Data guru tidak ditemukan atau tidak terdaftar pada sekolah ini.',
+        404,
+      )
+    }
+  }
+
+  const collectedStudentIds: string[] = []
+
+  if (studentId) {
+    if (!isValidUuid(studentId)) {
+      throw new HttpError('Format studentId tidak valid.', 400)
+    }
+    collectedStudentIds.push(studentId)
+  }
+
+  if (Array.isArray(studentLinks) && studentLinks.length > 0) {
+    for (const item of studentLinks) {
+      if (!item || typeof item.studentId !== 'string' || !isValidUuid(item.studentId)) {
+        throw new HttpError(
+          'Salah satu studentId pada daftar tautan anak tidak valid.',
+          400,
+        )
+      }
+      collectedStudentIds.push(item.studentId.trim())
+    }
+  }
+
+  if (collectedStudentIds.length > 0) {
+    if (role !== 'SISWA' && role !== 'ORANG_TUA') {
+      throw new HttpError(
+        `Data tautan siswa hanya diperbolehkan untuk role SISWA atau ORANG_TUA.`,
+        400,
+      )
+    }
+
+    if (!schoolId) {
+      throw new HttpError('schoolId wajib diisi saat menautkan data siswa.', 400)
+    }
+
+    const uniqueStudentIds = Array.from(new Set(collectedStudentIds))
+
+    if (role === 'SISWA' && uniqueStudentIds.length > 1) {
+      throw new HttpError(
+        'Akun SISWA hanya dapat ditautkan ke satu data siswa.',
+        400,
+      )
+    }
+
+    const { data: studentRows, error: studentCheckError } = await supabaseAdmin
+      .from('students')
+      .select('id')
+      .eq('schoolId', schoolId)
+      .in('id', uniqueStudentIds)
+
+    if (studentCheckError) {
+      throw new HttpError('Gagal memverifikasi data master siswa.', 500)
+    }
+
+    if (!studentRows || studentRows.length !== uniqueStudentIds.length) {
+      throw new HttpError(
+        'Data siswa tidak ditemukan atau tidak terdaftar pada sekolah ini.',
+        404,
+      )
+    }
+  }
+}
+
+/**
+ * Menautkan userId ke tabel master (teachers / user_student_links) secara idempoten.
+ */
+async function syncMasterLink(
+  supabaseAdmin: SupabaseClient,
+  params: {
+    userId: string
+    schoolId: string | null
+    role: AllowedRole
+    teacherId?: string | null
+    studentId?: string | null
+    relationship?: string | null
+    studentLinks?: ParentLinkInput[]
+  },
+): Promise<void> {
+  const { userId, schoolId, role, teacherId, studentId, relationship, studentLinks } = params
+  if (!schoolId) return
+
+  if (teacherId) {
+    const { error } = await supabaseAdmin
+      .from('teachers')
+      .update({ userId })
+      .eq('id', teacherId)
+      .eq('schoolId', schoolId)
+
+    if (error) {
+      throw new HttpError(`Gagal menautkan akun ke data guru: ${error.message}`, 500)
+    }
+    return
+  }
+
+  if (role === 'SISWA' && studentId) {
+    const { data: existing, error: lookupError } = await supabaseAdmin
+      .from('user_student_links')
+      .select('id')
+      .eq('schoolId', schoolId)
+      .eq('userId', userId)
+      .eq('studentId', studentId)
+      .eq('relationship', 'SISWA')
+      .maybeSingle()
+
+    if (lookupError) {
+      throw new HttpError(`Gagal memeriksa tautan siswa: ${lookupError.message}`, 500)
+    }
+
+    if (!existing) {
+      const { error } = await supabaseAdmin
+        .from('user_student_links')
+        .insert({
+          id: crypto.randomUUID(),
+          schoolId,
+          userId,
+          studentId,
+          relationship: 'SISWA',
+          isPrimary: false,
+          createdAt: new Date().toISOString(),
+        })
+
+      if (error) {
+        throw new HttpError(`Gagal menautkan akun ke data siswa: ${error.message}`, 500)
+      }
+    }
+    return
+  }
+
+  if (role === 'ORANG_TUA') {
+    const rawLinks: ParentLinkInput[] = Array.isArray(studentLinks) && studentLinks.length > 0
+      ? studentLinks
+      : studentId
+        ? [{ studentId, relationship: relationship || 'Wali' }]
+        : []
+
+    if (rawLinks.length === 0) return
+
+    const { data: existingLinks, error: existingLinksError } = await supabaseAdmin
+      .from('user_student_links')
+      .select('"studentId", "isPrimary"')
+      .eq('schoolId', schoolId)
+      .eq('userId', userId)
+
+    if (existingLinksError) {
+      throw new HttpError(`Gagal memeriksa tautan anak: ${existingLinksError.message}`, 500)
+    }
+
+    const existingIds = new Set(
+      (existingLinks || []).map((row: { studentId: string }) => String(row.studentId)),
+    )
+    const hasPrimary = (existingLinks || []).some(
+      (row: { isPrimary?: boolean }) => row.isPrimary === true,
+    )
+
+    const seenInPayload = new Set<string>()
+    const toInsert = rawLinks
+      .filter((item) => {
+        const cleanId = item.studentId.trim()
+        if (existingIds.has(cleanId) || seenInPayload.has(cleanId)) return false
+        seenInPayload.add(cleanId)
+        return true
+      })
+      .map((item, idx) => ({
+        id: crypto.randomUUID(),
+        schoolId,
+        userId,
+        studentId: item.studentId.trim(),
+        relationship: (item.relationship || 'Wali').trim() || 'Wali',
+        isPrimary: !hasPrimary && idx === 0,
+        createdAt: new Date().toISOString(),
+      }))
+
+    if (toInsert.length > 0) {
+      const { error } = await supabaseAdmin
+        .from('user_student_links')
+        .insert(toInsert)
+
+      if (error) {
+        throw new HttpError(`Gagal menautkan akun ke data anak: ${error.message}`, 500)
+      }
+    }
+  }
+}
+
 async function authorize(
   req: Request,
   supabaseAdmin: SupabaseClient,
-): Promise<CallerRow> {
+): Promise<AuthorizedCaller> {
   const header = req.headers.get('Authorization') || ''
   const tokenMatch = header.match(/^Bearer\s+(.+)$/i)
 
@@ -163,7 +421,7 @@ async function authorize(
 
   const { data: callerData, error } = await supabaseAdmin
     .from('users')
-    .select('id, "schoolId", role, "isActive"')
+    .select('id, "schoolId", role, "additionalRoles", "isActive"')
     .eq('id', authData.user.id)
     .maybeSingle()
 
@@ -177,19 +435,25 @@ async function authorize(
     throw new HttpError('Akun Anda tidak aktif atau profil tidak ditemukan.', 403)
   }
 
-  if (!['SUPER_ADMIN', 'ADMIN'].includes(caller.role)) {
+  const callerRoles = new Set<string>([
+    caller.role,
+    ...(Array.isArray(caller.additionalRoles) ? caller.additionalRoles : []),
+  ])
+
+  const isSuperAdmin =
+    callerRoles.has('SUPER_ADMIN') &&
+    caller.schoolId === null
+
+  const isSchoolAdmin =
+    callerRoles.has('ADMIN') &&
+    typeof caller.schoolId === 'string' &&
+    caller.schoolId.trim().length > 0
+
+  if (!isSuperAdmin && !isSchoolAdmin) {
     throw new HttpError('Anda tidak memiliki izin membuat akun.', 403)
   }
 
-  if (caller.role === 'SUPER_ADMIN' && caller.schoolId !== null) {
-    throw new HttpError('Konfigurasi akun SUPER_ADMIN tidak valid.', 403)
-  }
-
-  if (caller.role === 'ADMIN' && !caller.schoolId) {
-    throw new HttpError('Akun ADMIN belum terhubung ke sekolah.', 403)
-  }
-
-  return caller
+  return { caller, isSuperAdmin, isSchoolAdmin }
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -215,7 +479,7 @@ serve(async (req: Request): Promise<Response> => {
   let createdAuthId: string | null = null
 
   try {
-    const caller = await authorize(req, supabaseAdmin)
+    const { caller, isSuperAdmin, isSchoolAdmin } = await authorize(req, supabaseAdmin)
 
     let body: Record<string, unknown>
     try {
@@ -233,9 +497,18 @@ serve(async (req: Request): Promise<Response> => {
     const fullName =
       typeof body.fullName === 'string' ? body.fullName.trim() : ''
     const role = body.role
-    const schoolId = body.schoolId
-    const existingUserId = body.existingUserId
+    const rawSchoolId =
+      typeof body.schoolId === 'string' ? body.schoolId.trim() : ''
+    const existingUserId =
+      typeof body.existingUserId === 'string' ? body.existingUserId.trim() : body.existingUserId
     const useDefaultPassword = body.useDefaultPassword === true
+
+    const teacherId = typeof body.teacherId === 'string' ? body.teacherId.trim() : null
+    const studentId = typeof body.studentId === 'string' ? body.studentId.trim() : null
+    const relationship = typeof body.relationship === 'string' ? body.relationship.trim() : null
+    const studentLinks = Array.isArray(body.studentLinks)
+      ? (body.studentLinks as ParentLinkInput[])
+      : undefined
 
     // Tentukan password: dari secret server (jika useDefaultPassword) atau dari input form
     let resolvedPassword = ''
@@ -276,14 +549,14 @@ serve(async (req: Request): Promise<Response> => {
       typedRole,
     )
 
-    if (typedRole === 'SUPER_ADMIN' && caller.role !== 'SUPER_ADMIN') {
+    if (typedRole === 'SUPER_ADMIN' && !isSuperAdmin) {
       throw new HttpError(
         'Hanya SUPER_ADMIN yang dapat membuat akun SUPER_ADMIN.',
         403,
       )
     }
 
-    if (caller.role === 'ADMIN' && typedRole === 'ADMIN') {
+    if (isSchoolAdmin && !isSuperAdmin && typedRole === 'ADMIN') {
       throw new HttpError('ADMIN tidak diizinkan membuat akun ADMIN lain.', 403)
     }
 
@@ -292,14 +565,21 @@ serve(async (req: Request): Promise<Response> => {
     if (typedRole === 'SUPER_ADMIN') {
       resolvedSchoolId = null
     } else {
-      if (!isValidUuid(schoolId)) {
+      if (!rawSchoolId) {
+        throw new HttpError(
+          'Sekolah aktif belum dipilih. Pilih sekolah terlebih dahulu.',
+          400,
+        )
+      }
+
+      if (!isValidUuid(rawSchoolId)) {
         throw new HttpError(
           'schoolId wajib diisi dengan ID sekolah yang valid.',
           400,
         )
       }
 
-      if (caller.role === 'ADMIN' && schoolId !== caller.schoolId) {
+      if (isSchoolAdmin && !isSuperAdmin && rawSchoolId !== caller.schoolId) {
         throw new HttpError(
           'Anda hanya dapat membuat akun untuk sekolah sendiri.',
           403,
@@ -309,7 +589,7 @@ serve(async (req: Request): Promise<Response> => {
       const { data: schoolData, error: schoolError } = await supabaseAdmin
         .from('schools')
         .select('id')
-        .eq('id', schoolId)
+        .eq('id', rawSchoolId)
         .maybeSingle()
 
       if (schoolError) {
@@ -319,15 +599,24 @@ serve(async (req: Request): Promise<Response> => {
         throw new HttpError('Satuan pendidikan tidak ditemukan.', 404)
       }
 
-      resolvedSchoolId = schoolId
+      resolvedSchoolId = rawSchoolId
     }
+
+    // Validasi referensi tabel master sebelum membuat / mengubah akun Auth
+    await validateMasterReferences(supabaseAdmin, {
+      schoolId: resolvedSchoolId,
+      role: typedRole,
+      teacherId,
+      studentId,
+      studentLinks,
+    })
 
     let userId: string
 
     // =========================================================
     // JALUR 1: PEMBARUAN / RESET AKUN YANG SUDAH ADA (GENERATE TERPILIH)
     // =========================================================
-    if (existingUserId !== undefined && existingUserId !== null) {
+    if (existingUserId !== undefined && existingUserId !== null && existingUserId !== '') {
       if (!isValidUuid(existingUserId)) {
         throw new HttpError('existingUserId tidak valid.', 400)
       }
@@ -371,7 +660,8 @@ serve(async (req: Request): Promise<Response> => {
       }
 
       if (
-        caller.role === 'ADMIN' &&
+        isSchoolAdmin &&
+        !isSuperAdmin &&
         existingProfile &&
         (existingProfile.schoolId !== caller.schoolId ||
           existingProfile.role === 'ADMIN')
@@ -459,6 +749,16 @@ serve(async (req: Request): Promise<Response> => {
         }
       }
 
+      await syncMasterLink(supabaseAdmin, {
+        userId,
+        schoolId: resolvedSchoolId,
+        role: typedRole,
+        teacherId,
+        studentId,
+        relationship,
+        studentLinks,
+      })
+
       return jsonResponse({
         success: true,
         message: 'Profil akun yang sudah ada berhasil diperbarui.',
@@ -467,7 +767,7 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // =========================================================
-    // JALUR 2: PEMBUATAN AKUN BARU (AUTH + PROFIL)
+    // JALUR 2: PEMBUATAN AKUN BARU (AUTH + PROFIL + TAUTAN)
     // =========================================================
     const { data: authData, error: createAuthError } =
       await supabaseAdmin.auth.admin.createUser({
@@ -518,6 +818,16 @@ serve(async (req: Request): Promise<Response> => {
         500,
       )
     }
+
+    await syncMasterLink(supabaseAdmin, {
+      userId,
+      schoolId: resolvedSchoolId,
+      role: typedRole,
+      teacherId,
+      studentId,
+      relationship,
+      studentLinks,
+    })
 
     createdAuthId = null
 

@@ -1,3 +1,4 @@
+// src/modules/admin/pages/UserManagementPage.tsx
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -46,6 +47,8 @@ import {
     STAFF_ROLES,
     getEffectiveRoles,
     isBulkTargetGroup,
+    isProtectedAdminAccount,
+    normalizeSchoolId,
     type AppUser,
     type AppUserRole,
     type BulkTargetGroup,
@@ -75,7 +78,10 @@ export function UserManagementPage() {
     );
     const isSuperAdmin = effectiveCurrentRoles.includes('SUPER_ADMIN');
     const canManageUsers = isSuperAdmin || effectiveCurrentRoles.includes('ADMIN');
-    const activeSchoolId = school?.id ?? currentUser?.schoolId ?? null;
+    const activeSchoolId = useMemo(
+        () => normalizeSchoolId(school?.id) ?? normalizeSchoolId(currentUser?.schoolId),
+        [school?.id, currentUser?.schoolId]
+    );
 
     const { locale } = useUIStore();
     const lang = locale === 'en' ? 'en' : 'id';
@@ -136,8 +142,7 @@ export function UserManagementPage() {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let channel: ReturnType<typeof supabase.channel> | null = null;
 
-        const changeFilter =
-            !isSuperAdmin && activeSchoolId ? `schoolId=eq.${activeSchoolId}` : undefined;
+        const changeFilter = activeSchoolId ? `schoolId=eq.${activeSchoolId}` : undefined;
 
         try {
             channel = supabase
@@ -178,7 +183,7 @@ export function UserManagementPage() {
     // ------------------------------------------
     const addUserMutation = useMutation({
         mutationFn: (payload: CreateUserFormValues) =>
-            userManagementService.createUser(payload, activeSchoolId),
+            userManagementService.createUser(payload, activeSchoolId, isSuperAdmin),
         onSuccess: () => {
             toast.success(tUM('toastAddSuccess'));
             setIsAddUserModalOpen(false);
@@ -194,6 +199,7 @@ export function UserManagementPage() {
                 data: payload.data,
                 isSuperAdmin,
                 activeSchoolId,
+                currentUserId: currentUser?.id,
             });
 
             if (currentUser && currentUser.id === payload.targetUser.id) {
@@ -268,6 +274,7 @@ export function UserManagementPage() {
                 usersTarget,
                 activeSchoolId,
                 currentUserId: currentUser?.id,
+                isSuperAdmin,
             }),
         onSuccess: (summary) => {
             toast.success(tUM('toastGenSelSuccess', { count: summary.success }), {
@@ -337,6 +344,7 @@ export function UserManagementPage() {
                 allUsers: users,
                 activeSchoolId,
                 currentUserId: currentUser?.id,
+                isSuperAdmin,
             }),
         onSuccess: (summary) => {
             toast.success(tUM('toastDelSelSuccess', { count: summary.success }));
@@ -458,10 +466,10 @@ export function UserManagementPage() {
             processedUsers.filter(
                 (u) =>
                     selectedUserIds.includes(u.id) &&
-                    u.role !== 'SUPER_ADMIN' &&
+                    !isProtectedAdminAccount(u, isSuperAdmin) &&
                     u.id !== currentUser?.id
             ),
-        [processedUsers, selectedUserIds, currentUser?.id]
+        [processedUsers, selectedUserIds, isSuperAdmin, currentUser?.id]
     );
 
     const tabCounts = useMemo<Record<UserTabKey, number>>(
@@ -507,11 +515,14 @@ export function UserManagementPage() {
     };
 
     const handleSelectAllPage = (checked: boolean) => {
-        const pageIds = paginatedUsers.map((u) => u.id);
+        const selectableIds = paginatedUsers
+            .filter((u) => u.id !== currentUser?.id && !isProtectedAdminAccount(u, isSuperAdmin))
+            .map((u) => u.id);
+
         if (checked) {
-            setSelectedUserIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+            setSelectedUserIds((prev) => Array.from(new Set([...prev, ...selectableIds])));
         } else {
-            const pageIdSet = new Set(pageIds);
+            const pageIdSet = new Set(selectableIds);
             setSelectedUserIds((prev) => prev.filter((id) => !pageIdSet.has(id)));
         }
     };
@@ -561,6 +572,7 @@ export function UserManagementPage() {
                     <AddUserModal
                         lang={lang}
                         activeSchoolId={activeSchoolId}
+                        isSuperAdmin={isSuperAdmin}
                         isSubmitting={addUserMutation.isPending}
                         onClose={() => setIsAddUserModalOpen(false)}
                         onSubmit={(values) => addUserMutation.mutate(values)}
@@ -604,8 +616,8 @@ export function UserManagementPage() {
                         subNote={
                             userToDelete.role === 'SISWA'
                                 ? lang === 'id'
-                                    ? 'Profil akademik siswa yang tertaut (students.user_id) akan ikut terhapus secara cascade.'
-                                    : 'The linked student academic record (students.user_id) will also be cascade-deleted.'
+                                    ? 'Tautan akun siswa akan dilepas tanpa menghapus data induk akademik siswa.'
+                                    : 'The student user link will be detached without deleting the master academic record.'
                                 : userToDelete.role === 'ORANG_TUA'
                                     ? lang === 'id'
                                         ? 'Tautan wali murid (user_student_links) akan dilepas tanpa menghapus data siswa.'
@@ -628,8 +640,8 @@ export function UserManagementPage() {
                         subNote={
                             selectedUserIds.length > eligibleSelectedUsers.length
                                 ? lang === 'id'
-                                    ? `${selectedUserIds.length - eligibleSelectedUsers.length} akun Super Admin / akun sendiri otomatis dilewati.`
-                                    : `${selectedUserIds.length - eligibleSelectedUsers.length} Super Admin / self account(s) automatically skipped.`
+                                    ? `${selectedUserIds.length - eligibleSelectedUsers.length} akun Admin / akun sendiri otomatis dilewati.`
+                                    : `${selectedUserIds.length - eligibleSelectedUsers.length} Admin / self account(s) automatically skipped.`
                                 : undefined
                         }
                         confirmLabel={tGlobal('yes')}
@@ -644,7 +656,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {isGenerateAllModalOpen && canManageUsers && activeBulkGroup && (
+                {isGenerateAllModalOpen && canManageUsers && activeBulkGroup && activeSchoolId && (
                     <ConfirmUserActionModal
                         variant="generate-all"
                         title={tUM('modalGenAllTitle')}
@@ -665,8 +677,8 @@ export function UserManagementPage() {
                         subNote={
                             selectedUserIds.length > eligibleSelectedUsers.length
                                 ? lang === 'id'
-                                    ? `${selectedUserIds.length - eligibleSelectedUsers.length} akun Super Admin / akun sendiri dilindungi dari penghapusan.`
-                                    : `${selectedUserIds.length - eligibleSelectedUsers.length} Super Admin / self account(s) protected from deletion.`
+                                    ? `${selectedUserIds.length - eligibleSelectedUsers.length} akun Admin / akun sendiri dilindungi dari penghapusan.`
+                                    : `${selectedUserIds.length - eligibleSelectedUsers.length} Admin / self account(s) protected from deletion.`
                                 : undefined
                         }
                         confirmLabel={tGlobal('delete')}
@@ -677,7 +689,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {isDeleteAllModalOpen && isSuperAdmin && activeBulkGroup && (
+                {isDeleteAllModalOpen && isSuperAdmin && activeBulkGroup && activeSchoolId && (
                     <ConfirmUserActionModal
                         variant="delete-all"
                         title={tGlobal('warning')}
@@ -709,6 +721,24 @@ export function UserManagementPage() {
                 )}
             </div>
 
+            {isSuperAdmin && !activeSchoolId && (
+                <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <div>
+                        <p className="font-semibold">
+                            {lang === 'id'
+                                ? 'Mode Super Admin Lintas Sekolah'
+                                : 'Cross-School Super Admin Mode'}
+                        </p>
+                        <p className="mt-0.5">
+                            {lang === 'id'
+                                ? 'Pilih sekolah aktif terlebih dahulu pada switcher sekolah sebelum membuat akun sekolah atau menjalankan Generate Masal.'
+                                : 'Select an active school from the school switcher before creating school accounts or running Bulk Generate.'}
+                        </p>
+                    </div>
+                </div>
+            )}
+
             <div className="space-y-4 rounded-xl border border-border bg-card p-4 text-card-foreground shadow-sm">
                 {/* ================= TAB FILTER ================= */}
                 <div className="w-full overflow-x-auto pb-1">
@@ -726,8 +756,8 @@ export function UserManagementPage() {
                                         {label}
                                         <span
                                             className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${isActive
-                                                ? 'bg-white/20 text-white'
-                                                : 'bg-muted text-muted-foreground'
+                                                    ? 'bg-white/20 text-white'
+                                                    : 'bg-muted text-muted-foreground'
                                                 }`}
                                         >
                                             {tabCounts[value] ?? 0}
@@ -820,8 +850,8 @@ export function UserManagementPage() {
                                             handleSortChange({ key: 'none', direction: 'asc' })
                                         }
                                         className={`cursor-pointer ${sortConfig.key === 'none'
-                                            ? 'bg-primary/10 text-primary'
-                                            : ''
+                                                ? 'bg-primary/10 text-primary'
+                                                : ''
                                             }`}
                                     >
                                         <ArrowUpDown className="mr-2 h-4 w-4 shrink-0" /> Reset
@@ -836,6 +866,7 @@ export function UserManagementPage() {
                                     <DropdownMenuTrigger asChild>
                                         <Button
                                             type="button"
+                                            disabled={!activeSchoolId}
                                             className="h-10 grow justify-center gap-2 whitespace-nowrap bg-blue-600 px-3 text-white hover:bg-blue-700 sm:grow-0 sm:px-4"
                                         >
                                             <DatabaseZap className="h-4 w-4 shrink-0" />
@@ -884,7 +915,8 @@ export function UserManagementPage() {
                                     </Button>
                                 ) : (
                                     isSuperAdmin &&
-                                    activeBulkGroup && (
+                                    activeBulkGroup &&
+                                    activeSchoolId && (
                                         <Button
                                             type="button"
                                             variant="outline"

@@ -1,3 +1,4 @@
+// src/modules/admin/components/UserManagementForms.tsx
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { motion } from 'framer-motion';
 import { useForm } from 'react-hook-form';
@@ -37,9 +38,9 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import {
-    ADDITIONAL_ROLE_OPTIONS,
     ROLE_DISPLAY_NAMES,
     ROLE_VALUES,
+    getAssignableAdditionalRoles,
     mapTugasTambahanToRoles,
     type AppUser,
     type AppUserRole,
@@ -50,10 +51,6 @@ import {
 
 type Lang = 'id' | 'en';
 
-/**
- * Mengambil label tampilan role dengan fallback aman ke `ROLE_DISPLAY_NAMES`
- * agar role baru seperti `STAFF_PERPUS` tidak pernah kosong atau error.
- */
 function getRoleLabel(role: AppUserRole, lang: Lang): string {
     const dict = translations[lang].userManagement as Record<string, string | undefined>;
     const translated = dict[`role_${role}`];
@@ -63,9 +60,6 @@ function getRoleLabel(role: AppUserRole, lang: Lang): string {
     return ROLE_DISPLAY_NAMES[role]?.[lang] ?? role;
 }
 
-/**
- * Mengecek apakah role utama berhak memiliki tugas tambahan pegawai sekolah.
- */
 function canHaveAdditionalRoles(role: AppUserRole): boolean {
     return role !== 'SUPER_ADMIN' && role !== 'SISWA' && role !== 'ORANG_TUA';
 }
@@ -120,6 +114,7 @@ function BaseModalWrapper({
 interface AddUserModalProps {
     lang: Lang;
     activeSchoolId: string | null;
+    isSuperAdmin: boolean;
     isSubmitting: boolean;
     onClose: () => void;
     onSubmit: (values: CreateUserFormValues) => void;
@@ -128,6 +123,7 @@ interface AddUserModalProps {
 export function AddUserModal({
     lang,
     activeSchoolId,
+    isSuperAdmin,
     isSubmitting,
     onClose,
     onSubmit,
@@ -137,6 +133,22 @@ export function AddUserModal({
     const tGlobal = (key: keyof typeof translations.id.common) => translations[lang].common[key];
     const tUM = (key: keyof typeof translations.id.userManagement) =>
         translations[lang].userManagement[key];
+
+    const availableRoles = useMemo(
+        () =>
+            ROLE_VALUES.filter((role) => {
+                if (!isSuperAdmin) {
+                    return role !== 'SUPER_ADMIN' && role !== 'ADMIN';
+                }
+                return true;
+            }),
+        [isSuperAdmin]
+    );
+
+    const assignableDutyOptions = useMemo(
+        () => getAssignableAdditionalRoles(isSuperAdmin),
+        [isSuperAdmin]
+    );
 
     const schema = useMemo(
         () =>
@@ -282,7 +294,7 @@ export function AddUserModal({
                                         side="bottom"
                                         className="max-h-52 overflow-y-auto"
                                     >
-                                        {ROLE_VALUES.map((r) => (
+                                        {availableRoles.map((r) => (
                                             <SelectItem key={r} value={r}>
                                                 {getRoleLabel(r, lang)}
                                             </SelectItem>
@@ -311,35 +323,36 @@ export function AddUserModal({
                             </div>
 
                             <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
-                                {ADDITIONAL_ROLE_OPTIONS.filter(
-                                    (opt) => opt !== selectedRole
-                                ).map((dutyRole) => {
-                                    const isChecked = selectedAdditionalRoles.includes(dutyRole);
-                                    return (
-                                        <label
-                                            key={dutyRole}
-                                            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors ${isChecked
-                                                ? 'border-emerald-500/50 bg-emerald-500/10 font-medium text-foreground'
-                                                : 'border-border bg-background text-muted-foreground hover:text-foreground'
-                                                }`}
-                                        >
-                                            <input
-                                                type="checkbox"
-                                                checked={isChecked}
-                                                onChange={(e) =>
-                                                    handleToggleAdditionalRole(
-                                                        dutyRole,
-                                                        e.target.checked
-                                                    )
-                                                }
-                                                className="h-3.5 w-3.5 rounded border-border accent-emerald-600"
-                                            />
-                                            <span className="truncate">
-                                                {getRoleLabel(dutyRole, lang)}
-                                            </span>
-                                        </label>
-                                    );
-                                })}
+                                {assignableDutyOptions.filter((opt) => opt !== selectedRole).map(
+                                    (dutyRole) => {
+                                        const isChecked =
+                                            selectedAdditionalRoles.includes(dutyRole);
+                                        return (
+                                            <label
+                                                key={dutyRole}
+                                                className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors ${isChecked
+                                                        ? 'border-emerald-500/50 bg-emerald-500/10 font-medium text-foreground'
+                                                        : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                                                    }`}
+                                            >
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isChecked}
+                                                    onChange={(e) =>
+                                                        handleToggleAdditionalRole(
+                                                            dutyRole,
+                                                            e.target.checked
+                                                        )
+                                                    }
+                                                    className="h-3.5 w-3.5 rounded border-border accent-emerald-600"
+                                                />
+                                                <span className="truncate">
+                                                    {getRoleLabel(dutyRole, lang)}
+                                                </span>
+                                            </label>
+                                        );
+                                    }
+                                )}
                             </div>
                         </div>
                     )}
@@ -425,6 +438,20 @@ export function EditUserModal({
     const tUM = (key: keyof typeof translations.id.userManagement) =>
         translations[lang].userManagement[key];
 
+    const editableRoles = useMemo(
+        () =>
+            ROLE_VALUES.filter((role) => {
+                if (user.role === 'SUPER_ADMIN') return role === 'SUPER_ADMIN';
+                return role !== 'SUPER_ADMIN';
+            }),
+        [user.role]
+    );
+
+    const assignableDutyOptions = useMemo(
+        () => getAssignableAdditionalRoles(isSuperAdmin),
+        [isSuperAdmin]
+    );
+
     const schema = useMemo(
         () =>
             z.object({
@@ -459,7 +486,6 @@ export function EditUserModal({
     const selectedAdditionalRoles = form.watch('additionalRoles');
     const showAdditionalSelector = canHaveAdditionalRoles(selectedRole);
 
-    // Deteksi role yang sudah otomatis didapat dari teks tugasTambahan Dapodik
     const dapodikAutoRoles = useMemo(
         () => mapTugasTambahanToRoles(user.tugasTambahan),
         [user.tugasTambahan]
@@ -539,7 +565,7 @@ export function EditUserModal({
                                             form.setValue('additionalRoles', filtered);
                                         }
                                     }}
-                                    disabled={!isSuperAdmin}
+                                    disabled={!isSuperAdmin || user.role === 'SUPER_ADMIN'}
                                 >
                                     <FormControl>
                                         <SelectTrigger>
@@ -551,7 +577,7 @@ export function EditUserModal({
                                         side="bottom"
                                         className="max-h-52 overflow-y-auto"
                                     >
-                                        {ROLE_VALUES.map((r) => (
+                                        {editableRoles.map((r) => (
                                             <SelectItem key={r} value={r}>
                                                 {getRoleLabel(r, lang)}
                                             </SelectItem>
@@ -563,7 +589,6 @@ export function EditUserModal({
                         )}
                     />
 
-                    {/* Pilihan Tugas Tambahan & Info Dapodik */}
                     {showAdditionalSelector && (
                         <div className="space-y-2.5 rounded-xl border border-border bg-muted/30 p-3.5">
                             <div>
@@ -594,49 +619,50 @@ export function EditUserModal({
                             )}
 
                             <div className="grid grid-cols-1 gap-2 pt-0.5 sm:grid-cols-2">
-                                {ADDITIONAL_ROLE_OPTIONS.filter(
-                                    (opt) => opt !== selectedRole
-                                ).map((dutyRole) => {
-                                    const isFromDapodik = dapodikAutoRoles.includes(dutyRole);
-                                    const isChecked =
-                                        isFromDapodik || selectedAdditionalRoles.includes(dutyRole);
+                                {assignableDutyOptions.filter((opt) => opt !== selectedRole).map(
+                                    (dutyRole) => {
+                                        const isFromDapodik = dapodikAutoRoles.includes(dutyRole);
+                                        const isChecked =
+                                            isFromDapodik ||
+                                            selectedAdditionalRoles.includes(dutyRole);
 
-                                    return (
-                                        <label
-                                            key={dutyRole}
-                                            className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors ${isFromDapodik
-                                                ? 'cursor-default border-sky-500/40 bg-sky-500/10 font-medium text-foreground'
-                                                : isChecked
-                                                    ? 'cursor-pointer border-emerald-500/50 bg-emerald-500/10 font-medium text-foreground'
-                                                    : 'cursor-pointer border-border bg-background text-muted-foreground hover:text-foreground'
-                                                }`}
-                                        >
-                                            <span className="flex items-center gap-2 truncate">
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isChecked}
-                                                    disabled={isFromDapodik}
-                                                    onChange={(e) =>
-                                                        handleToggleAdditionalRole(
-                                                            dutyRole,
-                                                            e.target.checked
-                                                        )
-                                                    }
-                                                    className="h-3.5 w-3.5 rounded border-border accent-emerald-600"
-                                                />
-                                                <span className="truncate">
-                                                    {getRoleLabel(dutyRole, lang)}
+                                        return (
+                                            <label
+                                                key={dutyRole}
+                                                className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors ${isFromDapodik
+                                                        ? 'cursor-default border-sky-500/40 bg-sky-500/10 font-medium text-foreground'
+                                                        : isChecked
+                                                            ? 'cursor-pointer border-emerald-500/50 bg-emerald-500/10 font-medium text-foreground'
+                                                            : 'cursor-pointer border-border bg-background text-muted-foreground hover:text-foreground'
+                                                    }`}
+                                            >
+                                                <span className="flex items-center gap-2 truncate">
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isChecked}
+                                                        disabled={isFromDapodik}
+                                                        onChange={(e) =>
+                                                            handleToggleAdditionalRole(
+                                                                dutyRole,
+                                                                e.target.checked
+                                                            )
+                                                        }
+                                                        className="h-3.5 w-3.5 rounded border-border accent-emerald-600"
+                                                    />
+                                                    <span className="truncate">
+                                                        {getRoleLabel(dutyRole, lang)}
+                                                    </span>
                                                 </span>
-                                            </span>
 
-                                            {isFromDapodik && (
-                                                <span className="shrink-0 rounded bg-sky-600/15 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700 dark:text-sky-300">
-                                                    Dapodik
-                                                </span>
-                                            )}
-                                        </label>
-                                    );
-                                })}
+                                                {isFromDapodik && (
+                                                    <span className="shrink-0 rounded bg-sky-600/15 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700 dark:text-sky-300">
+                                                        Dapodik
+                                                    </span>
+                                                )}
+                                            </label>
+                                        );
+                                    }
+                                )}
                             </div>
                         </div>
                     )}

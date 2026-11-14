@@ -1,6 +1,9 @@
+// src/modules/admin/services/user-management.service.ts
 import { supabase } from '@/services/supabase.client';
 import {
     BULK_CONCURRENCY,
+    isProtectedAdminAccount,
+    normalizeSchoolId,
     type AppUser,
     type AppUserRole,
     type BatchExecutionSummary,
@@ -16,9 +19,6 @@ import {
 // INTERNAL HELPERS
 // ==========================================
 
-/**
- * Mengambil pesan error yang mudah dibaca dari respons Supabase Edge Function.
- */
 const extractEdgeErrorMessage = async (error: unknown): Promise<string> => {
     if (!error || typeof error !== 'object') return 'Terjadi kesalahan jaringan';
     const errObj = error as { message?: string; context?: Response };
@@ -36,9 +36,6 @@ const extractEdgeErrorMessage = async (error: unknown): Promise<string> => {
     return errObj.message || 'Terjadi kesalahan pada server';
 };
 
-/**
- * Memanggil Edge Function dengan penanganan error yang aman untuk proses massal.
- */
 const invokeSafe = async (
     name: string,
     body: Record<string, unknown>
@@ -58,10 +55,6 @@ const invokeSafe = async (
     }
 };
 
-/**
- * Menjalankan proses async secara paralel dengan batas antrean (concurrency)
- * agar server tidak kelebihan beban saat memproses banyak akun sekaligus.
- */
 const runWithConcurrency = async <T, R>(
     items: readonly T[],
     limit: number,
@@ -82,9 +75,6 @@ const runWithConcurrency = async <T, R>(
     return results;
 };
 
-/**
- * Merangkum hasil eksekusi massal (jumlah berhasil, gagal, dan dilewati).
- */
 const summarizeResults = (results: InvokeResult[], skipped = 0): BatchExecutionSummary => {
     const failures = results.filter((r) => r.error || r.data?.error);
     return {
@@ -97,10 +87,6 @@ const summarizeResults = (results: InvokeResult[], skipped = 0): BatchExecutionS
     };
 };
 
-/**
- * Memecah array besar menjadi beberapa potongan kecil (chunk)
- * agar parameter `.in(...)` pada query Supabase tidak melebihi batas panjang URL.
- */
 const chunkArray = <T>(items: readonly T[], size: number): T[][] => {
     const chunks: T[][] = [];
     for (let i = 0; i < items.length; i += size) {
@@ -112,7 +98,7 @@ const chunkArray = <T>(items: readonly T[], size: number): T[][] => {
 /**
  * Memperkaya daftar akun dengan:
  * 1. Status keterhubungan siswa/orang tua di `public.user_student_links`.
- * 2. Teks tugas tambahan Dapodik dari `public.teachers` ("tugasTambahan").
+ * 2. Status keterhubungan & tugas tambahan Dapodik dari `public.teachers` ("tugasTambahan").
  */
 const enrichUsersWithMasterData = async (
     users: AppUser[],
@@ -120,6 +106,8 @@ const enrichUsersWithMasterData = async (
     isSuperAdmin: boolean
 ): Promise<AppUser[]> => {
     if (users.length === 0) return users;
+
+    const validSchoolId = normalizeSchoolId(schoolId);
 
     const studentParentIds = users
         .filter((u) => u.role === 'SISWA' || u.role === 'ORANG_TUA')
@@ -135,6 +123,7 @@ const enrichUsersWithMasterData = async (
         .map((u) => u.id);
 
     const linkedCountMap = new Map<string, number>();
+    const linkedTeacherIds = new Set<string>();
     const teacherDutyMap = new Map<string, string>();
 
     // 1. Ambil tautan master siswa / orang tua
@@ -147,8 +136,8 @@ const enrichUsersWithMasterData = async (
                     .select('userId')
                     .in('userId', chunk);
 
-                if (!isSuperAdmin && schoolId) {
-                    linkQuery = linkQuery.eq('schoolId', schoolId);
+                if (!isSuperAdmin && validSchoolId) {
+                    linkQuery = linkQuery.eq('schoolId', validSchoolId);
                 }
 
                 const { data: linkRows, error } = await linkQuery;
@@ -162,11 +151,11 @@ const enrichUsersWithMasterData = async (
                 }
             }
         } catch {
-            // Fallback aman agar daftar pengguna tetap tampil
+            // Fallback aman
         }
     }
 
-    // 2. Ambil tugasTambahan dari tabel teachers (Dapodik)
+    // 2. Ambil tautan master & tugasTambahan dari tabel teachers (Dapodik)
     if (staffUserIds.length > 0) {
         try {
             const staffChunks = chunkArray(staffUserIds, 200);
@@ -176,8 +165,8 @@ const enrichUsersWithMasterData = async (
                     .select('userId, tugasTambahan')
                     .in('userId', chunk);
 
-                if (!isSuperAdmin && schoolId) {
-                    teacherQuery = teacherQuery.eq('schoolId', schoolId);
+                if (!isSuperAdmin && validSchoolId) {
+                    teacherQuery = teacherQuery.eq('schoolId', validSchoolId);
                 }
 
                 const { data: teacherRows, error } = await teacherQuery;
@@ -187,14 +176,17 @@ const enrichUsersWithMasterData = async (
                             userId?: string | null;
                             tugasTambahan?: string | null;
                         };
-                        if (typedRow.userId && typedRow.tugasTambahan) {
-                            teacherDutyMap.set(typedRow.userId, typedRow.tugasTambahan);
+                        if (typedRow.userId) {
+                            linkedTeacherIds.add(typedRow.userId);
+                            if (typedRow.tugasTambahan) {
+                                teacherDutyMap.set(typedRow.userId, typedRow.tugasTambahan);
+                            }
                         }
                     }
                 }
             }
         } catch {
-            // Fallback aman jika tabel/kolom belum tersedia
+            // Fallback aman
         }
     }
 
@@ -223,6 +215,7 @@ const enrichUsersWithMasterData = async (
         return {
             ...u,
             additionalRoles: normalizedAdditionalRoles,
+            isLinkedToMaster: linkedTeacherIds.has(u.id),
             tugasTambahan: teacherDutyMap.get(u.id) ?? u.tugasTambahan ?? null,
         };
     });
@@ -233,12 +226,9 @@ const enrichUsersWithMasterData = async (
 // ==========================================
 
 export const userManagementService = {
-    /**
-     * Mengambil seluruh data pengguna (dengan paginasi 1000 baris per batch)
-     * lalu menggabungkannya dengan status tautan master & tugas tambahan Dapodik.
-     */
     async fetchAllUsers(schoolId: string | null, isSuperAdmin: boolean): Promise<AppUser[]> {
-        if (!isSuperAdmin && !schoolId) return [];
+        const validSchoolId = normalizeSchoolId(schoolId);
+        if (!isSuperAdmin && !validSchoolId) return [];
 
         const pageSize = 1000;
         const allUsers: AppUser[] = [];
@@ -251,8 +241,8 @@ export const userManagementService = {
                 .order('id', { ascending: true })
                 .range(from, from + pageSize - 1);
 
-            if (!isSuperAdmin && schoolId) {
-                query = query.eq('schoolId', schoolId);
+            if (validSchoolId) {
+                query = query.eq('schoolId', validSchoolId);
             }
 
             const { data, error } = await query;
@@ -263,16 +253,22 @@ export const userManagementService = {
             if (batch.length < pageSize) break;
         }
 
-        return enrichUsersWithMasterData(allUsers, schoolId, isSuperAdmin);
+        return enrichUsersWithMasterData(allUsers, validSchoolId, isSuperAdmin);
     },
 
-    /**
-     * Membuat satu akun pengguna baru melalui Edge Function `create-user`.
-     * Sesuai constraint `users_scope_check`, SUPER_ADMIN wajib memiliki schoolId = null.
-     */
-    async createUser(payload: CreateUserFormValues, schoolId: string | null): Promise<void> {
-        if (payload.role !== 'SUPER_ADMIN' && !schoolId) {
-            throw new Error('Pilih sekolah terlebih dahulu sebelum membuat akun sekolah.');
+    async createUser(
+        payload: CreateUserFormValues,
+        schoolId: string | null,
+        isSuperAdmin = false
+    ): Promise<void> {
+        const validSchoolId = normalizeSchoolId(schoolId);
+
+        if (payload.role !== 'SUPER_ADMIN' && !validSchoolId) {
+            throw new Error('Pilih sekolah yang valid terlebih dahulu sebelum membuat akun sekolah.');
+        }
+
+        if (!isSuperAdmin && (payload.role === 'SUPER_ADMIN' || payload.role === 'ADMIN')) {
+            throw new Error('Anda tidak memiliki izin untuk membuat akun Admin atau Super Admin.');
         }
 
         const isNonStaffRole =
@@ -280,18 +276,19 @@ export const userManagementService = {
             payload.role === 'SISWA' ||
             payload.role === 'ORANG_TUA';
 
-        // Bersihkan additionalRoles agar tidak duplikat dengan role utama
         const cleanAdditionalRoles = isNonStaffRole
             ? []
             : Array.from(new Set(payload.additionalRoles ?? [])).filter(
-                  (r) => r !== payload.role
+                  (r) =>
+                      r !== payload.role &&
+                      (isSuperAdmin || (r !== 'SUPER_ADMIN' && r !== 'ADMIN'))
               );
 
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('create-user', {
             body: {
                 ...payload,
                 additionalRoles: cleanAdditionalRoles,
-                schoolId: payload.role === 'SUPER_ADMIN' ? null : schoolId,
+                schoolId: payload.role === 'SUPER_ADMIN' ? null : validSchoolId,
             },
         });
 
@@ -303,17 +300,20 @@ export const userManagementService = {
         }
     },
 
-    /**
-     * Memperbarui nama lengkap, role utama, dan daftar tugas tambahan pengguna,
-     * serta menyinkronkan nama siswa ke tabel `students`.
-     */
     async updateUser(params: {
         targetUser: AppUser;
         data: EditUserFormValues;
         isSuperAdmin: boolean;
         activeSchoolId: string | null;
+        currentUserId?: string;
     }): Promise<void> {
-        const { targetUser, data, isSuperAdmin, activeSchoolId } = params;
+        const { targetUser, data, isSuperAdmin, activeSchoolId, currentUserId } = params;
+        const validSchoolId = normalizeSchoolId(activeSchoolId);
+        const isSelf = Boolean(currentUserId && currentUserId === targetUser.id);
+
+        if (!isSelf && isProtectedAdminAccount(targetUser, isSuperAdmin)) {
+            throw new Error('Anda tidak memiliki izin untuk mengubah akun Admin atau Super Admin.');
+        }
 
         const targetMainRole = isSuperAdmin ? data.role : targetUser.role;
         const isNonStaffRole =
@@ -324,7 +324,9 @@ export const userManagementService = {
         const cleanAdditionalRoles = isNonStaffRole
             ? []
             : Array.from(new Set(data.additionalRoles ?? [])).filter(
-                  (r) => r !== targetMainRole
+                  (r) =>
+                      r !== targetMainRole &&
+                      (isSuperAdmin || (r !== 'SUPER_ADMIN' && r !== 'ADMIN'))
               );
 
         const updateFields = isSuperAdmin
@@ -339,8 +341,8 @@ export const userManagementService = {
               };
 
         let query = supabase.from('users').update(updateFields).eq('id', targetUser.id);
-        if (!isSuperAdmin && activeSchoolId) {
-            query = query.eq('schoolId', activeSchoolId);
+        if (!isSuperAdmin && validSchoolId) {
+            query = query.eq('schoolId', validSchoolId);
         }
 
         const { error } = await query;
@@ -364,14 +366,34 @@ export const userManagementService = {
                         .eq('id', linkedStudentId);
                 }
             } catch {
-                // Best-effort sync agar tidak memblokir pembaruan akun utama
+                // Best-effort sync
+            }
+        }
+
+        // Sinkronkan nama lengkap ke tabel master `teachers` jika akun guru/PTK tertaut
+        if (
+            targetMainRole !== 'SISWA' &&
+            targetMainRole !== 'ORANG_TUA' &&
+            targetMainRole !== 'SUPER_ADMIN' &&
+            targetUser.fullName !== data.fullName
+        ) {
+            try {
+                let teacherSyncQuery = supabase
+                    .from('teachers')
+                    .update({ fullName: data.fullName })
+                    .eq('userId', targetUser.id);
+
+                if (!isSuperAdmin && validSchoolId) {
+                    teacherSyncQuery = teacherSyncQuery.eq('schoolId', validSchoolId);
+                }
+
+                await teacherSyncQuery;
+            } catch {
+                // Best-effort sync
             }
         }
     },
 
-    /**
-     * Mengatur ulang kata sandi pengguna melalui Edge Function `reset-password`.
-     */
     async resetPassword(targetUserId: string, newPassword: string): Promise<void> {
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
             'reset-password',
@@ -388,9 +410,6 @@ export const userManagementService = {
         }
     },
 
-    /**
-     * Mengaktifkan atau memblokir akun pengguna.
-     */
     async toggleActiveStatus(params: {
         targetUser: AppUser;
         currentUserId?: string;
@@ -399,12 +418,13 @@ export const userManagementService = {
         activeSchoolId: string | null;
     }): Promise<void> {
         const { targetUser, currentUserId, isSuperAdmin, canManageUsers, activeSchoolId } = params;
+        const validSchoolId = normalizeSchoolId(activeSchoolId);
 
         if (!canManageUsers) {
             throw new Error('Anda tidak memiliki izin untuk mengubah status akun.');
         }
-        if (!isSuperAdmin && targetUser.role === 'SUPER_ADMIN') {
-            throw new Error('Admin sekolah tidak dapat mengubah status akun Super Admin.');
+        if (isProtectedAdminAccount(targetUser, isSuperAdmin)) {
+            throw new Error('Anda tidak dapat mengubah status akun Admin atau Super Admin.');
         }
         if (currentUserId === targetUser.id) {
             throw new Error('Anda tidak dapat memblokir akun Anda sendiri.');
@@ -415,30 +435,28 @@ export const userManagementService = {
             .update({ isActive: !targetUser.isActive })
             .eq('id', targetUser.id);
 
-        if (!isSuperAdmin && activeSchoolId) {
-            query = query.eq('schoolId', activeSchoolId);
+        if (!isSuperAdmin && validSchoolId) {
+            query = query.eq('schoolId', validSchoolId);
         }
 
         const { error } = await query;
         if (error) throw new Error(error.message);
     },
 
-    /**
-     * Menghapus satu akun pengguna melalui Edge Function `delete-user`.
-     */
     async deleteUser(params: {
         targetUserId: string;
         currentUserId?: string;
         activeSchoolId: string | null;
     }): Promise<void> {
         const { targetUserId, currentUserId, activeSchoolId } = params;
+        const validSchoolId = normalizeSchoolId(activeSchoolId);
 
         if (currentUserId === targetUserId) {
             throw new Error('Anda tidak dapat menghapus akun Anda sendiri.');
         }
 
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('delete-user', {
-            body: { targetUserId, schoolId: activeSchoolId },
+            body: { targetUserId, schoolId: validSchoolId },
         });
 
         if (error) {
@@ -449,39 +467,45 @@ export const userManagementService = {
         }
     },
 
-    /**
-     * Melakukan generate/reset akun untuk pengguna yang dicentang di tabel.
-     * Kata sandi awal diambil langsung dari secret server (`useDefaultPassword: true`).
-     */
     async generateSelectedUsers(params: {
         usersTarget: AppUser[];
         activeSchoolId: string | null;
         currentUserId?: string;
+        isSuperAdmin?: boolean;
     }): Promise<BatchExecutionSummary> {
-        const { usersTarget, activeSchoolId, currentUserId } = params;
+        const { usersTarget, activeSchoolId, currentUserId, isSuperAdmin = false } = params;
+        const fallbackSchoolId = normalizeSchoolId(activeSchoolId);
 
         const eligibleUsers = usersTarget.filter(
-            (u) => u.role !== 'SUPER_ADMIN' && u.id !== currentUserId
+            (u) => !isProtectedAdminAccount(u, isSuperAdmin) && u.id !== currentUserId
         );
         const skippedCount = usersTarget.length - eligibleUsers.length;
 
         if (eligibleUsers.length === 0) {
             throw new Error(
-                'Tidak ada akun yang memenuhi syarat untuk di-generate (Super Admin & akun sendiri dilewati).'
+                'Tidak ada akun yang memenuhi syarat untuk di-generate (Admin/Super Admin & akun sendiri dilewati).'
             );
         }
 
-        const results = await runWithConcurrency(eligibleUsers, BULK_CONCURRENCY, (user) =>
-            invokeSafe('create-user', {
+        const results = await runWithConcurrency(eligibleUsers, BULK_CONCURRENCY, (user) => {
+            const targetSchoolId = normalizeSchoolId(user.schoolId) ?? fallbackSchoolId;
+            if (!targetSchoolId) {
+                return Promise.resolve({
+                    data: null,
+                    error: { message: `School ID untuk akun ${user.email} tidak valid.` },
+                });
+            }
+
+            return invokeSafe('create-user', {
                 email: user.email,
                 useDefaultPassword: true,
                 fullName: user.fullName,
                 role: user.role,
                 additionalRoles: Array.isArray(user.additionalRoles) ? user.additionalRoles : [],
-                schoolId: user.schoolId ?? activeSchoolId,
+                schoolId: targetSchoolId,
                 existingUserId: user.id,
-            })
-        );
+            });
+        });
 
         const summary = summarizeResults(results, skippedCount);
         if (summary.success === 0) {
@@ -491,22 +515,21 @@ export const userManagementService = {
         return summary;
     },
 
-    /**
-     * Menjalankan generate akun massal dari data master (Guru/Siswa/Orang Tua)
-     * melalui Edge Function `generate-accounts-from-master`.
-     */
     async generateBulkFromMaster(
         targetGroup: BulkTargetGroup,
         activeSchoolId: string | null
     ): Promise<BulkGenerateResponse> {
-        if (!activeSchoolId) {
-            throw new Error('Pilih sekolah terlebih dahulu sebelum menjalankan generate massal.');
+        const validSchoolId = normalizeSchoolId(activeSchoolId);
+        if (!validSchoolId) {
+            throw new Error(
+                'Pilih sekolah aktif yang valid terlebih dahulu sebelum menjalankan generate massal.'
+            );
         }
 
         const { data, error } = await supabase.functions.invoke<BulkGenerateResponse>(
-            'generate-accounts-from-master',
+            'bulk-generate-accounts',
             {
-                body: { targetGroup, schoolId: activeSchoolId },
+                body: { targetGroup, schoolId: validSchoolId },
             }
         );
 
@@ -520,35 +543,43 @@ export const userManagementService = {
         return data ?? {};
     },
 
-    /**
-     * Menghapus beberapa akun sekaligus yang dicentang pada tabel.
-     */
     async deleteSelectedUsers(params: {
         selectedIds: string[];
         allUsers: AppUser[];
         activeSchoolId: string | null;
         currentUserId?: string;
+        isSuperAdmin?: boolean;
     }): Promise<BatchExecutionSummary> {
-        const { selectedIds, allUsers, activeSchoolId, currentUserId } = params;
+        const {
+            selectedIds,
+            allUsers,
+            activeSchoolId,
+            currentUserId,
+            isSuperAdmin = false,
+        } = params;
+        const fallbackSchoolId = normalizeSchoolId(activeSchoolId);
         const userMap = new Map(allUsers.map((u) => [u.id, u]));
 
         const safeIds = selectedIds.filter((id) => {
             if (id === currentUserId) return false;
             const target = userMap.get(id);
-            return target?.role !== 'SUPER_ADMIN';
+            if (!target) return false;
+            return !isProtectedAdminAccount(target, isSuperAdmin);
         });
 
         const skippedCount = selectedIds.length - safeIds.length;
 
         if (safeIds.length === 0) {
             throw new Error(
-                'Tidak ada akun valid yang dapat dihapus (Super Admin & akun sendiri dilindungi).'
+                'Tidak ada akun valid yang dapat dihapus (Admin/Super Admin & akun sendiri dilindungi).'
             );
         }
 
-        const results = await runWithConcurrency(safeIds, BULK_CONCURRENCY, (id) =>
-            invokeSafe('delete-user', { targetUserId: id, schoolId: activeSchoolId })
-        );
+        const results = await runWithConcurrency(safeIds, BULK_CONCURRENCY, (id) => {
+            const target = userMap.get(id);
+            const targetSchoolId = normalizeSchoolId(target?.schoolId) ?? fallbackSchoolId;
+            return invokeSafe('delete-user', { targetUserId: id, schoolId: targetSchoolId });
+        });
 
         const summary = summarizeResults(results, skippedCount);
         if (summary.success === 0) {
@@ -558,21 +589,21 @@ export const userManagementService = {
         return summary;
     },
 
-    /**
-     * Menghapus seluruh akun berdasarkan kelompok tab (staff / siswa / orangtua).
-     */
     async deleteUsersByRoleGroup(
         targetGroup: BulkTargetGroup,
         activeSchoolId: string | null
     ): Promise<EdgeFunctionBody> {
-        if (!activeSchoolId) {
-            throw new Error('Pilih sekolah terlebih dahulu sebelum menghapus data massal.');
+        const validSchoolId = normalizeSchoolId(activeSchoolId);
+        if (!validSchoolId) {
+            throw new Error(
+                'Pilih sekolah aktif yang valid terlebih dahulu sebelum menghapus data massal.'
+            );
         }
 
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
             'delete-users-by-role',
             {
-                body: { targetGroup, schoolId: activeSchoolId },
+                body: { targetGroup, schoolId: validSchoolId },
             }
         );
 

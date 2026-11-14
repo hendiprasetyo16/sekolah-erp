@@ -1,3 +1,4 @@
+// src/modules/admin/components/UserManagementTable.tsx
 import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from 'react';
 import {
     ArrowDown,
@@ -33,6 +34,7 @@ import {
     ITEMS_PER_PAGE,
     ROLE_DISPLAY_NAMES,
     STAFF_ROLES,
+    isProtectedAdminAccount,
     mapTugasTambahanToRoles,
     type AppUser,
     type AppUserRole,
@@ -163,8 +165,13 @@ export function UserManagementTable({
         return ROLE_DISPLAY_NAMES[role]?.[lang] ?? role;
     };
 
+    const selectablePageUsers = users.filter(
+        (u) => u.id !== currentUserId && !isProtectedAdminAccount(u, isSuperAdmin)
+    );
+
     const isAllPageSelected =
-        users.length > 0 && users.every((u) => selectedUserIds.includes(u.id));
+        selectablePageUsers.length > 0 &&
+        selectablePageUsers.every((u) => selectedUserIds.includes(u.id));
 
     const handleSelectAllChange = (e: ChangeEvent<HTMLInputElement>) => {
         onSelectAllPage(e.target.checked);
@@ -206,12 +213,13 @@ export function UserManagementTable({
                             <th className="w-10 px-4 py-3 text-center">
                                 <input
                                     type="checkbox"
-                                    className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary accent-primary"
+                                    className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary accent-primary disabled:cursor-not-allowed disabled:opacity-40"
                                     aria-label={
                                         lang === 'id'
                                             ? 'Pilih semua di halaman ini'
                                             : 'Select all on this page'
                                     }
+                                    disabled={!canManageUsers || selectablePageUsers.length === 0}
                                     checked={isAllPageSelected}
                                     onChange={handleSelectAllChange}
                                 />
@@ -260,8 +268,14 @@ export function UserManagementTable({
                         ) : (
                             users.map((user, index) => {
                                 const isSelf = currentUserId === user.id;
-                                const canManageRow =
-                                    canManageUsers && (isSuperAdmin || user.role !== 'SUPER_ADMIN');
+                                const isProtectedTarget = isProtectedAdminAccount(
+                                    user,
+                                    isSuperAdmin
+                                );
+                                const canEditRow =
+                                    canManageUsers && (isSelf || !isProtectedTarget);
+                                const canControlOtherRow =
+                                    canManageUsers && !isSelf && !isProtectedTarget;
 
                                 // Gabungkan additionalRoles manual + tugasTambahan Dapodik tanpa duplikat
                                 const extraDuties = Array.from(
@@ -282,8 +296,9 @@ export function UserManagementTable({
                                         <td className="px-4 py-3 text-center">
                                             <input
                                                 type="checkbox"
-                                                className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary accent-primary"
+                                                className="h-4 w-4 cursor-pointer rounded border-gray-300 text-primary accent-primary disabled:cursor-not-allowed disabled:opacity-40"
                                                 aria-label={user.fullName}
+                                                disabled={!canControlOtherRow}
                                                 checked={selectedUserIds.includes(user.id)}
                                                 onChange={() => onToggleSelectUser(user.id)}
                                             />
@@ -309,8 +324,8 @@ export function UserManagementTable({
                                                                             ? `Tertaut dengan ${user.linkedChildrenCount ?? 1} siswa`
                                                                             : `Linked to ${user.linkedChildrenCount ?? 1} student(s)`
                                                                         : lang === 'id'
-                                                                            ? 'Tertaut dengan data master siswa'
-                                                                            : 'Linked to student master record'
+                                                                            ? 'Tertaut dengan data master akademik'
+                                                                            : 'Linked to master academic record'
                                                                 }
                                                                 className="inline-flex items-center gap-0.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-500/20 dark:text-sky-300"
                                                             >
@@ -362,14 +377,14 @@ export function UserManagementTable({
                                         <td className="px-4 py-3">
                                             <span
                                                 className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive
-                                                    ? 'text-emerald-600 dark:text-emerald-400'
-                                                    : 'text-red-600 dark:text-red-400'
+                                                        ? 'text-emerald-600 dark:text-emerald-400'
+                                                        : 'text-red-600 dark:text-red-400'
                                                     }`}
                                             >
                                                 <span
                                                     className={`h-2 w-2 rounded-full ${user.isActive
-                                                        ? 'animate-pulse bg-emerald-500'
-                                                        : 'bg-red-500'
+                                                            ? 'animate-pulse bg-emerald-500'
+                                                            : 'bg-red-500'
                                                         }`}
                                                 />
                                                 {user.isActive
@@ -378,7 +393,7 @@ export function UserManagementTable({
                                             </span>
                                         </td>
                                         <td className="px-4 py-3 text-right">
-                                            {canManageRow ? (
+                                            {canEditRow ? (
                                                 <DropdownMenu>
                                                     <DropdownMenuTrigger asChild>
                                                         <Button
@@ -394,18 +409,24 @@ export function UserManagementTable({
                                                         align="end"
                                                         className="w-48 bg-card text-card-foreground"
                                                     >
-                                                        <DropdownMenuItem onClick={() => onEditUser(user)}>
+                                                        <DropdownMenuItem
+                                                            onClick={() => onEditUser(user)}
+                                                        >
                                                             <Edit className="mr-2 h-4 w-4" />
                                                             {tUM('actionEdit')}
                                                         </DropdownMenuItem>
 
-                                                        <DropdownMenuItem onClick={() => onResetPassword(user)}>
-                                                            <KeyRound className="mr-2 h-4 w-4" />
-                                                            {tUM('actionResetPass')}
-                                                        </DropdownMenuItem>
-
-                                                        {!isSelf && (
+                                                        {canControlOtherRow && (
                                                             <>
+                                                                <DropdownMenuItem
+                                                                    onClick={() =>
+                                                                        onResetPassword(user)
+                                                                    }
+                                                                >
+                                                                    <KeyRound className="mr-2 h-4 w-4" />
+                                                                    {tUM('actionResetPass')}
+                                                                </DropdownMenuItem>
+
                                                                 <DropdownMenuSeparator />
                                                                 <DropdownMenuItem
                                                                     className={
@@ -413,7 +434,9 @@ export function UserManagementTable({
                                                                             ? 'text-red-600'
                                                                             : 'text-emerald-600'
                                                                     }
-                                                                    onClick={() => onToggleStatus(user)}
+                                                                    onClick={() =>
+                                                                        onToggleStatus(user)
+                                                                    }
                                                                 >
                                                                     {user.isActive ? (
                                                                         <Ban className="mr-2 h-4 w-4" />
@@ -427,7 +450,9 @@ export function UserManagementTable({
                                                                 <DropdownMenuSeparator />
                                                                 <DropdownMenuItem
                                                                     className="text-red-600 focus:bg-red-50 focus:text-red-600 dark:focus:bg-red-500/10"
-                                                                    onClick={() => onDeleteUser(user)}
+                                                                    onClick={() =>
+                                                                        onDeleteUser(user)
+                                                                    }
                                                                 >
                                                                     <Trash2 className="mr-2 h-4 w-4" />
                                                                     {tUM('actionDelete')}
@@ -437,7 +462,9 @@ export function UserManagementTable({
                                                     </DropdownMenuContent>
                                                 </DropdownMenu>
                                             ) : (
-                                                <span className="text-xs text-muted-foreground">-</span>
+                                                <span className="text-xs text-muted-foreground">
+                                                    -
+                                                </span>
                                             )}
                                         </td>
                                     </tr>
@@ -491,8 +518,8 @@ export function UserManagementTable({
                                     size="icon"
                                     onClick={() => onPageChange(pageNum)}
                                     className={`h-8 w-8 font-medium ${currentPage === pageNum
-                                        ? 'bg-primary font-bold text-primary-foreground shadow-sm'
-                                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                            ? 'bg-primary font-bold text-primary-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                                         }`}
                                 >
                                     {pageNum}

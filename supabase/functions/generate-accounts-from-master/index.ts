@@ -1,3 +1,4 @@
+// supabase/functions/generate-accounts-from-master/index.ts
 // @ts-nocheck
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
@@ -15,7 +16,7 @@ const corsHeaders = {
 }
 
 // =========================================================
-// PARAMETER PENGATURAN (Bisa disesuaikan sesuai kebutuhan)
+// PARAMETER PENGATURAN
 // =========================================================
 const MAX_ACCOUNTS_PER_RUN = 50 // Maksimal kandidat yang diproses dalam 1x klik Generate
 const CHUNK_SIZE = 5            // Jumlah proses paralel dalam 1 kelompok kecil
@@ -30,6 +31,7 @@ type TargetGroup = (typeof ALLOWED_GROUPS)[number]
 interface CallerRow {
   id: string
   role: string
+  additionalRoles?: string[] | null
   schoolId: string | null
   isActive: boolean
 }
@@ -43,6 +45,7 @@ interface TeacherRow {
   nuptk: string | null
   nip: string | null
   nik: string | null
+  tugasTambahan?: string | null
   isActive: boolean
 }
 
@@ -92,6 +95,7 @@ interface AccountCandidate {
   email: string
   fullName: string
   role: 'GURU' | 'SISWA' | 'ORANG_TUA'
+  additionalRoles?: string[]
   studentLinks?: ParentLink[]
   alreadyLinked?: boolean
   existingUserId?: string
@@ -151,11 +155,14 @@ function normalizeEmail(value: unknown): string {
     : ''
 }
 
+/**
+ * Validasi format UUID standar PostgreSQL (mendukung UUID v4 maupun UUID seed/kustom).
+ */
 function isValidUuid(value: unknown): value is string {
   return (
     typeof value === 'string' &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
-      value,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value.trim(),
     )
   )
 }
@@ -172,6 +179,29 @@ function isAllowedGroup(value: unknown): value is TargetGroup {
     typeof value === 'string' &&
     (ALLOWED_GROUPS as readonly string[]).includes(value)
   )
+}
+
+/**
+ * Selaras dengan fungsi SQL `map_tugas_tambahan_to_roles` dan frontend.
+ */
+function mapTugasTambahanToRoles(tugasTambahan?: string | null): string[] {
+  if (!tugasTambahan) return []
+  const text = tugasTambahan.toLowerCase().trim()
+  const mapped: string[] = []
+
+  if (text.includes('bendahara')) mapped.push('BENDAHARA')
+  if (text.includes('sarpras') || text.includes('sarana')) mapped.push('STAFF_SARPRAS')
+  if (text.includes('perpustakaan') || text.includes('perpus')) mapped.push('STAFF_PERPUS')
+  if (text.includes('tata usaha') || text.includes('administrasi')) mapped.push('STAFF_TU')
+  if (text.includes('wali kelas')) mapped.push('WALI_KELAS')
+  if (text.includes('wakil kepala') || text.includes('wakasek') || text.includes('operator')) {
+    mapped.push('OPERATOR')
+  }
+  if (text.includes('kepala sekolah') && !text.includes('wakil')) {
+    mapped.push('KEPALA_SEKOLAH')
+  }
+
+  return Array.from(new Set(mapped))
 }
 
 /**
@@ -238,16 +268,27 @@ function formatAuthErrorReason(rawMessage: string): string {
 }
 
 /**
- * Menghapus akun Auth yang baru saja dibuat jika langkah profil/tautan gagal.
- * HANYA dipanggil untuk akun baru (bukan akun lama yang sudah ada sebelumnya).
+ * Menghapus profil public.users & akun Auth yang baru dibuat jika langkah tautan gagal.
  */
 async function rollbackAuthUser(
   supabaseAdmin: SupabaseClient,
   userId: string,
 ): Promise<boolean> {
   try {
-    const { error } =
-      await supabaseAdmin.auth.admin.deleteUser(userId)
+    const { error: profileDeleteError } = await supabaseAdmin
+      .from('users')
+      .delete()
+      .eq('id', userId)
+
+    if (profileDeleteError) {
+      console.error(
+        'Gagal menghapus profil users saat rollback:',
+        userId,
+        profileDeleteError.message,
+      )
+    }
+
+    const { error } = await supabaseAdmin.auth.admin.deleteUser(userId)
 
     if (error) {
       console.error(
@@ -338,14 +379,14 @@ serve(async (req: Request): Promise<Response> => {
     const callerId = authData.user.id
 
     // =========================================================
-    // 3. VALIDASI ROLE & STATUS AKTIF PENGGUNA
+    // 3. VALIDASI ROLE & STATUS AKTIF (HANYA SUPER_ADMIN & ADMIN)
     // =========================================================
     const {
       data: callerData,
       error: callerError,
     } = await supabaseAdmin
       .from('users')
-      .select('id, role, "schoolId", "isActive"')
+      .select('id, role, "additionalRoles", "schoolId", "isActive"')
       .eq('id', callerId)
       .maybeSingle()
 
@@ -360,13 +401,19 @@ serve(async (req: Request): Promise<Response> => {
       throw new HttpError('Akun tidak ditemukan atau tidak aktif.', 403)
     }
 
+    const callerRoles = new Set<string>([
+      caller.role,
+      ...(Array.isArray(caller.additionalRoles) ? caller.additionalRoles : []),
+    ])
+
     const isSuperAdmin =
-      caller.role === 'SUPER_ADMIN' &&
+      callerRoles.has('SUPER_ADMIN') &&
       caller.schoolId === null
 
     const isSchoolAdmin =
-      caller.role === 'ADMIN' &&
-      typeof caller.schoolId === 'string'
+      callerRoles.has('ADMIN') &&
+      typeof caller.schoolId === 'string' &&
+      caller.schoolId.trim().length > 0
 
     if (!isSuperAdmin && !isSchoolAdmin) {
       throw new HttpError(
@@ -391,7 +438,10 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const targetGroup = requestBody.targetGroup
-    const schoolId = requestBody.schoolId
+    const rawSchoolId =
+      typeof requestBody.schoolId === 'string'
+        ? requestBody.schoolId.trim()
+        : ''
 
     if (!isAllowedGroup(targetGroup)) {
       throw new HttpError(
@@ -400,9 +450,18 @@ serve(async (req: Request): Promise<Response> => {
       )
     }
 
-    if (!isValidUuid(schoolId)) {
+    if (!rawSchoolId) {
+      throw new HttpError(
+        'Sekolah aktif belum dipilih. Pilih sekolah terlebih dahulu sebelum menjalankan generate massal.',
+        400,
+      )
+    }
+
+    if (!isValidUuid(rawSchoolId)) {
       throw new HttpError('School ID tidak valid.', 400)
     }
+
+    const schoolId = rawSchoolId
 
     if (isSchoolAdmin && caller.schoolId !== schoolId) {
       throw new HttpError(
@@ -439,7 +498,7 @@ serve(async (req: Request): Promise<Response> => {
     if (targetGroup === 'staff') {
       const { data, error } = await supabaseAdmin
         .from('teachers')
-        .select('id, "schoolId", "userId", email, "fullName", nuptk, nip, nik, "isActive"')
+        .select('id, "schoolId", "userId", email, "fullName", nuptk, nip, nik, "tugasTambahan", "isActive"')
         .eq('schoolId', schoolId)
         .eq('isActive', true)
 
@@ -463,6 +522,7 @@ serve(async (req: Request): Promise<Response> => {
           email: makeEmail(teacher.email, username),
           fullName: teacher.fullName || '',
           role: 'GURU',
+          additionalRoles: mapTugasTambahanToRoles(teacher.tugasTambahan),
           alreadyLinked: Boolean(teacher.userId),
         }
       })
@@ -566,7 +626,6 @@ serve(async (req: Request): Promise<Response> => {
         existingParentLinkRows.map((row: UserStudentLinkRow) => String(row.studentId)),
       )
 
-      // 1) Pilih 1 wali utama per siswa aktif (Ayah -> Ibu -> Wali)
       const parentByStudent = new Map<string, StudentParentRow>()
       const parentRows = (parentsRes.data as StudentParentRow[] | null) || []
 
@@ -585,8 +644,6 @@ serve(async (req: Request): Promise<Response> => {
         }
       }
 
-      // 2) Gabungkan jika 1 email orang tua memiliki beberapa anak
-      //    Selaras dengan fungsi SQL resolve_user_email: w-xxxxxx@sistem.local (6 karakter)
       const parentByEmail = new Map<string, AccountCandidate>()
 
       for (const parent of parentByStudent.values()) {
@@ -710,7 +767,6 @@ serve(async (req: Request): Promise<Response> => {
     const preValidationFailures: Failure[] = []
 
     for (const person of uniqueMasterData) {
-      // 1) Jika data master ini sudah tertaut seluruhnya, lewati
       if (person.alreadyLinked) {
         skipped++
         continue
@@ -718,13 +774,11 @@ serve(async (req: Request): Promise<Response> => {
 
       const existingAccount = existingUserMap.get(person.email)
 
-      // 2) Email belum ada di sekolah ini -> siap dibuatkan akun baru
       if (!existingAccount) {
         candidates.push(person)
         continue
       }
 
-      // 3) Email sudah ada di sekolah ini & merupakan ORANG_TUA dengan anak baru yang belum tertaut
       if (
         person.role === 'ORANG_TUA' &&
         existingAccount.role === 'ORANG_TUA' &&
@@ -738,7 +792,6 @@ serve(async (req: Request): Promise<Response> => {
         continue
       }
 
-      // 4) Email sudah ada di sekolah ini dengan role berbeda (misal GURU/ADMIN)
       if (
         person.role === 'ORANG_TUA' &&
         existingAccount.role !== 'ORANG_TUA'
@@ -750,7 +803,6 @@ serve(async (req: Request): Promise<Response> => {
         continue
       }
 
-      // 5) Kasus lainnya: email sudah terpakai -> lewati
       skipped++
     }
 
@@ -798,7 +850,6 @@ serve(async (req: Request): Promise<Response> => {
           let newlyCreatedAuthUserId: string | null = null
 
           try {
-            // Pastikan kandidat ORANG_TUA memiliki minimal 1 anak yang perlu ditautkan
             if (
               person.role === 'ORANG_TUA' &&
               (!person.studentLinks || person.studentLinks.length === 0)
@@ -923,17 +974,17 @@ serve(async (req: Request): Promise<Response> => {
 
             // B. Buat profil aplikasi di tabel public.users
             const { error: profileError } = await supabaseAdmin
-            .from('users')
-            .insert({
-              id: userId,
-              schoolId,
-              email: person.email,
-              fullName: person.fullName || person.email,
-              role: person.role,
-              additionalRoles: [],
-              isActive: true,
-              isFirstLogin: true,
-            })
+              .from('users')
+              .insert({
+                id: userId,
+                schoolId,
+                email: person.email,
+                fullName: person.fullName || person.email,
+                role: person.role,
+                additionalRoles: person.additionalRoles ?? [],
+                isActive: true,
+                isFirstLogin: true,
+              })
 
             if (profileError) {
               console.error(
