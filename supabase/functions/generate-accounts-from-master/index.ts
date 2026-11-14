@@ -1,6 +1,11 @@
 // @ts-nocheck
+/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
+
 import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
+import {
+  createClient,
+  type SupabaseClient,
+} from 'https://esm.sh/@supabase/supabase-js@2.39.0'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -9,26 +14,90 @@ const corsHeaders = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-const MAX_ACCOUNTS_PER_RUN = 50
-const CHUNK_SIZE = 5
-const DELAY_MS = 500
+// =========================================================
+// PARAMETER PENGATURAN (Bisa disesuaikan sesuai kebutuhan)
+// =========================================================
+const MAX_ACCOUNTS_PER_RUN = 50 // Maksimal kandidat yang diproses dalam 1x klik Generate
+const CHUNK_SIZE = 5            // Jumlah proses paralel dalam 1 kelompok kecil
+const DELAY_MS = 500            // Jeda waktu (milidetik) antar kelompok kecil
 
-const ALLOWED_GROUPS = ['staff', 'siswa', 'orangtua']
+const ALLOWED_GROUPS = ['staff', 'siswa', 'orangtua'] as const
+type TargetGroup = (typeof ALLOWED_GROUPS)[number]
 
-type ParentLink = {
+// =========================================================
+// DEFINISI TIPE DATA
+// =========================================================
+interface CallerRow {
+  id: string
+  role: string
+  schoolId: string | null
+  isActive: boolean
+}
+
+interface TeacherRow {
+  id: string
+  schoolId: string
+  userId: string | null
+  email: string | null
+  fullName: string | null
+  nuptk: string | null
+  nip: string | null
+  nik: string | null
+  isActive: boolean
+}
+
+interface StudentRow {
+  id: string
+  schoolId: string
+  email: string | null
+  fullName: string | null
+  nisn: string | null
+  nis: string | null
+  nik: string | null
+  status: string
+}
+
+interface StudentParentRow {
+  id: string
+  schoolId: string
+  studentId: string | null
+  email: string | null
+  fullName: string | null
+  nik: string | null
+  relation: string | null
+}
+
+interface ExistingUserRow {
+  id: string
+  email: string
+  role: string
+  schoolId: string | null
+}
+
+interface UserStudentLinkRow {
+  id?: string
+  userId?: string
+  studentId: string
+  relationship?: string
+  isPrimary?: boolean
+}
+
+interface ParentLink {
   studentId: string
   relationship: string
 }
 
-type AccountCandidate = {
+interface AccountCandidate {
   id: string
   email: string
   fullName: string
   role: 'GURU' | 'SISWA' | 'ORANG_TUA'
   studentLinks?: ParentLink[]
+  alreadyLinked?: boolean
+  existingUserId?: string
 }
 
-type Failure = {
+interface Failure {
   email: string
   reason: string
 }
@@ -43,7 +112,10 @@ class HttpError extends Error {
   }
 }
 
-function jsonResponse(body: unknown, status = 200) {
+// =========================================================
+// FUNGSI BANTU (HELPERS)
+// =========================================================
+function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: {
@@ -63,7 +135,7 @@ function chunkArray<T>(array: T[], size: number): T[][] {
   return result
 }
 
-function delay(ms: number) {
+function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
@@ -95,9 +167,16 @@ function isValidEmail(email: string): boolean {
   )
 }
 
+function isAllowedGroup(value: unknown): value is TargetGroup {
+  return (
+    typeof value === 'string' &&
+    (ALLOWED_GROUPS as readonly string[]).includes(value)
+  )
+}
+
 /**
- * Prioritas orang tua:
- * Ayah -> Ibu -> Wali -> lainnya.
+ * Menentukan prioritas wali utama per siswa:
+ * 1. Ayah -> 2. Ibu -> 3. Wali -> 4. Lainnya
  */
 function getParentPriority(relation: unknown): number {
   const rel =
@@ -144,13 +223,26 @@ function getRelationship(value: unknown): string {
   return value.trim()
 }
 
+function formatAuthErrorReason(rawMessage: string): string {
+  const lower = rawMessage.toLowerCase()
+
+  if (
+    lower.includes('already been registered') ||
+    lower.includes('already exists') ||
+    lower.includes('duplicate')
+  ) {
+    return 'Email ini sudah terdaftar di sistem autentikasi (kemungkinan dipakai akun lama atau sekolah lain).'
+  }
+
+  return 'Pembuatan akun Auth gagal. Periksa format email atau data akun pada tabel master.'
+}
+
 /**
- * Mencoba menghapus pengguna Auth yang sudah dibuat.
- * Penghapusan Auth seharusnya ikut menghapus profil public.users
- * karena users.id memiliki FK ke auth.users dengan ON DELETE CASCADE.
+ * Menghapus akun Auth yang baru saja dibuat jika langkah profil/tautan gagal.
+ * HANYA dipanggil untuk akun baru (bukan akun lama yang sudah ada sebelumnya).
  */
 async function rollbackAuthUser(
-  supabaseAdmin: any,
+  supabaseAdmin: SupabaseClient,
   userId: string,
 ): Promise<boolean> {
   try {
@@ -177,8 +269,7 @@ async function rollbackAuthUser(
   }
 }
 
-serve(async (req) => {
-  // Menangani preflight CORS.
+serve(async (req: Request): Promise<Response> => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
   }
@@ -192,22 +283,14 @@ serve(async (req) => {
 
   try {
     // =========================================================
-    // 1. KONFIGURASI SUPABASE
+    // 1. KONFIGURASI SUPABASE & SECRET PASSWORD AWAL
     // =========================================================
-
     const supabaseUrl = Deno.env.get('SUPABASE_URL')
-    const serviceRoleKey = Deno.env.get(
-      'SUPABASE_SERVICE_ROLE_KEY',
-    )
-    const initialPassword = Deno.env.get(
-      'INITIAL_ACCOUNT_PASSWORD',
-    )
+    const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+    const initialPassword = Deno.env.get('INITIAL_ACCOUNT_PASSWORD')
 
     if (!supabaseUrl || !serviceRoleKey) {
-      throw new HttpError(
-        'Konfigurasi Supabase belum lengkap.',
-        500,
-      )
+      throw new HttpError('Konfigurasi Supabase belum lengkap.', 500)
     }
 
     if (!initialPassword || initialPassword.length < 12) {
@@ -229,21 +312,13 @@ serve(async (req) => {
     )
 
     // =========================================================
-    // 2. VALIDASI TOKEN LOGIN
+    // 2. VALIDASI TOKEN LOGIN PENGGUNA
     // =========================================================
-
-    const authorization =
-      req.headers.get('Authorization') || ''
-
-    const tokenMatch = authorization.match(
-      /^Bearer\s+(.+)$/i,
-    )
+    const authorization = req.headers.get('Authorization') || ''
+    const tokenMatch = authorization.match(/^Bearer\s+(.+)$/i)
 
     if (!tokenMatch) {
-      throw new HttpError(
-        'Token login diperlukan.',
-        401,
-      )
+      throw new HttpError('Token login diperlukan.', 401)
     }
 
     const accessToken = tokenMatch[1]
@@ -263,11 +338,10 @@ serve(async (req) => {
     const callerId = authData.user.id
 
     // =========================================================
-    // 3. VALIDASI ROLE DAN STATUS PENGGUNA
+    // 3. VALIDASI ROLE & STATUS AKTIF PENGGUNA
     // =========================================================
-
     const {
-      data: caller,
+      data: callerData,
       error: callerError,
     } = await supabaseAdmin
       .from('users')
@@ -276,31 +350,23 @@ serve(async (req) => {
       .maybeSingle()
 
     if (callerError) {
-      console.error(
-        'Gagal memverifikasi pengguna:',
-        callerError.message,
-      )
-
-      throw new HttpError(
-        'Gagal memverifikasi hak akses pengguna.',
-        500,
-      )
+      console.error('Gagal memverifikasi pengguna:', callerError.message)
+      throw new HttpError('Gagal memverifikasi hak akses pengguna.', 500)
     }
 
+    const caller = callerData as CallerRow | null
+
     if (!caller || caller.isActive !== true) {
-      throw new HttpError(
-        'Akun tidak ditemukan atau tidak aktif.',
-        403,
-      )
+      throw new HttpError('Akun tidak ditemukan atau tidak aktif.', 403)
     }
 
     const isSuperAdmin =
       caller.role === 'SUPER_ADMIN' &&
-      caller['schoolId'] === null
+      caller.schoolId === null
 
     const isSchoolAdmin =
       caller.role === 'ADMIN' &&
-      typeof caller['schoolId'] === 'string'
+      typeof caller.schoolId === 'string'
 
     if (!isSuperAdmin && !isSchoolAdmin) {
       throw new HttpError(
@@ -310,27 +376,24 @@ serve(async (req) => {
     }
 
     // =========================================================
-    // 4. VALIDASI TARGET SEKOLAH DAN KELOMPOK AKUN
+    // 4. VALIDASI INPUT REQUEST & KEBERADAAN SEKOLAH
     // =========================================================
-
-    let requestBody: any
+    let requestBody: Record<string, unknown>
 
     try {
-      requestBody = await req.json()
+      const parsed: unknown = await req.json()
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Invalid JSON object')
+      }
+      requestBody = parsed as Record<string, unknown>
     } catch {
-      throw new HttpError(
-        'Body request bukan JSON yang valid.',
-        400,
-      )
+      throw new HttpError('Body request bukan JSON yang valid.', 400)
     }
 
-    const targetGroup = requestBody?.targetGroup
-    const schoolId = requestBody?.schoolId
+    const targetGroup = requestBody.targetGroup
+    const schoolId = requestBody.schoolId
 
-    if (
-      typeof targetGroup !== 'string' ||
-      !ALLOWED_GROUPS.includes(targetGroup)
-    ) {
+    if (!isAllowedGroup(targetGroup)) {
       throw new HttpError(
         'Target kelompok tidak valid. Gunakan staff, siswa, atau orangtua.',
         400,
@@ -338,57 +401,56 @@ serve(async (req) => {
     }
 
     if (!isValidUuid(schoolId)) {
-      throw new HttpError(
-        'School ID tidak valid.',
-        400,
-      )
+      throw new HttpError('School ID tidak valid.', 400)
     }
 
-    // Admin sekolah hanya boleh memproses sekolahnya sendiri.
-    if (
-      isSchoolAdmin &&
-      caller['schoolId'] !== schoolId
-    ) {
+    if (isSchoolAdmin && caller.schoolId !== schoolId) {
       throw new HttpError(
         'Admin hanya dapat membuat akun untuk sekolahnya sendiri.',
         403,
       )
     }
 
-    // =========================================================
-    // 5. AMBIL DATA MASTER
-    // =========================================================
+    const { data: schoolData, error: schoolError } = await supabaseAdmin
+      .from('schools')
+      .select('id')
+      .eq('id', schoolId)
+      .maybeSingle()
 
+    if (schoolError) {
+      console.error('Gagal memeriksa data sekolah:', schoolError.message)
+      throw new HttpError('Gagal memverifikasi data sekolah.', 500)
+    }
+
+    const schoolRecord = schoolData as { id: string } | null
+
+    if (!schoolRecord) {
+      throw new HttpError('Satuan pendidikan tidak ditemukan.', 404)
+    }
+
+    // =========================================================
+    // 5. AMBIL DATA MASTER AKTIF & CEK TAUTAN YANG SUDAH ADA
+    // =========================================================
     let masterData: AccountCandidate[] = []
 
     // ---------------------------------------------------------
-    // A. GURU / STAFF
+    // A. GURU / STAFF (Hanya yang isActive = true)
     // ---------------------------------------------------------
-
     if (targetGroup === 'staff') {
-      const {
-        data,
-        error,
-      } = await supabaseAdmin
+      const { data, error } = await supabaseAdmin
         .from('teachers')
-        .select(
-          'id, "schoolId", email, fullName, nuptk, nip, nik',
-        )
+        .select('id, "schoolId", "userId", email, "fullName", nuptk, nip, nik, "isActive"')
         .eq('schoolId', schoolId)
+        .eq('isActive', true)
 
       if (error) {
-        console.error(
-          'Gagal mengambil data guru:',
-          error.message,
-        )
-
-        throw new HttpError(
-          'Gagal mengambil data guru.',
-          500,
-        )
+        console.error('Gagal mengambil data guru:', error.message)
+        throw new HttpError('Gagal mengambil data guru.', 500)
       }
 
-      masterData = (data || []).map((teacher: any) => {
+      const teachers = (data as TeacherRow[] | null) || []
+
+      masterData = teachers.map((teacher: TeacherRow) => {
         const username = getUsername(
           teacher.nuptk,
           teacher.nip,
@@ -401,38 +463,46 @@ serve(async (req) => {
           email: makeEmail(teacher.email, username),
           fullName: teacher.fullName || '',
           role: 'GURU',
+          alreadyLinked: Boolean(teacher.userId),
         }
       })
     }
 
     // ---------------------------------------------------------
-    // B. SISWA
+    // B. SISWA (Hanya yang status = 'AKTIF')
     // ---------------------------------------------------------
-
     if (targetGroup === 'siswa') {
-      const {
-        data,
-        error,
-      } = await supabaseAdmin
-        .from('students')
-        .select(
-          'id, "schoolId", email, fullName, nisn, nis, nik',
-        )
-        .eq('schoolId', schoolId)
+      const [studentsRes, linksRes] = await Promise.all([
+        supabaseAdmin
+          .from('students')
+          .select('id, "schoolId", email, "fullName", nisn, nis, nik, status')
+          .eq('schoolId', schoolId)
+          .eq('status', 'AKTIF'),
+        supabaseAdmin
+          .from('user_student_links')
+          .select('"studentId"')
+          .eq('schoolId', schoolId)
+          .eq('relationship', 'SISWA'),
+      ])
 
-      if (error) {
-        console.error(
-          'Gagal mengambil data siswa:',
-          error.message,
-        )
-
-        throw new HttpError(
-          'Gagal mengambil data siswa.',
-          500,
-        )
+      if (studentsRes.error) {
+        console.error('Gagal mengambil data siswa:', studentsRes.error.message)
+        throw new HttpError('Gagal mengambil data siswa.', 500)
       }
 
-      masterData = (data || []).map((student: any) => {
+      if (linksRes.error) {
+        console.error('Gagal memeriksa tautan siswa:', linksRes.error.message)
+        throw new HttpError('Gagal memeriksa tautan akun siswa.', 500)
+      }
+
+      const studentLinks = (linksRes.data as UserStudentLinkRow[] | null) || []
+      const linkedStudentIds = new Set(
+        studentLinks.map((row: UserStudentLinkRow) => String(row.studentId)),
+      )
+
+      const students = (studentsRes.data as StudentRow[] | null) || []
+
+      masterData = students.map((student: StudentRow) => {
         const username = getUsername(
           student.nisn,
           student.nis,
@@ -445,135 +515,139 @@ serve(async (req) => {
           email: makeEmail(student.email, username),
           fullName: student.fullName || '',
           role: 'SISWA',
+          alreadyLinked: linkedStudentIds.has(String(student.id)),
         }
       })
     }
 
     // ---------------------------------------------------------
-    // C. ORANG TUA / WALI
+    // C. ORANG TUA / WALI (Hanya dari siswa yang status = 'AKTIF')
     // ---------------------------------------------------------
-
     if (targetGroup === 'orangtua') {
-      const {
-        data,
-        error,
-      } = await supabaseAdmin
-        .from('student_parents')
-        .select(
-          'id, "schoolId", studentId, email, fullName, nik, relation',
-        )
-        .eq('schoolId', schoolId)
+      const [activeStudentsRes, parentsRes, parentLinksRes] = await Promise.all([
+        supabaseAdmin
+          .from('students')
+          .select('id')
+          .eq('schoolId', schoolId)
+          .eq('status', 'AKTIF'),
+        supabaseAdmin
+          .from('student_parents')
+          .select('id, "schoolId", "studentId", email, "fullName", nik, relation')
+          .eq('schoolId', schoolId),
+        supabaseAdmin
+          .from('user_student_links')
+          .select('"studentId", relationship')
+          .eq('schoolId', schoolId)
+          .neq('relationship', 'SISWA'),
+      ])
 
-      if (error) {
-        console.error(
-          'Gagal mengambil data orang tua:',
-          error.message,
-        )
-
-        throw new HttpError(
-          'Gagal mengambil data orang tua.',
-          500,
-        )
+      if (activeStudentsRes.error) {
+        console.error('Gagal memeriksa status aktif siswa:', activeStudentsRes.error.message)
+        throw new HttpError('Gagal memeriksa data siswa aktif.', 500)
       }
 
-      /**
-       * Pilih satu orang tua per anak.
-       * Prioritas: Ayah -> Ibu -> Wali -> lainnya.
-       */
-      const parentByStudent = new Map<string, any>()
+      if (parentsRes.error) {
+        console.error('Gagal mengambil data orang tua:', parentsRes.error.message)
+        throw new HttpError('Gagal mengambil data orang tua.', 500)
+      }
 
-      for (const parent of data || []) {
+      if (parentLinksRes.error) {
+        console.error('Gagal memeriksa tautan orang tua:', parentLinksRes.error.message)
+        throw new HttpError('Gagal memeriksa tautan akun orang tua.', 500)
+      }
+
+      const activeStudentRows = (activeStudentsRes.data as { id: string }[] | null) || []
+      const activeStudentIds = new Set(
+        activeStudentRows.map((row: { id: string }) => String(row.id)),
+      )
+
+      const existingParentLinkRows = (parentLinksRes.data as UserStudentLinkRow[] | null) || []
+      const alreadyLinkedStudentParentIds = new Set(
+        existingParentLinkRows.map((row: UserStudentLinkRow) => String(row.studentId)),
+      )
+
+      // 1) Pilih 1 wali utama per siswa aktif (Ayah -> Ibu -> Wali)
+      const parentByStudent = new Map<string, StudentParentRow>()
+      const parentRows = (parentsRes.data as StudentParentRow[] | null) || []
+
+      for (const parent of parentRows) {
         if (!parent.studentId) continue
+        if (!activeStudentIds.has(String(parent.studentId))) continue
 
-        const current = parentByStudent.get(
-          parent.studentId,
-        )
+        const current = parentByStudent.get(parent.studentId)
 
         if (
           !current ||
           getParentPriority(parent.relation) <
             getParentPriority(current.relation)
         ) {
-          parentByStudent.set(
-            parent.studentId,
-            parent,
-          )
+          parentByStudent.set(parent.studentId, parent)
         }
       }
 
-      /**
-       * Gabungkan data berdasarkan email.
-       * Satu email dapat terhubung ke beberapa anak.
-       *
-       * Relasi setiap anak disimpan masing-masing agar
-       * hubungan Ayah/Ibu/Wali tidak tertukar antar-anak.
-       */
-      const parentByEmail = new Map<string, any>()
+      // 2) Gabungkan jika 1 email orang tua memiliki beberapa anak
+      //    Selaras dengan fungsi SQL resolve_user_email: w-xxxxxx@sistem.local (6 karakter)
+      const parentByEmail = new Map<string, AccountCandidate>()
 
       for (const parent of parentByStudent.values()) {
+        const studentId = String(parent.studentId)
         const username =
           cleanString(parent.nik) ||
-          `w-${String(parent.studentId).substring(0, 6)}`
+          `w-${studentId.substring(0, 6)}`
 
-        const email = makeEmail(
-          parent.email,
-          username,
-        )
-
-        const studentId = String(parent.studentId)
+        const email = makeEmail(parent.email, username)
+        const isChildAlreadyLinked = alreadyLinkedStudentParentIds.has(studentId)
 
         const link: ParentLink = {
           studentId,
           relationship: getRelationship(parent.relation),
         }
 
-        if (!parentByEmail.has(email)) {
+        const existing = parentByEmail.get(email)
+
+        if (!existing) {
           parentByEmail.set(email, {
             id: parent.id,
             email,
             fullName: parent.fullName || '',
             role: 'ORANG_TUA',
-            studentLinks: [link],
+            studentLinks: isChildAlreadyLinked ? [] : [link],
+            alreadyLinked: isChildAlreadyLinked,
           })
         } else {
-          const existing = parentByEmail.get(email)
-
-          // Hindari relasi ganda ke anak yang sama.
-          const alreadyLinked =
-            existing.studentLinks.some(
-              (item: ParentLink) =>
-                item.studentId === studentId,
+          if (!isChildAlreadyLinked) {
+            const links = existing.studentLinks ?? []
+            const alreadyInList = links.some(
+              (item: ParentLink) => item.studentId === studentId,
             )
 
-          if (!alreadyLinked) {
-            existing.studentLinks.push(link)
+            if (!alreadyInList) {
+              links.push(link)
+            }
+            existing.studentLinks = links
+            existing.alreadyLinked = false
           }
 
-          // Jika nama pertama kosong, gunakan nama yang tersedia.
           if (!existing.fullName && parent.fullName) {
             existing.fullName = parent.fullName
           }
         }
       }
 
-      masterData = Array.from(
-        parentByEmail.values(),
-      ).map((parent: any) => ({
+      masterData = Array.from(parentByEmail.values()).map((parent: AccountCandidate) => ({
         ...parent,
-        studentLinks: [...parent.studentLinks].sort(
-          (a: ParentLink, b: ParentLink) =>
-            a.studentId.localeCompare(b.studentId),
+        studentLinks: [...(parent.studentLinks ?? [])].sort(
+          (a: ParentLink, b: ParentLink) => a.studentId.localeCompare(b.studentId),
         ),
       }))
     }
 
     // =========================================================
-    // 6. VALIDASI DAN DEDUPLIKASI EMAIL
+    // 6. VALIDASI FORMAT & DEDUPLIKASI EMAIL
     // =========================================================
-
     if (masterData.length === 0) {
       throw new HttpError(
-        `Tidak ada data ${targetGroup} untuk sekolah ini.`,
+        `Tidak ada data ${targetGroup} aktif untuk sekolah ini.`,
         404,
       )
     }
@@ -585,13 +659,8 @@ serve(async (req) => {
     for (const person of masterData) {
       person.email = normalizeEmail(person.email)
 
-      if (
-        !person.email ||
-        !isValidEmail(person.email)
-      ) {
-        invalidEmails.push(
-          person.fullName || person.id,
-        )
+      if (!person.email || !isValidEmail(person.email)) {
+        invalidEmails.push(person.fullName || person.id)
         continue
       }
 
@@ -604,22 +673,18 @@ serve(async (req) => {
     }
 
     if (uniqueMasterData.length === 0) {
-      throw new HttpError(
-        'Tidak ada data dengan email yang valid.',
-        400,
-      )
+      throw new HttpError('Tidak ada data dengan email yang valid.', 400)
     }
 
     // =========================================================
-    // 7. PERIKSA PROFIL YANG SUDAH ADA
+    // 7. CEK AKUN YANG SUDAH ADA (TERMASUK ORANG TUA MULTI-ANAK)
     // =========================================================
-
     const {
       data: existingUsers,
       error: existingUsersError,
     } = await supabaseAdmin
       .from('users')
-      .select('id, email, "schoolId"')
+      .select('id, email, role, "schoolId"')
       .eq('schoolId', schoolId)
 
     if (existingUsersError) {
@@ -627,35 +692,75 @@ serve(async (req) => {
         'Gagal memeriksa profil yang sudah ada:',
         existingUsersError.message,
       )
-
       throw new HttpError(
         'Gagal memeriksa akun yang sudah ada. Tidak ada akun baru yang diproses.',
         500,
       )
     }
 
-    const existingEmails = new Set(
-      (existingUsers || []).map(
-        (user: any) => normalizeEmail(user.email),
-      ),
-    )
+    const existingUserRows = (existingUsers as ExistingUserRow[] | null) || []
+    const existingUserMap = new Map<string, ExistingUserRow>()
 
-    const alreadyPresent =
-      uniqueMasterData.filter(
-        (person) => existingEmails.has(person.email),
-      )
+    for (const user of existingUserRows) {
+      existingUserMap.set(normalizeEmail(user.email), user)
+    }
 
-    const candidates =
-      uniqueMasterData.filter(
-        (person) => !existingEmails.has(person.email),
-      )
+    let skipped = 0
+    const candidates: AccountCandidate[] = []
+    const preValidationFailures: Failure[] = []
 
-    const skipped = alreadyPresent.length
+    for (const person of uniqueMasterData) {
+      // 1) Jika data master ini sudah tertaut seluruhnya, lewati
+      if (person.alreadyLinked) {
+        skipped++
+        continue
+      }
+
+      const existingAccount = existingUserMap.get(person.email)
+
+      // 2) Email belum ada di sekolah ini -> siap dibuatkan akun baru
+      if (!existingAccount) {
+        candidates.push(person)
+        continue
+      }
+
+      // 3) Email sudah ada di sekolah ini & merupakan ORANG_TUA dengan anak baru yang belum tertaut
+      if (
+        person.role === 'ORANG_TUA' &&
+        existingAccount.role === 'ORANG_TUA' &&
+        person.studentLinks &&
+        person.studentLinks.length > 0
+      ) {
+        candidates.push({
+          ...person,
+          existingUserId: existingAccount.id,
+        })
+        continue
+      }
+
+      // 4) Email sudah ada di sekolah ini dengan role berbeda (misal GURU/ADMIN)
+      if (
+        person.role === 'ORANG_TUA' &&
+        existingAccount.role !== 'ORANG_TUA'
+      ) {
+        preValidationFailures.push({
+          email: person.email,
+          reason: `Email ini sudah terdaftar sebagai akun ${existingAccount.role} di sekolah ini sehingga tidak dapat digabung otomatis sebagai akun ORANG_TUA.`,
+        })
+        continue
+      }
+
+      // 5) Kasus lainnya: email sudah terpakai -> lewati
+      skipped++
+    }
 
     if (candidates.length === 0) {
       return jsonResponse({
-        success: true,
-        message: 'Semua data sudah memiliki profil di sekolah ini.',
+        success: preValidationFailures.length === 0,
+        message:
+          preValidationFailures.length === 0
+            ? 'Semua data aktif sudah memiliki akun di sekolah ini.'
+            : `Tidak ada akun baru dibuat. ${skipped} data dilewati dan ${preValidationFailures.length} data memerlukan perhatian.`,
         targetGroup,
         schoolId,
         totalSource: masterData.length,
@@ -664,49 +769,118 @@ serve(async (req) => {
         invalidEmailCount: invalidEmails.length,
         invalidEmails,
         created: 0,
-        failed: 0,
+        linked: 0,
+        failed: preValidationFailures.length,
         remaining: 0,
-        failures: [],
+        failures: preValidationFailures,
       })
     }
 
     // =========================================================
-    // 8. BATASI JUMLAH AKUN PER EKSEKUSI
+    // 8. BATASI JUMLAH PROSES PER EKSEKUSI (MAKSIMAL 50)
     // =========================================================
-
-    const targetData = candidates.slice(
-      0,
-      MAX_ACCOUNTS_PER_RUN,
-    )
-
-    const remaining = Math.max(
-      0,
-      candidates.length - targetData.length,
-    )
+    const targetData = candidates.slice(0, MAX_ACCOUNTS_PER_RUN)
+    const remaining = Math.max(0, candidates.length - targetData.length)
 
     let created = 0
-
-    const failures: Failure[] = []
-
-    const chunks = chunkArray(
-      targetData,
-      CHUNK_SIZE,
-    )
+    let linked = 0
+    const failures: Failure[] = [...preValidationFailures]
+    const chunks = chunkArray(targetData, CHUNK_SIZE)
 
     // =========================================================
-    // 9. BUAT AKUN AUTH, PROFIL, DAN RELASI ANAK
+    // 9. PROSES PEMBUATAN AKUN BARU & PENAUTAN ANAK TAMBAHAN
     // =========================================================
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]
 
-    for (const chunk of chunks) {
       await Promise.all(
-        chunk.map(async (person) => {
-          let createdAuthUserId: string | null = null
+        chunk.map(async (person: AccountCandidate) => {
+          let newlyCreatedAuthUserId: string | null = null
 
           try {
-            // -------------------------------------------------
-            // A. Buat akun Auth
-            // -------------------------------------------------
+            // Pastikan kandidat ORANG_TUA memiliki minimal 1 anak yang perlu ditautkan
+            if (
+              person.role === 'ORANG_TUA' &&
+              (!person.studentLinks || person.studentLinks.length === 0)
+            ) {
+              return
+            }
 
+            // =================================================
+            // JALUR 1: ORANG TUA SUDAH PUNYA AKUN (TAMBAH ANAK)
+            // =================================================
+            if (person.role === 'ORANG_TUA' && person.existingUserId && person.studentLinks) {
+              const { data: existingLinks, error: checkPrimaryError } = await supabaseAdmin
+                .from('user_student_links')
+                .select('"studentId", "isPrimary"')
+                .eq('schoolId', schoolId)
+                .eq('userId', person.existingUserId)
+
+              if (checkPrimaryError) {
+                console.error(
+                  'Gagal memeriksa tautan anak sebelumnya:',
+                  person.email,
+                  checkPrimaryError.message,
+                )
+                failures.push({
+                  email: person.email,
+                  reason: 'Gagal memeriksa daftar anak yang sudah tertaut pada akun orang tua.',
+                })
+                return
+              }
+
+              const typedExistingLinks = (existingLinks as UserStudentLinkRow[] | null) || []
+
+              const alreadyLinkedIds = new Set(
+                typedExistingLinks.map((row: UserStudentLinkRow) => String(row.studentId)),
+              )
+              const hasPrimaryChild = typedExistingLinks.some(
+                (row: UserStudentLinkRow) => row.isPrimary === true,
+              )
+
+              const newLinks = person.studentLinks
+                .filter((item: ParentLink) => !alreadyLinkedIds.has(item.studentId))
+                .sort((a: ParentLink, b: ParentLink) => a.studentId.localeCompare(b.studentId))
+
+              if (newLinks.length === 0) {
+                skipped++
+                return
+              }
+
+              const linksToInsert = newLinks.map((link: ParentLink, index: number) => ({
+                id: crypto.randomUUID(),
+                schoolId,
+                userId: person.existingUserId,
+                studentId: link.studentId,
+                relationship: link.relationship,
+                isPrimary: !hasPrimaryChild && index === 0,
+                createdAt: new Date().toISOString(),
+              }))
+
+              const { error: appendLinkError } = await supabaseAdmin
+                .from('user_student_links')
+                .insert(linksToInsert)
+
+              if (appendLinkError) {
+                console.error(
+                  'Gagal menambahkan tautan anak ke akun orang tua:',
+                  person.email,
+                  appendLinkError.message,
+                )
+                failures.push({
+                  email: person.email,
+                  reason: 'Gagal menambahkan tautan anak baru ke akun orang tua yang sudah ada.',
+                })
+                return
+              }
+
+              linked += newLinks.length
+              return
+            }
+
+            // =================================================
+            // JALUR 2: BUAT AKUN BARU (AUTH + PROFIL + TAUTAN)
+            // =================================================
             const {
               data: authResult,
               error: authCreateError,
@@ -730,10 +904,8 @@ serve(async (req) => {
 
               failures.push({
                 email: person.email,
-                reason:
-                  'Pembuatan akun Auth gagal. Periksa apakah email sudah digunakan atau data akun tidak valid.',
+                reason: formatAuthErrorReason(authCreateError.message || ''),
               })
-
               return
             }
 
@@ -742,29 +914,21 @@ serve(async (req) => {
             if (!userId) {
               failures.push({
                 email: person.email,
-                reason:
-                  'Supabase tidak mengembalikan ID pengguna Auth.',
+                reason: 'Supabase tidak mengembalikan ID pengguna Auth.',
               })
-
               return
             }
 
-            createdAuthUserId = userId
+            newlyCreatedAuthUserId = userId
 
-            // -------------------------------------------------
-            // B. Buat profil public.users
-            // -------------------------------------------------
-
-            const {
-              error: profileError,
-            } = await supabaseAdmin
+            // B. Buat profil aplikasi di tabel public.users
+            const { error: profileError } = await supabaseAdmin
               .from('users')
               .insert({
                 id: userId,
                 schoolId,
                 email: person.email,
-                fullName:
-                  person.fullName || person.email,
+                fullName: person.fullName || person.email,
                 role: person.role,
                 isActive: true,
                 isFirstLogin: true,
@@ -777,13 +941,11 @@ serve(async (req) => {
                 profileError.message,
               )
 
-              const rolledBack =
-                await rollbackAuthUser(
-                  supabaseAdmin,
-                  userId,
-                )
-
-              createdAuthUserId = null
+              const rolledBack = await rollbackAuthUser(
+                supabaseAdmin,
+                userId,
+              )
+              newlyCreatedAuthUserId = null
 
               failures.push({
                 email: person.email,
@@ -791,48 +953,58 @@ serve(async (req) => {
                   ? 'Profil pengguna gagal dibuat. Akun Auth sementara telah dibersihkan.'
                   : 'Profil pengguna gagal dibuat dan pembersihan akun Auth gagal. Perlu pemeriksaan manual.',
               })
-
               return
             }
 
-            // -------------------------------------------------
-            // C. Simpan relasi orang tua dengan anak
-            // -------------------------------------------------
+            // C. Tautkan akun ke tabel master masing-masing role
+            if (person.role === 'GURU') {
+              const { error: teacherLinkError } = await supabaseAdmin
+                .from('teachers')
+                .update({ userId })
+                .eq('id', person.id)
+                .eq('schoolId', schoolId)
 
-            if (
+              if (teacherLinkError) {
+                console.error(
+                  'Gagal menautkan akun ke data master guru:',
+                  person.email,
+                  teacherLinkError.message,
+                )
+
+                const rolledBack = await rollbackAuthUser(
+                  supabaseAdmin,
+                  userId,
+                )
+                newlyCreatedAuthUserId = null
+
+                failures.push({
+                  email: person.email,
+                  reason: rolledBack
+                    ? 'Gagal menautkan akun ke data master guru. Akun Auth dan profil telah dibersihkan.'
+                    : 'Gagal menautkan akun ke data master guru dan pembersihan Auth gagal. Perlu pemeriksaan manual.',
+                })
+                return
+              }
+            } else if (
               person.role === 'ORANG_TUA' &&
               person.studentLinks &&
               person.studentLinks.length > 0
             ) {
-              /**
-               * Kolom id dan createdAt diisi secara eksplisit
-               * karena hasil pemeriksaan skema belum memastikan
-               * adanya default pada kedua kolom tersebut.
-               *
-               * isPrimary dibuat deterministik berdasarkan
-               * urutan studentId, bukan urutan query acak.
-               */
-              const sortedLinks = [
-                ...person.studentLinks,
-              ].sort((a, b) =>
-                a.studentId.localeCompare(b.studentId),
+              const sortedLinks = [...person.studentLinks].sort(
+                (a: ParentLink, b: ParentLink) => a.studentId.localeCompare(b.studentId),
               )
 
-              const linksToInsert = sortedLinks.map(
-                (link, index) => ({
-                  id: crypto.randomUUID(),
-                  schoolId,
-                  userId,
-                  studentId: link.studentId,
-                  relationship: link.relationship,
-                  isPrimary: index === 0,
-                  createdAt: new Date().toISOString(),
-                }),
-              )
+              const linksToInsert = sortedLinks.map((link: ParentLink, index: number) => ({
+                id: crypto.randomUUID(),
+                schoolId,
+                userId,
+                studentId: link.studentId,
+                relationship: link.relationship,
+                isPrimary: index === 0,
+                createdAt: new Date().toISOString(),
+              }))
 
-              const {
-                error: linkError,
-              } = await supabaseAdmin
+              const { error: linkError } = await supabaseAdmin
                 .from('user_student_links')
                 .insert(linksToInsert)
 
@@ -843,13 +1015,11 @@ serve(async (req) => {
                   linkError.message,
                 )
 
-                const rolledBack =
-                  await rollbackAuthUser(
-                    supabaseAdmin,
-                    userId,
-                  )
-
-                createdAuthUserId = null
+                const rolledBack = await rollbackAuthUser(
+                  supabaseAdmin,
+                  userId,
+                )
+                newlyCreatedAuthUserId = null
 
                 failures.push({
                   email: person.email,
@@ -857,17 +1027,46 @@ serve(async (req) => {
                     ? 'Relasi orang tua-anak gagal disimpan. Akun Auth dan profil terkait telah dibersihkan.'
                     : 'Relasi orang tua-anak gagal disimpan dan pembersihan akun Auth gagal. Perlu pemeriksaan manual.',
                 })
+                return
+              }
+            } else if (person.role === 'SISWA') {
+              const { error: studentLinkError } = await supabaseAdmin
+                .from('user_student_links')
+                .insert({
+                  id: crypto.randomUUID(),
+                  schoolId,
+                  userId,
+                  studentId: person.id,
+                  relationship: 'SISWA',
+                  isPrimary: false,
+                  createdAt: new Date().toISOString(),
+                })
 
+              if (studentLinkError) {
+                console.error(
+                  'Gagal menyimpan relasi akun siswa:',
+                  person.email,
+                  studentLinkError.message,
+                )
+
+                const rolledBack = await rollbackAuthUser(
+                  supabaseAdmin,
+                  userId,
+                )
+                newlyCreatedAuthUserId = null
+
+                failures.push({
+                  email: person.email,
+                  reason: rolledBack
+                    ? 'Relasi akun siswa gagal disimpan. Akun Auth dan profil terkait telah dibersihkan.'
+                    : 'Relasi akun siswa gagal disimpan dan pembersihan akun Auth gagal. Perlu pemeriksaan manual.',
+                })
                 return
               }
             }
 
-            // -------------------------------------------------
-            // D. Tandai berhasil hanya setelah semua tahap lolos
-            // -------------------------------------------------
-
             created++
-            createdAuthUserId = null
+            newlyCreatedAuthUserId = null
           } catch (error) {
             console.error(
               'Kesalahan pemrosesan akun:',
@@ -877,12 +1076,11 @@ serve(async (req) => {
 
             let cleanupSucceeded = true
 
-            if (createdAuthUserId) {
-              cleanupSucceeded =
-                await rollbackAuthUser(
-                  supabaseAdmin,
-                  createdAuthUserId,
-                )
+            if (newlyCreatedAuthUserId) {
+              cleanupSucceeded = await rollbackAuthUser(
+                supabaseAdmin,
+                newlyCreatedAuthUserId,
+              )
             }
 
             failures.push({
@@ -895,20 +1093,23 @@ serve(async (req) => {
         }),
       )
 
-      // Jeda antar-kelompok untuk mengurangi beban pemrosesan.
-      await delay(DELAY_MS)
+      if (i < chunks.length - 1) {
+        await delay(DELAY_MS)
+      }
     }
 
     // =========================================================
-    // 10. HASIL AKHIR
+    // 10. KIRIM LAPORAN HASIL AKHIR
     // =========================================================
-
     const success = failures.length === 0
+    let message = `Selesai. ${created} akun baru dibuat.`
 
-    let message = `Selesai. ${created} akun berhasil dibuat.`
+    if (linked > 0) {
+      message += ` ${linked} tautan anak ditambahkan ke akun orang tua yang sudah ada.`
+    }
 
     if (skipped > 0) {
-      message += ` ${skipped} data dilewati karena profil sudah ada.`
+      message += ` ${skipped} data dilewati karena akun sudah ada.`
     }
 
     if (invalidEmails.length > 0) {
@@ -916,11 +1117,11 @@ serve(async (req) => {
     }
 
     if (failures.length > 0) {
-      message += ` ${failures.length} akun gagal diproses.`
+      message += ` ${failures.length} data gagal diproses.`
     }
 
     if (remaining > 0) {
-      message += ` Masih ada ${remaining} akun dalam antrean untuk eksekusi berikutnya.`
+      message += ` Masih ada ${remaining} antrean untuk eksekusi berikutnya.`
     }
 
     return jsonResponse({
@@ -934,21 +1135,16 @@ serve(async (req) => {
       invalidEmailCount: invalidEmails.length,
       invalidEmails,
       created,
+      linked,
       failed: failures.length,
       remaining,
       failures,
     })
   } catch (error) {
-    const status =
-      error instanceof HttpError
-        ? error.status
-        : 500
+    const status = error instanceof HttpError ? error.status : 500
 
     if (!(error instanceof HttpError)) {
-      console.error(
-        'Kesalahan internal Edge Function:',
-        error,
-      )
+      console.error('Kesalahan internal Edge Function:', error)
     }
 
     return jsonResponse(
