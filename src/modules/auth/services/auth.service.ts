@@ -1,5 +1,21 @@
+// src/modules/auth/services/auth.service.ts
 import { supabase } from '@/services/supabase.client';
-import type { User, School, AcademicYear } from '@/types/common.types';
+import type { User, School, AcademicYear, UserRole } from '@/types/common.types';
+
+/**
+ * Daftar seluruh kode role yang didukung sistem (termasuk role baru STAFF_PERPUS).
+ */
+export type EffectiveUserRole = UserRole | 'STAFF_PERPUS';
+
+/**
+ * Perluasan tipe User agar mendukung daftar tugas tambahan (`additionalRoles`)
+ * serta teks tugas tambahan bawaan Dapodik (`tugasTambahan`).
+ */
+export interface UserWithAdditionalRoles extends Omit<User, 'role'> {
+  role: EffectiveUserRole;
+  additionalRoles?: EffectiveUserRole[];
+  tugasTambahan?: string | null;
+}
 
 /**
  * Payload input untuk proses autentikasi pengguna.
@@ -14,15 +30,13 @@ export interface LoginPayload {
  * Struktur data sesi lengkap yang dikembalikan ketika login berhasil.
  */
 export interface LoginResponse {
-  user: User;
+  user: UserWithAdditionalRoles;
   school: School | null;
   academicYear: AcademicYear | null;
 }
 
 /**
  * Discriminated Union untuk hasil autentikasi.
- * Memastikan TypeScript mengenali bahwa `data` selalu tersedia jika `success === true`,
- * dan selalu `null` jika `success === false` tanpa perlu type-casting paksa.
  */
 export type AuthResult =
   | { success: true; data: LoginResponse; message: string }
@@ -30,13 +44,11 @@ export type AuthResult =
 
 /**
  * Daftar key localStorage yang berkaitan dengan sesi autentikasi.
- * Digunakan saat logout agar preferensi UI (tema & bahasa) tidak ikut terhapus.
  */
 const AUTH_STORAGE_KEYS = ['sekolah-erp-auth', 'auth-storage'] as const;
 
 /**
- * Helper aman untuk mengekstrak pesan error dari tipe `unknown`
- * tanpa menggunakan tipe `any`.
+ * Helper aman untuk mengekstrak pesan error dari tipe `unknown`.
  */
 function extractErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && error.message.trim().length > 0) {
@@ -54,21 +66,89 @@ function extractErrorMessage(error: unknown, fallbackMessage: string): string {
 }
 
 /**
+ * Menerjemahkan teks Tugas Tambahan dari Excel Dapodik menjadi kode role sistem.
+ * Kamu bisa menyesuaikan kata kunci di bawah ini sesuai kebutuhan sekolah.
+ */
+export function mapTugasTambahanToRoles(tugasTambahan?: string | null): EffectiveUserRole[] {
+  if (!tugasTambahan) return [];
+  const text = tugasTambahan.toLowerCase().trim();
+  const mapped: EffectiveUserRole[] = [];
+
+  if (text.includes('bendahara')) mapped.push('BENDAHARA');
+  if (text.includes('sarpras') || text.includes('sarana')) mapped.push('STAFF_SARPRAS');
+  if (text.includes('perpustakaan') || text.includes('perpus')) mapped.push('STAFF_PERPUS');
+  if (text.includes('tata usaha') || text.includes('administrasi')) mapped.push('STAFF_TU');
+  if (text.includes('wali kelas')) mapped.push('WALI_KELAS');
+  if (text.includes('wakil kepala') || text.includes('wakasek') || text.includes('operator')) {
+    mapped.push('OPERATOR');
+  }
+
+  return mapped;
+}
+
+/**
+ * Menormalkan data profil dari database agar `additionalRoles` selalu berupa array valid.
+ */
+function normalizeUserProfile(rawProfile: Record<string, unknown>): UserWithAdditionalRoles {
+  const baseUser = rawProfile as unknown as UserWithAdditionalRoles;
+  const rawAdditional = rawProfile.additionalRoles;
+
+  return {
+    ...baseUser,
+    additionalRoles: Array.isArray(rawAdditional)
+      ? (rawAdditional as EffectiveUserRole[])
+      : [],
+  };
+}
+
+/**
+ * Mengambil kolom `tugasTambahan` dari tabel `teachers` (jika akun tertaut ke data guru)
+ * lalu menggabungkan hasilnya ke dalam `additionalRoles`.
+ */
+async function enrichProfileWithTeacherDuties(
+  profile: UserWithAdditionalRoles
+): Promise<UserWithAdditionalRoles> {
+  if (!profile.schoolId || profile.role === 'SISWA' || profile.role === 'ORANG_TUA') {
+    return profile;
+  }
+
+  try {
+    const { data: teacherRow } = await supabase
+      .from('teachers')
+      .select('tugasTambahan')
+      .eq('userId', profile.id)
+      .eq('schoolId', profile.schoolId)
+      .maybeSingle();
+
+    const tugasTambahan =
+      (teacherRow as { tugasTambahan?: string | null } | null)?.tugasTambahan ?? null;
+
+    const dutyRoles = mapTugasTambahanToRoles(tugasTambahan);
+    const mergedExtras = Array.from(
+      new Set<EffectiveUserRole>([...(profile.additionalRoles ?? []), ...dutyRoles])
+    ).filter((r) => r !== profile.role);
+
+    return {
+      ...profile,
+      tugasTambahan,
+      additionalRoles: mergedExtras,
+    };
+  } catch {
+    return profile;
+  }
+}
+
+/**
  * Mengubah identifier non-email (NIP, NUPTK, NISN, NIK) menjadi alamat email
  * yang terdaftar di Supabase Auth melalui fungsi RPC `resolve_user_email`.
- *
- * @param rawIdentifier - Teks yang diketik pengguna pada kolom login
- * @returns Alamat email valid untuk proses `signInWithPassword`
  */
 async function resolveLoginEmail(rawIdentifier: string): Promise<string> {
   const cleaned = rawIdentifier.trim().toLowerCase();
 
-  // Jika input sudah mengandung '@', perlakukan langsung sebagai email
   if (cleaned.includes('@')) {
     return cleaned;
   }
 
-  // Panggil fungsi RPC PostgreSQL untuk mencari email asli dari tabel teachers/students
   const { data, error } = await supabase.rpc('resolve_user_email', {
     identifier: cleaned,
   });
@@ -77,18 +157,12 @@ async function resolveLoginEmail(rawIdentifier: string): Promise<string> {
     return data.trim().toLowerCase();
   }
 
-  // Fallback standar untuk akun hasil generate massal yang belum memiliki email pribadi
   return `${cleaned}@sistem.local`;
 }
 
 export const authService = {
   /**
-   * Menjalankan alur login lengkap:
-   * 1. Resolusi identifier menjadi email.
-   * 2. Verifikasi kredensial ke Supabase Auth.
-   * 3. Validasi profil & status aktif (`isActive`) pada tabel `public.users`.
-   * 4. Pembaruan stempel waktu `lastLogin`.
-   * 5. Pengambilan data sekolah & tahun ajaran aktif (jika terikat ke sekolah).
+   * Menjalankan alur login lengkap beserta pemuatan peran utama dan tugas tambahan.
    */
   async login(payload: LoginPayload): Promise<AuthResult> {
     try {
@@ -126,10 +200,10 @@ export const authService = {
         };
       }
 
-      const profile = profileData as User;
+      const baseProfile = normalizeUserProfile(profileData as Record<string, unknown>);
 
       // 3. Blokir akses apabila akun berstatus nonaktif (isActive = false)
-      if (!profile.isActive) {
+      if (!baseProfile.isActive) {
         await supabase.auth.signOut();
         return {
           success: false,
@@ -138,35 +212,29 @@ export const authService = {
         };
       }
 
-      // 4. Catat waktu login terakhir secara non-blocking (tidak menggagalkan login jika gagal)
-      void supabase
-        .from('users')
-        .update({ lastLogin: new Date().toISOString() })
-        .eq('id', userId);
-
-      // 5. Muat data sekolah & tahun ajaran aktif secara paralel (kecuali SUPER_ADMIN)
-      let schoolData: School | null = null;
-      let academicYearData: AcademicYear | null = null;
-
-      if (profile.schoolId) {
-        const [schoolRes, academicYearRes] = await Promise.all([
-          supabase.from('schools').select('*').eq('id', profile.schoolId).maybeSingle(),
-          supabase
-            .from('academic_years')
-            .select('*')
-            .eq('schoolId', profile.schoolId)
-            .eq('isActive', true)
-            .maybeSingle(),
-        ]);
-
-        schoolData = (schoolRes.data as School | null) ?? null;
-        academicYearData = (academicYearRes.data as AcademicYear | null) ?? null;
+      // 4. Catat waktu login terakhir dengan aman tanpa menggagalkan proses login
+      try {
+        await supabase
+          .from('users')
+          .update({ lastLogin: new Date().toISOString() })
+          .eq('id', userId);
+      } catch {
+        // Abaikan jika gagal memperbarui stempel waktu login terakhir
       }
+
+      // 5. Muat tugas tambahan guru, data sekolah, dan tahun ajaran aktif secara paralel
+      const [enrichedProfile, schoolData, academicYearData] = await Promise.all([
+        enrichProfileWithTeacherDuties(baseProfile),
+        baseProfile.schoolId ? this.getSchool(baseProfile.schoolId) : Promise.resolve(null),
+        baseProfile.schoolId
+          ? this.getActiveAcademicYear(baseProfile.schoolId)
+          : Promise.resolve(null),
+      ]);
 
       return {
         success: true,
         data: {
-          user: profile,
+          user: enrichedProfile,
           school: schoolData,
           academicYear: academicYearData,
         },
@@ -185,8 +253,7 @@ export const authService = {
   },
 
   /**
-   * Mengakhiri sesi Supabase Auth dan membersihkan penyimpanan sesi lokal
-   * tanpa menghapus pengaturan tema/bahasa pengguna.
+   * Mengakhiri sesi Supabase Auth dan membersihkan penyimpanan sesi lokal.
    */
   async logout(): Promise<void> {
     try {
@@ -197,13 +264,17 @@ export const authService = {
   },
 
   /**
-   * Mengambil ulang data profil aktif berdasarkan UUID pengguna.
+   * Mengambil ulang data profil aktif beserta tugas tambahannya berdasarkan UUID pengguna.
    */
-  async getProfile(userId: string): Promise<{ success: boolean; data: User | null }> {
+  async getProfile(
+    userId: string
+  ): Promise<{ success: boolean; data: UserWithAdditionalRoles | null }> {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select('id, email, "fullName", role, "avatarUrl", "schoolId", "isActive", "isFirstLogin", "lastLogin"')
+        .select(
+          'id, email, "fullName", role, "additionalRoles", "avatarUrl", "schoolId", "isActive", "isFirstLogin", "lastLogin"'
+        )
         .eq('id', userId)
         .eq('isActive', true)
         .single();
@@ -212,7 +283,13 @@ export const authService = {
         return { success: false, data: null };
       }
 
-      return { success: true, data: data as User };
+      const normalized = normalizeUserProfile(data as Record<string, unknown>);
+      const enriched = await enrichProfileWithTeacherDuties(normalized);
+
+      return {
+        success: true,
+        data: enriched,
+      };
     } catch {
       return { success: false, data: null };
     }

@@ -1,3 +1,4 @@
+//src/types/common.types.ts
 export type Locale = 'id' | 'en';
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -12,6 +13,7 @@ export type UserRole =
   | 'GURU'
   | 'STAFF_TU'
   | 'STAFF_SARPRAS'
+  | 'STAFF_PERPUS'
   | 'ORANG_TUA'
   | 'SISWA';
 
@@ -76,6 +78,8 @@ export interface User {
   email: string;
   fullName: string;
   role: UserRole;
+  additionalRoles?: UserRole[];
+  tugasTambahan?: string | null;
   avatarUrl?: string;
   schoolId: string;
   isActive: boolean;

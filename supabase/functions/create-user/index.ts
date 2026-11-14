@@ -1,3 +1,4 @@
+// supabase/functions/create-user/index.ts
 // @ts-nocheck
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
@@ -15,6 +16,7 @@ const corsHeaders = {
 }
 
 const VALID_ROLES = [
+  'SUPER_ADMIN',
   'ADMIN',
   'KEPALA_SEKOLAH',
   'OPERATOR',
@@ -23,11 +25,24 @@ const VALID_ROLES = [
   'GURU',
   'STAFF_TU',
   'STAFF_SARPRAS',
+  'STAFF_PERPUS',
   'ORANG_TUA',
   'SISWA',
 ] as const
 
+const VALID_ADDITIONAL_ROLES = [
+  'KEPALA_SEKOLAH',
+  'OPERATOR',
+  'BENDAHARA',
+  'WALI_KELAS',
+  'GURU',
+  'STAFF_TU',
+  'STAFF_SARPRAS',
+  'STAFF_PERPUS',
+] as const
+
 type AllowedRole = (typeof VALID_ROLES)[number]
+type AllowedAdditionalRole = (typeof VALID_ADDITIONAL_ROLES)[number]
 
 interface CallerRow {
   id: string
@@ -69,6 +84,34 @@ function isValidUuid(value: unknown): value is string {
       value,
     )
   )
+}
+
+function sanitizeAdditionalRoles(
+  raw: unknown,
+  primaryRole: AllowedRole,
+): AllowedAdditionalRole[] {
+  if (
+    primaryRole === 'SUPER_ADMIN' ||
+    primaryRole === 'SISWA' ||
+    primaryRole === 'ORANG_TUA'
+  ) {
+    return []
+  }
+
+  if (!Array.isArray(raw)) return []
+
+  const unique = new Set<AllowedAdditionalRole>()
+  for (const item of raw) {
+    if (
+      typeof item === 'string' &&
+      item !== primaryRole &&
+      VALID_ADDITIONAL_ROLES.includes(item as AllowedAdditionalRole)
+    ) {
+      unique.add(item as AllowedAdditionalRole)
+    }
+  }
+
+  return Array.from(unique)
 }
 
 function formatAuthErrorReason(rawMessage: string): string {
@@ -227,35 +270,56 @@ serve(async (req: Request): Promise<Response> => {
       throw new HttpError('Role yang diminta tidak diizinkan.', 400)
     }
 
-    if (!isValidUuid(schoolId)) {
-      throw new HttpError(
-        'schoolId wajib diisi dengan ID sekolah yang valid.',
-        400,
-      )
-    }
+    const typedRole = role as AllowedRole
+    const cleanAdditionalRoles = sanitizeAdditionalRoles(
+      body.additionalRoles,
+      typedRole,
+    )
 
-    if (caller.role === 'ADMIN' && role === 'ADMIN') {
-      throw new HttpError('ADMIN tidak diizinkan membuat akun ADMIN lain.', 403)
-    }
-
-    if (caller.role === 'ADMIN' && schoolId !== caller.schoolId) {
+    if (typedRole === 'SUPER_ADMIN' && caller.role !== 'SUPER_ADMIN') {
       throw new HttpError(
-        'Anda hanya dapat membuat akun untuk sekolah sendiri.',
+        'Hanya SUPER_ADMIN yang dapat membuat akun SUPER_ADMIN.',
         403,
       )
     }
 
-    const { data: schoolData, error: schoolError } = await supabaseAdmin
-      .from('schools')
-      .select('id')
-      .eq('id', schoolId)
-      .maybeSingle()
-
-    if (schoolError) {
-      throw new HttpError('Gagal memeriksa data sekolah.', 500)
+    if (caller.role === 'ADMIN' && typedRole === 'ADMIN') {
+      throw new HttpError('ADMIN tidak diizinkan membuat akun ADMIN lain.', 403)
     }
-    if (!schoolData) {
-      throw new HttpError('Satuan pendidikan tidak ditemukan.', 404)
+
+    let resolvedSchoolId: string | null = null
+
+    if (typedRole === 'SUPER_ADMIN') {
+      resolvedSchoolId = null
+    } else {
+      if (!isValidUuid(schoolId)) {
+        throw new HttpError(
+          'schoolId wajib diisi dengan ID sekolah yang valid.',
+          400,
+        )
+      }
+
+      if (caller.role === 'ADMIN' && schoolId !== caller.schoolId) {
+        throw new HttpError(
+          'Anda hanya dapat membuat akun untuk sekolah sendiri.',
+          403,
+        )
+      }
+
+      const { data: schoolData, error: schoolError } = await supabaseAdmin
+        .from('schools')
+        .select('id')
+        .eq('id', schoolId)
+        .maybeSingle()
+
+      if (schoolError) {
+        throw new HttpError('Gagal memeriksa data sekolah.', 500)
+      }
+      if (!schoolData) {
+        throw new HttpError('Satuan pendidikan tidak ditemukan.', 404)
+      }
+
+      resolvedSchoolId = schoolId
     }
 
     let userId: string
@@ -315,7 +379,7 @@ serve(async (req: Request): Promise<Response> => {
         throw new HttpError('Anda tidak berwenang mengubah akun tersebut.', 403)
       }
 
-      if (existingProfile && existingProfile.schoolId !== schoolId) {
+      if (existingProfile && existingProfile.schoolId !== resolvedSchoolId) {
         throw new HttpError(
           'Akun sudah terhubung ke sekolah lain. Pemindahan sekolah harus dilakukan melalui alur khusus.',
           409,
@@ -329,7 +393,7 @@ serve(async (req: Request): Promise<Response> => {
           email_confirm: true,
           user_metadata: {
             full_name: fullName,
-            school_id: schoolId,
+            school_id: resolvedSchoolId,
             initial_account: useDefaultPassword,
           },
         })
@@ -345,8 +409,9 @@ serve(async (req: Request): Promise<Response> => {
       const profilePayload = {
         email,
         fullName,
-        role,
-        schoolId,
+        role: typedRole,
+        additionalRoles: cleanAdditionalRoles,
+        schoolId: resolvedSchoolId,
         isActive: true,
         isFirstLogin: true,
       }
@@ -411,7 +476,7 @@ serve(async (req: Request): Promise<Response> => {
         email_confirm: true,
         user_metadata: {
           full_name: fullName,
-          school_id: schoolId,
+          school_id: resolvedSchoolId,
           initial_account: useDefaultPassword,
         },
       })
@@ -433,8 +498,9 @@ serve(async (req: Request): Promise<Response> => {
         id: userId,
         email,
         fullName,
-        role,
-        schoolId,
+        role: typedRole,
+        additionalRoles: cleanAdditionalRoles,
+        schoolId: resolvedSchoolId,
         isActive: true,
         isFirstLogin: true,
       })

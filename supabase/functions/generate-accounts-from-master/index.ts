@@ -923,16 +923,17 @@ serve(async (req: Request): Promise<Response> => {
 
             // B. Buat profil aplikasi di tabel public.users
             const { error: profileError } = await supabaseAdmin
-              .from('users')
-              .insert({
-                id: userId,
-                schoolId,
-                email: person.email,
-                fullName: person.fullName || person.email,
-                role: person.role,
-                isActive: true,
-                isFirstLogin: true,
-              })
+            .from('users')
+            .insert({
+              id: userId,
+              schoolId,
+              email: person.email,
+              fullName: person.fullName || person.email,
+              role: person.role,
+              additionalRoles: [],
+              isActive: true,
+              isFirstLogin: true,
+            })
 
             if (profileError) {
               console.error(

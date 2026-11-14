@@ -26,6 +26,7 @@ export const ROLE_LABELS: Record<string, { id: string; en: string }> = {
   GURU: { id: 'Guru', en: 'Teacher' },
   STAFF_TU: { id: 'Staff Tata Usaha', en: 'Admin Staff' },
   STAFF_SARPRAS: { id: 'Staff Sarpras', en: 'Facility Staff' },
+  STAFF_PERPUS: { id: 'Staff Perpustakaan', en: 'Library Staff' },
   ORANG_TUA: { id: 'Orang Tua / Wali', en: 'Parent' },
   SISWA: { id: 'Siswa', en: 'Student' },
 };

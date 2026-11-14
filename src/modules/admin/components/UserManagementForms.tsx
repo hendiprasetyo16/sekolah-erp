@@ -12,6 +12,7 @@ import {
     KeyRound,
     Loader2,
     Plus,
+    Sparkles,
     Trash2,
     UserPlus,
     X,
@@ -36,14 +37,38 @@ import {
     SelectValue,
 } from '@/components/ui/select';
 import {
+    ADDITIONAL_ROLE_OPTIONS,
+    ROLE_DISPLAY_NAMES,
     ROLE_VALUES,
+    mapTugasTambahanToRoles,
     type AppUser,
+    type AppUserRole,
     type CreateUserFormValues,
     type EditUserFormValues,
     type ResetPasswordFormValues,
 } from '../types/user-management.types';
 
 type Lang = 'id' | 'en';
+
+/**
+ * Mengambil label tampilan role dengan fallback aman ke `ROLE_DISPLAY_NAMES`
+ * agar role baru seperti `STAFF_PERPUS` tidak pernah kosong atau error.
+ */
+function getRoleLabel(role: AppUserRole, lang: Lang): string {
+    const dict = translations[lang].userManagement as Record<string, string | undefined>;
+    const translated = dict[`role_${role}`];
+    if (typeof translated === 'string' && translated.trim().length > 0) {
+        return translated;
+    }
+    return ROLE_DISPLAY_NAMES[role]?.[lang] ?? role;
+}
+
+/**
+ * Mengecek apakah role utama berhak memiliki tugas tambahan pegawai sekolah.
+ */
+function canHaveAdditionalRoles(role: AppUserRole): boolean {
+    return role !== 'SUPER_ADMIN' && role !== 'SISWA' && role !== 'ORANG_TUA';
+}
 
 interface BaseModalWrapperProps {
     onClose: () => void;
@@ -79,7 +104,7 @@ function BaseModalWrapper({
                 initial={{ opacity: 0, scale: 0.95 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0, scale: 0.95 }}
-                className={`w-full ${maxWidthClass} rounded-2xl ${borderClass} bg-card p-6 shadow-2xl ${centered ? 'text-center' : ''
+                className={`max-h-[90dvh] w-full overflow-y-auto ${maxWidthClass} rounded-2xl ${borderClass} bg-card p-6 shadow-2xl ${centered ? 'text-center' : ''
                     }`}
             >
                 {children}
@@ -126,19 +151,36 @@ export function AddUserModal({
                     .email(lang === 'id' ? 'Format email tidak valid' : 'Invalid email format'),
                 password: z
                     .string()
-                    .min(6, lang === 'id' ? 'Minimal 6 karakter' : 'Minimum 6 characters'),
+                    .min(8, lang === 'id' ? 'Minimal 8 karakter' : 'Minimum 8 characters'),
                 role: z.enum(ROLE_VALUES),
+                additionalRoles: z.array(z.enum(ROLE_VALUES)),
             }),
         [lang]
     );
 
     const form = useForm<CreateUserFormValues>({
         resolver: zodResolver(schema),
-        defaultValues: { fullName: '', email: '', password: '', role: 'GURU' },
+        defaultValues: {
+            fullName: '',
+            email: '',
+            password: '',
+            role: 'GURU',
+            additionalRoles: [],
+        },
     });
 
     const selectedRole = form.watch('role');
+    const selectedAdditionalRoles = form.watch('additionalRoles');
     const missingSchoolWarning = selectedRole !== 'SUPER_ADMIN' && !activeSchoolId;
+    const showAdditionalSelector = canHaveAdditionalRoles(selectedRole);
+
+    const handleToggleAdditionalRole = (dutyRole: AppUserRole, checked: boolean) => {
+        const current = form.getValues('additionalRoles') ?? [];
+        const next = checked
+            ? Array.from(new Set([...current, dutyRole]))
+            : current.filter((item) => item !== dutyRole);
+        form.setValue('additionalRoles', next, { shouldDirty: true });
+    };
 
     const handleClose = () => {
         form.reset();
@@ -147,7 +189,7 @@ export function AddUserModal({
     };
 
     return (
-        <BaseModalWrapper onClose={handleClose}>
+        <BaseModalWrapper onClose={handleClose} maxWidthClass="max-w-lg">
             <div className="mb-4 flex justify-between">
                 <div>
                     <h3 className="text-xl font-bold">{tUM('modalAddTitle')}</h3>
@@ -212,8 +254,24 @@ export function AddUserModal({
                         name="role"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{tUM('colRole')}</FormLabel>
-                                <Select value={field.value} onValueChange={field.onChange}>
+                                <FormLabel>
+                                    {lang === 'id' ? 'Role Utama' : 'Primary Role'}
+                                </FormLabel>
+                                <Select
+                                    value={field.value}
+                                    onValueChange={(nextRole) => {
+                                        const typedRole = nextRole as AppUserRole;
+                                        field.onChange(typedRole);
+                                        if (!canHaveAdditionalRoles(typedRole)) {
+                                            form.setValue('additionalRoles', []);
+                                        } else {
+                                            const filtered = (
+                                                form.getValues('additionalRoles') ?? []
+                                            ).filter((r) => r !== typedRole);
+                                            form.setValue('additionalRoles', filtered);
+                                        }
+                                    }}
+                                >
                                     <FormControl>
                                         <SelectTrigger>
                                             <SelectValue placeholder={tUM('roleReq')} />
@@ -226,10 +284,7 @@ export function AddUserModal({
                                     >
                                         {ROLE_VALUES.map((r) => (
                                             <SelectItem key={r} value={r}>
-                                                {tUM(
-                                                    ('role_' +
-                                                        r) as keyof typeof translations.id.userManagement
-                                                )}
+                                                {getRoleLabel(r, lang)}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -238,6 +293,57 @@ export function AddUserModal({
                             </FormItem>
                         )}
                     />
+
+                    {/* Pilihan Tugas Tambahan (Multi-Role Otomatis) */}
+                    {showAdditionalSelector && (
+                        <div className="space-y-2 rounded-xl border border-border bg-muted/30 p-3.5">
+                            <div>
+                                <p className="text-xs font-semibold text-foreground">
+                                    {lang === 'id'
+                                        ? 'Tugas Tambahan (Opsional)'
+                                        : 'Additional Duties (Optional)'}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground">
+                                    {lang === 'id'
+                                        ? 'Menu dan hak akses akan digabung otomatis sesuai tugas yang dicentang.'
+                                        : 'Menus and permissions will be merged automatically based on checked duties.'}
+                                </p>
+                            </div>
+
+                            <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
+                                {ADDITIONAL_ROLE_OPTIONS.filter(
+                                    (opt) => opt !== selectedRole
+                                ).map((dutyRole) => {
+                                    const isChecked = selectedAdditionalRoles.includes(dutyRole);
+                                    return (
+                                        <label
+                                            key={dutyRole}
+                                            className={`flex cursor-pointer items-center gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors ${isChecked
+                                                ? 'border-emerald-500/50 bg-emerald-500/10 font-medium text-foreground'
+                                                : 'border-border bg-background text-muted-foreground hover:text-foreground'
+                                                }`}
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                checked={isChecked}
+                                                onChange={(e) =>
+                                                    handleToggleAdditionalRole(
+                                                        dutyRole,
+                                                        e.target.checked
+                                                    )
+                                                }
+                                                className="h-3.5 w-3.5 rounded border-border accent-emerald-600"
+                                            />
+                                            <span className="truncate">
+                                                {getRoleLabel(dutyRole, lang)}
+                                            </span>
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     <FormField
                         control={form.control}
                         name="password"
@@ -327,21 +433,48 @@ export function EditUserModal({
                     .trim()
                     .min(3, lang === 'id' ? 'Minimal 3 karakter' : 'Minimum 3 characters'),
                 role: z.enum(ROLE_VALUES),
+                additionalRoles: z.array(z.enum(ROLE_VALUES)),
             }),
         [lang]
     );
 
     const form = useForm<EditUserFormValues>({
         resolver: zodResolver(schema),
-        defaultValues: { fullName: user.fullName, role: user.role },
+        defaultValues: {
+            fullName: user.fullName,
+            role: user.role,
+            additionalRoles: Array.isArray(user.additionalRoles) ? user.additionalRoles : [],
+        },
     });
 
     useEffect(() => {
-        form.reset({ fullName: user.fullName, role: user.role });
+        form.reset({
+            fullName: user.fullName,
+            role: user.role,
+            additionalRoles: Array.isArray(user.additionalRoles) ? user.additionalRoles : [],
+        });
     }, [user, form]);
 
+    const selectedRole = form.watch('role');
+    const selectedAdditionalRoles = form.watch('additionalRoles');
+    const showAdditionalSelector = canHaveAdditionalRoles(selectedRole);
+
+    // Deteksi role yang sudah otomatis didapat dari teks tugasTambahan Dapodik
+    const dapodikAutoRoles = useMemo(
+        () => mapTugasTambahanToRoles(user.tugasTambahan),
+        [user.tugasTambahan]
+    );
+
+    const handleToggleAdditionalRole = (dutyRole: AppUserRole, checked: boolean) => {
+        const current = form.getValues('additionalRoles') ?? [];
+        const next = checked
+            ? Array.from(new Set([...current, dutyRole]))
+            : current.filter((item) => item !== dutyRole);
+        form.setValue('additionalRoles', next, { shouldDirty: true });
+    };
+
     return (
-        <BaseModalWrapper onClose={onClose}>
+        <BaseModalWrapper onClose={onClose} maxWidthClass="max-w-lg">
             <div className="mb-4 flex justify-between">
                 <div>
                     <h3 className="text-xl font-bold">{tUM('modalEditTitle')}</h3>
@@ -389,10 +522,23 @@ export function EditUserModal({
                         name="role"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{tUM('colRole')}</FormLabel>
+                                <FormLabel>
+                                    {lang === 'id' ? 'Role Utama' : 'Primary Role'}
+                                </FormLabel>
                                 <Select
                                     value={field.value}
-                                    onValueChange={field.onChange}
+                                    onValueChange={(nextRole) => {
+                                        const typedRole = nextRole as AppUserRole;
+                                        field.onChange(typedRole);
+                                        if (!canHaveAdditionalRoles(typedRole)) {
+                                            form.setValue('additionalRoles', []);
+                                        } else {
+                                            const filtered = (
+                                                form.getValues('additionalRoles') ?? []
+                                            ).filter((r) => r !== typedRole);
+                                            form.setValue('additionalRoles', filtered);
+                                        }
+                                    }}
                                     disabled={!isSuperAdmin}
                                 >
                                     <FormControl>
@@ -407,10 +553,7 @@ export function EditUserModal({
                                     >
                                         {ROLE_VALUES.map((r) => (
                                             <SelectItem key={r} value={r}>
-                                                {tUM(
-                                                    ('role_' +
-                                                        r) as keyof typeof translations.id.userManagement
-                                                )}
+                                                {getRoleLabel(r, lang)}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -419,6 +562,84 @@ export function EditUserModal({
                             </FormItem>
                         )}
                     />
+
+                    {/* Pilihan Tugas Tambahan & Info Dapodik */}
+                    {showAdditionalSelector && (
+                        <div className="space-y-2.5 rounded-xl border border-border bg-muted/30 p-3.5">
+                            <div>
+                                <p className="text-xs font-semibold text-foreground">
+                                    {lang === 'id'
+                                        ? 'Tugas Tambahan (Multi-Role)'
+                                        : 'Additional Duties (Multi-Role)'}
+                                </p>
+                                <p className="text-[11px] text-muted-foreground">
+                                    {lang === 'id'
+                                        ? 'Centang tugas tambahan di luar role utama agar menu terkait terbuka otomatis.'
+                                        : 'Check additional duties beyond the primary role to unlock related menus.'}
+                                </p>
+                            </div>
+
+                            {user.tugasTambahan && (
+                                <div className="flex items-start gap-2 rounded-lg border border-sky-500/25 bg-sky-500/10 px-2.5 py-2 text-[11px] text-sky-800 dark:text-sky-300">
+                                    <Sparkles className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                                    <div>
+                                        <span className="font-semibold">
+                                            {lang === 'id'
+                                                ? 'Data Dapodik PTK: '
+                                                : 'Dapodik PTK Record: '}
+                                        </span>
+                                        <span>{user.tugasTambahan}</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            <div className="grid grid-cols-1 gap-2 pt-0.5 sm:grid-cols-2">
+                                {ADDITIONAL_ROLE_OPTIONS.filter(
+                                    (opt) => opt !== selectedRole
+                                ).map((dutyRole) => {
+                                    const isFromDapodik = dapodikAutoRoles.includes(dutyRole);
+                                    const isChecked =
+                                        isFromDapodik || selectedAdditionalRoles.includes(dutyRole);
+
+                                    return (
+                                        <label
+                                            key={dutyRole}
+                                            className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-2 text-xs transition-colors ${isFromDapodik
+                                                ? 'cursor-default border-sky-500/40 bg-sky-500/10 font-medium text-foreground'
+                                                : isChecked
+                                                    ? 'cursor-pointer border-emerald-500/50 bg-emerald-500/10 font-medium text-foreground'
+                                                    : 'cursor-pointer border-border bg-background text-muted-foreground hover:text-foreground'
+                                                }`}
+                                        >
+                                            <span className="flex items-center gap-2 truncate">
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isChecked}
+                                                    disabled={isFromDapodik}
+                                                    onChange={(e) =>
+                                                        handleToggleAdditionalRole(
+                                                            dutyRole,
+                                                            e.target.checked
+                                                        )
+                                                    }
+                                                    className="h-3.5 w-3.5 rounded border-border accent-emerald-600"
+                                                />
+                                                <span className="truncate">
+                                                    {getRoleLabel(dutyRole, lang)}
+                                                </span>
+                                            </span>
+
+                                            {isFromDapodik && (
+                                                <span className="shrink-0 rounded bg-sky-600/15 px-1.5 py-0.5 text-[9px] font-semibold text-sky-700 dark:text-sky-300">
+                                                    Dapodik
+                                                </span>
+                                            )}
+                                        </label>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
 
                     <div className="mt-6 flex justify-end gap-3 border-t pt-4">
                         <Button type="button" variant="outline" onClick={onClose}>
@@ -473,7 +694,7 @@ export function ResetPasswordModal({
             z.object({
                 newPassword: z
                     .string()
-                    .min(6, lang === 'id' ? 'Minimal 6 karakter' : 'Minimum 6 characters'),
+                    .min(8, lang === 'id' ? 'Minimal 8 karakter' : 'Minimum 8 characters'),
             }),
         [lang]
     );

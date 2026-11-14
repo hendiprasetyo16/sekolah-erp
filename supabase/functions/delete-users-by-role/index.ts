@@ -1,3 +1,4 @@
+// supabase/functions/delete-users-by-role/index.ts
 // @ts-nocheck
 /// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
@@ -22,7 +23,14 @@ const CHUNK_SIZE = 5           // Jumlah penghapusan paralel dalam 1 kelompok ke
 const DELAY_MS = 300           // Jeda waktu (milidetik) antar kelompok kecil
 
 const ROLES_BY_GROUP: Record<string, readonly string[]> = {
-  staff: ['GURU', 'WALI_KELAS', 'BENDAHARA', 'STAFF_TU', 'STAFF_SARPRAS'],
+  staff: [
+    'GURU',
+    'WALI_KELAS',
+    'BENDAHARA',
+    'STAFF_TU',
+    'STAFF_SARPRAS',
+    'STAFF_PERPUS',
+  ],
   siswa: ['SISWA'],
   orangtua: ['ORANG_TUA'],
 }
@@ -122,16 +130,15 @@ async function authorize(
     throw new HttpError('Akun Anda tidak aktif atau profil tidak ditemukan.', 403)
   }
 
-  if (!['SUPER_ADMIN', 'ADMIN'].includes(caller.role)) {
-    throw new HttpError('Anda tidak memiliki izin menghapus akun massal.', 403)
+  if (caller.role !== 'SUPER_ADMIN') {
+    throw new HttpError(
+      'Hanya Super Admin yang memiliki izin menghapus akun massal.',
+      403,
+    )
   }
 
-  if (caller.role === 'SUPER_ADMIN' && caller.schoolId !== null) {
+  if (caller.schoolId !== null) {
     throw new HttpError('Konfigurasi akun SUPER_ADMIN tidak valid.', 403)
-  }
-
-  if (caller.role === 'ADMIN' && !caller.schoolId) {
-    throw new HttpError('Akun ADMIN belum terhubung ke sekolah.', 403)
   }
 
   return caller
@@ -185,13 +192,6 @@ serve(async (req: Request): Promise<Response> => {
 
     if (!isValidUuid(schoolId)) {
       throw new HttpError('schoolId tidak valid.', 400)
-    }
-
-    if (caller.role === 'ADMIN' && schoolId !== caller.schoolId) {
-      throw new HttpError(
-        'ADMIN hanya dapat menghapus akun dari sekolah sendiri.',
-        403,
-      )
     }
 
     const targetRoles = ROLES_BY_GROUP[targetGroup]

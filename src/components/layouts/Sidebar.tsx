@@ -31,6 +31,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { Module } from '@/types/permission.types';
+import { getEffectiveRoles } from '@/modules/admin/types/user-management.types';
 
 interface NavItem {
   label: string;
@@ -61,6 +62,7 @@ const ATTENDANCE_STAFF_ROLES = [
   'GURU',
   'STAFF_TU',
   'STAFF_SARPRAS',
+  'STAFF_PERPUS',
   'BENDAHARA',
 ] as const;
 
@@ -275,17 +277,26 @@ export function Sidebar() {
     },
   ];
 
-  const filteredGroups: NavGroup[] = navGroups
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => {
-        const hasModule = !item.module || hasAnyPermission(item.module);
-        const hasRole =
-          !item.allowedRoles || Boolean(user?.role && item.allowedRoles.includes(user.role));
-        return hasModule && hasRole;
-      }),
-    }))
-    .filter((group) => group.items.length > 0);
+  // Gabungkan Role Utama + Additional Roles + Tugas Tambahan Dapodik menjadi satu daftar
+  const effectiveUserRoles = useMemo(() => getEffectiveRoles(user), [user]);
+
+  const filteredGroups: NavGroup[] = useMemo(
+    () =>
+      navGroups
+        .map((group) => ({
+          ...group,
+          items: group.items.filter((item) => {
+            const hasModule = !item.module || hasAnyPermission(item.module);
+            const hasRole =
+              !item.allowedRoles ||
+              effectiveUserRoles.some((userRole) => item.allowedRoles!.includes(userRole));
+            return hasModule && hasRole;
+          }),
+        }))
+        .filter((group) => group.items.length > 0),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [effectiveUserRoles, hasAnyPermission, locale]
+  );
 
   const activeHref = useMemo(
     () => resolveMostSpecificActiveHref(location.pathname, filteredGroups),

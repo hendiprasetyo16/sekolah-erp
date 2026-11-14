@@ -1,42 +1,59 @@
-import { useCallback } from 'react';
+// src/hooks/usePermission.ts
+import { useCallback, useMemo } from 'react';
 import { useAuthStore } from '../modules/auth/store/auth.store';
 import { ROLE_PERMISSIONS } from '../types/permission.types';
 import type { Module, Action } from '../types/permission.types';
+import type { UserRole } from '../types/common.types';
+import { getEffectiveRoles } from '../modules/admin/types/user-management.types';
 
 export function usePermission() {
   const user = useAuthStore((state) => state.user);
 
+  const effectiveRoles = useMemo(
+    () => getEffectiveRoles(user) as UserRole[],
+    [user]
+  );
+
   const hasPermission = useCallback(
     (module: Module, action: Action): boolean => {
-      if (!user) return false;
-      
-      const permissions = ROLE_PERMISSIONS[user.role];
-      if (!permissions) return false;
+      if (!user || effectiveRoles.length === 0) return false;
 
-      const modulePermission = permissions.find((p) => p.module === module);
-      if (!modulePermission) return false;
+      return effectiveRoles.some((role) => {
+        const permissions = ROLE_PERMISSIONS[role];
+        if (!permissions) return false;
 
-      return modulePermission.actions.includes(action);
+        const modulePermission = permissions.find((p) => p.module === module);
+        return modulePermission?.actions.includes(action) ?? false;
+      });
     },
-    [user]
+    [user, effectiveRoles]
   );
 
   const hasAnyPermission = useCallback(
     (module: Module): boolean => {
-      if (!user) return false;
-      const permissions = ROLE_PERMISSIONS[user.role];
-      return permissions?.some((p) => p.module === module) ?? false;
+      if (!user || effectiveRoles.length === 0) return false;
+
+      return effectiveRoles.some((role) => {
+        const permissions = ROLE_PERMISSIONS[role];
+        return permissions?.some((p) => p.module === module) ?? false;
+      });
     },
-    [user]
+    [user, effectiveRoles]
   );
 
   const hasRole = useCallback(
     (...roles: string[]): boolean => {
-      if (!user) return false;
-      return roles.includes(user.role);
+      if (!user || effectiveRoles.length === 0) return false;
+      return effectiveRoles.some((role) => roles.includes(role));
     },
-    [user]
+    [user, effectiveRoles]
   );
 
-  return { hasPermission, hasAnyPermission, hasRole, user };
+  return {
+    hasPermission,
+    hasAnyPermission,
+    hasRole,
+    effectiveRoles,
+    user,
+  };
 }

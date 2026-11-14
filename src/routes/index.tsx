@@ -19,6 +19,7 @@ import FinanceDashboardPage from '@/modules/finance/pages/FinanceDashboardPage';
 import ScheduleDashboardPage from '@/modules/schedules/pages/ScheduleDashboardPage';
 import ReportsDashboardPage from '@/modules/reports/pages/ReportsDashboardPage';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { getEffectiveRoles } from '@/modules/admin/types/user-management.types';
 
 // Attendance module
 import { StudentKioskPage } from '@/modules/attendance/pages/StudentKioskPage';
@@ -59,6 +60,7 @@ const ATTENDANCE_GPS_ROLES = [
   'GURU',
   'STAFF_TU',
   'STAFF_SARPRAS',
+  'STAFF_PERPUS',
   'BENDAHARA',
 ] as const;
 
@@ -80,8 +82,9 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * Satpam Rute Per-Role: Mencegah user membuka halaman yang bukan haknya
- * lewat pengetikan URL manual di browser.
+ * Satpam Rute Per-Role (Mendukung Multi-Role / Tugas Tambahan):
+ * Mengecek Role Utama + Additional Roles + Tugas Tambahan Dapodik
+ * agar selaras 100% dengan tampilan menu di Sidebar.tsx.
  */
 function RoleRoute({
   allowedRoles,
@@ -91,8 +94,11 @@ function RoleRoute({
   children: React.ReactNode;
 }) {
   const { user } = useAuthStore();
+  const effectiveRoles = getEffectiveRoles(user);
 
-  if (!user?.role || !allowedRoles.includes(user.role)) {
+  const isAllowed = effectiveRoles.some((userRole) => allowedRoles.includes(userRole));
+
+  if (!isAllowed) {
     return <Navigate to="/dashboard" replace />;
   }
 

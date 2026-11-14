@@ -2,6 +2,7 @@ import { supabase } from '@/services/supabase.client';
 import {
     BULK_CONCURRENCY,
     type AppUser,
+    type AppUserRole,
     type BatchExecutionSummary,
     type BulkGenerateResponse,
     type BulkTargetGroup,
@@ -109,58 +110,104 @@ const chunkArray = <T>(items: readonly T[], size: number): T[][] => {
 };
 
 /**
- * Memperkaya daftar akun (SISWA & ORANG_TUA) dengan status keterhubungan
- * ke tabel `public.user_student_links` (kolom camelCase: "userId", "schoolId").
+ * Memperkaya daftar akun dengan:
+ * 1. Status keterhubungan siswa/orang tua di `public.user_student_links`.
+ * 2. Teks tugas tambahan Dapodik dari `public.teachers` ("tugasTambahan").
  */
-const enrichUsersWithMasterLinks = async (
+const enrichUsersWithMasterData = async (
     users: AppUser[],
     schoolId: string | null,
     isSuperAdmin: boolean
 ): Promise<AppUser[]> => {
     if (users.length === 0) return users;
 
-    const targetIds = users
+    const studentParentIds = users
         .filter((u) => u.role === 'SISWA' || u.role === 'ORANG_TUA')
         .map((u) => u.id);
 
-    if (targetIds.length === 0) return users;
+    const staffUserIds = users
+        .filter(
+            (u) =>
+                u.role !== 'SISWA' &&
+                u.role !== 'ORANG_TUA' &&
+                u.role !== 'SUPER_ADMIN'
+        )
+        .map((u) => u.id);
 
-    // Menyimpan jumlah siswa yang tertaut untuk setiap userId
     const linkedCountMap = new Map<string, number>();
+    const teacherDutyMap = new Map<string, string>();
 
-    try {
-        // Pecah per 200 UUID agar aman dari error "URI Too Long"
-        const idChunks = chunkArray(targetIds, 200);
+    // 1. Ambil tautan master siswa / orang tua
+    if (studentParentIds.length > 0) {
+        try {
+            const idChunks = chunkArray(studentParentIds, 200);
+            for (const chunk of idChunks) {
+                let linkQuery = supabase
+                    .from('user_student_links')
+                    .select('userId')
+                    .in('userId', chunk);
 
-        for (const chunk of idChunks) {
-            let linkQuery = supabase
-                .from('user_student_links')
-                .select('userId')
-                .in('userId', chunk);
+                if (!isSuperAdmin && schoolId) {
+                    linkQuery = linkQuery.eq('schoolId', schoolId);
+                }
 
-            if (!isSuperAdmin && schoolId) {
-                linkQuery = linkQuery.eq('schoolId', schoolId);
-            }
-
-            const { data: linkRows, error } = await linkQuery;
-            if (!error && Array.isArray(linkRows)) {
-                for (const row of linkRows) {
-                    const uid = (row as { userId?: string | null }).userId;
-                    if (uid) {
-                        linkedCountMap.set(uid, (linkedCountMap.get(uid) ?? 0) + 1);
+                const { data: linkRows, error } = await linkQuery;
+                if (!error && Array.isArray(linkRows)) {
+                    for (const row of linkRows) {
+                        const uid = (row as { userId?: string | null }).userId;
+                        if (uid) {
+                            linkedCountMap.set(uid, (linkedCountMap.get(uid) ?? 0) + 1);
+                        }
                     }
                 }
             }
+        } catch {
+            // Fallback aman agar daftar pengguna tetap tampil
         }
-    } catch {
-        // Fallback aman agar daftar pengguna tetap tampil meskipun query tautan gagal
+    }
+
+    // 2. Ambil tugasTambahan dari tabel teachers (Dapodik)
+    if (staffUserIds.length > 0) {
+        try {
+            const staffChunks = chunkArray(staffUserIds, 200);
+            for (const chunk of staffChunks) {
+                let teacherQuery = supabase
+                    .from('teachers')
+                    .select('userId, tugasTambahan')
+                    .in('userId', chunk);
+
+                if (!isSuperAdmin && schoolId) {
+                    teacherQuery = teacherQuery.eq('schoolId', schoolId);
+                }
+
+                const { data: teacherRows, error } = await teacherQuery;
+                if (!error && Array.isArray(teacherRows)) {
+                    for (const row of teacherRows) {
+                        const typedRow = row as {
+                            userId?: string | null;
+                            tugasTambahan?: string | null;
+                        };
+                        if (typedRow.userId && typedRow.tugasTambahan) {
+                            teacherDutyMap.set(typedRow.userId, typedRow.tugasTambahan);
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Fallback aman jika tabel/kolom belum tersedia
+        }
     }
 
     return users.map((u) => {
+        const normalizedAdditionalRoles: AppUserRole[] = Array.isArray(u.additionalRoles)
+            ? u.additionalRoles
+            : [];
+
         if (u.role === 'SISWA') {
             const count = linkedCountMap.get(u.id) ?? 0;
             return {
                 ...u,
+                additionalRoles: [],
                 isLinkedToMaster: count > 0,
             };
         }
@@ -168,11 +215,16 @@ const enrichUsersWithMasterLinks = async (
             const count = linkedCountMap.get(u.id) ?? 0;
             return {
                 ...u,
+                additionalRoles: [],
                 isLinkedToMaster: count > 0,
                 linkedChildrenCount: count,
             };
         }
-        return u;
+        return {
+            ...u,
+            additionalRoles: normalizedAdditionalRoles,
+            tugasTambahan: teacherDutyMap.get(u.id) ?? u.tugasTambahan ?? null,
+        };
     });
 };
 
@@ -183,7 +235,7 @@ const enrichUsersWithMasterLinks = async (
 export const userManagementService = {
     /**
      * Mengambil seluruh data pengguna (dengan paginasi 1000 baris per batch)
-     * lalu menggabungkannya dengan status tautan master siswa/orang tua.
+     * lalu menggabungkannya dengan status tautan master & tugas tambahan Dapodik.
      */
     async fetchAllUsers(schoolId: string | null, isSuperAdmin: boolean): Promise<AppUser[]> {
         if (!isSuperAdmin && !schoolId) return [];
@@ -211,7 +263,7 @@ export const userManagementService = {
             if (batch.length < pageSize) break;
         }
 
-        return enrichUsersWithMasterLinks(allUsers, schoolId, isSuperAdmin);
+        return enrichUsersWithMasterData(allUsers, schoolId, isSuperAdmin);
     },
 
     /**
@@ -223,9 +275,22 @@ export const userManagementService = {
             throw new Error('Pilih sekolah terlebih dahulu sebelum membuat akun sekolah.');
         }
 
+        const isNonStaffRole =
+            payload.role === 'SUPER_ADMIN' ||
+            payload.role === 'SISWA' ||
+            payload.role === 'ORANG_TUA';
+
+        // Bersihkan additionalRoles agar tidak duplikat dengan role utama
+        const cleanAdditionalRoles = isNonStaffRole
+            ? []
+            : Array.from(new Set(payload.additionalRoles ?? [])).filter(
+                  (r) => r !== payload.role
+              );
+
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('create-user', {
             body: {
                 ...payload,
+                additionalRoles: cleanAdditionalRoles,
                 schoolId: payload.role === 'SUPER_ADMIN' ? null : schoolId,
             },
         });
@@ -239,8 +304,8 @@ export const userManagementService = {
     },
 
     /**
-     * Memperbarui nama lengkap & role pengguna, serta menyinkronkan nama siswa
-     * ke tabel `students` ("fullName") melalui relasi di `user_student_links`.
+     * Memperbarui nama lengkap, role utama, dan daftar tugas tambahan pengguna,
+     * serta menyinkronkan nama siswa ke tabel `students`.
      */
     async updateUser(params: {
         targetUser: AppUser;
@@ -250,13 +315,28 @@ export const userManagementService = {
     }): Promise<void> {
         const { targetUser, data, isSuperAdmin, activeSchoolId } = params;
 
-        if (!isSuperAdmin && targetUser.role === 'SUPER_ADMIN') {
-            throw new Error('Anda tidak memiliki izin mengubah akun Super Admin.');
-        }
+        const targetMainRole = isSuperAdmin ? data.role : targetUser.role;
+        const isNonStaffRole =
+            targetMainRole === 'SUPER_ADMIN' ||
+            targetMainRole === 'SISWA' ||
+            targetMainRole === 'ORANG_TUA';
+
+        const cleanAdditionalRoles = isNonStaffRole
+            ? []
+            : Array.from(new Set(data.additionalRoles ?? [])).filter(
+                  (r) => r !== targetMainRole
+              );
 
         const updateFields = isSuperAdmin
-            ? { fullName: data.fullName, role: data.role }
-            : { fullName: data.fullName };
+            ? {
+                  fullName: data.fullName,
+                  role: data.role,
+                  additionalRoles: cleanAdditionalRoles,
+              }
+            : {
+                  fullName: data.fullName,
+                  additionalRoles: cleanAdditionalRoles,
+              };
 
         let query = supabase.from('users').update(updateFields).eq('id', targetUser.id);
         if (!isSuperAdmin && activeSchoolId) {
@@ -267,8 +347,7 @@ export const userManagementService = {
         if (error) throw new Error(error.message);
 
         // Sinkronkan nama lengkap ke tabel master `students` jika akun ber-role SISWA
-        const effectiveRole = isSuperAdmin ? data.role : targetUser.role;
-        if (effectiveRole === 'SISWA' && targetUser.fullName !== data.fullName) {
+        if (targetMainRole === 'SISWA' && targetUser.fullName !== data.fullName) {
             try {
                 const { data: linkRow } = await supabase
                     .from('user_student_links')
@@ -316,12 +395,16 @@ export const userManagementService = {
         targetUser: AppUser;
         currentUserId?: string;
         isSuperAdmin: boolean;
+        canManageUsers: boolean;
         activeSchoolId: string | null;
     }): Promise<void> {
-        const { targetUser, currentUserId, isSuperAdmin, activeSchoolId } = params;
+        const { targetUser, currentUserId, isSuperAdmin, canManageUsers, activeSchoolId } = params;
 
-        if (!isSuperAdmin) {
-            throw new Error('Hanya Super Admin yang dapat mengubah status akun.');
+        if (!canManageUsers) {
+            throw new Error('Anda tidak memiliki izin untuk mengubah status akun.');
+        }
+        if (!isSuperAdmin && targetUser.role === 'SUPER_ADMIN') {
+            throw new Error('Admin sekolah tidak dapat mengubah status akun Super Admin.');
         }
         if (currentUserId === targetUser.id) {
             throw new Error('Anda tidak dapat memblokir akun Anda sendiri.');
@@ -332,7 +415,7 @@ export const userManagementService = {
             .update({ isActive: !targetUser.isActive })
             .eq('id', targetUser.id);
 
-        if (activeSchoolId && targetUser.schoolId) {
+        if (!isSuperAdmin && activeSchoolId) {
             query = query.eq('schoolId', activeSchoolId);
         }
 
@@ -377,7 +460,6 @@ export const userManagementService = {
     }): Promise<BatchExecutionSummary> {
         const { usersTarget, activeSchoolId, currentUserId } = params;
 
-        // Lindungi akun SUPER_ADMIN & akun diri sendiri agar tidak tertimpa password awal
         const eligibleUsers = usersTarget.filter(
             (u) => u.role !== 'SUPER_ADMIN' && u.id !== currentUserId
         );
@@ -395,6 +477,7 @@ export const userManagementService = {
                 useDefaultPassword: true,
                 fullName: user.fullName,
                 role: user.role,
+                additionalRoles: Array.isArray(user.additionalRoles) ? user.additionalRoles : [],
                 schoolId: user.schoolId ?? activeSchoolId,
                 existingUserId: user.id,
             })

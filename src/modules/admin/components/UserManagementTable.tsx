@@ -31,7 +31,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import {
     ITEMS_PER_PAGE,
+    ROLE_DISPLAY_NAMES,
     STAFF_ROLES,
+    mapTugasTambahanToRoles,
     type AppUser,
     type AppUserRole,
     type SortConfig,
@@ -110,6 +112,7 @@ interface UserManagementTableProps {
     selectedUserIds: string[];
     currentUserId?: string;
     isSuperAdmin: boolean;
+    canManageUsers: boolean;
     onSort: (key: SortKey) => void;
     onPageChange: (page: number) => void;
     onSelectAllPage: (checked: boolean) => void;
@@ -131,6 +134,7 @@ export function UserManagementTable({
     selectedUserIds,
     currentUserId,
     isSuperAdmin,
+    canManageUsers,
     onSort,
     onPageChange,
     onSelectAllPage,
@@ -150,8 +154,14 @@ export function UserManagementTable({
     const tUM = (key: keyof typeof translations.id.userManagement) =>
         translations[lang].userManagement[key];
 
-    const formatRoleName = (role: AppUserRole): string =>
-        tUM(('role_' + role) as keyof typeof translations.id.userManagement);
+    const formatRoleName = (role: AppUserRole): string => {
+        const dict = translations[lang].userManagement as Record<string, string | undefined>;
+        const translated = dict[`role_${role}`];
+        if (typeof translated === 'string' && translated.trim().length > 0) {
+            return translated;
+        }
+        return ROLE_DISPLAY_NAMES[role]?.[lang] ?? role;
+    };
 
     const isAllPageSelected =
         users.length > 0 && users.every((u) => selectedUserIds.includes(u.id));
@@ -250,7 +260,18 @@ export function UserManagementTable({
                         ) : (
                             users.map((user, index) => {
                                 const isSelf = currentUserId === user.id;
-                                const canEditRow = isSuperAdmin || user.role !== 'SUPER_ADMIN';
+                                const canManageRow =
+                                    canManageUsers && (isSuperAdmin || user.role !== 'SUPER_ADMIN');
+
+                                // Gabungkan additionalRoles manual + tugasTambahan Dapodik tanpa duplikat
+                                const extraDuties = Array.from(
+                                    new Set<AppUserRole>([
+                                        ...(Array.isArray(user.additionalRoles)
+                                            ? user.additionalRoles
+                                            : []),
+                                        ...mapTugasTambahanToRoles(user.tugasTambahan),
+                                    ])
+                                ).filter((r) => r !== user.role);
 
                                 return (
                                     <tr
@@ -308,25 +329,47 @@ export function UserManagementTable({
                                             </div>
                                         </td>
                                         <td className="px-4 py-3">
-                                            <span
-                                                className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-semibold ${getRoleBadgeColor(
-                                                    user.role
-                                                )}`}
-                                            >
-                                                {formatRoleName(user.role)}
-                                            </span>
+                                            <div className="flex flex-wrap items-center gap-1.5">
+                                                <span
+                                                    className={`inline-flex items-center rounded border px-2 py-0.5 text-xs font-semibold ${getRoleBadgeColor(
+                                                        user.role
+                                                    )}`}
+                                                >
+                                                    {formatRoleName(user.role)}
+                                                </span>
+
+                                                {extraDuties.map((duty) => (
+                                                    <span
+                                                        key={duty}
+                                                        title={
+                                                            lang === 'id'
+                                                                ? 'Tugas Tambahan'
+                                                                : 'Additional Duty'
+                                                        }
+                                                        className="inline-flex items-center rounded border border-amber-300/70 bg-amber-50 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300"
+                                                    >
+                                                        +{formatRoleName(duty)}
+                                                    </span>
+                                                ))}
+                                            </div>
+
+                                            {user.tugasTambahan && (
+                                                <p className="mt-1 text-[11px] text-muted-foreground">
+                                                    Dapodik: {user.tugasTambahan}
+                                                </p>
+                                            )}
                                         </td>
                                         <td className="px-4 py-3">
                                             <span
                                                 className={`inline-flex items-center gap-1.5 text-xs font-medium ${user.isActive
-                                                        ? 'text-emerald-600 dark:text-emerald-400'
-                                                        : 'text-red-600 dark:text-red-400'
+                                                    ? 'text-emerald-600 dark:text-emerald-400'
+                                                    : 'text-red-600 dark:text-red-400'
                                                     }`}
                                             >
                                                 <span
                                                     className={`h-2 w-2 rounded-full ${user.isActive
-                                                            ? 'animate-pulse bg-emerald-500'
-                                                            : 'bg-red-500'
+                                                        ? 'animate-pulse bg-emerald-500'
+                                                        : 'bg-red-500'
                                                         }`}
                                                 />
                                                 {user.isActive
@@ -335,79 +378,67 @@ export function UserManagementTable({
                                             </span>
                                         </td>
                                         <td className="px-4 py-3 text-right">
-                                            <DropdownMenu>
-                                                <DropdownMenuTrigger asChild>
-                                                    <Button
-                                                        variant="ghost"
-                                                        size="icon"
-                                                        aria-label={tUM('colAction')}
-                                                        className="h-8 w-8"
-                                                    >
-                                                        <MoreVertical className="h-4 w-4" />
-                                                    </Button>
-                                                </DropdownMenuTrigger>
-                                                <DropdownMenuContent
-                                                    align="end"
-                                                    className="w-48 bg-card text-card-foreground"
-                                                >
-                                                    {canEditRow && (
-                                                        <DropdownMenuItem
-                                                            onClick={() => onEditUser(user)}
+                                            {canManageRow ? (
+                                                <DropdownMenu>
+                                                    <DropdownMenuTrigger asChild>
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            aria-label={tUM('colAction')}
+                                                            className="h-8 w-8"
                                                         >
+                                                            <MoreVertical className="h-4 w-4" />
+                                                        </Button>
+                                                    </DropdownMenuTrigger>
+                                                    <DropdownMenuContent
+                                                        align="end"
+                                                        className="w-48 bg-card text-card-foreground"
+                                                    >
+                                                        <DropdownMenuItem onClick={() => onEditUser(user)}>
                                                             <Edit className="mr-2 h-4 w-4" />
                                                             {tUM('actionEdit')}
                                                         </DropdownMenuItem>
-                                                    )}
 
-                                                    {isSuperAdmin && (
-                                                        <>
-                                                            <DropdownMenuItem
-                                                                onClick={() =>
-                                                                    onResetPassword(user)
-                                                                }
-                                                            >
-                                                                <KeyRound className="mr-2 h-4 w-4" />
-                                                                {tUM('actionResetPass')}
-                                                            </DropdownMenuItem>
+                                                        <DropdownMenuItem onClick={() => onResetPassword(user)}>
+                                                            <KeyRound className="mr-2 h-4 w-4" />
+                                                            {tUM('actionResetPass')}
+                                                        </DropdownMenuItem>
 
-                                                            {!isSelf && (
-                                                                <>
-                                                                    <DropdownMenuSeparator />
-                                                                    <DropdownMenuItem
-                                                                        className={
-                                                                            user.isActive
-                                                                                ? 'text-red-600'
-                                                                                : 'text-emerald-600'
-                                                                        }
-                                                                        onClick={() =>
-                                                                            onToggleStatus(user)
-                                                                        }
-                                                                    >
-                                                                        {user.isActive ? (
-                                                                            <Ban className="mr-2 h-4 w-4" />
-                                                                        ) : (
-                                                                            <CheckCircle2 className="mr-2 h-4 w-4" />
-                                                                        )}
-                                                                        {user.isActive
-                                                                            ? tUM('actionBlock')
-                                                                            : tUM('actionUnblock')}
-                                                                    </DropdownMenuItem>
-                                                                    <DropdownMenuSeparator />
-                                                                    <DropdownMenuItem
-                                                                        className="text-red-600 focus:bg-red-50 focus:text-red-600 dark:focus:bg-red-500/10"
-                                                                        onClick={() =>
-                                                                            onDeleteUser(user)
-                                                                        }
-                                                                    >
-                                                                        <Trash2 className="mr-2 h-4 w-4" />
-                                                                        {tUM('actionDelete')}
-                                                                    </DropdownMenuItem>
-                                                                </>
-                                                            )}
-                                                        </>
-                                                    )}
-                                                </DropdownMenuContent>
-                                            </DropdownMenu>
+                                                        {!isSelf && (
+                                                            <>
+                                                                <DropdownMenuSeparator />
+                                                                <DropdownMenuItem
+                                                                    className={
+                                                                        user.isActive
+                                                                            ? 'text-red-600'
+                                                                            : 'text-emerald-600'
+                                                                    }
+                                                                    onClick={() => onToggleStatus(user)}
+                                                                >
+                                                                    {user.isActive ? (
+                                                                        <Ban className="mr-2 h-4 w-4" />
+                                                                    ) : (
+                                                                        <CheckCircle2 className="mr-2 h-4 w-4" />
+                                                                    )}
+                                                                    {user.isActive
+                                                                        ? tUM('actionBlock')
+                                                                        : tUM('actionUnblock')}
+                                                                </DropdownMenuItem>
+                                                                <DropdownMenuSeparator />
+                                                                <DropdownMenuItem
+                                                                    className="text-red-600 focus:bg-red-50 focus:text-red-600 dark:focus:bg-red-500/10"
+                                                                    onClick={() => onDeleteUser(user)}
+                                                                >
+                                                                    <Trash2 className="mr-2 h-4 w-4" />
+                                                                    {tUM('actionDelete')}
+                                                                </DropdownMenuItem>
+                                                            </>
+                                                        )}
+                                                    </DropdownMenuContent>
+                                                </DropdownMenu>
+                                            ) : (
+                                                <span className="text-xs text-muted-foreground">-</span>
+                                            )}
                                         </td>
                                     </tr>
                                 );
@@ -460,8 +491,8 @@ export function UserManagementTable({
                                     size="icon"
                                     onClick={() => onPageChange(pageNum)}
                                     className={`h-8 w-8 font-medium ${currentPage === pageNum
-                                            ? 'bg-primary font-bold text-primary-foreground shadow-sm'
-                                            : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                                        ? 'bg-primary font-bold text-primary-foreground shadow-sm'
+                                        : 'text-muted-foreground hover:bg-muted hover:text-foreground'
                                         }`}
                                 >
                                     {pageNum}

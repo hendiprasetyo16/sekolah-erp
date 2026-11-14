@@ -42,9 +42,12 @@ import {
 import {
     ITEMS_PER_PAGE,
     MANAGEMENT_ROLES,
+    ROLE_DISPLAY_NAMES,
     STAFF_ROLES,
+    getEffectiveRoles,
     isBulkTargetGroup,
     type AppUser,
+    type AppUserRole,
     type BulkTargetGroup,
     type CreateUserFormValues,
     type EditUserFormValues,
@@ -65,7 +68,13 @@ import { UserManagementTable } from '../components/UserManagementTable';
 export function UserManagementPage() {
     const { school, user: currentUser } = useAuthStore();
     const queryClient = useQueryClient();
-    const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
+
+    const effectiveCurrentRoles = useMemo(
+        () => getEffectiveRoles(currentUser),
+        [currentUser]
+    );
+    const isSuperAdmin = effectiveCurrentRoles.includes('SUPER_ADMIN');
+    const canManageUsers = isSuperAdmin || effectiveCurrentRoles.includes('ADMIN');
     const activeSchoolId = school?.id ?? currentUser?.schoolId ?? null;
 
     const { locale } = useUIStore();
@@ -188,12 +197,19 @@ export function UserManagementPage() {
             });
 
             if (currentUser && currentUser.id === payload.targetUser.id) {
+                const updatedRole = isSuperAdmin ? payload.data.role : currentUser.role;
+                const updatedAdditional = (payload.data.additionalRoles ?? []).filter(
+                    (r) => r !== updatedRole
+                );
+
                 useAuthStore.setState({
                     user: {
                         ...currentUser,
                         fullName: payload.data.fullName,
-                        role: isSuperAdmin ? payload.data.role : currentUser.role,
+                        role: updatedRole,
+                        additionalRoles: updatedAdditional,
                     },
+                    activeRole: updatedRole,
                 });
             }
         },
@@ -221,6 +237,7 @@ export function UserManagementPage() {
                 targetUser,
                 currentUserId: currentUser?.id,
                 isSuperAdmin,
+                canManageUsers,
                 activeSchoolId,
             }),
         onSuccess: () => {
@@ -369,8 +386,17 @@ export function UserManagementPage() {
     const processedUsers = useMemo(() => {
         const q = searchQuery.trim().toLowerCase();
         const filtered = users.filter((u) => {
+            const effectiveRolesText = getEffectiveRoles(u)
+                .map((r) => ROLE_DISPLAY_NAMES[r as AppUserRole]?.[lang] ?? r)
+                .join(' ')
+                .toLowerCase();
+
             const matchesSearch =
-                u.fullName.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
+                !q ||
+                u.fullName.toLowerCase().includes(q) ||
+                u.email.toLowerCase().includes(q) ||
+                effectiveRolesText.includes(q) ||
+                (u.tugasTambahan ?? '').toLowerCase().includes(q);
 
             let matchesTab = true;
             if (activeTab === 'manajemen') matchesTab = MANAGEMENT_ROLES.includes(u.role);
@@ -400,7 +426,7 @@ export function UserManagementPage() {
         }
 
         return filtered;
-    }, [users, searchQuery, activeTab, sortConfig]);
+    }, [users, searchQuery, activeTab, sortConfig, lang]);
 
     const totalPages = Math.ceil(processedUsers.length / ITEMS_PER_PAGE);
 
@@ -531,7 +557,7 @@ export function UserManagementPage() {
         >
             {/* ================= MODALS ================= */}
             <AnimatePresence>
-                {isAddUserModalOpen && isSuperAdmin && (
+                {isAddUserModalOpen && canManageUsers && (
                     <AddUserModal
                         lang={lang}
                         activeSchoolId={activeSchoolId}
@@ -541,7 +567,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {userToEdit && (
+                {userToEdit && canManageUsers && (
                     <EditUserModal
                         user={userToEdit}
                         lang={lang}
@@ -554,7 +580,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {userToReset && isSuperAdmin && (
+                {userToReset && canManageUsers && (
                     <ResetPasswordModal
                         user={userToReset}
                         lang={lang}
@@ -569,7 +595,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {userToDelete && isSuperAdmin && (
+                {userToDelete && canManageUsers && (
                     <ConfirmUserActionModal
                         variant="delete-single"
                         title={tUM('modalDelTitle')}
@@ -594,7 +620,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {isGenerateSelectedModalOpen && isSuperAdmin && (
+                {isGenerateSelectedModalOpen && canManageUsers && (
                     <ConfirmUserActionModal
                         variant="generate-selected"
                         title={tUM('modalGenSelTitle', { count: eligibleSelectedUsers.length })}
@@ -618,7 +644,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {isGenerateAllModalOpen && isSuperAdmin && activeBulkGroup && (
+                {isGenerateAllModalOpen && canManageUsers && activeBulkGroup && (
                     <ConfirmUserActionModal
                         variant="generate-all"
                         title={tUM('modalGenAllTitle')}
@@ -631,7 +657,7 @@ export function UserManagementPage() {
                     />
                 )}
 
-                {isDeleteSelectedModalOpen && isSuperAdmin && (
+                {isDeleteSelectedModalOpen && canManageUsers && (
                     <ConfirmUserActionModal
                         variant="delete-selected"
                         title={tUM('modalDelSelTitle', { count: eligibleSelectedUsers.length })}
@@ -673,7 +699,7 @@ export function UserManagementPage() {
                     </h1>
                     <p className="mt-1 text-sm text-muted-foreground">{tUM('pageSubtitle')}</p>
                 </div>
-                {isSuperAdmin && (
+                {canManageUsers && (
                     <Button
                         onClick={() => setIsAddUserModalOpen(true)}
                         className="bg-emerald-600 text-white shadow-md hover:bg-emerald-700"
@@ -700,8 +726,8 @@ export function UserManagementPage() {
                                         {label}
                                         <span
                                             className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${isActive
-                                                    ? 'bg-white/20 text-white'
-                                                    : 'bg-muted text-muted-foreground'
+                                                ? 'bg-white/20 text-white'
+                                                : 'bg-muted text-muted-foreground'
                                                 }`}
                                         >
                                             {tabCounts[value] ?? 0}
@@ -794,8 +820,8 @@ export function UserManagementPage() {
                                             handleSortChange({ key: 'none', direction: 'asc' })
                                         }
                                         className={`cursor-pointer ${sortConfig.key === 'none'
-                                                ? 'bg-primary/10 text-primary'
-                                                : ''
+                                            ? 'bg-primary/10 text-primary'
+                                            : ''
                                             }`}
                                     >
                                         <ArrowUpDown className="mr-2 h-4 w-4 shrink-0" /> Reset
@@ -804,8 +830,8 @@ export function UserManagementPage() {
                                 </DropdownMenuContent>
                             </DropdownMenu>
 
-                            {/* GENERATE DATA (SUPER_ADMIN) */}
-                            {isSuperAdmin && activeBulkGroup && (
+                            {/* GENERATE DATA */}
+                            {canManageUsers && activeBulkGroup && (
                                 <DropdownMenu>
                                     <DropdownMenuTrigger asChild>
                                         <Button
@@ -842,8 +868,8 @@ export function UserManagementPage() {
                                 </DropdownMenu>
                             )}
 
-                            {/* HAPUS (SUPER_ADMIN) */}
-                            {isSuperAdmin &&
+                            {/* HAPUS */}
+                            {canManageUsers &&
                                 (eligibleSelectedUsers.length > 0 ? (
                                     <Button
                                         type="button"
@@ -857,6 +883,7 @@ export function UserManagementPage() {
                                         </span>
                                     </Button>
                                 ) : (
+                                    isSuperAdmin &&
                                     activeBulkGroup && (
                                         <Button
                                             type="button"
@@ -885,6 +912,7 @@ export function UserManagementPage() {
                     selectedUserIds={selectedUserIds}
                     currentUserId={currentUser?.id}
                     isSuperAdmin={isSuperAdmin}
+                    canManageUsers={canManageUsers}
                     onSort={handleColumnSort}
                     onPageChange={setCurrentPage}
                     onSelectAllPage={handleSelectAllPage}
