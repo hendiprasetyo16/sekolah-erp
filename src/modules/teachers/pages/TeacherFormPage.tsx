@@ -1,7 +1,7 @@
-import { useEffect } from 'react';
+// src/modules/teachers/pages/TeacherFormPage.tsx
+import { useEffect, useMemo } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { useForm } from 'react-hook-form';
-import type { Path } from 'react-hook-form';
+import { useForm, type Control, type Path } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -15,6 +15,7 @@ import {
   Building,
   Award,
   Briefcase,
+  ShieldAlert,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -37,8 +38,12 @@ import {
 import { Card, CardContent } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-import { teacherService } from '../services/teacher.service';
+import {
+  teacherService,
+  normalizeTeacherSchoolId,
+} from '../services/teacher.service';
 import { useTranslation } from '@/hooks/useTranslation';
+import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { CreateTeacherPayload } from '../types/teacher.types';
 
@@ -115,7 +120,8 @@ const teacherSchema = z.object({
 
 type TeacherFormValues = z.infer<typeof teacherSchema>;
 
-interface FieldProps {
+interface TeacherFormFieldProps {
+  control: Control<TeacherFormValues>;
   name: Path<TeacherFormValues>;
   label: string;
   type?: 'text' | 'number' | 'date' | 'email' | 'select' | 'boolean';
@@ -123,6 +129,70 @@ interface FieldProps {
   options?: { label: string; value: string }[];
   className?: string;
   labelClassName?: string;
+}
+
+function TeacherFormField({
+  control,
+  name,
+  label,
+  type = 'text',
+  placeholder = '',
+  options = [],
+  className = '',
+  labelClassName = '',
+}: TeacherFormFieldProps) {
+  return (
+    <FormField
+      control={control}
+      name={name}
+      render={({ field }) => (
+        <FormItem className={className}>
+          <FormLabel className={labelClassName}>{label}</FormLabel>
+          {type === 'select' ? (
+            <Select onValueChange={field.onChange} value={(field.value as string) || undefined}>
+              <FormControl>
+                <SelectTrigger>
+                  <SelectValue placeholder={placeholder || 'Pilih...'} />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                {options.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : type === 'boolean' ? (
+            <Select
+              onValueChange={(val) => field.onChange(val === 'true')}
+              value={field.value ? 'true' : 'false'}
+            >
+              <FormControl>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+              </FormControl>
+              <SelectContent>
+                <SelectItem value="true">Ya</SelectItem>
+                <SelectItem value="false">Tidak</SelectItem>
+              </SelectContent>
+            </Select>
+          ) : (
+            <FormControl>
+              <Input
+                type={type}
+                placeholder={placeholder}
+                {...field}
+                value={typeof field.value === 'boolean' ? '' : (field.value ?? '')}
+              />
+            </FormControl>
+          )}
+          <FormMessage />
+        </FormItem>
+      )}
+    />
+  );
 }
 
 const formatDateForInput = (dateStr?: string | null): string =>
@@ -133,8 +203,18 @@ export function TeacherFormPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { locale } = useTranslation();
-  const { school } = useAuthStore();
+  const { school, user: currentUser } = useAuthStore();
+  const { hasPermission } = usePermission();
   const isEdit = Boolean(id);
+
+  const canSubmitForm = isEdit
+    ? hasPermission('teachers', 'update')
+    : hasPermission('teachers', 'create');
+
+  const activeSchoolId = useMemo(
+    () => normalizeTeacherSchoolId(school?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
+    [school?.id, currentUser?.schoolId]
+  );
 
   const dict = {
     addTitle: locale === 'id' ? 'Tambah Guru Baru' : 'Add New Teacher',
@@ -229,9 +309,9 @@ export function TeacherFormPage() {
   });
 
   const { data: response, isLoading } = useQuery({
-    queryKey: ['teacher', id, school?.id],
-    queryFn: () => teacherService.getById(id!, school?.id),
-    enabled: isEdit && Boolean(id),
+    queryKey: ['teacher', id, activeSchoolId],
+    queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
+    enabled: isEdit && Boolean(id) && canSubmitForm,
   });
 
   useEffect(() => {
@@ -239,7 +319,7 @@ export function TeacherFormPage() {
       const t = response.data;
       form.reset({
         fullName: t.fullName || '',
-        gender: t.gender || '',
+        gender: t.gender ? t.gender.toUpperCase() : '',
         nip: t.nip || '',
         nuptk: t.nuptk || '',
         nik: t.nik || '',
@@ -306,8 +386,13 @@ export function TeacherFormPage() {
 
   const mutation = useMutation({
     mutationFn: (values: TeacherFormValues) => {
-      if (!school?.id) {
-        throw new Error('School ID tidak ditemukan. Harap pastikan institusi sudah dipilih.');
+      const targetSchoolId =
+        activeSchoolId ?? normalizeTeacherSchoolId(response?.data?.schoolId);
+
+      if (!targetSchoolId) {
+        throw new Error(
+          'Sekolah aktif belum dipilih. Pastikan institusi sudah dipilih terlebih dahulu.'
+        );
       }
 
       const parsedSalary =
@@ -321,7 +406,7 @@ export function TeacherFormPage() {
 
       const payload: CreateTeacherPayload = {
         ...values,
-        schoolId: school.id,
+        schoolId: targetSchoolId,
         gender: values.gender as 'L' | 'P',
         isActive: values.isActive ?? true,
         isCertified: values.isCertified ?? false,
@@ -345,6 +430,24 @@ export function TeacherFormPage() {
     },
   });
 
+  if (!canSubmitForm) {
+    return (
+      <div className="flex h-96 flex-col items-center justify-center gap-4 p-4 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400">
+          <ShieldAlert className="h-6 w-6" />
+        </div>
+        <p className="font-medium text-foreground">
+          {locale === 'id'
+            ? 'Anda tidak memiliki izin untuk mengakses formulir Guru & PTK.'
+            : 'You do not have permission to access the Teacher & PTK form.'}
+        </p>
+        <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
+          {locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers'}
+        </Button>
+      </div>
+    );
+  }
+
   if (isEdit && isLoading) {
     return (
       <div className="flex h-100 items-center justify-center">
@@ -352,67 +455,6 @@ export function TeacherFormPage() {
       </div>
     );
   }
-
-  const Field = ({
-    name,
-    label,
-    type = 'text',
-    placeholder = '',
-    options = [],
-    className = '',
-    labelClassName = '',
-  }: FieldProps) => (
-    <FormField
-      control={form.control}
-      name={name}
-      render={({ field }) => (
-        <FormItem className={className}>
-          <FormLabel className={labelClassName}>{label}</FormLabel>
-          {type === 'select' ? (
-            <Select onValueChange={field.onChange} value={(field.value as string) || ''}>
-              <FormControl>
-                <SelectTrigger>
-                  <SelectValue placeholder={placeholder || 'Pilih...'} />
-                </SelectTrigger>
-              </FormControl>
-              <SelectContent>
-                {options.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : type === 'boolean' ? (
-            <Select
-              onValueChange={(val) => field.onChange(val === 'true')}
-              value={field.value ? 'true' : 'false'}
-            >
-              <FormControl>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-              </FormControl>
-              <SelectContent>
-                <SelectItem value="true">Ya</SelectItem>
-                <SelectItem value="false">Tidak</SelectItem>
-              </SelectContent>
-            </Select>
-          ) : (
-            <FormControl>
-              <Input
-                type={type}
-                placeholder={placeholder}
-                {...field}
-                value={typeof field.value === 'boolean' ? '' : (field.value ?? '')}
-              />
-            </FormControl>
-          )}
-          <FormMessage />
-        </FormItem>
-      )}
-    />
-  );
 
   return (
     <div className="space-y-6">
@@ -478,8 +520,14 @@ export function TeacherFormPage() {
                 {/* TAB 1: Data Pribadi & Alamat Dapodik */}
                 <TabsContent value="personal" className="m-0">
                   <div className="grid gap-4 sm:grid-cols-2 pt-2">
-                    <Field name="fullName" label="Nama Lengkap *" placeholder="Sesuai Ijazah" />
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
+                      name="fullName"
+                      label="Nama Lengkap *"
+                      placeholder="Sesuai Ijazah"
+                    />
+                    <TeacherFormField
+                      control={form.control}
                       name="gender"
                       label="Jenis Kelamin *"
                       type="select"
@@ -488,11 +536,27 @@ export function TeacherFormPage() {
                         { label: 'Perempuan', value: 'P' },
                       ]}
                     />
-                    <Field name="nik" label="NIK (Nomor Induk Kependudukan)" placeholder="16 Digit NIK" />
-                    <Field name="noKk" label="Nomor Kartu Keluarga (KK)" placeholder="16 Digit KK" />
-                    <Field name="birthPlace" label="Tempat Lahir" />
-                    <Field name="birthDate" label="Tanggal Lahir" type="date" />
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
+                      name="nik"
+                      label="NIK (Nomor Induk Kependudukan)"
+                      placeholder="16 Digit NIK"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="noKk"
+                      label="Nomor Kartu Keluarga (KK)"
+                      placeholder="16 Digit KK"
+                    />
+                    <TeacherFormField control={form.control} name="birthPlace" label="Tempat Lahir" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="birthDate"
+                      label="Tanggal Lahir"
+                      type="date"
+                    />
+                    <TeacherFormField
+                      control={form.control}
                       name="religion"
                       label="Agama / Kepercayaan"
                       type="select"
@@ -506,37 +570,88 @@ export function TeacherFormPage() {
                         { label: 'Kepercayaan kpd Tuhan YME', value: 'KEPERCAYAAN' },
                       ]}
                     />
-                    <Field name="kewarganegaraan" label="Kewarganegaraan" />
-                    <Field name="namaIbuKandung" label="Nama Ibu Kandung" />
-                    <Field name="phone" label="Nomor HP / WhatsApp" />
-                    <Field name="telepon" label="Nomor Telepon Rumah" />
-                    <Field name="email" label="Email Aktif" type="email" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="kewarganegaraan"
+                      label="Kewarganegaraan"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="namaIbuKandung"
+                      label="Nama Ibu Kandung"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="phone"
+                      label="Nomor HP / WhatsApp"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="telepon"
+                      label="Nomor Telepon Rumah"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="email"
+                      label="Email Aktif"
+                      type="email"
+                    />
 
                     <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">
                       Alamat Domisili (Dapodik)
                     </div>
                     <div className="sm:col-span-2">
-                      <Field name="address" label="Alamat Jalan" />
+                      <TeacherFormField control={form.control} name="address" label="Alamat Jalan" />
                     </div>
-                    <Field name="dusun" label="Nama Dusun" />
+                    <TeacherFormField control={form.control} name="dusun" label="Nama Dusun" />
                     <div className="grid grid-cols-3 gap-3">
-                      <Field name="rt" label="RT" placeholder="001" />
-                      <Field name="rw" label="RW" placeholder="002" />
-                      <Field name="postalCode" label="Kode Pos" placeholder="55111" />
+                      <TeacherFormField
+                        control={form.control}
+                        name="rt"
+                        label="RT"
+                        placeholder="001"
+                      />
+                      <TeacherFormField
+                        control={form.control}
+                        name="rw"
+                        label="RW"
+                        placeholder="002"
+                      />
+                      <TeacherFormField
+                        control={form.control}
+                        name="postalCode"
+                        label="Kode Pos"
+                        placeholder="55111"
+                      />
                     </div>
-                    <Field name="kelurahan" label="Desa / Kelurahan" />
-                    <Field name="kecamatan" label="Kecamatan" />
-                    <Field name="city" label="Kabupaten / Kota" />
-                    <Field name="province" label="Provinsi" />
-                    <Field name="lintang" label="Lintang (Latitude)" placeholder="-7.795580" />
-                    <Field name="bujur" label="Bujur (Longitude)" placeholder="110.369490" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="kelurahan"
+                      label="Desa / Kelurahan"
+                    />
+                    <TeacherFormField control={form.control} name="kecamatan" label="Kecamatan" />
+                    <TeacherFormField control={form.control} name="city" label="Kabupaten / Kota" />
+                    <TeacherFormField control={form.control} name="province" label="Provinsi" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="lintang"
+                      label="Lintang (Latitude)"
+                      placeholder="-7.795580"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="bujur"
+                      label="Bujur (Longitude)"
+                      placeholder="110.369490"
+                    />
                   </div>
                 </TabsContent>
 
                 {/* TAB 2: Kepegawaian */}
                 <TabsContent value="professional" className="m-0">
                   <div className="grid gap-4 sm:grid-cols-2 pt-2">
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
                       name="status"
                       label="Status Kepegawaian"
                       type="select"
@@ -549,24 +664,70 @@ export function TeacherFormPage() {
                         { label: 'GTT', value: 'GTT' },
                       ]}
                     />
-                    <Field name="position" label="Jenis PTK / Jabatan" placeholder="Contoh: Guru" />
-                    <Field name="nip" label="NIP (PNS/CPNS/PPPK)" />
-                    <Field name="nuptk" label="NUPTK" />
-                    <Field name="pangkatGolongan" label="Pangkat / Golongan" />
-                    <Field name="sumberGaji" label="Sumber Gaji" />
-                    <Field name="isActive" label="Status Aktif di Sekolah" type="boolean" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="position"
+                      label="Jenis PTK / Jabatan"
+                      placeholder="Contoh: Guru"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="nip"
+                      label="NIP (PNS/CPNS/PPPK)"
+                    />
+                    <TeacherFormField control={form.control} name="nuptk" label="NUPTK" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="pangkatGolongan"
+                      label="Pangkat / Golongan"
+                    />
+                    <TeacherFormField control={form.control} name="sumberGaji" label="Sumber Gaji" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="isActive"
+                      label="Status Aktif di Sekolah"
+                      type="boolean"
+                    />
 
                     <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">
                       Data SK & Pengangkatan
                     </div>
-                    <Field name="skCpns" label="SK CPNS" />
-                    <Field name="tanggalCpns" label="Tanggal CPNS" type="date" />
-                    <Field name="skPengangkatan" label="SK Pengangkatan" />
-                    <Field name="tmtPengangkatan" label="TMT Pengangkatan" type="date" />
-                    <Field name="lembagaPengangkatan" label="Lembaga Pengangkatan" />
-                    <Field name="tmtPns" label="TMT PNS" type="date" />
-                    <Field name="karpeg" label="Karpeg" />
-                    <Field name="joinDate" label="Tanggal Bergabung di Sekolah" type="date" />
+                    <TeacherFormField control={form.control} name="skCpns" label="SK CPNS" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="tanggalCpns"
+                      label="Tanggal CPNS"
+                      type="date"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="skPengangkatan"
+                      label="SK Pengangkatan"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="tmtPengangkatan"
+                      label="TMT Pengangkatan"
+                      type="date"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="lembagaPengangkatan"
+                      label="Lembaga Pengangkatan"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="tmtPns"
+                      label="TMT PNS"
+                      type="date"
+                    />
+                    <TeacherFormField control={form.control} name="karpeg" label="Karpeg" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="joinDate"
+                      label="Tanggal Bergabung di Sekolah"
+                      type="date"
+                    />
                   </div>
                 </TabsContent>
 
@@ -574,21 +735,23 @@ export function TeacherFormPage() {
                 <TabsContent value="tasks" className="m-0">
                   <div className="grid gap-4 sm:grid-cols-2 pt-2">
                     <div className="sm:col-span-2 p-4 bg-amber-500/10 rounded-lg border border-amber-500/20 shadow-none">
-                      <Field
+                      <TeacherFormField
+                        control={form.control}
                         name="tugasTambahan"
                         label="Tugas Tambahan (Opsional)"
                         placeholder="Contoh: Kepala Sekolah, Bendahara BOS, Wakasek Kurikulum..."
                         labelClassName="text-amber-700 dark:text-amber-400 font-semibold"
                       />
                       <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-2 font-medium">
-                        *Tugas tambahan ini akan muncul sebagai label khusus (highlight) di profil guru.
+                        *Tugas tambahan ini akan muncul sebagai label khusus di profil guru dan membuka menu peran terkait secara otomatis.
                       </p>
                     </div>
 
                     <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">
                       Pendidikan & Akademik
                     </div>
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
                       name="education"
                       label="Pendidikan Terakhir"
                       type="select"
@@ -601,11 +764,21 @@ export function TeacherFormPage() {
                         { label: 'SMA/SMK', value: 'SMA' },
                       ]}
                     />
-                    <Field name="major" label="Jurusan" />
-                    <Field name="university" label="Universitas / Perguruan Tinggi" />
-                    <Field name="maxHoursPerWeek" label="Maks. Jam per Minggu" type="number" />
+                    <TeacherFormField control={form.control} name="major" label="Jurusan" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="university"
+                      label="Universitas / Perguruan Tinggi"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="maxHoursPerWeek"
+                      label="Maks. Jam per Minggu"
+                      type="number"
+                    />
                     <div className="sm:col-span-2">
-                      <Field
+                      <TeacherFormField
+                        control={form.control}
                         name="subjects"
                         label="Mata Pelajaran (Pisahkan dengan Koma)"
                         placeholder="Matematika, IPA"
@@ -615,25 +788,46 @@ export function TeacherFormPage() {
                     <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">
                       Sertifikasi & Lisensi
                     </div>
-                    <Field name="isCertified" label="Sudah Sertifikasi Guru?" type="boolean" />
-                    <Field name="certificationNumber" label="Nomor Sertifikasi" />
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
+                      name="isCertified"
+                      label="Sudah Sertifikasi Guru?"
+                      type="boolean"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="certificationNumber"
+                      label="Nomor Sertifikasi"
+                    />
+                    <TeacherFormField
+                      control={form.control}
                       name="sudahLisensiKepalaSekolah"
                       label="Lisensi Kepala Sekolah?"
                       type="boolean"
                     />
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
                       name="pernahDiklatKepengawasan"
                       label="Pernah Diklat Kepengawasan?"
                       type="boolean"
                     />
-                    <Field name="keahlianBraille" label="Keahlian Braille?" type="boolean" />
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
+                      name="keahlianBraille"
+                      label="Keahlian Braille?"
+                      type="boolean"
+                    />
+                    <TeacherFormField
+                      control={form.control}
                       name="keahlianBahasaIsyarat"
                       label="Keahlian Bahasa Isyarat?"
                       type="boolean"
                     />
-                    <Field name="nuks" label="NUKS (Nomor Unik Kepala Sekolah)" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="nuks"
+                      label="NUKS (Nomor Unik Kepala Sekolah)"
+                    />
                   </div>
                 </TabsContent>
 
@@ -641,7 +835,8 @@ export function TeacherFormPage() {
                 <TabsContent value="family" className="m-0">
                   <div className="grid gap-4 sm:grid-cols-2 pt-2">
                     <div className="sm:col-span-2 font-semibold text-foreground">Keluarga</div>
-                    <Field
+                    <TeacherFormField
+                      control={form.control}
                       name="statusPerkawinan"
                       label="Status Perkawinan"
                       type="select"
@@ -651,20 +846,58 @@ export function TeacherFormPage() {
                         { label: 'Janda/Duda', value: 'Janda/Duda' },
                       ]}
                     />
-                    <Field name="namaSuamiIstri" label="Nama Suami / Istri" />
-                    <Field name="nipSuamiIstri" label="NIP Suami / Istri" />
-                    <Field name="pekerjaanSuamiIstri" label="Pekerjaan Suami / Istri" />
-                    <Field name="karisKarsu" label="Karis / Karsu" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="namaSuamiIstri"
+                      label="Nama Suami / Istri"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="nipSuamiIstri"
+                      label="NIP Suami / Istri"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="pekerjaanSuamiIstri"
+                      label="Pekerjaan Suami / Istri"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="karisKarsu"
+                      label="Karis / Karsu"
+                    />
 
                     <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">
                       Pajak & Rekening Bank
                     </div>
-                    <Field name="npwp" label="NPWP" />
-                    <Field name="namaWajibPajak" label="Nama Wajib Pajak" />
-                    <Field name="baseSalary" label="Gaji Pokok (Nominal)" type="number" />
-                    <Field name="bank" label="Nama Bank" placeholder="Contoh: BRI, Mandiri, BNI" />
-                    <Field name="nomorRekeningBank" label="Nomor Rekening" />
-                    <Field name="rekeningAtasNama" label="Rekening Atas Nama" />
+                    <TeacherFormField control={form.control} name="npwp" label="NPWP" />
+                    <TeacherFormField
+                      control={form.control}
+                      name="namaWajibPajak"
+                      label="Nama Wajib Pajak"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="baseSalary"
+                      label="Gaji Pokok (Nominal)"
+                      type="number"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="bank"
+                      label="Nama Bank"
+                      placeholder="Contoh: BRI, Mandiri, BNI"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="nomorRekeningBank"
+                      label="Nomor Rekening"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="rekeningAtasNama"
+                      label="Rekening Atas Nama"
+                    />
                   </div>
                 </TabsContent>
               </Tabs>

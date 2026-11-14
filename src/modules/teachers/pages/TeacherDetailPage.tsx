@@ -1,4 +1,5 @@
-import type { ReactNode } from 'react';
+// src/modules/teachers/pages/TeacherDetailPage.tsx
+import { useMemo, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -20,27 +21,50 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-import { teacherService } from '../services/teacher.service';
+import {
+  teacherService,
+  normalizeTeacherSchoolId,
+} from '../services/teacher.service';
 import { useTranslation } from '@/hooks/useTranslation';
+import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatDate, formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
-/**
- * Daftar role yang diizinkan mengedit biodata Guru & PTK.
- */
-const TEACHER_EDITOR_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
+function InfoItem({
+  label,
+  value,
+  fallback = '-',
+}: {
+  label: string;
+  value?: ReactNode;
+  fallback?: string;
+}) {
+  return (
+    <div className="border-b border-border/40 py-2.5 last:border-0">
+      <div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="wrap-break-word text-sm font-medium text-foreground">
+        {value || fallback}
+      </div>
+    </div>
+  );
+}
 
 export function TeacherDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { locale } = useTranslation();
-  const { school, hasAnyRole } = useAuthStore();
+  const { school, user: currentUser } = useAuthStore();
+  const { hasPermission } = usePermission();
 
-  // Mengecek apakah pengguna memiliki salah satu hak akses pengelola data guru
-  const canManageTeachers = hasAnyRole(TEACHER_EDITOR_ROLES);
+  // Mengecek izin update guru secara terpusat (selaras dengan TeacherListPage & RLS database)
+  const canManageTeachers = hasPermission('teachers', 'update');
+  const activeSchoolId = useMemo(
+    () => normalizeTeacherSchoolId(school?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
+    [school?.id, currentUser?.schoolId]
+  );
 
-  // Kamus label teks (mudah disesuaikan untuk Bahasa Indonesia / Inggris)
+  // Kamus label teks
   const dict = {
     title: locale === 'id' ? 'Profil Guru & PTK' : 'Teacher Profile',
     desc:
@@ -60,8 +84,8 @@ export function TeacherDetailPage() {
 
   // Mengambil detail data guru berdasarkan ID dari URL
   const { data: response, isLoading, isError } = useQuery({
-    queryKey: ['teacher', id, school?.id],
-    queryFn: () => teacherService.getById(id!, school?.id),
+    queryKey: ['teacher', id, activeSchoolId],
+    queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
     enabled: Boolean(id),
   });
 
@@ -94,28 +118,17 @@ export function TeacherDetailPage() {
 
   // Warna lencana status kepegawaian
   const statusColorMap: Record<string, string> = {
-    PNS: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-    CPNS: 'bg-blue-100 text-blue-800 border-blue-200',
-    PPPK: 'bg-cyan-100 text-cyan-800 border-cyan-200',
-    HONORER: 'bg-orange-100 text-orange-800 border-orange-200',
-    GTY: 'bg-purple-100 text-purple-800 border-purple-200',
-    GTT: 'bg-gray-100 text-gray-800 border-gray-200',
+    PNS: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300',
+    CPNS: 'bg-blue-100 text-blue-800 border-blue-200 dark:border-blue-500/30 dark:bg-blue-500/15 dark:text-blue-300',
+    PPPK: 'bg-cyan-100 text-cyan-800 border-cyan-200 dark:border-cyan-500/30 dark:bg-cyan-500/15 dark:text-cyan-300',
+    HONORER: 'bg-orange-100 text-orange-800 border-orange-200 dark:border-orange-500/30 dark:bg-orange-500/15 dark:text-orange-300',
+    GTY: 'bg-purple-100 text-purple-800 border-purple-200 dark:border-purple-500/30 dark:bg-purple-500/15 dark:text-purple-300',
+    GTT: 'bg-gray-100 text-gray-800 border-gray-200 dark:border-border dark:bg-muted dark:text-muted-foreground',
   };
-
-  // Komponen kecil untuk menampilkan pasangan Label + Nilai secara seragam
-  const InfoItem = ({ label, value }: { label: string; value?: ReactNode }) => (
-    <div className="border-b border-border/40 py-2.5 last:border-0">
-      <div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div>
-      <div className="wrap-break-word text-sm font-medium text-foreground">
-        {value || dict.noData}
-      </div>
-    </div>
-  );
 
   const normalizedStatus = teacher.status?.toUpperCase();
   const normalizedGender = teacher.gender?.toUpperCase();
 
-  // Format Jenis Kelamin yang aman jika data kosong
   const genderText =
     normalizedGender === 'L'
       ? 'Laki-laki'
@@ -141,7 +154,7 @@ export function TeacherDetailPage() {
 
   return (
     <div className="w-full min-w-0 space-y-6">
-      {/* ================= BAGIAN 1: HEADER (Rapi Kiri & Kanan Atas) ================= */}
+      {/* ================= BAGIAN 1: HEADER ================= */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <Button
@@ -172,7 +185,7 @@ export function TeacherDetailPage() {
         )}
       </div>
 
-      {/* ================= BAGIAN 2: GRID UTAMA (Kiri: 280px, Kanan: Sisa Layar) ================= */}
+      {/* ================= BAGIAN 2: GRID UTAMA ================= */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
         {/* KARTU PROFIL SINGKAT (KIRI) */}
         <Card className="h-fit border-border shadow-sm">
@@ -195,12 +208,18 @@ export function TeacherDetailPage() {
                 {teacher.status || 'Belum Diatur'}
               </Badge>
               {!teacher.isActive && (
-                <Badge className="border-rose-200 bg-rose-100 text-rose-800" variant="outline">
+                <Badge
+                  className="border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300"
+                  variant="outline"
+                >
                   {locale === 'id' ? 'Nonaktif' : 'Inactive'}
                 </Badge>
               )}
               {teacher.tugasTambahan && (
-                <Badge className="border-amber-200 bg-amber-100 text-amber-800">
+                <Badge
+                  variant="outline"
+                  className="border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300"
+                >
                   <Briefcase className="mr-1 h-3 w-3 shrink-0" />
                   <span className="max-w-44 truncate">{teacher.tugasTambahan}</span>
                 </Badge>
@@ -223,7 +242,7 @@ export function TeacherDetailPage() {
                 </div>
               )}
               {teacher.isCertified && (
-                <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-emerald-100 bg-emerald-50 py-1.5 px-2 text-xs font-medium text-emerald-600">
+                <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 py-1.5 px-2 text-xs font-medium text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
                   <Award className="h-4 w-4 shrink-0" />
                   <span>{locale === 'id' ? 'Guru Tersertifikasi' : 'Certified Teacher'}</span>
                 </div>

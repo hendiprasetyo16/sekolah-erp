@@ -1,4 +1,6 @@
+// src/modules/teachers/services/teacher.service.ts
 import { supabase } from '@/services/supabase.client';
+import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { PostgrestError } from '@supabase/supabase-js';
 import type {
   ApiResponse,
@@ -34,13 +36,25 @@ const ALLOWED_SORT_COLUMNS = new Set([
 
 const BULK_IMPORT_CHUNK_SIZE = 250;
 const BULK_DELETE_CHUNK_SIZE = 200;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const normalizeTeacherSchoolId = (value?: string | null): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return UUID_REGEX.test(trimmed) ? trimmed : null;
+};
 
 // ============================================================================
 // HELPER NORMALISASI & SANITASI DATA
 // ============================================================================
 const cleanNullableText = (value?: unknown): string | null => {
   if (value === undefined || value === null) return null;
-  const trimmed = String(value).replace(/\s+/g, ' ').trim();
+  // Hapus tanda petik tunggal di awal (sering muncul pada ekspor Excel Dapodik untuk NIK/NUPTK/NIP)
+  const trimmed = String(value)
+    .replace(/^'+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!trimmed || trimmed === '(tidak diisi)' || trimmed.toLowerCase() === 'null') {
     return null;
   }
@@ -245,12 +259,14 @@ export const teacherService = {
       sortOrder = 'asc',
     } = params;
 
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
+
     let query = supabase
       .from('teachers')
       .select('*', { count: 'exact' });
 
-    if (schoolId) {
-      query = query.eq('schoolId', schoolId);
+    if (validSchoolId) {
+      query = query.eq('schoolId', validSchoolId);
     }
 
     if (search && search.trim()) {
@@ -333,13 +349,15 @@ export const teacherService = {
   },
 
   async getById(id: string, schoolId?: string): Promise<ApiResponse<TeacherDetail>> {
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
+
     let query = supabase
       .from('teachers')
       .select('*')
       .eq('id', id);
 
-    if (schoolId) {
-      query = query.eq('schoolId', schoolId);
+    if (validSchoolId) {
+      query = query.eq('schoolId', validSchoolId);
     }
 
     const { data, error } = await query.single();
@@ -353,9 +371,15 @@ export const teacherService = {
   },
 
   async create(payload: CreateTeacherPayload): Promise<ApiResponse<TeacherDetail>> {
+    const validSchoolId = normalizeTeacherSchoolId(payload.schoolId);
+    if (!validSchoolId) {
+      throw new Error('Identitas sekolah (schoolId) tidak valid.');
+    }
+
     const normalized = normalizeTeacherFields(
       payload as CreateTeacherPayload & Record<string, unknown>
     );
+    normalized.schoolId = validSchoolId;
 
     const { data, error } = await supabase
       .from('teachers')
@@ -403,6 +427,16 @@ export const teacherService = {
             .update({ fullName: normalized.fullName })
             .eq('id', existing.userId)
             .eq('schoolId', existing.schoolId);
+
+          const authState = useAuthStore.getState();
+          if (authState.user && authState.user.id === existing.userId) {
+            useAuthStore.setState({
+              user: {
+                ...authState.user,
+                fullName: normalized.fullName,
+              },
+            });
+          }
         } catch {
           // Best-effort sync
         }
@@ -413,9 +447,10 @@ export const teacherService = {
   },
 
   async delete(id: string, schoolId?: string): Promise<ApiResponse<void>> {
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
     let query = supabase.from('teachers').delete().eq('id', id);
-    if (schoolId) {
-      query = query.eq('schoolId', schoolId);
+    if (validSchoolId) {
+      query = query.eq('schoolId', validSchoolId);
     }
 
     const { error } = await query;
@@ -429,6 +464,7 @@ export const teacherService = {
   },
 
   async deleteMany(ids: string[], schoolId?: string): Promise<ApiResponse<{ deleted: number }>> {
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
     const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
     if (uniqueIds.length === 0) {
       return { success: true, data: { deleted: 0 }, message: 'Tidak ada data guru yang dipilih' };
@@ -437,8 +473,8 @@ export const teacherService = {
     for (let i = 0; i < uniqueIds.length; i += BULK_DELETE_CHUNK_SIZE) {
       const chunk = uniqueIds.slice(i, i + BULK_DELETE_CHUNK_SIZE);
       let query = supabase.from('teachers').delete().in('id', chunk);
-      if (schoolId) {
-        query = query.eq('schoolId', schoolId);
+      if (validSchoolId) {
+        query = query.eq('schoolId', validSchoolId);
       }
 
       const { error } = await query;
@@ -453,9 +489,10 @@ export const teacherService = {
   },
 
   async deleteAll(schoolId: string): Promise<ApiResponse<void>> {
-    if (!schoolId) throw new Error('School ID tidak valid');
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
+    if (!validSchoolId) throw new Error('School ID tidak valid');
 
-    const { error } = await supabase.from('teachers').delete().eq('schoolId', schoolId);
+    const { error } = await supabase.from('teachers').delete().eq('schoolId', validSchoolId);
     if (error) throw handleDbError(error);
 
     return {
@@ -466,6 +503,7 @@ export const teacherService = {
   },
 
   async exportAll(schoolId?: string): Promise<ApiResponse<TeacherDetail[]>> {
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
     const allRows: TeacherDetail[] = [];
     const batchSize = 1000;
 
@@ -476,8 +514,8 @@ export const teacherService = {
         .order('fullName', { ascending: true })
         .range(from, from + batchSize - 1);
 
-      if (schoolId) {
-        query = query.eq('schoolId', schoolId);
+      if (validSchoolId) {
+        query = query.eq('schoolId', validSchoolId);
       }
 
       const { data, error } = await query;

@@ -1,3 +1,4 @@
+// src/modules/teachers/pages/TeacherListPage.tsx
 import { useState, useRef, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -5,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Upload, Download, Search, Eye, Edit, Trash2, Loader2,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
-  X, AlertTriangle, ArrowUpDown, ArrowUp, ArrowDown,
+  X, AlertTriangle, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown,
   FileSpreadsheet, CheckCircle2, RefreshCw, Sparkles, Filter
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -14,7 +15,10 @@ import * as XLSX from 'xlsx';
 import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
-import { teacherService } from '../services/teacher.service';
+import {
+  teacherService,
+  normalizeTeacherSchoolId,
+} from '../services/teacher.service';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type {
   TeacherDetail,
@@ -147,7 +151,11 @@ const getVal = (row: ExcelRow, keys: string[]): string | null => {
   for (const key of keys) {
     const v = row[normKey(key)];
     if (v !== undefined && v !== null) {
-      const cleaned = String(v).replace(/\s+/g, ' ').trim();
+      // Hapus apostrof awal bawaan ekspor Excel Dapodik (misal '340408...)
+      const cleaned = String(v)
+        .replace(/^'+/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
       if (cleaned !== '' && cleaned !== '(tidak diisi)' && cleaned.toLowerCase() !== 'null') {
         return cleaned;
       }
@@ -188,7 +196,7 @@ const parseExcelDate = (value: unknown): string | null => {
   if (value === null || value === undefined) return null;
   if (typeof value === 'number') return serialToIso(value);
 
-  const str = String(value).trim();
+  const str = String(value).replace(/^'+/, '').trim();
   if (!str) return null;
   if (/^\d{5}(\.\d+)?$/.test(str)) return serialToIso(Number(str));
   if (str.includes('T')) return str.split('T')[0];
@@ -311,7 +319,7 @@ const parseTeacherExcel = (jsonData: ExcelRow[], schoolId: string) => {
 const normCompare = (val: unknown): string => {
   if (val === null || val === undefined) return '';
   if (typeof val === 'boolean') return val ? 'true' : 'false';
-  return String(val).replace(/\s+/g, ' ').trim();
+  return String(val).replace(/^'+/, '').replace(/\s+/g, ' ').trim();
 };
 
 const DATE_COMPARE_KEYS = new Set<keyof TeacherBulkImportItem>([
@@ -320,6 +328,12 @@ const DATE_COMPARE_KEYS = new Set<keyof TeacherBulkImportItem>([
   'tanggalCpns',
   'tmtPengangkatan',
   'tmtPns',
+]);
+
+const UPPER_COMPARE_KEYS = new Set<keyof TeacherBulkImportItem>([
+  'gender',
+  'religion',
+  'status',
 ]);
 
 const computeSmartDiff = (
@@ -332,9 +346,9 @@ const computeSmartDiff = (
   const byNameBirth = new Map<string, TeacherDetail>();
 
   for (const t of existingList) {
-    if (t.nip) byNip.set(t.nip.trim(), t);
-    if (t.nuptk) byNuptk.set(t.nuptk.trim(), t);
-    if (t.nik) byNik.set(t.nik.trim(), t);
+    if (t.nip) byNip.set(normCompare(t.nip), t);
+    if (t.nuptk) byNuptk.set(normCompare(t.nuptk), t);
+    if (t.nik) byNik.set(normCompare(t.nik), t);
     if (t.fullName && t.birthDate) {
       byNameBirth.set(
         `${t.fullName.trim().toLowerCase()}|${String(t.birthDate).split('T')[0]}`,
@@ -409,19 +423,19 @@ const computeSmartDiff = (
   const rows: TeacherBulkImportItem[] = [];
 
   for (const item of incoming) {
-    const normNip = item.nip?.trim();
-    const normNuptk = item.nuptk?.trim();
-    const normNik = item.nik?.trim();
+    const normNip = item.nip ? normCompare(item.nip) : '';
+    const normNuptk = item.nuptk ? normCompare(item.nuptk) : '';
+    const normNik = item.nik ? normCompare(item.nik) : '';
     const normNameBirth =
       item.fullName && item.birthDate
         ? `${item.fullName.trim().toLowerCase()}|${item.birthDate}`
-        : undefined;
+        : '';
 
     const isInternalDuplicate =
-      (normNip && seenNip.has(normNip)) ||
-      (normNuptk && seenNuptk.has(normNuptk)) ||
-      (normNik && seenNik.has(normNik)) ||
-      (normNameBirth && seenNameBirth.has(normNameBirth));
+      (normNip !== '' && seenNip.has(normNip)) ||
+      (normNuptk !== '' && seenNuptk.has(normNuptk)) ||
+      (normNik !== '' && seenNik.has(normNik)) ||
+      (normNameBirth !== '' && seenNameBirth.has(normNameBirth));
 
     if (isInternalDuplicate) {
       duplicateCount++;
@@ -457,12 +471,17 @@ const computeSmartDiff = (
         continue;
       }
 
-      const normNext = DATE_COMPARE_KEYS.has(key)
+      let normNext = DATE_COMPARE_KEYS.has(key)
         ? normCompare(nextVal).split('T')[0]
         : normCompare(nextVal);
-      const normPrev = DATE_COMPARE_KEYS.has(key)
+      let normPrev = DATE_COMPARE_KEYS.has(key)
         ? normCompare(prevVal).split('T')[0]
         : normCompare(prevVal);
+
+      if (UPPER_COMPARE_KEYS.has(key)) {
+        normNext = normNext.toUpperCase();
+        normPrev = normPrev.toUpperCase();
+      }
 
       if (normNext !== normPrev) {
         changedLabels.push(DIFF_FIELD_LABELS[key] || String(key));
@@ -528,7 +547,7 @@ function SortableHeader({ columnKey, label, sortConfig, onSort, className }: Sor
 export function TeacherListPage() {
   const { locale } = useTranslation();
   const queryClient = useQueryClient();
-  const { school } = useAuthStore();
+  const { school, user: currentUser } = useAuthStore();
   const { hasPermission, hasRole } = usePermission();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -536,12 +555,17 @@ export function TeacherListPage() {
 
   // Multi-role permission checks (mengevaluasi role utama + additionalRoles + tugasTambahan Dapodik)
   const isSuperAdmin = hasRole('SUPER_ADMIN');
+  const activeSchoolId = useMemo(
+    () => normalizeTeacherSchoolId(school?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
+    [school?.id, currentUser?.schoolId]
+  );
+
   const canCreateTeacher = hasPermission('teachers', 'create');
   const canUpdateTeacher = hasPermission('teachers', 'update');
   const canDeleteTeacher = hasPermission('teachers', 'delete');
   const canImportTeacher = hasPermission('teachers', 'import');
   const canExportTeacher = hasPermission('teachers', 'export');
-  const canClearAllTeachers = isSuperAdmin && canDeleteTeacher;
+  const canClearAllTeachers = isSuperAdmin && canDeleteTeacher && Boolean(activeSchoolId);
 
   // Filter, Pagination, Selection & Sort State
   const [searchInput, setSearchInput] = useState('');
@@ -578,7 +602,6 @@ export function TeacherListPage() {
     setPageInputValue(currentPage.toString());
   }, [currentPage]);
 
-  // Reset pilihan checkbox jika user tidak memiliki izin hapus
   useEffect(() => {
     if (!canDeleteTeacher && selectedRows.length > 0) {
       setSelectedRows([]);
@@ -592,7 +615,8 @@ export function TeacherListPage() {
   const { data: teachersResponse, isLoading, isError } = useQuery({
     queryKey: [
       'teachers',
-      school?.id,
+      activeSchoolId,
+      isSuperAdmin,
       currentPage,
       PAGE_SIZE,
       searchQuery,
@@ -602,7 +626,7 @@ export function TeacherListPage() {
     ],
     queryFn: () =>
       teacherService.list({
-        schoolId: school?.id,
+        schoolId: activeSchoolId ?? undefined,
         page: currentPage,
         limit: PAGE_SIZE,
         search: searchQuery,
@@ -611,7 +635,7 @@ export function TeacherListPage() {
         sortBy: sortConfig?.key,
         sortOrder: sortConfig?.direction,
       }),
-    enabled: Boolean(school?.id),
+    enabled: isSuperAdmin || Boolean(activeSchoolId),
   });
 
   const teachers = teachersResponse?.data?.data || [];
@@ -627,7 +651,7 @@ export function TeacherListPage() {
   const closeDeleteModal = () => setDeleteModal({ isOpen: false, type: 'single' });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => teacherService.delete(id, school?.id),
+    mutationFn: (id: string) => teacherService.delete(id, activeSchoolId ?? undefined),
     onSuccess: (_res, id) => {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
@@ -639,7 +663,7 @@ export function TeacherListPage() {
   });
 
   const deleteManyMutation = useMutation({
-    mutationFn: (ids: string[]) => teacherService.deleteMany(ids, school?.id),
+    mutationFn: (ids: string[]) => teacherService.deleteMany(ids, activeSchoolId ?? undefined),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
@@ -652,8 +676,8 @@ export function TeacherListPage() {
 
   const deleteAllMutation = useMutation({
     mutationFn: () => {
-      if (!school?.id) throw new Error('School ID tidak ditemukan.');
-      return teacherService.deleteAll(school.id);
+      if (!activeSchoolId) throw new Error('Pilih sekolah aktif terlebih dahulu.');
+      return teacherService.deleteAll(activeSchoolId);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
@@ -714,7 +738,12 @@ export function TeacherListPage() {
   const confirmDelete = () => {
     if (deleteModal.type === 'all') {
       if (!canClearAllTeachers) {
-        toast.error(tr('Hanya Super Admin yang dapat mengosongkan data.', 'Only Super Admin can clear all data.'));
+        toast.error(
+          tr(
+            'Hanya Super Admin dengan sekolah aktif yang dapat mengosongkan data.',
+            'Only Super Admin with an active school can clear all data.'
+          )
+        );
         closeDeleteModal();
         return;
       }
@@ -723,7 +752,12 @@ export function TeacherListPage() {
     }
 
     if (!canDeleteTeacher) {
-      toast.error(tr('Anda tidak memiliki izin menghapus data guru.', 'You do not have permission to delete teacher records.'));
+      toast.error(
+        tr(
+          'Anda tidak memiliki izin menghapus data guru.',
+          'You do not have permission to delete teacher records.'
+        )
+      );
       closeDeleteModal();
       return;
     }
@@ -740,18 +774,30 @@ export function TeacherListPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     if (!canImportTeacher) {
-      toast.error(tr('Anda tidak memiliki izin mengimpor data guru.', 'You do not have permission to import teacher data.'));
+      toast.error(
+        tr(
+          'Anda tidak memiliki izin mengimpor data guru.',
+          'You do not have permission to import teacher data.'
+        )
+      );
       e.target.value = '';
       return;
     }
-    if (!school?.id) {
-      toast.error(tr('Data sekolah belum termuat.', 'School data is not loaded yet.'));
+    if (!activeSchoolId) {
+      toast.error(
+        tr(
+          'Pilih sekolah aktif terlebih dahulu sebelum mengimpor data PTK.',
+          'Select an active school before importing PTK data.'
+        )
+      );
       e.target.value = '';
       return;
     }
 
     setIsParsingExcel(true);
-    const toastId = toast.loading(tr('Menganalisis file Excel Dapodik PTK...', 'Analyzing Dapodik PTK Excel...'));
+    const toastId = toast.loading(
+      tr('Menganalisis file Excel Dapodik PTK...', 'Analyzing Dapodik PTK Excel...')
+    );
 
     try {
       const buffer = await file.arrayBuffer();
@@ -781,7 +827,7 @@ export function TeacherListPage() {
         );
       }
 
-      const { payloads, skipped } = parseTeacherExcel(jsonData, school.id);
+      const { payloads, skipped } = parseTeacherExcel(jsonData, activeSchoolId);
       if (payloads.length === 0) {
         throw new Error(
           tr(
@@ -791,7 +837,7 @@ export function TeacherListPage() {
         );
       }
 
-      const existingRes = await teacherService.exportAll(school.id);
+      const existingRes = await teacherService.exportAll(activeSchoolId);
       const { rows: diffedRows, duplicateCount } = computeSmartDiff(
         payloads,
         existingRes.data || []
@@ -845,12 +891,13 @@ export function TeacherListPage() {
 
   // --- EXPORT EXCEL ---
   const handleExport = async () => {
-    if (!canExportTeacher || !school?.id) return;
+    if (!canExportTeacher) return;
+    if (!isSuperAdmin && !activeSchoolId) return;
     setIsExporting(true);
     const toastId = toast.loading(tr('Menyiapkan file Excel...', 'Preparing Excel file...'));
 
     try {
-      const response = await teacherService.exportAll(school.id);
+      const response = await teacherService.exportAll(activeSchoolId ?? undefined);
       let dataToExport = response.data || [];
       if (dataToExport.length === 0) {
         throw new Error(tr('Tidak ada data untuk diekspor', 'No data to export'));
@@ -981,7 +1028,7 @@ export function TeacherListPage() {
               />
               <button
                 onClick={() => fileInputRef.current?.click()}
-                disabled={isParsingExcel || bulkImportMutation.isPending}
+                disabled={!activeSchoolId || isParsingExcel || bulkImportMutation.isPending}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
               >
                 {isParsingExcel ? (
@@ -1007,7 +1054,7 @@ export function TeacherListPage() {
             </button>
           )}
 
-          {canCreateTeacher && (
+          {canCreateTeacher && activeSchoolId && (
             <Link
               to="/teachers/new"
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
@@ -1018,6 +1065,23 @@ export function TeacherListPage() {
           )}
         </div>
       </div>
+
+      {isSuperAdmin && !activeSchoolId && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-semibold">
+              {tr('Mode Super Admin Lintas Sekolah', 'Cross-School Super Admin Mode')}
+            </p>
+            <p className="mt-0.5">
+              {tr(
+                'Pilih sekolah aktif terlebih dahulu pada switcher sekolah untuk menambah guru baru atau mengimpor Excel Verval PTK.',
+                'Select an active school from the school switcher before adding new teachers or importing Verval PTK Excel.'
+              )}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* --- TOOLBAR + TABLE --- */}
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col">

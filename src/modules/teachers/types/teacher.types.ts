@@ -1,3 +1,4 @@
+// src/modules/teachers/types/teacher.types.ts
 import type { Gender } from '@/types/common.types';
 
 /**
