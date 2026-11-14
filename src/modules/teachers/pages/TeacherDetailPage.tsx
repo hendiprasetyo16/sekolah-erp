@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   ArrowLeft,
@@ -11,6 +11,8 @@ import {
   Award,
   GraduationCap,
   Building,
+  UserCheck,
+  UserX,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -24,11 +26,21 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatDate, formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
+/**
+ * Daftar role yang diizinkan mengedit biodata Guru & PTK.
+ */
+const TEACHER_EDITOR_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
+
 export function TeacherDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const { locale } = useTranslation();
-  const { school } = useAuthStore();
+  const { school, hasAnyRole } = useAuthStore();
 
+  // Mengecek apakah pengguna memiliki salah satu hak akses pengelola data guru
+  const canManageTeachers = hasAnyRole(TEACHER_EDITOR_ROLES);
+
+  // Kamus label teks (mudah disesuaikan untuk Bahasa Indonesia / Inggris)
   const dict = {
     title: locale === 'id' ? 'Profil Guru & PTK' : 'Teacher Profile',
     desc:
@@ -46,6 +58,7 @@ export function TeacherDetailPage() {
     no: locale === 'id' ? 'Tidak' : 'No',
   };
 
+  // Mengambil detail data guru berdasarkan ID dari URL
   const { data: response, isLoading, isError } = useQuery({
     queryKey: ['teacher', id, school?.id],
     queryFn: () => teacherService.getById(id!, school?.id),
@@ -54,22 +67,24 @@ export function TeacherDetailPage() {
 
   const teacher = response?.data;
 
+  // Tampilan saat data sedang dimuat
   if (isLoading) {
     return (
-      <div className="flex h-100 items-center justify-center">
+      <div className="flex h-96 items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
       </div>
     );
   }
 
+  // Tampilan jika data tidak ditemukan atau gagal dimuat
   if (isError || !teacher) {
     return (
-      <div className="flex h-100 flex-col items-center justify-center gap-4 p-4 text-center">
+      <div className="flex h-96 flex-col items-center justify-center gap-4 p-4 text-center">
         <p className="text-muted-foreground">
           {locale === 'id' ? 'Gagal memuat data guru.' : 'Failed to load teacher data.'}
         </p>
-        <Button variant="outline" asChild className="w-full sm:w-auto">
-          <Link to="/teachers">{dict.back}</Link>
+        <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
+          {dict.back}
         </Button>
       </div>
     );
@@ -77,6 +92,7 @@ export function TeacherDetailPage() {
 
   const getInitials = (name: string) => name.charAt(0).toUpperCase();
 
+  // Warna lencana status kepegawaian
   const statusColorMap: Record<string, string> = {
     PNS: 'bg-emerald-100 text-emerald-800 border-emerald-200',
     CPNS: 'bg-blue-100 text-blue-800 border-blue-200',
@@ -86,12 +102,26 @@ export function TeacherDetailPage() {
     GTT: 'bg-gray-100 text-gray-800 border-gray-200',
   };
 
+  // Komponen kecil untuk menampilkan pasangan Label + Nilai secara seragam
   const InfoItem = ({ label, value }: { label: string; value?: ReactNode }) => (
-    <div className="py-2.5 border-b border-border/40 last:border-0">
-      <div className="text-xs font-medium text-muted-foreground mb-1">{label}</div>
-      <div className="text-sm font-medium text-foreground">{value || dict.noData}</div>
+    <div className="border-b border-border/40 py-2.5 last:border-0">
+      <div className="mb-1 text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="wrap-break-word text-sm font-medium text-foreground">
+        {value || dict.noData}
+      </div>
     </div>
   );
+
+  const normalizedStatus = teacher.status?.toUpperCase();
+  const normalizedGender = teacher.gender?.toUpperCase();
+
+  // Format Jenis Kelamin yang aman jika data kosong
+  const genderText =
+    normalizedGender === 'L'
+      ? 'Laki-laki'
+      : normalizedGender === 'P'
+        ? 'Perempuan'
+        : dict.noData;
 
   const rtRwText =
     teacher.rt || teacher.rw
@@ -110,110 +140,142 @@ export function TeacherDetailPage() {
   ].filter(Boolean);
 
   return (
-    <div className="space-y-6">
-      {/* ================= HEADER ================= */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div className="flex items-start sm:items-center gap-4">
-          <Button variant="outline" size="icon" className="shrink-0 mt-1 sm:mt-0" asChild>
-            <Link to="/teachers">
-              <ArrowLeft className="h-4 w-4" />
-            </Link>
+    <div className="w-full min-w-0 space-y-6">
+      {/* ================= BAGIAN 1: HEADER (Rapi Kiri & Kanan Atas) ================= */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button
+            type="button"
+            variant="outline"
+            size="icon"
+            className="shrink-0"
+            onClick={() => navigate('/teachers')}
+            aria-label={dict.back}
+          >
+            <ArrowLeft className="h-4 w-4" />
           </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">{dict.title}</h1>
+          <div className="min-w-0">
+            <h1 className="truncate text-2xl font-bold tracking-tight">{dict.title}</h1>
             <p className="text-sm text-muted-foreground">{dict.desc}</p>
           </div>
         </div>
 
-        <Button asChild className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700">
-          <Link to={`/teachers/${id}/edit`} className="flex justify-center items-center">
-            <Edit className="mr-2 h-4 w-4 shrink-0" />
-            <span className="whitespace-nowrap">{dict.editBtn}</span>
-          </Link>
-        </Button>
+        {canManageTeachers && (
+          <Button
+            type="button"
+            onClick={() => navigate(`/teachers/${id}/edit`)}
+            className="w-fit shrink-0 bg-emerald-600 text-white shadow-sm hover:bg-emerald-700"
+          >
+            <Edit className="mr-2 h-4 w-4" />
+            {dict.editBtn}
+          </Button>
+        )}
       </div>
 
-      <div className="grid gap-6 md:grid-cols-[1fr_3fr]">
-        {/* ================= LEFT SIDEBAR (Profil Singkat) ================= */}
-        <Card className="h-fit shadow-sm border-border">
-          <CardContent className="pt-6 flex flex-col items-center text-center">
-            <div className="flex h-24 w-24 items-center justify-center rounded-full bg-linear-to-br from-emerald-500 to-teal-600 text-3xl font-bold text-white shadow-lg mb-4">
+      {/* ================= BAGIAN 2: GRID UTAMA (Kiri: 280px, Kanan: Sisa Layar) ================= */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+        {/* KARTU PROFIL SINGKAT (KIRI) */}
+        <Card className="h-fit border-border shadow-sm">
+          <CardContent className="flex flex-col items-center pt-6 text-center">
+            <div className="mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-linear-to-br from-emerald-500 to-teal-600 text-3xl font-bold text-white shadow-lg">
               {getInitials(teacher.fullName)}
             </div>
-            <h2 className="text-xl font-bold text-foreground leading-tight">{teacher.fullName}</h2>
-            <p className="text-sm text-muted-foreground mt-1">{teacher.position || 'Guru'}</p>
+            <h2 className="text-lg font-bold leading-tight text-foreground">{teacher.fullName}</h2>
+            <p className="mt-1 text-sm text-muted-foreground">{teacher.position || 'Guru'}</p>
 
-            <div className="flex flex-wrap justify-center gap-2 mt-3 mb-5">
+            <div className="mt-3 mb-5 flex flex-wrap justify-center gap-2">
               <Badge
-                className={cn(teacher.status ? statusColorMap[teacher.status] : 'bg-muted')}
+                className={cn(
+                  normalizedStatus && statusColorMap[normalizedStatus]
+                    ? statusColorMap[normalizedStatus]
+                    : 'bg-muted'
+                )}
                 variant="outline"
               >
                 {teacher.status || 'Belum Diatur'}
               </Badge>
+              {!teacher.isActive && (
+                <Badge className="border-rose-200 bg-rose-100 text-rose-800" variant="outline">
+                  {locale === 'id' ? 'Nonaktif' : 'Inactive'}
+                </Badge>
+              )}
               {teacher.tugasTambahan && (
-                <Badge className="bg-amber-100 text-amber-800 border-amber-200">
-                  <Briefcase className="w-3 h-3 mr-1 shrink-0" />
-                  <span className="truncate max-w-36">{teacher.tugasTambahan}</span>
+                <Badge className="border-amber-200 bg-amber-100 text-amber-800">
+                  <Briefcase className="mr-1 h-3 w-3 shrink-0" />
+                  <span className="max-w-44 truncate">{teacher.tugasTambahan}</span>
                 </Badge>
               )}
             </div>
 
-            <div className="w-full space-y-3 text-sm border-t border-border/50 pt-5">
+            <div className="w-full space-y-2.5 border-t border-border/50 pt-5 text-sm">
               {teacher.phone && (
-                <div className="flex items-center gap-3 text-muted-foreground justify-center">
+                <div className="flex items-center justify-center gap-2.5 text-muted-foreground">
                   <Phone className="h-4 w-4 shrink-0 text-emerald-600" />
                   <span className="truncate">{teacher.phone}</span>
                 </div>
               )}
               {teacher.email && (
-                <div className="flex items-center gap-3 text-muted-foreground justify-center">
+                <div className="flex items-center justify-center gap-2.5 text-muted-foreground">
                   <Mail className="h-4 w-4 shrink-0 text-emerald-600" />
-                  <span className="truncate">{teacher.email}</span>
+                  <span className="truncate" title={teacher.email}>
+                    {teacher.email}
+                  </span>
                 </div>
               )}
               {teacher.isCertified && (
-                <div className="flex items-center gap-3 text-emerald-600 justify-center font-medium mt-2 bg-emerald-50 py-1.5 rounded-md border border-emerald-100">
+                <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-emerald-100 bg-emerald-50 py-1.5 px-2 text-xs font-medium text-emerald-600">
                   <Award className="h-4 w-4 shrink-0" />
-                  <span>Guru Tersertifikasi</span>
+                  <span>{locale === 'id' ? 'Guru Tersertifikasi' : 'Certified Teacher'}</span>
+                </div>
+              )}
+              {teacher.userId ? (
+                <div className="flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 py-1.5 px-2 text-xs font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">
+                  <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                  <span>{locale === 'id' ? 'Terhubung Akun Login' : 'Login Account Linked'}</span>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center gap-2 rounded-md border border-border bg-muted/50 py-1.5 px-2 text-xs font-medium text-muted-foreground">
+                  <UserX className="h-3.5 w-3.5 shrink-0" />
+                  <span>{locale === 'id' ? 'Belum Punya Akun Login' : 'No Login Account'}</span>
                 </div>
               )}
             </div>
           </CardContent>
         </Card>
 
-        {/* ================= RIGHT CONTENT (Tabs Detail) ================= */}
+        {/* ================= BAGIAN 3: KONTEN TAB DETAIL (KANAN) ================= */}
         <Tabs defaultValue="personal" className="w-full min-w-0">
-          <div className="w-full overflow-x-auto pb-1 mb-4">
-            <TabsList className="h-auto gap-1 bg-muted/50 p-1 flex w-max min-w-full sm:min-w-0">
+          <div className="mb-4 w-full overflow-x-auto pb-1">
+            <TabsList className="inline-flex h-auto w-fit max-w-full flex-wrap items-center gap-1 rounded-lg bg-muted/60 p-1">
               <TabsTrigger
                 value="personal"
-                className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                className="whitespace-nowrap rounded-md px-3.5 py-2 text-sm text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
               >
-                <GraduationCap className="w-4 h-4 mr-2 shrink-0" />
+                <GraduationCap className="mr-2 h-4 w-4 shrink-0" />
                 {dict.tabPersonal}
               </TabsTrigger>
 
               <TabsTrigger
                 value="professional"
-                className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                className="whitespace-nowrap rounded-md px-3.5 py-2 text-sm text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
               >
-                <Building className="w-4 h-4 mr-2 shrink-0" />
+                <Building className="mr-2 h-4 w-4 shrink-0" />
                 {dict.tabProf}
               </TabsTrigger>
 
               <TabsTrigger
                 value="tasks"
-                className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                className="whitespace-nowrap rounded-md px-3.5 py-2 text-sm text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
               >
-                <Award className="w-4 h-4 mr-2 shrink-0" />
+                <Award className="mr-2 h-4 w-4 shrink-0" />
                 {dict.tabTask}
               </TabsTrigger>
 
               <TabsTrigger
                 value="family"
-                className="flex-1 whitespace-nowrap rounded-md px-4 py-2.5 text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
+                className="whitespace-nowrap rounded-md px-3.5 py-2 text-sm text-muted-foreground transition-all hover:text-foreground data-[state=active]:bg-emerald-600 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:hover:text-white"
               >
-                <Briefcase className="w-4 h-4 mr-2 shrink-0" />
+                <Briefcase className="mr-2 h-4 w-4 shrink-0" />
                 {dict.tabFamily}
               </TabsTrigger>
             </TabsList>
@@ -221,7 +283,7 @@ export function TeacherDetailPage() {
 
           {/* TAB 1: Data Pribadi & Alamat Dapodik */}
           <TabsContent value="personal" className="m-0 space-y-4">
-            <Card className="shadow-sm border-border">
+            <Card className="border-border shadow-sm">
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Informasi Dasar (Dapodik)</CardTitle>
               </CardHeader>
@@ -232,7 +294,7 @@ export function TeacherDetailPage() {
                 />
                 <InfoItem
                   label={locale === 'id' ? 'Jenis Kelamin' : 'Gender'}
-                  value={teacher.gender === 'L' ? 'Laki-laki' : 'Perempuan'}
+                  value={genderText}
                 />
                 <InfoItem label="NIK" value={teacher.nik} />
                 <InfoItem label="No. KK" value={teacher.noKk} />
@@ -266,7 +328,10 @@ export function TeacherDetailPage() {
                 <InfoItem label="Desa / Kelurahan" value={teacher.kelurahan} />
                 <InfoItem label="Kecamatan" value={teacher.kecamatan} />
                 <InfoItem label="Kabupaten / Kota" value={teacher.city} />
-                <InfoItem label="Provinsi / Kode Pos" value={`${teacher.province || '-'} (${teacher.postalCode || '-'})`} />
+                <InfoItem
+                  label="Provinsi / Kode Pos"
+                  value={`${teacher.province || '-'} (${teacher.postalCode || '-'})`}
+                />
                 <InfoItem label="Lintang (Latitude)" value={teacher.lintang} />
                 <InfoItem label="Bujur (Longitude)" value={teacher.bujur} />
               </CardContent>
@@ -275,7 +340,7 @@ export function TeacherDetailPage() {
 
           {/* TAB 2: Kepegawaian */}
           <TabsContent value="professional" className="m-0 space-y-4">
-            <Card className="shadow-sm border-border">
+            <Card className="border-border shadow-sm">
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Status & SK Pengangkatan</CardTitle>
               </CardHeader>
@@ -314,13 +379,13 @@ export function TeacherDetailPage() {
 
           {/* TAB 3: Tugas & Lisensi */}
           <TabsContent value="tasks" className="m-0 space-y-4">
-            <Card className="shadow-sm border-border">
+            <Card className="border-border shadow-sm">
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Akademik, Tugas Tambahan & Kompetensi</CardTitle>
               </CardHeader>
               <CardContent className="grid gap-x-6 sm:grid-cols-2">
-                <div className="sm:col-span-2 bg-amber-50 dark:bg-amber-500/10 p-4 rounded-lg mb-4 border border-amber-200 dark:border-amber-500/20">
-                  <div className="text-xs font-semibold text-amber-700 dark:text-amber-400 mb-1">
+                <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-4 sm:col-span-2 dark:border-amber-500/20 dark:bg-amber-500/10">
+                  <div className="mb-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
                     Tugas Tambahan Saat Ini
                   </div>
                   <div className="text-sm font-medium text-amber-950 dark:text-amber-100">
@@ -347,26 +412,26 @@ export function TeacherDetailPage() {
                 />
                 <InfoItem label="NUKS" value={teacher.nuks} />
 
-                <div className="sm:col-span-2 grid sm:grid-cols-2 gap-4 mt-4 bg-muted/30 p-4 rounded-lg border border-border/50">
-                  <div className="flex justify-between items-center text-sm">
+                <div className="mt-4 grid gap-4 rounded-lg border border-border/50 bg-muted/30 p-4 sm:col-span-2 sm:grid-cols-2">
+                  <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Lisensi Kepala Sekolah</span>
                     <Badge variant={teacher.sudahLisensiKepalaSekolah ? 'default' : 'secondary'}>
                       {teacher.sudahLisensiKepalaSekolah ? dict.yes : dict.no}
                     </Badge>
                   </div>
-                  <div className="flex justify-between items-center text-sm">
+                  <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Diklat Kepengawasan</span>
                     <Badge variant={teacher.pernahDiklatKepengawasan ? 'default' : 'secondary'}>
                       {teacher.pernahDiklatKepengawasan ? dict.yes : dict.no}
                     </Badge>
                   </div>
-                  <div className="flex justify-between items-center text-sm">
+                  <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Keahlian Braille</span>
                     <Badge variant={teacher.keahlianBraille ? 'default' : 'secondary'}>
                       {teacher.keahlianBraille ? dict.yes : dict.no}
                     </Badge>
                   </div>
-                  <div className="flex justify-between items-center text-sm">
+                  <div className="flex items-center justify-between text-sm">
                     <span className="text-muted-foreground">Keahlian Bahasa Isyarat</span>
                     <Badge variant={teacher.keahlianBahasaIsyarat ? 'default' : 'secondary'}>
                       {teacher.keahlianBahasaIsyarat ? dict.yes : dict.no}
@@ -374,8 +439,8 @@ export function TeacherDetailPage() {
                   </div>
                 </div>
 
-                <div className="sm:col-span-2 mt-5 border-t border-border/50 pt-5">
-                  <div className="text-sm font-medium text-muted-foreground mb-3">
+                <div className="mt-5 border-t border-border/50 pt-5 sm:col-span-2">
+                  <div className="mb-3 text-sm font-medium text-muted-foreground">
                     Mata Pelajaran yang Diampu
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -398,7 +463,7 @@ export function TeacherDetailPage() {
 
           {/* TAB 4: Keluarga & Finansial */}
           <TabsContent value="family" className="m-0 space-y-4">
-            <Card className="shadow-sm border-border">
+            <Card className="border-border shadow-sm">
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Keluarga & Pajak</CardTitle>
               </CardHeader>
@@ -419,7 +484,7 @@ export function TeacherDetailPage() {
               </CardContent>
             </Card>
 
-            <Card className="shadow-sm border-border">
+            <Card className="border-border shadow-sm">
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Informasi Rekening Bank</CardTitle>
               </CardHeader>

@@ -1987,7 +1987,7 @@ export function StudentListPage() {
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
             >
               <Upload size={16} />
-              <span className="hidden sm:inline">Import Verval PD</span>
+              <span className="hidden sm:inline">{tr('Impor Verval PD', 'Import Verval PD')}</span>
             </button>
           )}
 

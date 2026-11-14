@@ -73,6 +73,7 @@ const teacherSchema = z.object({
   status: z.string().optional(),
   position: z.string().optional(),
   tugasTambahan: z.string().optional(),
+  isActive: z.boolean().optional(),
 
   skCpns: z.string().optional(),
   tanggalCpns: z.string().optional(),
@@ -121,6 +122,7 @@ interface FieldProps {
   placeholder?: string;
   options?: { label: string; value: string }[];
   className?: string;
+  labelClassName?: string;
 }
 
 const formatDateForInput = (dateStr?: string | null): string =>
@@ -190,6 +192,7 @@ export function TeacherFormPage() {
       status: 'HONORER',
       position: 'Guru',
       tugasTambahan: '',
+      isActive: true,
       skCpns: '',
       tanggalCpns: '',
       skPengangkatan: '',
@@ -243,7 +246,7 @@ export function TeacherFormPage() {
         noKk: t.noKk || '',
         birthDate: formatDateForInput(t.birthDate),
         birthPlace: t.birthPlace || '',
-        religion: t.religion || '',
+        religion: t.religion ? t.religion.toUpperCase() : '',
         telepon: t.telepon || '',
         phone: t.phone || '',
         email: t.email || '',
@@ -258,12 +261,13 @@ export function TeacherFormPage() {
         postalCode: t.postalCode || '',
         lintang: t.lintang || '',
         bujur: t.bujur || '',
-        education: t.education || '',
+        education: t.education ? t.education.toUpperCase() : '',
         major: t.major || '',
         university: t.university || '',
-        status: t.status || '',
+        status: t.status ? t.status.toUpperCase() : '',
         position: t.position || '',
         tugasTambahan: t.tugasTambahan || '',
+        isActive: t.isActive ?? true,
         skCpns: t.skCpns || '',
         tanggalCpns: formatDateForInput(t.tanggalCpns),
         skPengangkatan: t.skPengangkatan || '',
@@ -319,7 +323,7 @@ export function TeacherFormPage() {
         ...values,
         schoolId: school.id,
         gender: values.gender as 'L' | 'P',
-        isActive: true,
+        isActive: values.isActive ?? true,
         isCertified: values.isCertified ?? false,
         baseSalary: parsedSalary,
         maxHoursPerWeek: parsedHours,
@@ -329,6 +333,7 @@ export function TeacherFormPage() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
       if (id) {
         queryClient.invalidateQueries({ queryKey: ['teacher', id] });
       }
@@ -355,13 +360,14 @@ export function TeacherFormPage() {
     placeholder = '',
     options = [],
     className = '',
+    labelClassName = '',
   }: FieldProps) => (
     <FormField
       control={form.control}
       name={name}
       render={({ field }) => (
         <FormItem className={className}>
-          <FormLabel className={className}>{label}</FormLabel>
+          <FormLabel className={labelClassName}>{label}</FormLabel>
           {type === 'select' ? (
             <Select onValueChange={field.onChange} value={(field.value as string) || ''}>
               <FormControl>
@@ -548,6 +554,7 @@ export function TeacherFormPage() {
                     <Field name="nuptk" label="NUPTK" />
                     <Field name="pangkatGolongan" label="Pangkat / Golongan" />
                     <Field name="sumberGaji" label="Sumber Gaji" />
+                    <Field name="isActive" label="Status Aktif di Sekolah" type="boolean" />
 
                     <div className="sm:col-span-2 border-t border-border mt-2 pt-4 font-semibold text-foreground">
                       Data SK & Pengangkatan
@@ -571,7 +578,7 @@ export function TeacherFormPage() {
                         name="tugasTambahan"
                         label="Tugas Tambahan (Opsional)"
                         placeholder="Contoh: Kepala Sekolah, Bendahara BOS, Wakasek Kurikulum..."
-                        className="text-amber-700 dark:text-amber-400 font-semibold"
+                        labelClassName="text-amber-700 dark:text-amber-400 font-semibold"
                       />
                       <p className="text-xs text-amber-700/80 dark:text-amber-400/80 mt-2 font-medium">
                         *Tugas tambahan ini akan muncul sebagai label khusus (highlight) di profil guru.
@@ -677,7 +684,7 @@ export function TeacherFormPage() {
 
               <Button
                 type="submit"
-                className="bg-blue-600 hover:bg-blue-700 text-white"
+                className="bg-emerald-600 hover:bg-emerald-700 text-white"
                 disabled={mutation.isPending}
               >
                 {mutation.isPending ? (

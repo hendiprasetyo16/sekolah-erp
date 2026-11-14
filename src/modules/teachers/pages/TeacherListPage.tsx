@@ -13,6 +13,7 @@ import * as XLSX from 'xlsx';
 
 import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
+import { usePermission } from '@/hooks/usePermission';
 import { teacherService } from '../services/teacher.service';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type {
@@ -409,7 +410,6 @@ const computeSmartDiff = (
       const nextVal = item[key];
       const prevVal = matched[key as keyof TeacherDetail];
 
-      // RPC menggunakan COALESCE untuk sebagian besar kolom opsional: jika Excel kosong, nilai lama dipertahankan
       if (key !== 'tugasTambahan' && (nextVal === null || nextVal === undefined || nextVal === '')) {
         continue;
       }
@@ -485,11 +485,20 @@ function SortableHeader({ columnKey, label, sortConfig, onSort, className }: Sor
 export function TeacherListPage() {
   const { locale } = useTranslation();
   const queryClient = useQueryClient();
-  const { school, user } = useAuthStore();
+  const { school } = useAuthStore();
+  const { hasPermission, hasRole } = usePermission();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const tr = (id: string, en: string) => (locale === 'id' ? id : en);
-  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+
+  // Multi-role permission checks (mengevaluasi role utama + additionalRoles + tugasTambahan Dapodik)
+  const isSuperAdmin = hasRole('SUPER_ADMIN');
+  const canCreateTeacher = hasPermission('teachers', 'create');
+  const canUpdateTeacher = hasPermission('teachers', 'update');
+  const canDeleteTeacher = hasPermission('teachers', 'delete');
+  const canImportTeacher = hasPermission('teachers', 'import');
+  const canExportTeacher = hasPermission('teachers', 'export');
+  const canClearAllTeachers = isSuperAdmin && canDeleteTeacher;
 
   // Filter, Pagination, Selection & Sort State
   const [searchInput, setSearchInput] = useState('');
@@ -513,7 +522,6 @@ export function TeacherListPage() {
   const [importSkippedCount, setImportSkippedCount] = useState(0);
   const [diffFilterTab, setDiffFilterTab] = useState<DiffFilterTab>('all');
 
-  // Debounce pencarian agar tidak spam request database
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearchQuery(searchInput);
@@ -525,6 +533,13 @@ export function TeacherListPage() {
   useEffect(() => {
     setPageInputValue(currentPage.toString());
   }, [currentPage]);
+
+  // Reset pilihan checkbox jika user tidak memiliki izin hapus
+  useEffect(() => {
+    if (!canDeleteTeacher && selectedRows.length > 0) {
+      setSelectedRows([]);
+    }
+  }, [canDeleteTeacher, selectedRows.length]);
 
   const parsedCertifiedFilter =
     certifiedFilter === 'all' ? undefined : certifiedFilter === 'true';
@@ -628,17 +643,21 @@ export function TeacherListPage() {
     setSortConfig({ key, direction });
   };
 
-  const toggleRow = (id: string) =>
+  const toggleRow = (id: string) => {
+    if (!canDeleteTeacher) return;
     setSelectedRows((prev) =>
       prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]
     );
+  };
 
-  const toggleAll = () =>
+  const toggleAll = () => {
+    if (!canDeleteTeacher) return;
     setSelectedRows(
       selectedRows.length === teachers.length && teachers.length > 0
         ? []
         : teachers.map((t) => t.id)
     );
+  };
 
   const handlePageSubmit = () => {
     let p = parseInt(pageInputValue, 10);
@@ -649,17 +668,26 @@ export function TeacherListPage() {
   };
 
   const confirmDelete = () => {
-    if (deleteModal.type === 'single' && deleteModal.id) {
-      deleteMutation.mutate(deleteModal.id);
-    } else if (deleteModal.type === 'bulk') {
-      deleteManyMutation.mutate(selectedRows);
-    } else if (deleteModal.type === 'all') {
-      if (!isSuperAdmin) {
+    if (deleteModal.type === 'all') {
+      if (!canClearAllTeachers) {
         toast.error(tr('Hanya Super Admin yang dapat mengosongkan data.', 'Only Super Admin can clear all data.'));
         closeDeleteModal();
         return;
       }
       deleteAllMutation.mutate();
+      return;
+    }
+
+    if (!canDeleteTeacher) {
+      toast.error(tr('Anda tidak memiliki izin menghapus data guru.', 'You do not have permission to delete teacher records.'));
+      closeDeleteModal();
+      return;
+    }
+
+    if (deleteModal.type === 'single' && deleteModal.id) {
+      deleteMutation.mutate(deleteModal.id);
+    } else if (deleteModal.type === 'bulk') {
+      deleteManyMutation.mutate(selectedRows);
     }
   };
 
@@ -667,6 +695,11 @@ export function TeacherListPage() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!canImportTeacher) {
+      toast.error(tr('Anda tidak memiliki izin mengimpor data guru.', 'You do not have permission to import teacher data.'));
+      e.target.value = '';
+      return;
+    }
     if (!school?.id) {
       toast.error(tr('Data sekolah belum termuat.', 'School data is not loaded yet.'));
       e.target.value = '';
@@ -756,6 +789,7 @@ export function TeacherListPage() {
   );
 
   const handleConfirmSmartImport = () => {
+    if (!canImportTeacher) return;
     const rowsToSend =
       actionableImportRows.length > 0 ? actionableImportRows : importPreviewRows;
     bulkImportMutation.mutate(rowsToSend);
@@ -763,7 +797,7 @@ export function TeacherListPage() {
 
   // --- EXPORT EXCEL ---
   const handleExport = async () => {
-    if (!school?.id) return;
+    if (!canExportTeacher || !school?.id) return;
     setIsExporting(true);
     const toastId = toast.loading(tr('Menyiapkan file Excel...', 'Preparing Excel file...'));
 
@@ -774,7 +808,7 @@ export function TeacherListPage() {
         throw new Error(tr('Tidak ada data untuk diekspor', 'No data to export'));
       }
 
-      if (selectedRows.length > 0) {
+      if (canDeleteTeacher && selectedRows.length > 0) {
         dataToExport = dataToExport.filter((t) => selectedRows.includes(t.id));
       }
 
@@ -827,7 +861,7 @@ export function TeacherListPage() {
       XLSX.utils.book_append_sheet(wb, ws, 'Data Guru');
       const dateStr = new Date().toISOString().split('T')[0];
       const fileName =
-        selectedRows.length > 0
+        canDeleteTeacher && selectedRows.length > 0
           ? `Data_Guru_Terpilih_${dateStr}.xlsx`
           : `Data_Guru_Pegawai_${dateStr}.xlsx`;
 
@@ -878,7 +912,7 @@ export function TeacherListPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {isSuperAdmin && (
+          {canClearAllTeachers && (
             <button
               onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
               className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
@@ -888,67 +922,90 @@ export function TeacherListPage() {
             </button>
           )}
 
-          <input
-            type="file"
-            accept=".xlsx, .xls"
-            ref={fileInputRef}
-            className="hidden"
-            onChange={handleFileUpload}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isParsingExcel || bulkImportMutation.isPending}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
-          >
-            {isParsingExcel ? (
-              <Loader2 size={16} className="animate-spin text-emerald-600" />
-            ) : (
-              <Upload size={16} />
-            )}
-            <span className="hidden sm:inline">
-              {isParsingExcel ? tr('Membaca...', 'Reading...') : tr('Impor Dapodik', 'Import Dapodik')}
-            </span>
-          </button>
+          {canImportTeacher && (
+            <>
+              <input
+                type="file"
+                accept=".xlsx, .xls"
+                ref={fileInputRef}
+                className="hidden"
+                onChange={handleFileUpload}
+              />
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isParsingExcel || bulkImportMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
+              >
+                {isParsingExcel ? (
+                  <Loader2 size={16} className="animate-spin text-emerald-600" />
+                ) : (
+                  <Upload size={16} />
+                )}
+                <span className="hidden sm:inline">
+                  {isParsingExcel ? tr('Membaca...', 'Reading...') : tr('Impor Verval PTK', 'Import Verval PTK')}
+                </span>
+              </button>
+            </>
+          )}
 
-          <button
-            onClick={handleExport}
-            disabled={isExporting || totalData === 0}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
-          >
-            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-            <span className="hidden sm:inline">{tr('Ekspor', 'Export')}</span>
-          </button>
+          {canExportTeacher && (
+            <button
+              onClick={handleExport}
+              disabled={isExporting || totalData === 0}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
+            >
+              {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+              <span className="hidden sm:inline">{tr('Ekspor Data', 'Export Data')}</span>
+            </button>
+          )}
 
-          <Link
-            to="/teachers/new"
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
-          >
-            <Plus size={16} />
-            <span>{tr('Tambah Data', 'Add New')}</span>
-          </Link>
+          {canCreateTeacher && (
+            <Link
+              to="/teachers/new"
+              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
+            >
+              <Plus size={16} />
+              <span>{tr('Tambah Guru', 'Add Teacher')}</span>
+            </Link>
+          )}
         </div>
       </div>
 
       {/* --- TOOLBAR + TABLE --- */}
       <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col">
         <div className="p-4 border-b border-border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-muted/20">
-          {/* Kiri: Pencarian + Filter Status & Sertifikasi */}
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 flex-1">
-            <div className="relative w-full sm:max-w-xs">
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-              />
-              <input
-                type="text"
-                placeholder={tr('Cari nama, NIP, NUPTK, NIK...', 'Search name, NIP, NUPTK, NIK...')}
-                value={searchInput}
-                onChange={(e) => setSearchInput(e.target.value)}
-                className="w-full pl-9 pr-4 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
-              />
-            </div>
+          {/* Kiri: Pencarian (otomatis melebar & mengecil mengikuti ruang tersedia) */}
+          <div className="relative w-full lg:flex-1 lg:min-w-50 transition-all duration-200">
+            <Search
+              size={16}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+            />
+            <input
+              type="text"
+              placeholder={tr('Cari nama, NIP, NUPTK, NIK...', 'Search name, NIP, NUPTK, NIK...')}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              className={cn(
+                'w-full pl-9 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all',
+                searchInput ? 'pr-8' : 'pr-4'
+              )}
+            />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                title={tr('Hapus pencarian', 'Clear search')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
 
-            <div className="flex items-center gap-2">
+          {/* Kanan: Filter (bergeser ke kiri saat ada data dipilih) + Aksi Terpilih */}
+          <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2.5 shrink-0">
+            {/* Filter Status & Sertifikasi */}
+            <div className="flex flex-1 sm:flex-initial items-center gap-2 transition-all duration-200">
               <div className="relative flex-1 sm:flex-initial">
                 <Filter
                   size={14}
@@ -987,32 +1044,35 @@ export function TeacherListPage() {
                 <option value="false">{tr('Belum Sertifikasi', 'Uncertified')}</option>
               </select>
             </div>
-          </div>
 
-          {/* Kanan: Aksi Terpilih */}
-          {selectedRows.length > 0 && (
-            <div className="flex items-center gap-2 justify-end animate-in fade-in zoom-in duration-200">
-              <span className="hidden sm:inline-block text-sm font-medium text-emerald-600 bg-emerald-50 px-3 py-1.5 rounded-lg border border-emerald-200 whitespace-nowrap">
-                {selectedRows.length} {tr('Terpilih', 'Selected')}
-              </span>
-              <span className="sm:hidden text-sm font-bold text-emerald-600">
-                ({selectedRows.length})
-              </span>
-              <button
-                onClick={() => setDeleteModal({ isOpen: true, type: 'bulk' })}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm"
-              >
-                <Trash2 size={16} />
-                <span className="hidden sm:inline">{tr('Hapus', 'Delete')}</span>
-              </button>
-              <button
-                onClick={() => setSelectedRows([])}
-                className="p-1.5 text-muted-foreground hover:bg-muted rounded-md"
-              >
-                <X size={16} />
-              </button>
-            </div>
-          )}
+            {/* Aksi Terpilih (muncul di paling kanan saat checkbox dipilih & punya izin hapus) */}
+            {canDeleteTeacher && selectedRows.length > 0 && (
+              <div className="flex items-center gap-2 pl-2 border-l border-border shrink-0 animate-in fade-in zoom-in-95 duration-200">
+                <span className="hidden sm:inline-block text-sm font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/20 whitespace-nowrap">
+                  {selectedRows.length} {tr('Terpilih', 'Selected')}
+                </span>
+                <span className="sm:hidden text-sm font-bold text-emerald-600">
+                  ({selectedRows.length})
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setDeleteModal({ isOpen: true, type: 'bulk' })}
+                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm"
+                >
+                  <Trash2 size={16} />
+                  <span className="hidden sm:inline">{tr('Hapus', 'Delete')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedRows([])}
+                  title={tr('Batal Pilih', 'Clear Selection')}
+                  className="p-2 text-muted-foreground hover:bg-muted rounded-lg transition-colors"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* --- DATA TABLE --- */}
@@ -1020,14 +1080,16 @@ export function TeacherListPage() {
           <table className="w-full text-left border-collapse">
             <thead>
               <tr className="bg-muted/50 border-b border-border">
-                <th className="p-4 w-12 text-center">
-                  <input
-                    type="checkbox"
-                    checked={selectedRows.length === teachers.length && teachers.length > 0}
-                    onChange={toggleAll}
-                    className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
-                  />
-                </th>
+                {canDeleteTeacher && (
+                  <th className="p-4 w-12 text-center">
+                    <input
+                      type="checkbox"
+                      checked={selectedRows.length === teachers.length && teachers.length > 0}
+                      onChange={toggleAll}
+                      className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
+                    />
+                  </th>
+                )}
                 <th className="px-4 py-3 text-sm font-semibold text-muted-foreground w-12 text-center">
                   No
                 </th>
@@ -1067,45 +1129,57 @@ export function TeacherListPage() {
             <tbody className="divide-y divide-border bg-card">
               {isLoading ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
+                  <td
+                    colSpan={canDeleteTeacher ? 8 : 7}
+                    className="px-6 py-12 text-center text-muted-foreground"
+                  >
                     <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-2" />
                     {tr('Memuat data...', 'Loading data...')}
                   </td>
                 </tr>
               ) : isError ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-red-500">
+                  <td
+                    colSpan={canDeleteTeacher ? 8 : 7}
+                    className="px-6 py-12 text-center text-red-500"
+                  >
                     {tr('Gagal memuat data guru.', 'Failed to load teacher data.')}
                   </td>
                 </tr>
               ) : teachers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
+                  <td
+                    colSpan={canDeleteTeacher ? 8 : 7}
+                    className="px-6 py-12 text-center text-muted-foreground"
+                  >
                     {tr('Tidak ada data guru.', 'No teacher data found.')}
                   </td>
                 </tr>
               ) : (
                 teachers.map((teacher, idx) => {
-                  const statusConf = STATUS_CONFIG[teacher.status || 'HONORER'];
+                  const statusConf = STATUS_CONFIG[(teacher.status || 'HONORER').toUpperCase()];
                   return (
                     <motion.tr
                       key={teacher.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
                       className={cn(
-                        'hover:bg-muted/50 transition-colors group cursor-pointer',
+                        'hover:bg-muted/50 transition-colors group',
+                        canDeleteTeacher && 'cursor-pointer',
                         selectedRows.includes(teacher.id) && 'bg-emerald-500/5'
                       )}
-                      onClick={() => toggleRow(teacher.id)}
+                      onClick={() => canDeleteTeacher && toggleRow(teacher.id)}
                     >
-                      <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
-                        <input
-                          type="checkbox"
-                          checked={selectedRows.includes(teacher.id)}
-                          onChange={() => toggleRow(teacher.id)}
-                          className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
-                        />
-                      </td>
+                      {canDeleteTeacher && (
+                        <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
+                          <input
+                            type="checkbox"
+                            checked={selectedRows.includes(teacher.id)}
+                            onChange={() => toggleRow(teacher.id)}
+                            className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-3 text-sm text-muted-foreground text-center">
                         {(currentPage - 1) * PAGE_SIZE + idx + 1}
                       </td>
@@ -1174,22 +1248,26 @@ export function TeacherListPage() {
                           >
                             <Eye className="h-4 w-4" />
                           </Link>
-                          <Link
-                            to={`/teachers/${teacher.id}/edit`}
-                            title={tr('Edit Data', 'Edit Data')}
-                            className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Link>
-                          <button
-                            onClick={() =>
-                              setDeleteModal({ isOpen: true, type: 'single', id: teacher.id })
-                            }
-                            title={tr('Hapus Data', 'Delete Data')}
-                            className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition-colors"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </button>
+                          {canUpdateTeacher && (
+                            <Link
+                              to={`/teachers/${teacher.id}/edit`}
+                              title={tr('Edit Data', 'Edit Data')}
+                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Link>
+                          )}
+                          {canDeleteTeacher && (
+                            <button
+                              onClick={() =>
+                                setDeleteModal({ isOpen: true, type: 'single', id: teacher.id })
+                              }
+                              title={tr('Hapus Data', 'Delete Data')}
+                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition-colors"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </motion.tr>
@@ -1290,7 +1368,7 @@ export function TeacherListPage() {
 
       {/* --- SMARTDIFF IMPORT WIZARD MODAL --- */}
       <AnimatePresence>
-        {importModalOpen && (
+        {canImportTeacher && importModalOpen && (
           <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
             <div
               className="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
@@ -1518,50 +1596,52 @@ export function TeacherListPage() {
 
       {/* --- DELETE CONFIRMATION MODAL --- */}
       <AnimatePresence>
-        {deleteModal.isOpen && (deleteModal.type !== 'all' || isSuperAdmin) && (
-          <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
-              onClick={() => !isDeleteBusy && closeDeleteModal()}
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="relative bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm p-6 overflow-hidden z-10"
-            >
-              <div className="flex flex-col items-center text-center">
-                <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-4 ring-4 ring-red-50">
-                  <AlertTriangle size={28} />
+        {deleteModal.isOpen &&
+          ((deleteModal.type === 'all' && canClearAllTeachers) ||
+            (deleteModal.type !== 'all' && canDeleteTeacher)) && (
+            <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
+              <div
+                className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
+                onClick={() => !isDeleteBusy && closeDeleteModal()}
+              />
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.95, y: 10 }}
+                className="relative bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm p-6 overflow-hidden z-10"
+              >
+                <div className="flex flex-col items-center text-center">
+                  <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-4 ring-4 ring-red-50">
+                    <AlertTriangle size={28} />
+                  </div>
+                  <h3 className="text-xl font-bold text-foreground">{modalTitle}</h3>
+                  <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{modalDesc}</p>
                 </div>
-                <h3 className="text-xl font-bold text-foreground">{modalTitle}</h3>
-                <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{modalDesc}</p>
-              </div>
-              <div className="flex gap-3 mt-8">
-                <button
-                  onClick={closeDeleteModal}
-                  disabled={isDeleteBusy}
-                  className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
-                >
-                  {tr('Batal', 'Cancel')}
-                </button>
-                <button
-                  onClick={confirmDelete}
-                  disabled={isDeleteBusy}
-                  className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                >
-                  {isDeleteBusy ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" /> {tr('Memproses', 'Processing')}
-                    </>
-                  ) : (
-                    tr('Ya, Hapus', 'Yes, Delete')
-                  )}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
+                <div className="flex gap-3 mt-8">
+                  <button
+                    onClick={closeDeleteModal}
+                    disabled={isDeleteBusy}
+                    className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
+                  >
+                    {tr('Batal', 'Cancel')}
+                  </button>
+                  <button
+                    onClick={confirmDelete}
+                    disabled={isDeleteBusy}
+                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+                  >
+                    {isDeleteBusy ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" /> {tr('Memproses', 'Processing')}
+                      </>
+                    ) : (
+                      tr('Ya, Hapus', 'Yes, Delete')
+                    )}
+                  </button>
+                </div>
+              </motion.div>
+            </div>
+          )}
       </AnimatePresence>
     </div>
   );
