@@ -1290,6 +1290,9 @@ export function StudentListPage() {
         }
 
         // Pada StudentListPage.tsx di dalam fungsi executeImport():
+        // Pertahankan data bansos lama jika opsi proteksi aktif.
+        // Kembalikan `undefined` bila siswa belum memiliki catatan di `student_economics`
+        // agar fungsi RPC tidak membuat baris kosong baru.
         const existingEco = payload.id ? existingWelfareMap[payload.id] : undefined;
         const savedEco =
           preserveManualWelfare && payload.diffAction === 'updated'
