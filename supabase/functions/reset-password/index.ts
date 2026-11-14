@@ -1,167 +1,244 @@
 // @ts-nocheck
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
+/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import {
+  createClient,
+  type SupabaseClient,
+} from 'https://esm.sh/@supabase/supabase-js@2.39.0'
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json",
-};
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
 
-const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+interface CallerRow {
+  id: string
+  schoolId: string | null
+  role: string
+  isActive: boolean
+}
 
-function respond(status: number, body: Record<string, unknown>) {
+interface TargetUserRow {
+  id: string
+  schoolId: string | null
+  role: string
+  isActive: boolean
+}
+
+class HttpError extends Error {
+  status: number
+
+  constructor(message: string, status = 400) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+  }
+}
+
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: corsHeaders,
-  });
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+  })
 }
 
-function isUuid(value: unknown): value is string {
-  return typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function isValidUuid(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  )
 }
 
-async function authorize(req: Request) {
-  const authorization = req.headers.get("Authorization");
-  if (!authorization?.startsWith("Bearer ")) {
-    throw new Error("Sesi login tidak ditemukan. Silakan login kembali.");
+async function authorize(
+  req: Request,
+  supabaseAdmin: SupabaseClient,
+): Promise<CallerRow> {
+  const authorization = req.headers.get('Authorization') || ''
+  const tokenMatch = authorization.match(/^Bearer\s+(.+)$/i)
+
+  if (!tokenMatch) {
+    throw new HttpError(
+      'Sesi login tidak ditemukan. Silakan login kembali.',
+      401,
+    )
   }
 
-  const token = authorization.slice(7).trim();
   const { data: authData, error: authError } =
-    await supabaseAdmin.auth.getUser(token);
+    await supabaseAdmin.auth.getUser(tokenMatch[1].trim())
 
-  if (authError || !authData.user) {
-    throw new Error("Sesi login tidak valid atau sudah kedaluwarsa.");
+  if (authError || !authData?.user) {
+    throw new HttpError(
+      'Sesi login tidak valid atau sudah kedaluwarsa.',
+      401,
+    )
   }
 
-  const { data: caller, error } = await supabaseAdmin
-    .from("users")
+  const { data: callerData, error } = await supabaseAdmin
+    .from('users')
     .select('id, "schoolId", role, "isActive"')
-    .eq("id", authData.user.id)
-    .maybeSingle();
+    .eq('id', authData.user.id)
+    .maybeSingle()
 
-  if (error) throw new Error("Gagal memverifikasi profil pemanggil.");
-  if (!caller || !caller.isActive) {
-    throw new Error("Akun Anda tidak aktif atau profil tidak ditemukan.");
+  if (error) {
+    throw new HttpError('Gagal memverifikasi profil pemanggil.', 500)
   }
 
-  if (
-    caller.role !== "SUPER_ADMIN" &&
-    caller.role !== "ADMIN"
-  ) {
-    throw new Error("Anda tidak memiliki izin untuk mereset kata sandi.");
+  const caller = callerData as CallerRow | null
+
+  if (!caller || caller.isActive !== true) {
+    throw new HttpError('Akun Anda tidak aktif atau profil tidak ditemukan.', 403)
   }
 
-  if (caller.role === "SUPER_ADMIN" && caller.schoolId !== null) {
-    throw new Error("Konfigurasi akun SUPER_ADMIN tidak valid.");
+  if (caller.role !== 'SUPER_ADMIN' && caller.role !== 'ADMIN') {
+    throw new HttpError(
+      'Anda tidak memiliki izin untuk mereset kata sandi.',
+      403,
+    )
   }
 
-  if (caller.role === "ADMIN" && !caller.schoolId) {
-    throw new Error("Akun ADMIN belum terhubung ke sekolah.");
+  if (caller.role === 'SUPER_ADMIN' && caller.schoolId !== null) {
+    throw new HttpError('Konfigurasi akun SUPER_ADMIN tidak valid.', 403)
   }
 
-  return caller;
+  if (caller.role === 'ADMIN' && !caller.schoolId) {
+    throw new HttpError('Akun ADMIN belum terhubung ke sekolah.', 403)
+  }
+
+  return caller
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+serve(async (req: Request): Promise<Response> => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
   }
 
-  if (req.method !== "POST") {
-    return respond(405, { error: "Metode tidak diizinkan." });
+  if (req.method !== 'POST') {
+    return jsonResponse({ error: 'Metode request tidak diizinkan.' }, 405)
   }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return jsonResponse({ error: 'Konfigurasi Supabase belum lengkap.' }, 500)
+  }
+
+  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
 
   try {
-    const caller = await authorize(req);
+    const caller = await authorize(req, supabaseAdmin)
 
-    let body: Record<string, unknown>;
+    let body: Record<string, unknown>
     try {
-      body = await req.json();
+      const parsed: unknown = await req.json()
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Invalid JSON')
+      }
+      body = parsed as Record<string, unknown>
     } catch {
-      return respond(400, { error: "Body JSON tidak valid." });
+      throw new HttpError('Body JSON tidak valid.', 400)
     }
 
-    const { targetUserId, newPassword } = body;
+    const { targetUserId, newPassword } = body
 
-    if (!isUuid(targetUserId)) {
-      return respond(400, { error: "ID pengguna tidak valid." });
+    if (!isValidUuid(targetUserId)) {
+      throw new HttpError('ID pengguna tidak valid.', 400)
     }
 
     if (
-      typeof newPassword !== "string" ||
+      typeof newPassword !== 'string' ||
       newPassword.length < 8 ||
       newPassword.length > 72
     ) {
-      return respond(400, {
-        error: "Kata sandi baru harus terdiri dari 8–72 karakter.",
-      });
+      throw new HttpError(
+        'Kata sandi baru harus terdiri dari 8–72 karakter.',
+        400,
+      )
     }
 
-    const { data: target, error: targetError } = await supabaseAdmin
-      .from("users")
+    const { data: targetData, error: targetError } = await supabaseAdmin
+      .from('users')
       .select('id, "schoolId", role, "isActive"')
-      .eq("id", targetUserId)
-      .maybeSingle();
+      .eq('id', targetUserId)
+      .maybeSingle()
 
-    if (targetError) throw new Error("Gagal memeriksa akun tujuan.");
+    if (targetError) {
+      throw new HttpError('Gagal memeriksa akun tujuan.', 500)
+    }
+
+    const target = targetData as TargetUserRow | null
+
     if (!target) {
-      return respond(404, {
-        error: "Profil pengguna tidak ditemukan. Pastikan akun sudah dibuat.",
-      });
+      throw new HttpError(
+        'Profil pengguna tidak ditemukan. Pastikan akun sudah dibuat.',
+        404,
+      )
     }
 
-    if (target.role === "SUPER_ADMIN") {
-      return respond(403, {
-        error: "Kata sandi SUPER_ADMIN tidak dapat diubah melalui fungsi ini.",
-      });
+    if (target.role === 'SUPER_ADMIN') {
+      throw new HttpError(
+        'Kata sandi SUPER_ADMIN tidak dapat diubah melalui fungsi ini.',
+        403,
+      )
     }
 
-    if (caller.role === "ADMIN") {
+    if (caller.role === 'ADMIN') {
       if (target.schoolId !== caller.schoolId) {
-        return respond(403, {
-          error: "Anda hanya dapat mengelola pengguna dari sekolah sendiri.",
-        });
+        throw new HttpError(
+          'Anda hanya dapat mengelola pengguna dari sekolah sendiri.',
+          403,
+        )
       }
 
-      if (target.role === "ADMIN") {
-        return respond(403, {
-          error: "ADMIN tidak diizinkan mereset kata sandi akun ADMIN lain.",
-        });
+      if (target.role === 'ADMIN') {
+        throw new HttpError(
+          'ADMIN tidak diizinkan mereset kata sandi akun ADMIN lain.',
+          403,
+        )
       }
     }
 
     const { error: updateError } =
       await supabaseAdmin.auth.admin.updateUserById(targetUserId, {
         password: newPassword,
-      });
+      })
 
     if (updateError) {
-      console.error("Reset password failed:", updateError.message);
-      throw new Error("Gagal memperbarui kata sandi akun.");
+      console.error('Reset password failed:', updateError.message)
+      throw new HttpError('Gagal memperbarui kata sandi akun.', 500)
     }
 
-    return respond(200, {
+    // OPSIONAL: Aktifkan blok di bawah ini jika pengguna wajib mengganti sandi saat login berikutnya
+    // await supabaseAdmin
+    //   .from('users')
+    //   .update({ isFirstLogin: true, updatedAt: new Date().toISOString() })
+    //   .eq('id', targetUserId)
+
+    return jsonResponse({
       success: true,
-      message: "Kata sandi berhasil direset.",
-    });
+      message: 'Kata sandi berhasil direset.',
+    })
   } catch (error) {
-    const message = error instanceof Error
-      ? error.message
-      : "Terjadi kesalahan pada server.";
+    const status = error instanceof HttpError ? error.status : 500
+    const message =
+      error instanceof HttpError
+        ? error.message
+        : 'Terjadi kesalahan internal pada server.'
 
-    const status = /Sesi login|login kembali|tidak memiliki izin|tidak diizinkan|hanya dapat|tidak aktif|tidak valid/i
-      .test(message) ? 403 : 500;
+    if (!(error instanceof HttpError)) {
+      console.error('Kesalahan internal reset-password:', error)
+    }
 
-    return respond(status, { error: message });
+    return jsonResponse({ error: message }, status)
   }
-});
+})

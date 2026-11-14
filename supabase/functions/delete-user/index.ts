@@ -1,180 +1,262 @@
 // @ts-nocheck
-import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.0'
+/// <reference types="https://esm.sh/@supabase/functions-js/src/edge-runtime.d.ts" />
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+import { serve } from 'https://deno.land/std@0.168.0/http/server.ts'
+import {
+  createClient,
+  type SupabaseClient,
+} from 'https://esm.sh/@supabase/supabase-js@2.39.0'
 
 const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers":
-    "authorization, x-client-info, apikey, content-type",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Content-Type": "application/json",
-};
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers':
+    'authorization, x-client-info, apikey, content-type',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+}
 
-const supabaseAdmin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
+interface CallerRow {
+  id: string
+  schoolId: string | null
+  role: string
+  isActive: boolean
+}
 
-function respond(status: number, body: Record<string, unknown>) {
+interface TargetUserRow {
+  id: string
+  schoolId: string | null
+  role: string
+  email: string
+}
+
+class HttpError extends Error {
+  status: number
+
+  constructor(message: string, status = 400) {
+    super(message)
+    this.name = 'HttpError'
+    this.status = status
+  }
+}
+
+function jsonResponse(body: Record<string, unknown>, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: corsHeaders,
-  });
+    headers: {
+      ...corsHeaders,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+  })
 }
 
-function isUuid(value: unknown): value is string {
-  return typeof value === "string" &&
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+function isValidUuid(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      value,
+    )
+  )
 }
 
-async function authorize(req: Request) {
-  const header = req.headers.get("Authorization");
-  if (!header?.startsWith("Bearer ")) {
-    throw new Error("Sesi login tidak ditemukan.");
+async function authorize(
+  req: Request,
+  supabaseAdmin: SupabaseClient,
+): Promise<CallerRow> {
+  const header = req.headers.get('Authorization') || ''
+  const tokenMatch = header.match(/^Bearer\s+(.+)$/i)
+
+  if (!tokenMatch) {
+    throw new HttpError('Sesi login tidak ditemukan.', 401)
   }
 
   const { data: authData, error: authError } =
-    await supabaseAdmin.auth.getUser(header.slice(7).trim());
+    await supabaseAdmin.auth.getUser(tokenMatch[1].trim())
 
-  if (authError || !authData.user) {
-    throw new Error("Sesi login tidak valid.");
+  if (authError || !authData?.user) {
+    throw new HttpError('Sesi login tidak valid atau telah berakhir.', 401)
   }
 
-  const { data: caller, error } = await supabaseAdmin
-    .from("users")
+  const { data: callerData, error } = await supabaseAdmin
+    .from('users')
     .select('id, "schoolId", role, "isActive"')
-    .eq("id", authData.user.id)
-    .maybeSingle();
+    .eq('id', authData.user.id)
+    .maybeSingle()
 
-  if (error) throw new Error("Gagal memverifikasi profil pemanggil.");
-  if (!caller || !caller.isActive) {
-    throw new Error("Akun Anda tidak aktif atau profil tidak ditemukan.");
+  if (error) {
+    throw new HttpError('Gagal memverifikasi profil pemanggil.', 500)
   }
 
-  if (!["SUPER_ADMIN", "ADMIN"].includes(caller.role)) {
-    throw new Error("Anda tidak memiliki izin menghapus akun.");
+  const caller = callerData as CallerRow | null
+
+  if (!caller || caller.isActive !== true) {
+    throw new HttpError('Akun Anda tidak aktif atau profil tidak ditemukan.', 403)
   }
 
-  if (caller.role === "SUPER_ADMIN" && caller.schoolId !== null) {
-    throw new Error("Konfigurasi akun SUPER_ADMIN tidak valid.");
+  if (!['SUPER_ADMIN', 'ADMIN'].includes(caller.role)) {
+    throw new HttpError('Anda tidak memiliki izin menghapus akun.', 403)
   }
 
-  if (caller.role === "ADMIN" && !caller.schoolId) {
-    throw new Error("Akun ADMIN belum terhubung ke sekolah.");
+  if (caller.role === 'SUPER_ADMIN' && caller.schoolId !== null) {
+    throw new HttpError('Konfigurasi akun SUPER_ADMIN tidak valid.', 403)
   }
 
-  return caller;
+  if (caller.role === 'ADMIN' && !caller.schoolId) {
+    throw new HttpError('Akun ADMIN belum terhubung ke sekolah.', 403)
+  }
+
+  return caller
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response("ok", { headers: corsHeaders });
+serve(async (req: Request): Promise<Response> => {
+  if (req.method === 'OPTIONS') {
+    return new Response('ok', { headers: corsHeaders })
   }
 
-  if (req.method !== "POST") {
-    return respond(405, { error: "Metode tidak diizinkan." });
+  if (req.method !== 'POST') {
+    return jsonResponse({ error: 'Metode request tidak diizinkan.' }, 405)
   }
+
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    return jsonResponse({ error: 'Konfigurasi Supabase belum lengkap.' }, 500)
+  }
+
+  const supabaseAdmin = createClient(supabaseUrl, serviceRoleKey, {
+    auth: { autoRefreshToken: false, persistSession: false },
+  })
 
   try {
-    const caller = await authorize(req);
+    const caller = await authorize(req, supabaseAdmin)
 
-    let body: Record<string, unknown>;
+    let body: Record<string, unknown>
     try {
-      body = await req.json();
+      const parsed: unknown = await req.json()
+      if (!parsed || typeof parsed !== 'object') {
+        throw new Error('Invalid JSON')
+      }
+      body = parsed as Record<string, unknown>
     } catch {
-      return respond(400, { error: "Body JSON tidak valid." });
+      throw new HttpError('Body JSON tidak valid.', 400)
     }
 
-    const { targetUserId } = body;
+    const { targetUserId, schoolId } = body
 
-    if (!isUuid(targetUserId)) {
-      return respond(400, { error: "ID pengguna tidak valid." });
+    if (!isValidUuid(targetUserId)) {
+      throw new HttpError('ID pengguna tidak valid.', 400)
+    }
+
+    if (schoolId !== undefined && schoolId !== null && !isValidUuid(schoolId)) {
+      throw new HttpError('School ID tidak valid.', 400)
     }
 
     if (targetUserId === caller.id) {
-      return respond(400, {
-        error: "Anda tidak dapat menghapus akun yang sedang digunakan.",
-      });
+      throw new HttpError(
+        'Anda tidak dapat menghapus akun yang sedang digunakan.',
+        400,
+      )
     }
 
-    const { data: target, error: targetError } = await supabaseAdmin
-      .from("users")
+    const { data: targetData, error: targetError } = await supabaseAdmin
+      .from('users')
       .select('id, "schoolId", role, email')
-      .eq("id", targetUserId)
-      .maybeSingle();
+      .eq('id', targetUserId)
+      .maybeSingle()
 
-    if (targetError) throw new Error("Gagal memeriksa akun tujuan.");
+    if (targetError) {
+      throw new HttpError('Gagal memeriksa akun tujuan.', 500)
+    }
+
+    const target = targetData as TargetUserRow | null
 
     if (target) {
-      if (target.role === "SUPER_ADMIN") {
-        return respond(403, {
-          error: "Akun SUPER_ADMIN tidak dapat dihapus melalui fungsi ini.",
-        });
+      if (target.role === 'SUPER_ADMIN') {
+        throw new HttpError(
+          'Akun SUPER_ADMIN tidak dapat dihapus melalui fungsi ini.',
+          403,
+        )
       }
 
-      if (caller.role === "ADMIN") {
+      if (
+        typeof schoolId === 'string' &&
+        target.schoolId &&
+        target.schoolId !== schoolId
+      ) {
+        throw new HttpError(
+          'Akun tujuan tidak berada pada satuan pendidikan yang sedang aktif.',
+          403,
+        )
+      }
+
+      if (caller.role === 'ADMIN') {
         if (target.schoolId !== caller.schoolId) {
-          return respond(403, {
-            error: "Anda hanya dapat menghapus akun dari sekolah sendiri.",
-          });
+          throw new HttpError(
+            'Anda hanya dapat menghapus akun dari sekolah sendiri.',
+            403,
+          )
         }
 
-        if (target.role === "ADMIN") {
-          return respond(403, {
-            error: "ADMIN tidak diizinkan menghapus akun ADMIN lain.",
-          });
+        if (target.role === 'ADMIN') {
+          throw new HttpError(
+            'ADMIN tidak diizinkan menghapus akun ADMIN lain.',
+            403,
+          )
         }
       }
     }
 
-    // Hapus Auth terlebih dahulu; foreign key akan menghapus profil terkait.
+    // Hapus akun dari Supabase Auth; relasi ON DELETE CASCADE akan membersihkan profil & tautan
     const { error: authDeleteError } =
-      await supabaseAdmin.auth.admin.deleteUser(targetUserId);
+      await supabaseAdmin.auth.admin.deleteUser(targetUserId)
 
     if (authDeleteError) {
-      // Jangan menghapus profil secara membabi buta jika Auth masih ada.
-      // Jika Auth memang tidak ada, coba bersihkan profil yatim di bawah.
       const { data: authLookup, error: lookupError } =
-        await supabaseAdmin.auth.admin.getUserById(targetUserId);
+        await supabaseAdmin.auth.admin.getUserById(targetUserId)
 
-      if (lookupError || authLookup.user) {
-        console.error("Auth delete failed:", authDeleteError.message);
-        return respond(500, {
-          error: "Gagal menghapus akun Auth. Profil tidak dihapus.",
-        });
+      if (lookupError || authLookup?.user) {
+        console.error('Auth delete failed:', authDeleteError.message)
+        throw new HttpError(
+          'Gagal menghapus akun Auth. Profil tidak dihapus.',
+          500,
+        )
       }
 
-      // Auth tidak ditemukan. Jika profil masih ada, bersihkan profil yatim.
+      // Jika akun Auth memang sudah tidak ada, bersihkan profil yatim di public.users
       if (target) {
         const { error: profileDeleteError } = await supabaseAdmin
-          .from("users")
+          .from('users')
           .delete()
-          .eq("id", targetUserId);
+          .eq('id', targetUserId)
 
         if (profileDeleteError) {
-          console.error("Orphan profile cleanup failed:", profileDeleteError.message);
-          return respond(500, {
-            error: "Akun Auth tidak ditemukan, tetapi profil gagal dibersihkan.",
-          });
+          console.error(
+            'Orphan profile cleanup failed:',
+            profileDeleteError.message,
+          )
+          throw new HttpError(
+            'Akun Auth tidak ditemukan, tetapi profil gagal dibersihkan.',
+            500,
+          )
         }
       }
     }
 
-    return respond(200, {
+    return jsonResponse({
       success: true,
-      message: "Penghapusan akun selesai.",
+      message: 'Penghapusan akun selesai.',
       targetUserId,
-    });
+    })
   } catch (error) {
-    const message = error instanceof Error
-      ? error.message
-      : "Terjadi kesalahan pada server.";
+    const status = error instanceof HttpError ? error.status : 500
+    const message =
+      error instanceof HttpError
+        ? error.message
+        : 'Terjadi kesalahan internal pada server.'
 
-    const status = /Sesi login|tidak memiliki izin|tidak diizinkan|hanya dapat|tidak aktif|tidak valid|belum terhubung/i
-      .test(message) ? 403 : 500;
+    if (!(error instanceof HttpError)) {
+      console.error('Kesalahan internal delete-user:', error)
+    }
 
-    return respond(status, { error: message });
+    return jsonResponse({ error: message }, status)
   }
-});
+})
