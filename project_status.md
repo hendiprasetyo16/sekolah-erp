@@ -2,125 +2,90 @@
 
 ## Ringkasan
 
-Aplikasi **SekolahERP** saat ini berada di **Phase 1 (MVP)** — dan sudah **hampir selesai** untuk fase ini. Fondasi utama sudah terbangun dengan baik di sisi frontend maupun backend.
+Aplikasi **SekolahERP** menggunakan arsitektur *serverless* **React 19 + Vite + TypeScript** di sisi frontend dan **Supabase Cloud (PostgreSQL + Auth + Hardened RLS)** di sisi backend. 
+
+* **Fondasi Database (`supabase_schema.sql` v13.1):** Selesai penuh (**26 tabel**, *triggers*, RPC, dan *Hardened Row Level Security*).
+* **Aplikasi Frontend (UI & Integrasi):** Selesai bertahap hingga modul **Manajemen Guru**. Modul **Absensi** dan modul operasional lainnya masih dalam daftar pengerjaan berikutnya.
 
 ---
 
-## ✅ Yang Sudah Selesai (Phase 1 MVP)
+## ✅ Yang Sudah Selesai (Frontend + Database Terhubung)
 
-### Frontend (React + Vite + TypeScript)
+### Frontend (React 19 + Vite + TypeScript)
 
-| Komponen | Status | File Utama |
-|----------|--------|------------|
-| **Login Page** | ✅ Selesai | [LoginPage.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/modules/auth/pages/LoginPage.tsx) (12.6 KB) |
-| **Admin Dashboard** | ✅ Selesai | [AdminDashboard.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/modules/dashboard/pages/AdminDashboard.tsx) (20.7 KB) |
-| **Manajemen Siswa** | ✅ Selesai | List, Detail, Form (3 halaman) |
-| **Sidebar & Header** | ✅ Selesai | [Sidebar.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/components/layouts/Sidebar.tsx), [Header.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/components/layouts/Header.tsx) |
-| **UI Component Library** | ✅ Selesai | 8 komponen (Button, Card, Badge, Form, Input, Label, Select, Tabs) |
-| **Auth Store (Zustand)** | ✅ Selesai | State management untuk autentikasi |
-| **Dark/Light Theme** | ✅ Selesai | Toggle tersedia di header |
-| **Bilingual (ID/EN)** | ✅ Selesai | [translations.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/constants/translations.ts) (10.9 KB) |
-| **RBAC Permissions** | ✅ Selesai | [permission.types.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/types/permission.types.ts), [usePermission.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/hooks/usePermission.ts) |
-| **Protected Routes** | ✅ Selesai | Route guards di [index.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/routes/index.tsx) |
-| **Mock Data** | ✅ Selesai | [mock-data.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/constants/mock-data.ts) (9.2 KB) |
-| **API Client** | ✅ Selesai | [api.client.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/services/api.client.ts) (Axios + interceptors) |
+| Komponen / Modul | Status | Keterangan |
+| :--- | :---: | :--- |
+| **Login Page** | ✅ Selesai | Autentikasi terhubung dengan Supabase Auth (mendukung Email / NUPTK / NIP / NIK / NISN / NIS via RPC). |
+| **Admin Dashboard** | ✅ Selesai | Halaman utama setelah login. |
+| **Data Master Akademik** | ✅ Selesai | Manajemen Profil Sekolah, Tahun Ajaran, Semester, Kelas, dan Mata Pelajaran. |
+| **Manajemen Siswa** | ✅ Selesai | List, Detail, Form CRUD (termasuk data Orang Tua, Kesejahteraan/PIP/Desil, dan Impor Excel). |
+| **Manajemen Guru** | ✅ Selesai | List, Detail, Form CRUD lengkap data PTK. |
+| **Sidebar & Header** | ✅ Selesai | Navigasi responsif dengan *toggle* tema Gelap/Terang dan dwibahasa (ID/EN). |
+| **UI Component Library** | ✅ Selesai | Komponen dasar (Button, Card, Badge, Form, Input, Label, Select, Tabs, dll.). |
+| **Auth Store & Route Guards** | ✅ Selesai | Manajemen sesi Zustand dan proteksi rute dasar (`role` utama). |
 
-### Backend (NestJS + Prisma + SQLite)
+### Database & Keamanan Backend (Supabase PostgreSQL v13.1)
 
 | Komponen | Status | Detail |
-|----------|--------|--------|
-| **Database Schema** | ✅ Selesai | [schema.prisma](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/server/prisma/schema.prisma) — 11 model (311 baris) |
-| **Auth Module** | ✅ Selesai | Controller, Service, Guards, Strategies, Decorators |
-| **Students Module** | ✅ Selesai | Controller, Service (CRUD) |
-| **Teachers Module** | ✅ Selesai | Controller, Service (CRUD) |
-| **Prisma Service** | ✅ Selesai | Database connection layer |
-| **Seed Data** | ✅ Selesai | [seed.ts](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/server/prisma/seed.ts) |
-| **Vercel Config** | ✅ Selesai | [vercel.json](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/vercel.json) |
-
-### Database Models (Prisma)
-
-```
-School, AcademicYear, Semester, User, RefreshToken, AuditLog,
-Student, StudentParent, StudentEconomic, Attendance,
-Teacher, Class, Announcement
-```
+| :--- | :---: | :--- |
+| **Skema Database (`supabase_schema.sql`)** | ✅ Selesai | **26 tabel** terrelasi lintas tenant dengan *composite foreign key* berbasis `schoolId`. |
+| **Hardened RLS Policies** | ✅ Selesai | Isolasi ketat antar sekolah dan pembatasan akses akun `ORANG_TUA` & `SISWA`. |
+| **Database Triggers & RPC** | ✅ Selesai | Otomasi stok sarpras, stok buku perpus, kalkulasi tagihan & anti-*overpayment*, sinkronisasi tahun ajaran/semester, dan *bulk import*. |
+| **Fondasi Multi-Role (SQL)** | ✅ Selesai | Kolom `additionalRoles`, pemetaan otomatis dari `tugasTambahan` PTK, dan fungsi `get_user_all_roles()`. |
 
 ---
 
-## 🔨 Dalam Pengembangan Awal (Parsial)
+## 🔨 Sedang / Perlu Diselesaikan Berikutnya (Integrasi Frontend)
 
-| Komponen | Status | Keterangan |
-|----------|--------|------------|
-| **Data Guru (Frontend)** | 🔨 Parsial | [TeacherListPage.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/modules/teachers/pages/TeacherListPage.tsx) ada tapi routing masih ke placeholder |
+| Pekerjaan | Status | Keterangan |
+| :--- | :---: | :--- |
+| **Integrasi Multi-Role di Frontend** | 🔨 Belum di UI | Skema SQL sudah siap, namun `authStore`, `usePermission`, `Sidebar`, dan form manajemen user masih perlu dihubungkan ke `additionalRoles` / `get_user_all_roles()`. |
 
 ---
 
-## 🚧 Belum Dimulai (Phase 2-4) — Masih Placeholder
+## 🚧 Belum Dimulai di Frontend (Tabel SQL Sudah Siap, UI Masih Placeholder)
 
-Semua modul berikut masih berupa **halaman placeholder** di [placeholder-pages.tsx](file:///c:/Users/Administrator/.gemini/antigravity/scratch/sekolah-erp/src/routes/placeholder-pages.tsx):
+Seluruh modul di bawah ini sudah memiliki tabel, *trigger*, dan kebijakan RLS di `supabase_schema.sql`, namun halaman frontend-nya **belum dibuat**:
 
 | Modul | Route | Fase Rencana |
-|-------|-------|-------------|
-| **Guru (full)** | `/teachers/*` | Phase 2 |
-| **Keuangan** | `/finance/*` | Phase 2-3 |
+| :--- | :--- | :--- |
 | **Jadwal Pelajaran** | `/schedules/*` | Phase 2 |
-| **Inventaris** | `/inventory/*` | Phase 3 |
-| **Administrasi** | `/admin/*` | Phase 3 |
-| **Beasiswa/PIP** | `/scholarships/*` | Phase 3-4 |
-| **Laporan** | `/reports/*` | Phase 3-4 |
-| **Pengaturan** | `/settings/*` | Phase 4 |
+| **Absensi (Siswa & GPS Guru)** | `/attendance/*` | Phase 2 |
+| **Keuangan & Kasir SPP** | `/finance/*` | Phase 2–3 |
+| **Inventaris & Sarpras** | `/inventory/*` | Phase 3 |
+| **Perpustakaan** | `/library/*` | Phase 3 |
+| **Administrasi TU** | `/admin/*` | Phase 3 |
+| **Beasiswa / PIP** | `/scholarships/*` | Phase 3–4 |
+| **Laporan** | `/reports/*` | Phase 3–4 |
+| **Pengaturan & Manajemen Akun** | `/settings/*` | Phase 4 |
 
 ---
 
-## 📐 Arsitektur & Infrastruktur
+## 📐 Arsitektur Sistem
 
 ```mermaid
 graph TB
-    subgraph Frontend["Frontend (React + Vite)"]
-        LP[Login Page]
-        DB[Dashboard]
-        SM[Student Module]
-        TM[Teacher Module - partial]
-        PH[6x Placeholder Modules]
+    subgraph Frontend["Frontend (React 19 + Vite + TypeScript)"]
+        DONE[Selesai: Login, Dashboard, Master Akademik, Siswa, Guru]
+        TODO[Belum UI: Multi-Role Hook, Jadwal, Absensi, Keuangan, Sarpras, Perpus, TU, Laporan]
     end
 
-    subgraph Backend["Backend (NestJS)"]
-        AUTH[Auth Module<br/>JWT + Guards]
-        STUD[Students API<br/>CRUD]
-        TEACH[Teachers API<br/>CRUD]
+    subgraph Supabase["Supabase Cloud (PostgreSQL v13.1)"]
+        AUTH[Supabase Auth]
+        RPC[Security Definer RPCs & Triggers]
+        RLS[Hardened RLS Multi-Tenant & Multi-Role]
+        DB[(26 Tables Ready)]
     end
 
-    subgraph Database["Database (SQLite + Prisma)"]
-        SCHEMA[13 Models<br/>311 lines schema]
-        SEED[Seed Data]
-    end
+    DONE --> AUTH
+    DONE --> RPC
+    DONE --> RLS
+    TODO -.-> RLS
+    AUTH --> DB
+    RPC --> DB
+    RLS --> DB
 
-    Frontend --> Backend
-    Backend --> Database
-```
-
----
-
-## 📝 Kesimpulan
-
-| Aspek | Penilaian |
-|-------|-----------|
-| **Fase saat ini** | **Phase 1 MVP — ~90% selesai** |
-| **Frontend** | Kuat — 6 halaman fungsional + 8 halaman placeholder |
-| **Backend** | Fondasi solid — 3 modul API (Auth, Students, Teachers) |
-| **Database** | Lengkap untuk Phase 1 — 13 model terstruktur |
-| **UI/UX** | Premium — tema gelap/terang, animasi, responsive |
-| **Yang kurang untuk Phase 1** | Integrasi penuh frontend ↔ backend (beberapa page mungkin masih pakai mock data) |
-
-> [!TIP]
-> Langkah berikutnya yang disarankan:
-> 1. **Selesaikan modul Guru** — halaman sudah ada tapi belum di-route
-> 2. **Integrasi frontend ↔ backend** — pastikan semua CRUD terhubung ke API
-> 3. **Mulai Phase 2** — Keuangan dan Jadwal Pelajaran
-
-Status Pengembangan SekolahERP (Telah Diperbarui)✅ Yang Sudah Selesai (Phase 1 MVP)Frontend (React + Vite + TypeScript)KomponenStatusKeteranganLogin Page✅ SelesaiAutentikasi terhubung dengan SupabaseAdmin Dashboard✅ SelesaiHalaman utama setelah loginData Master Akademik✅ SelesaiManajemen Tahun Ajaran, Kelas, Semester, MapelManajemen Siswa✅ SelesaiList, Detail, Form (Termasuk data Ortu & Kesejahteraan)Manajemen Guru✅ SelesaiList, Detail, Form (CRUD lengkap)Sidebar & Header✅ SelesaiNavigasi responsifUI Component Library✅ Selesai8 komponen (Button, Card, Badge, Form, Input, Label, Select, Tabs)Auth Store (Zustand)✅ SelesaiState management untuk autentikasiDark/Light Theme✅ SelesaiToggle tersedia di headerBilingual (ID/EN)✅ SelesaiImplementasi translasi manualRBAC Permissions✅ SelesaiManajemen hak akses penggunaProtected Routes✅ SelesaiRoute guards navigasiBackend (NestJS + Prisma + SQLite)KomponenStatusDetailDatabase Schema✅ Selesai13 model yang saling terelasiAuth Module✅ SelesaiController, Service, Guards, StrategiesStudents Module✅ SelesaiController, Service (CRUD)Teachers Module✅ SelesaiController, Service (CRUD)Prisma Service✅ SelesaiDatabase connection layer🚧 Belum Dimulai (Phase 2-4)ModulRouteFase RencanaJadwal Pelajaran/schedules/*Phase 2Absensi/attendance/*Phase 2Keuangan/finance/*Phase 2-3Inventaris/inventory/*Phase 3Administrasi/admin/*Phase 3Beasiswa/PIP/scholarships/*Phase 3-4Laporan/reports/*Phase 3-4Pengaturan/settings/*Phase 4
-
-Cara Memperbarui dan Menghasilkan File APK
+📱 Cara Memperbarui dan Menghasilkan File APK
 Setiap kali kamu selesai mengubah kode React di VS Code, kamu hanya perlu menjalankan rangkaian perintah ini untuk memperbarui dan membuat file APK-nya:
 
 Bash
@@ -132,10 +97,11 @@ npx cap sync
 
 # 3. Buka project-mu di Android Studio untuk build APK
 npx cap open android
+
 Ketika Android Studio terbuka secara otomatis:
 
 Hubungkan HP-mu dengan kabel USB (atau gunakan Emulator).
 
 Di Android Studio, klik menu Build > Build Bundle(s) / APK(s) > Build APK(s).
 
-Android Studio akan bekerja membuat file app-debug.apk yang bisa langsung kamu install dan bagikan!
+Android Studio akan bekerja membuat file app-debug.apk yang bisa langsung kamu install dan diuji di perangkat.

@@ -1,123 +1,86 @@
 # SekolahERP - Sistem Manajemen Sekolah Indonesia 🎓
 
-Sistem ERP dan Manajemen Sekolah Indonesia modern, multi-tenant, dan siap produksi untuk jenjang **SD, SMP, SMA, dan SMK**. Aplikasi terhubung langsung secara real-time ke **Supabase (PostgreSQL + Auth + Row Level Security)** tanpa ketergantungan data dummy/mock.
+Sistem ERP dan Manajemen Sekolah Indonesia *multi-tenant* untuk jenjang **TK, SD, SMP, SMA, dan SMK**. Aplikasi terhubung langsung secara *real-time* ke **Supabase (PostgreSQL + Auth + Hardened Row Level Security)** tanpa ketergantungan data *dummy*/*mock*.
 
 ---
 
-## 🌟 Fitur Utama
+## 🌟 Status & Cakupan Fitur
 
-- 🏫 **Multi-Tenant Architecture**: Isolasi data per sekolah menggunakan Row Level Security (RLS) PostgreSQL & Supabase Auth.
-- 👥 **Manajemen Siswa Lengkap**: Profil komprehensif, riwayat kelas, data orang tua/wali, data fisik Dapodik, dan data ekonomi/kesejahteraan.
-- 🎯 **Integrasi PIP & Desil (DTKS / P3KE Terbaru)**:
-  - Penandaan penerima KIP, status usulan layak PIP, dan kategori **Desil 1 s/d 10**.
-  - **Prioritas PIP Otomatis**: Desil 1 (Sangat Miskin), Desil 2 (Miskin), Desil 3 (Hampir Miskin), dan Desil 4 (Rentan Miskin).
-  - Tampilan visual badge prioritas pada detail siswa, form entri, dashboard, serta parser import Excel.
-- 📊 **Import & Export Data Siswa Massal**: Dukungan format Excel / CSV standar Dapodik Kemendikbudristek.
-- 👨‍🏫 **Manajemen Pendidik & Tenaga Kependidikan**: Data NIP, NUPTK, status kepegawaian (PNS, CPNS, GTY, GTT, Honorer), sertifikasi, gaji pokok, dan beban jam mengajar.
-- 💳 **Modul Keuangan Real-Time (Direct Supabase)**:
-  - Tarif pembayaran / SPP (`fee_templates`)
-  - Tagihan siswa (`student_bills`) dengan status `BELUM_BAYAR`, `CICILAN`, `LUNAS`, `DIBATALKAN`
-  - Transaksi pembayaran kasir / transfer (`payment_transactions`)
-  - Kalkulasi saldo kas, tunggakan tagihan, dan grafik arus kas dinamis tanpa data dummy
-- 🔐 **Autentikasi & Otorisasi Bertingkat**:
-  - Role: `SUPER_ADMIN`, `ADMIN`, `KEPALA_SEKOLAH`, `OPERATOR`, `BENDAHARA`, `WALI_KELAS`, `GURU`, `STAFF_TU`, `STAFF_SARPRAS`, `ORANG_TUA`, `SISWA`
-  - Proteksi pergantian password pertama kali login (`isFirstLogin`)
-  - Audit logging keamanan sistem (`audit_logs`)
+### ✅ Sudah Berjalan di Aplikasi (Frontend + Supabase)
+- 🏫 **Multi-Tenant Architecture**: Isolasi data per sekolah menggunakan *Row Level Security* (RLS) PostgreSQL & Supabase Auth.
+- 🔐 **Autentikasi Fleksibel**: Login menggunakan Email maupun NUPTK, NIP, NIK, NISN, atau NIS (`resolve_user_email`) serta proteksi ganti password saat login pertama (`isFirstLogin`).
+- 📚 **Data Master Akademik**: Pengelolaan profil sekolah, tahun ajaran, semester, rombongan belajar/kelas, dan mata pelajaran.
+- 👥 **Manajemen Siswa Lengkap**: Profil komprehensif, riwayat kelas, data orang tua/wali, atribut fisik Dapodik, dan klasifikasi ekonomi/kesejahteraan (**KIP, KKS, PKH, DTKS, dan Desil 1–10** beserta prioritas PIP otomatis).
+- 📊 **Import & Export Massal Dapodik**: Dukungan unggah Excel/CSV standar Dapodik untuk data siswa dan PTK.
+- 👨‍🏫 **Manajemen Pendidik & Tenaga Kependidikan (PTK)**: CRUD lengkap data NIP, NUPTK, NIK, status kepegawaian, sertifikasi, dan atribut Dapodik PTK.
+
+### 🛠️ Siap di Skema Database (Tahap Integrasi UI Berikutnya)
+- 🎭 **Multi-Role & Tugas Tambahan**: Skema database sudah mendukung peran ganda (`additionalRoles`) dan pemetaan otomatis dari `tugasTambahan` PTK; integrasi antarmuka (UI) sedang disiapkan.
+- 📅 **Jadwal Pelajaran & Presensi**: Tabel jadwal mengajar, presensi harian siswa, serta presensi GPS & selfie guru/tendik.
+- 💳 **Keuangan & Kasir SPP**: Template tarif (`fee_templates`), tagihan siswa (`student_bills`), dan pembayaran cicilan/lunas dengan proteksi *anti-overpayment* di level database.
+- 📦 **Sarpras, Perpustakaan & Administrasi TU**: Manajemen aset inventaris, sirkulasi peminjaman buku perpustakaan, arsip surat TU, dan pencatatan beasiswa.
 
 ---
 
 ## 🚀 Tech Stack
 
-### Frontend
+### Frontend & Mobile
 - **React 19** + **Vite** + **TypeScript**
-- **TailwindCSS v4** — Modern styling & sleek dark mode
-- **Zustand** — Client state management
-- **TanStack Query (React Query)** — Data fetching, caching & real-time sync
-- **React Hook Form + Zod** — Type-safe validation
-- **Framer Motion** — Smooth micro-animations
-- **Recharts** — Dynamic analytics & reporting charts
-- **Lucide React** — Modern iconography
-- **Sonner** — Interactive toast notifications
-- **XLSX** — Excel parser & generator
+- **TailwindCSS v4** — Styling modern & *dark/light mode*
+- **Zustand** — Manajemen *state* autentikasi
+- **TanStack Query (React Query)** — *Data fetching*, *caching* per `schoolId`, dan sinkronisasi *real-time*
+- **React Hook Form + Zod** — Validasi formulir *type-safe*
+- **Framer Motion**, **Lucide React**, **Recharts**, **Sonner**, **XLSX**
+- **Capacitor** — Build aplikasi mobile Android (APK)
 
 ### Database & Backend
-- **Supabase Cloud**
-- **PostgreSQL 15+**
-- **Supabase Auth** — Identity & session management
-- **Row Level Security (RLS)** — Multi-tenant tenant-level isolation
-- **PostgreSQL Triggers & Functions** — Otomasi kalkulasi status tagihan, sinkronisasi stok sarpras, dan `updatedAt`.
+- **Supabase Cloud** (PostgreSQL 15+ & Supabase Auth)
+- **Hardened Row Level Security (RLS)** — Isolasi multi-tenant dan kontrol akses berbasis peran
+- **PostgreSQL Triggers & Security Definer RPCs** — Otomasi validasi keuangan, stok sarpras, stok perpustakaan, sinkronisasi semester, dan *bulk import*.
 
 ---
 
-## 🗄️ Skema Database Supabase (24 Tabel)
+## 🗄️ Skema Database Supabase (26 Tabel — v13.1)
 
-Struktur tabel di bawah ini telah disinkronkan 100% antara file SQL repositori (`supabase_schema.sql` dan `supabase_setup.sql`) dengan database Supabase aktif:
+Seluruh definisi tabel, *trigger*, fungsi RPC, dan kebijakan RLS tersimpan dalam satu file skema utama [`supabase_schema.sql`](supabase_schema.sql):
 
 | No | Nama Tabel | Deskripsi |
-|---|---|---|
-| 1 | `schools` | Identitas sekolah tenant (NPSN, alamat, kontak, logo, settings). |
-| 2 | `academic_years` | Tahun ajaran sekolah (misal: 2026/2027) dan status aktif. |
-| 3 | `semesters` | Semester (Ganjil / Genap) per tahun ajaran. |
-| 4 | `users` | Profil otorisasi pengguna aplikasi terhubung ke `auth.users`. |
-| 5 | `refresh_tokens` | Manajemen token sesi pengguna. |
-| 6 | `teachers` | Data guru dan tenaga kependidikan (NIP, NUPTK, pendidikan, sertifikasi, dll). |
-| 7 | `classes` | Rombongan belajar / kelas per tahun ajaran dan wali kelas. |
-| 8 | `students` | Master data siswa (NIS, NISN, NIK, identitas fisik Dapodik, rekening bantuan). |
-| 9 | `student_class_history` | Riwayat penempatan kelas siswa per tahun ajaran. |
-| 10 | `student_parents` | Data orang tua / wali siswa (NIK, pekerjaan, penghasilan). |
-| 11 | `student_economics` | **Data PIP, KIP, DTKS, PKH, KKS, dan Desil (1-10)**. |
-| 12 | `attendances` | Presensi harian siswa (Hadir, Sakit, Izin, Alpa). |
-| 13 | `announcements` | Papan pengumuman internal sekolah. |
-| 14 | `subjects` | Master mata pelajaran sekolah. |
-| 15 | `schedule_entries` | Jadwal pelajaran per kelas, hari, jam, guru, dan ruangan. |
-| 16 | `inventory_items` | Master aset & barang inventaris sarana prasarana. |
-| 17 | `inventory_transactions`| Mutasi barang masuk, keluar, dan penyesuaian stok. |
-| 18 | `administration_records`| Arsip surat masuk, surat keluar, dan administrasi sekolah. |
-| 19 | `scholarship_records` | Pencatatan beasiswa internal/eksternal non-PIP. |
-| 20 | `fee_templates` | Pengaturan tarif iuran sekolah (SPP, DSP, gedung, seragam). |
-| 21 | `student_bills` | Tagihan pembayaran siswa per periode bulan/tahun. |
-| 22 | `payment_transactions` | Rekaman mutasi transaksi pembayaran tagihan. |
-| 23 | `user_student_links` | Relasi akun wali murid/siswa dengan data siswa. |
-| 24 | `audit_logs` | Catatan audit aktivitas keamanan dan perubahan data. |
+| :---: | :--- | :--- |
+| 1 | `schools` | Identitas sekolah tenant (NPSN, jenjang, status, alamat, koordinat GPS & radius absensi). |
+| 2 | `academic_years` | Tahun ajaran sekolah dan status aktif (maksimal 1 aktif per sekolah). |
+| 3 | `semesters` | Semester (`GANJIL` / `GENAP`) per tahun ajaran. |
+| 4 | `users` | Profil otorisasi pengguna terhubung ke `auth.users` (`role` utama & `additionalRoles`). |
+| 5 | `refresh_tokens` | Tabel sesi *legacy* (dikunci *default deny* dari klien). |
+| 6 | `audit_logs` | Catatan audit aktivitas sistem yang bersifat *immutable*. |
+| 7 | `teachers` | Data guru dan tenaga kependidikan standar Dapodik PTK. |
+| 8 | `classes` | Rombongan belajar / kelas per tahun ajaran dan wali kelas. |
+| 9 | `students` | Master data siswa (NIS, NISN, NIK, identitas fisik Dapodik, rekening bantuan). |
+| 10 | `student_class_history` | Riwayat penempatan kelas siswa per tahun ajaran. |
+| 11 | `user_student_links` | Relasi akun wali murid/siswa dengan data siswa. |
+| 12 | `student_parents` | Data orang tua / wali siswa (NIK, pendidikan, pekerjaan, penghasilan). |
+| 13 | `student_economics` | Data PIP, KIP, KKS, PKH, DTKS, kondisi rumah, dan **Desil (1–10)**. |
+| 14 | `attendances` | Presensi harian siswa serta presensi GPS & selfie guru/tendik. |
+| 15 | `subjects` | Master mata pelajaran sekolah. |
+| 16 | `schedule_entries` | Jadwal pelajaran per kelas, hari, jam, guru, dan ruangan. |
+| 17 | `announcements` | Papan pengumuman internal sekolah. |
+| 18 | `inventory_items` | Master aset & barang inventaris sarana prasarana. |
+| 19 | `inventory_transactions` | Mutasi barang masuk, keluar, dan penyesuaian stok otomatis. |
+| 20 | `administration_records` | Arsip surat masuk, surat keluar, dan administrasi TU. |
+| 21 | `scholarship_records` | Pencatatan beasiswa internal/eksternal non-PIP. |
+| 22 | `fee_templates` | Pengaturan tarif iuran sekolah (SPP, daftar ulang, kegiatan, dll.). |
+| 23 | `student_bills` | Tagihan pembayaran siswa per periode bulan/tahun. |
+| 24 | `payment_transactions` | Mutasi transaksi pembayaran tagihan dengan validasi anti-*overpayment*. |
+| 25 | `library_books` | Katalog koleksi buku perpustakaan dan stok eksemplar tersedia. |
+| 26 | `library_loans` | Sirkulasi peminjaman dan pengembalian buku siswa maupun guru. |
 
 ---
 
-## ⚡ Skrip SQL & Migrasi Desil PIP
+## ⚡ Setup Database di Supabase
 
-### Menjalankan Database Baru di Supabase
-1. Buka [Supabase Dashboard](https://supabase.com/dashboard) ➜ Masuk ke proyek Anda.
+1. Buka [Supabase Dashboard](https://supabase.com/dashboard) dan masuk ke proyek Anda.
 2. Buka menu **SQL Editor**.
-3. Buka file [`supabase_schema.sql`](supabase_schema.sql) dari repositori ini, salin seluruh kodenya, lalu klik **Run**.
-
-### Menambahkan Kolom Desil pada Database yang Sudah Berjalan
-Jika tabel `student_economics` sudah ada di database Supabase Anda, jalankan potongan query berikut di **SQL Editor**:
-
-```sql
--- Tambahkan kolom desil pada tabel student_economics
-ALTER TABLE public.student_economics 
-ADD COLUMN IF NOT EXISTS "desil" INTEGER;
-
--- Tambahkan constraint nilai desil 1 sampai 10
-ALTER TABLE public.student_economics 
-DROP CONSTRAINT IF EXISTS student_economics_desil_check;
-
-ALTER TABLE public.student_economics 
-ADD CONSTRAINT student_economics_desil_check 
-CHECK ("desil" IS NULL OR ("desil" >= 1 AND "desil" <= 10));
-
--- Perbarui fungsi import massal jika diperlukan
-COMMENT ON COLUMN public.student_economics."desil" IS 'Desil DTKS/P3KE (1-4 prioritas PIP, 5-10 non-prioritas)';
-```
-
----
-
-## 🚫 Bebas Data Dummy (Zero Mock Data)
-
-Aplikasi telah dikonfigurasi untuk terhubung **100% langsung ke Supabase**:
-1. File seed data dummy statis (`supabase_seed_data.sql`, `seed_finance.ts`, `mock-data.ts`) telah **dihapus**.
-2. Nilai `VITE_ENABLE_MOCK=false` pada environment aplikasi.
-3. Dashboard Keuangan dan Dashboard Utama membaca langsung data riil dari tabel `payment_transactions`, `student_bills`, `student_economics`, dan `students`.
-4. Jika database kosong, sistem akan menampilkan indikator visual yang bersih dan rapi (*empty state* informatif).
+3. Salin seluruh kode dari file [`supabase_schema.sql`](supabase_schema.sql), tempelkan ke editor, lalu klik **Run**.
+4. Buat akun `SUPER_ADMIN` atau `ADMIN` awal pada menu **Authentication > Users**, lalu sisipkan profilnya ke tabel `public.users` secara terpisah melalui SQL Editor (jangan menyimpan email/kredensial asli di repositori).
 
 ---
 

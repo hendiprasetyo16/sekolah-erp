@@ -1,71 +1,51 @@
-Rencana Implementasi: Sistem Informasi Sekolah (Multi-Tenant) & Modul Keuangan
-🎯 Tujuan Utama
-Arsitektur Multi-Tenant (Berbasis schoolId): Memastikan seluruh sistem dari Master Data hingga Pembayaran terisolasi dengan aman per institusi menggunakan Supabase. Tidak ada data sekolah yang bercampur.
+# 🗺️ Rencana Implementasi: Sistem Informasi Sekolah (Multi-Tenant)
 
-Penyempurnaan Bertahap (Iterative): Membangun aplikasi secara modular mulai dari Master Data -> Siswa -> Keuangan, memastikan satu modul 100% bug-free dan terelasi kuat sebelum melangkah ke modul berikutnya.
+## 🎯 Tujuan & Standar Arsitektur
 
-Modul Keuangan Dinamis: Mengelola tagihan dan pembayaran (cicilan/lunas) berdasarkan dokumen rincian biaya, namun didesain fleksibel untuk berbagai jenjang sekolah (TK, SD, SMP, SMA, SMK).
+1. **Arsitektur Multi-Tenant (Berbasis `schoolId`)**: Memastikan seluruh data dari Master Akademik hingga Transaksi Operasional terisolasi aman per sekolah menggunakan Supabase RLS dan *composite foreign key*.
+2. **Penyempurnaan Bertahap (Iterative)**: Menyelesaikan modul satu per satu hingga stabil dan bebas *bug* sebelum melangkah ke modul berikutnya.
+3. **Fleksibilitas Multi-Jenjang & Multi-Role**: Mendukung seluruh jenjang sekolah (**TK, SD, SMP, SMA, SMK**) serta rangkap tugas guru/tendik (`additionalRoles` & `tugasTambahan`).
 
-[!WARNING]
-Standar Arsitektur Database (Wajib)
+> [!WARNING]
+> **Standar Wajib Pengembangan Frontend:**
+> * Setiap query Supabase pada tabel operasional wajib menyertakan filter `schoolId` aktif.
+> * Seluruh *Query Keys* pada TanStack Query wajib menyertakan `schoolId` (contoh: `['teachers', schoolId]`) agar *cache* tidak bocor saat perpindahan akun/sekolah.
 
-Setiap tabel utama (Tahun Ajaran, Kelas, Guru, Siswa, Tagihan) wajib memiliki schoolId.
+---
 
-Frontend Cache menggunakan React Query wajib menyertakan schoolId pada Query Keys (contoh: ['classes', schoolId]).
+## 🛠️ Roadmap & Status Eksekusi
 
-Operasi Select, Insert, Update, dan Delete harus diverifikasi kepemilikannya ke schoolId aktif.
+### Fase 1: Fondasi Database, Master Akademik, Siswa & Guru — ✅ Selesai
+* **Database Schema v13.1**: 26 tabel lengkap dengan RLS, *triggers*, dan RPC di `supabase_schema.sql`.
+* **Autentikasi & Dashboard**: Login fleksibel (Email/NUPTK/NIP/NIK/NISN/NIS) dan ringkasan dashboard.
+* **Data Master Akademik**: CRUD Profil Sekolah, Tahun Ajaran, Semester, Kelas, dan Mata Pelajaran.
+* **Modul Siswa & Guru (PTK)**: CRUD lengkap, relasi orang tua, kesejahteraan/PIP/Desil, impor massal Dapodik, dan manajemen data guru.
 
-📝 Desain Database (Ringkasan Skema Master)
-schools: Master entitas sekolah.
+### Fase 2: Integrasi Multi-Role UI, Jadwal Pelajaran & Absensi — 🔜 Dikerjakan Berikutnya
+* **Integrasi Multi-Role di Frontend**:
+  * Memperbarui `authStore` dan `usePermission` agar membaca `role` utama + `additionalRoles` (via RPC `get_user_all_roles()`).
+  * Menyinkronkan hak akses menu di `Sidebar` dan rute terproteksi.
+  * Membuat UI manajemen akun pengguna & penetapan peran tambahan.
+* **Modul Jadwal Pelajaran (`/schedules/*`)**:
+  * Penyusunan jadwal per kelas, hari, jam pelajaran, mata pelajaran, guru pengampu, dan ruangan.
+  * Validasi bentrok jadwal guru/kelas.
+* **Modul Absensi (`/attendance/*`)**:
+  * Input presensi harian siswa per kelas (Hadir, Sakit, Izin, Alpa) dan rekap kehadiran.
+  * Presensi mandiri Guru & Tendik berbasis koordinat GPS, validasi radius sekolah (`attendanceRadiusMeters`), dan foto selfie.
 
-academic_years: Tahun ajaran (Relasi ke schoolId).
+### Fase 3: Modul Keuangan, Sarpras, Perpustakaan & Administrasi TU — ⏳ Terjadwal
+* **Modul Keuangan (`/finance/*`)**:
+  * Pengaturan template biaya (`fee_templates`) dinamis per jenjang/tingkat kelas.
+  * *Generate* tagihan siswa (`student_bills`) per periode.
+  * Antarmuka kasir untuk pencatatan pembayaran cicilan maupun pelunasan (`payment_transactions`).
+* **Modul Inventaris & Sarpras (`/inventory/*`)**:
+  * Manajemen daftar aset dan pencatatan transaksi barang masuk/keluar (`inventory_transactions`).
+* **Modul Perpustakaan (`/library/*`)**:
+  * Katalog buku (`library_books`) dan sirkulasi peminjaman/pengembalian buku siswa & guru (`library_loans`).
+* **Modul Administrasi TU & Beasiswa (`/admin/*`, `/scholarships/*`)**:
+  * Pengarsipan surat masuk/keluar dan pencatatan beasiswa non-PIP.
 
-teachers: Data Guru/Wali Kelas (Relasi ke schoolId).
-
-classes: Data Kelas (Relasi ke schoolId, academicYearId, homeroomTeacherId).
-
-students: Data Siswa (Relasi ke schoolId, classId).
-
-(Mendatang) fee_templates: Template tagihan per kelas/jenjang.
-
-(Mendatang) student_bills & payments: Transaksi Keuangan.
-
-🛠️ Langkah-langkah Eksekusi (Roadmap)
-Fase 1: Finalisasi Master Data (SEDANG DIKERJAKAN ✅)
-Fokus: Memastikan fondasi dasar 100% akurat sebelum memasukkan data masal.
-
-Integrasi profil Institusi, Tahun Ajaran, dan Kelas murni dari Supabase.
-
-Implementasi filter schoolId di semua Service dan Cache.
-
-Menyelesaikan isu siklus hidup komponen UI (Dropdown tidak sinkron, Cache nyangkut).
-
-Validasi Akhir Fase 1: Semua operasi CRUD (Buat, Baca, Ubah, Hapus) pada Data Master berjalan lancar tanpa refresh browser.
-
-Fase 2: Modul Siswa & Import Data (Tertunda - Dikerjakan setelah Fase 1 Selesai)
-Fokus: Mengelola data ribuan siswa tanpa merusak performa aplikasi.
-
-UI Tabel Siswa berdasarkan filter Kelas dan Tahun Ajaran.
-
-Pembuatan algoritma Import Excel (500+ baris).
-
-Pemetaan ID Kelas secara otomatis saat import (Mencocokkan string nama kelas dari Excel ke UUID di Supabase).
-
-Penanganan error saat import (Misal: NISN ganda).
-
-Fase 3: Modul Keuangan (Sesuai PDF Rincian Biaya)
-Fokus: Tagihan otomatis dan pelacakan cicilan.
-
-Master Tagihan: Form untuk menginput rincian biaya (contoh: LKS, Ekstrakurikuler) berdasarkan jenjang kelas.
-
-Generate Tagihan: Algoritma yang secara otomatis membebankan total biaya kepada siswa saat siswa dimasukkan ke dalam suatu Kelas & Tahun Ajaran aktif.
-
-Penerimaan Pembayaran: UI kasir untuk menerima cicilan atau pelunasan secara penuh.
-
-❓ Konfirmasi Arsitektur (Untuk Anda)
-[!IMPORTANT]
-Terkait arah aplikasi ke depan:
-
-Fleksibilitas Jenjang: Form profil sekolah Anda sekarang memfasilitasi TK hingga SMA/SMK. Meskipun referensi PDF tagihan yang akan kita buat adalah untuk SD (Kelas 1-6), apakah kita mendesain Modul Keuangan ini agar dinamis (bisa dipakai sekolah SMK) atau dikhususkan strukturnya untuk SD saja?
-
-Keamanan Ekstra: Setelah Fase 1 ini selesai dan berjalan lancar, saya sarankan kita masuk ke Dashboard Supabase Anda untuk mengaktifkan Row Level Security (RLS) agar schoolId difilter langsung oleh database engine. Apakah Anda memegang akses ke dashboard Supabase?
+### Fase 4: Laporan, Pengaturan Lanjutan & Optimasi Mobile APK — ⏳ Terjadwal
+* **Modul Laporan (`/reports/*`)**: Rekapitulasi presensi, laporan arus kas/tunggakan SPP, statistik siswa & PTK, serta ekspor Excel/PDF.
+* **Pengaturan Sistem (`/settings/*`)**: Konfigurasi titik koordinat GPS sekolah, radius absensi, dan audit log aktivitas.
+* **Optimasi Android APK (Capacitor)**: Penyempurnaan tampilan *mobile* untuk absensi GPS guru dan pemantauan oleh orang tua/siswa.
