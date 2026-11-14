@@ -175,7 +175,17 @@ const normalizeReligionDapodik = (val: string | null): string | null => {
   const u = val.toUpperCase();
   if (u === 'KATHOLIK') return 'KATOLIK';
   if (u === 'BUDHA') return 'BUDDHA';
+  if (u.includes('KEPERCAYAAN')) return 'KEPERCAYAAN';
   return u;
+};
+
+const normalizeMaritalStatusDapodik = (val: string | null): string | null => {
+  if (!val) return null;
+  const u = val.toUpperCase();
+  if (u === 'KAWIN') return 'Kawin';
+  if (u === 'BELUM KAWIN') return 'Belum Kawin';
+  if (u === 'JANDA/DUDA' || u === 'JANDA' || u === 'DUDA') return 'Janda/Duda';
+  return val;
 };
 
 const mapStatusKepegawaian = (status: string | null): string => {
@@ -286,7 +296,7 @@ const parseTeacherExcel = (jsonData: ExcelRow[], schoolId: string) => {
       pangkatGolongan: getVal(row, ['Pangkat Golongan', 'Pangkat/Golongan', 'Golongan']),
       sumberGaji: getVal(row, ['Sumber Gaji']),
       namaIbuKandung: getVal(row, ['Nama Ibu Kandung']),
-      statusPerkawinan: getVal(row, ['Status Perkawinan']),
+      statusPerkawinan: normalizeMaritalStatusDapodik(getVal(row, ['Status Perkawinan'])),
       namaSuamiIstri: getVal(row, ['Nama Suami/Istri', 'Nama Suami / Istri', 'Nama Suami/ Istri']),
       nipSuamiIstri: getVal(row, ['NIP Suami/Istri', 'NIP Suami / Istri']),
       pekerjaanSuamiIstri: getVal(row, ['Pekerjaan Suami/Istri', 'Pekerjaan Suami / Istri']),

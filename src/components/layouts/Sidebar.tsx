@@ -1,3 +1,4 @@
+// src/components/layout/Sidebar.tsx
 import { useState, useMemo } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import {
@@ -16,6 +17,7 @@ import {
   School,
   ChevronDown,
   BookOpen,
+  Library,
   CreditCard,
   Receipt,
   Building2,
@@ -49,8 +51,10 @@ interface NavGroup {
 
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
+const STUDENT_ATTENDANCE_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
 const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
+const LIBRARY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_PERPUS'] as const;
 const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
 
@@ -193,7 +197,7 @@ export function Sidebar() {
           label: locale === 'id' ? 'Rekap Presensi' : 'Attendance Report',
           icon: <ClipboardCheck size={17} />,
           href: '/attendance',
-          allowedRoles: [...CORE_ADMIN_ROLES, 'WALI_KELAS'],
+          allowedRoles: STUDENT_ATTENDANCE_ROLES,
         },
         {
           label: locale === 'id' ? 'Presensi GPS' : 'GPS Check-In',
@@ -236,6 +240,12 @@ export function Sidebar() {
           icon: <Package size={17} />,
           href: '/inventory',
           allowedRoles: INVENTORY_ROLES,
+        },
+        {
+          label: locale === 'id' ? 'Perpustakaan' : 'Library',
+          icon: <Library size={17} />,
+          href: '/library',
+          allowedRoles: LIBRARY_ROLES,
         },
         {
           label: t('sidebar.administration'),

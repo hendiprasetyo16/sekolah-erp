@@ -1,3 +1,4 @@
+// src/app/App.tsx
 import { useEffect, useState } from 'react';
 import { AppProviders } from './providers';
 import { AppRouter } from '@/routes';
@@ -6,47 +7,63 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { ErrorBoundary } from './ErrorBoundary';
 
 function AuthSync({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, logout } = useAuthStore();
   const [isReady, setIsReady] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+
     const checkSession = async () => {
       try {
-        const { data: { session } } = await supabase.auth.getSession();
+        const {
+          data: { session },
+        } = await supabase.auth.getSession();
 
-        // Ghost Login terdeteksi
-        if (isAuthenticated && !session) {
-          console.warn('[AuthSync] Ghost login terdeteksi. Mereset cache...');
-          logout(); // Dipanggil langsung, tanpa await
-          window.location.href = '/login';
+        const currentAuth = useAuthStore.getState();
+
+        // Ghost Login terdeteksi: store lokal masih login, tetapi sesi Supabase sudah habis
+        if (currentAuth.isAuthenticated && !session) {
+          console.warn('[AuthSync] Ghost login terdeteksi. Membersihkan sesi lokal...');
+          await Promise.resolve(currentAuth.logout());
+          if (isMounted && window.location.pathname !== '/login') {
+            window.location.replace('/login');
+          }
           return;
         }
       } catch (error) {
-        console.error('[AuthSync] Gagal memverifikasi sesi', error);
+        console.error('[AuthSync] Gagal memverifikasi sesi:', error);
       } finally {
-        setIsReady(true);
+        if (isMounted) {
+          setIsReady(true);
+        }
       }
     };
 
-    checkSession();
+    void checkSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      if ((event === 'SIGNED_OUT' || !session) && isAuthenticated) {
-        logout(); // Dipanggil langsung, tanpa .then()
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange(async (event, session) => {
+      const currentAuth = useAuthStore.getState();
+
+      if ((event === 'SIGNED_OUT' || !session) && currentAuth.isAuthenticated) {
+        await Promise.resolve(currentAuth.logout());
 
         if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
+          window.location.replace('/login');
         }
       }
     });
 
-    return () => subscription.unsubscribe();
-  }, [isAuthenticated, logout]);
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
 
   if (!isReady) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
+      <div className="min-h-dvh bg-background flex items-center justify-center">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
       </div>
     );
   }

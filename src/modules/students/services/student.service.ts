@@ -6,6 +6,7 @@ import type {
   ApiResponsePaginated,
   PaginatedParams,
 } from '@/services/api.types';
+import type { EconomicCategory } from '@/types/common.types';
 import type {
   StudentListItem,
   StudentDetail,
@@ -20,6 +21,7 @@ import type {
   StudentEconomic,
   ParentRelation,
   OrphanType,
+  PipScoringResult,
 } from '../types/student.types';
 
 interface ClassRelationRow {
@@ -50,6 +52,17 @@ export interface StudentListParams extends PaginatedParams {
   sortOrder?: 'asc' | 'desc';
 }
 
+/**
+ * Selaras dengan fungsi RLS v14 `public.current_user_can_manage_students()`
+ */
+export const MANAGE_STUDENT_ROLES = [
+  'SUPER_ADMIN',
+  'ADMIN',
+  'KEPALA_SEKOLAH',
+  'OPERATOR',
+  'STAFF_TU',
+] as const;
+
 const ALLOWED_SORT_COLUMNS = new Set([
   'fullName',
   'nisn',
@@ -72,6 +85,103 @@ const BULK_IMPORT_CHUNK_SIZE = 250;
 const BULK_DELETE_CHUNK_SIZE = 200;
 
 // ============================================================================
+// HELPER SKORING PRIORITAS PIP (STANDAR DAPODIK & DTKS V14)
+// ============================================================================
+export function calculatePipPriorityScore(
+  eco: {
+    hasKip?: boolean;
+    hasPkh?: boolean;
+    hasKks?: boolean;
+    isDtks?: boolean;
+    layakPip?: boolean;
+    orphanType?: OrphanType | string | null;
+    desil?: number | string | null;
+    houseOwnership?: string | null;
+    houseCondition?: string | null;
+  },
+  ayah?: { fullName?: string; monthlyIncome?: string | null } | null,
+  ibu?: { fullName?: string; monthlyIncome?: string | null } | null
+): PipScoringResult {
+  let score = 0;
+  const breakdown: Record<string, number> = {};
+
+  if (eco.hasKip) {
+    breakdown.kip = 25;
+    score += 25;
+  }
+  if (eco.hasPkh) {
+    breakdown.pkh = 20;
+    score += 20;
+  }
+  if (eco.hasKks) {
+    breakdown.kks = 15;
+    score += 15;
+  }
+  if (eco.isDtks) {
+    breakdown.dtks = 15;
+    score += 15;
+  }
+  if (eco.layakPip) {
+    breakdown.layakPipDapodik = 10;
+    score += 10;
+  }
+
+  if (eco.orphanType === 'YATIM_PIATU') {
+    breakdown.statusKeluarga = 15;
+    score += 15;
+  } else if (eco.orphanType === 'YATIM' || eco.orphanType === 'PIATU') {
+    breakdown.statusKeluarga = 10;
+    score += 10;
+  }
+
+  const desilNum =
+    eco.desil !== null && eco.desil !== undefined && String(eco.desil).trim() !== ''
+      ? Number(eco.desil)
+      : NaN;
+  if (!Number.isNaN(desilNum) && desilNum >= 1 && desilNum <= 10) {
+    const desilPts = desilNum <= 2 ? 15 : desilNum <= 4 ? 10 : desilNum <= 6 ? 5 : 0;
+    if (desilPts > 0) {
+      breakdown.desil = desilPts;
+      score += desilPts;
+    }
+  }
+
+  if (eco.houseOwnership === 'MENUMPANG' || eco.houseOwnership === 'SEWA_KONTRAK') {
+    breakdown.kepemilikanRumah = 5;
+    score += 5;
+  }
+  if (eco.houseCondition === 'TIDAK_LAYAK' || eco.houseCondition === 'SEDERHANA') {
+    breakdown.kondisiRumah = 5;
+    score += 5;
+  }
+
+  const lowIncomes = new Set([
+    'Tidak Berpenghasilan',
+    'Kurang dari Rp 500.000',
+    'Rp 500.000 - Rp 999.999',
+  ]);
+  if (
+    (ayah?.fullName?.trim() && ayah.monthlyIncome && lowIncomes.has(ayah.monthlyIncome)) ||
+    (ibu?.fullName?.trim() && ibu.monthlyIncome && lowIncomes.has(ibu.monthlyIncome))
+  ) {
+    breakdown.penghasilanOrtu = 10;
+    score += 10;
+  }
+
+  const finalScore = Math.min(100, score);
+  let category: EconomicCategory = 'REGULER';
+  if (finalScore >= 70) category = 'PRIORITAS_SANGAT_TINGGI';
+  else if (finalScore >= 45) category = 'PRIORITAS_TINGGI';
+  else if (finalScore >= 25) category = 'PRIORITAS_SEDANG';
+
+  return {
+    pipScore: finalScore,
+    economicCategory: category,
+    scoringDetails: breakdown,
+  };
+}
+
+// ============================================================================
 // HELPER NORMALISASI & SANITASI DATA
 // ============================================================================
 const cleanNullableText = (value?: string | null): string | null => {
@@ -80,11 +190,25 @@ const cleanNullableText = (value?: string | null): string | null => {
   return trimmed.length > 0 ? trimmed : null;
 };
 
+const normalizeDateOnly = (value?: string | null): string | null => {
+  const cleaned = cleanNullableText(value);
+  if (!cleaned) return null;
+  return cleaned.length >= 10 ? cleaned.slice(0, 10) : cleaned;
+};
+
+const normalizeNullableNumber = (value: unknown): number | null => {
+  if (value === undefined || value === null || String(value).trim() === '') return null;
+  const num = Number(value);
+  return Number.isFinite(num) ? num : null;
+};
+
 const normalizeReligion = (value?: string | null): string | null => {
   const cleaned = cleanNullableText(value);
   if (!cleaned) return null;
   const upper = cleaned.toUpperCase();
-  return upper === 'KATHOLIK' ? 'KATOLIK' : upper;
+  if (upper === 'KATHOLIK') return 'KATOLIK';
+  if (upper === 'BUDHA') return 'BUDDHA';
+  return upper;
 };
 
 const sanitizeNamaKip = (value?: string | null): string | null => {
@@ -123,8 +247,18 @@ const normalizeStudentFields = <T extends Record<string, unknown>>(
   }
   if ('nickname' in data) data.nickname = cleanNullableText(data.nickname as string | null);
   if ('religion' in data) data.religion = normalizeReligion(data.religion as string | null);
+  if ('gender' in data && typeof data.gender === 'string') {
+    data.gender = data.gender.trim().toUpperCase() === 'P' ? 'P' : 'L';
+  }
+  if ('birthDate' in data) {
+    data.birthDate = normalizeDateOnly(data.birthDate as string | null);
+  }
+  if ('entryDate' in data) {
+    data.entryDate = normalizeDateOnly(data.entryDate as string | null);
+  }
 
   const nullableStringFields = [
+    'userId',
     'dusun',
     'rt',
     'rw',
@@ -136,7 +270,6 @@ const normalizeStudentFields = <T extends Record<string, unknown>>(
     'email',
     'photoUrl',
     'classId',
-    'entryDate',
     'skhun',
     'noPesertaUn',
     'noIjazah',
@@ -155,6 +288,21 @@ const normalizeStudentFields = <T extends Record<string, unknown>>(
   for (const field of nullableStringFields) {
     if (field in data) {
       data[field] = cleanNullableText(data[field] as string | null);
+    }
+  }
+
+  const nullableNumberFields = [
+    'anakKe',
+    'jmlSaudara',
+    'beratBadan',
+    'tinggiBadan',
+    'lingkarKepala',
+    'jarakSekolah',
+  ];
+
+  for (const field of nullableNumberFields) {
+    if (field in data) {
+      data[field] = normalizeNullableNumber(data[field]);
     }
   }
 
@@ -213,7 +361,7 @@ const normalizeEconomicPayload = (
       ? Math.trunc(rawDesil)
       : null;
 
-  return {
+  const normalized: CreateStudentEconomicPayload = {
     hasKip,
     kipNumber: hasKip ? kipNumber : null,
     namaKip: hasKip ? sanitizeNamaKip(economic.namaKip) : null,
@@ -233,18 +381,29 @@ const normalizeEconomicPayload = (
         : null,
     isOrphan,
     orphanType,
-    pipScore: economic.pipScore ?? null,
-    economicCategory: economic.economicCategory ?? null,
     desil,
-    scoringDetails: economic.scoringDetails ?? null,
-    scoredAt: economic.scoredAt ?? null,
   };
+
+  if (economic.pipScore !== undefined) {
+    normalized.pipScore = economic.pipScore;
+  }
+  if (economic.economicCategory !== undefined) {
+    normalized.economicCategory = economic.economicCategory;
+  }
+  if (economic.scoringDetails !== undefined) {
+    normalized.scoringDetails = economic.scoringDetails;
+  }
+  if (economic.scoredAt !== undefined) {
+    normalized.scoredAt = economic.scoredAt;
+  }
+
+  return normalized;
 };
 
 // ============================================================================
-// ERROR HANDLER POSTGRESQL
+// ERROR HANDLER POSTGRESQL V14
 // ============================================================================
-const handleDbError = (error: unknown): Error => {
+export const handleStudentDbError = (error: unknown): Error => {
   const pgError = error as PostgrestError;
   let message = pgError?.message || 'Terjadi kesalahan pada database';
 
@@ -274,9 +433,9 @@ const handleDbError = (error: unknown): Error => {
     message = `${rowPrefix}Format input angka atau ID tidak valid.`;
   } else if (pgError?.code === '42P10') {
     message =
-      'Skema indeks unik database belum lengkap. Jalankan Patch SQL pada Supabase SQL Editor.';
+      'Skema indeks unik database belum lengkap. Jalankan Patch SQL v14 pada Supabase SQL Editor.';
   } else if (pgError?.code === '42501') {
-    message = 'Anda tidak memiliki hak akses untuk melakukan operasi ini.';
+    message = 'Anda tidak memiliki hak akses (RLS v14) untuk melakukan operasi ini.';
   }
 
   return new Error(message);
@@ -299,7 +458,7 @@ const syncActiveClassHistory = async (
     .eq('isActive', true)
     .maybeSingle();
 
-  if (yearError) throw handleDbError(yearError);
+  if (yearError) throw handleStudentDbError(yearError);
   if (!activeYear?.id) return;
 
   if (!classId) {
@@ -310,7 +469,7 @@ const syncActiveClassHistory = async (
       .eq('studentId', studentId)
       .eq('academicYearId', activeYear.id);
 
-    if (deleteHistoryError) throw handleDbError(deleteHistoryError);
+    if (deleteHistoryError) throw handleStudentDbError(deleteHistoryError);
     return;
   }
 
@@ -326,11 +485,11 @@ const syncActiveClassHistory = async (
       { onConflict: 'studentId,academicYearId' }
     );
 
-  if (upsertHistoryError) throw handleDbError(upsertHistoryError);
+  if (upsertHistoryError) throw handleStudentDbError(upsertHistoryError);
 };
 
 // ============================================================================
-// SERVICE UTAMA MODUL SISWA
+// SERVICE UTAMA MODUL SISWA (V14)
 // ============================================================================
 export const studentService = {
   async list(params: StudentListParams): Promise<ApiResponsePaginated<StudentListItem>> {
@@ -378,7 +537,7 @@ export const studentService = {
     const to = from + limit - 1;
 
     const { data, count, error } = await query.range(from, to);
-    if (error) throw handleDbError(error);
+    if (error) throw handleStudentDbError(error);
 
     const rows = (data || []) as unknown as RawStudentRow[];
     const mappedData: StudentListItem[] = rows.map((item) => ({
@@ -434,7 +593,7 @@ export const studentService = {
     }
 
     const { data: studentData, error: studentError } = await studentQuery.single();
-    if (studentError) throw handleDbError(studentError);
+    if (studentError) throw handleStudentDbError(studentError);
 
     const rawStudent = studentData as unknown as RawStudentRow;
 
@@ -446,7 +605,8 @@ export const studentService = {
         .from('student_parents')
         .select('*')
         .eq('studentId', id)
-        .eq('schoolId', rawStudent.schoolId),
+        .eq('schoolId', rawStudent.schoolId)
+        .order('relation', { ascending: true }),
       supabase
         .from('student_economics')
         .select('*')
@@ -455,8 +615,11 @@ export const studentService = {
         .maybeSingle(),
     ]);
 
-    if (parentsError) throw handleDbError(parentsError);
-    if (economicError) throw handleDbError(economicError);
+    if (parentsError) throw handleStudentDbError(parentsError);
+    // Sesuai RLS v14, ORANG_TUA & SISWA diblokir dari student_economics (42501)
+    if (economicError && economicError.code !== '42501') {
+      throw handleStudentDbError(economicError);
+    }
 
     const mappedData: StudentDetail = {
       ...rawStudent,
@@ -490,7 +653,7 @@ export const studentService = {
       .select('id, schoolId, classId')
       .single();
 
-    if (studentError) throw handleDbError(studentError);
+    if (studentError) throw handleStudentDbError(studentError);
 
     const trustedSchoolId = createdStudent.schoolId;
 
@@ -508,7 +671,7 @@ export const studentService = {
           const { error: parentError } = await supabase
             .from('student_parents')
             .insert(parentsData);
-          if (parentError) throw handleDbError(parentError);
+          if (parentError) throw handleStudentDbError(parentError);
         }
       }
 
@@ -521,7 +684,7 @@ export const studentService = {
           studentId: createdStudent.id,
           schoolId: trustedSchoolId,
         });
-        if (ecoError) throw handleDbError(ecoError);
+        if (ecoError) throw handleStudentDbError(ecoError);
       }
 
       await syncActiveClassHistory(trustedSchoolId, createdStudent.id, createdStudent.classId);
@@ -557,8 +720,8 @@ export const studentService = {
     }
 
     const { data: existingStudent, error: fetchError } = await existingQuery.single();
+    if (fetchError) throw handleStudentDbError(fetchError);
 
-    if (fetchError) throw handleDbError(fetchError);
     const trustedSchoolId = existingStudent.schoolId;
 
     if (Object.keys(studentData).length > 0) {
@@ -568,7 +731,7 @@ export const studentService = {
         .eq('id', id)
         .eq('schoolId', trustedSchoolId);
 
-      if (updateError) throw handleDbError(updateError);
+      if (updateError) throw handleStudentDbError(updateError);
     }
 
     if (parents !== undefined) {
@@ -586,7 +749,7 @@ export const studentService = {
           .eq('studentId', id)
           .eq('schoolId', trustedSchoolId);
 
-        if (deleteAllParentsError) throw handleDbError(deleteAllParentsError);
+        if (deleteAllParentsError) throw handleStudentDbError(deleteAllParentsError);
       } else {
         const activeRelations = normalizedParents.map((p) => p.relation);
         const { error: deleteRemovedError } = await supabase
@@ -596,7 +759,7 @@ export const studentService = {
           .eq('schoolId', trustedSchoolId)
           .not('relation', 'in', `(${activeRelations.join(',')})`);
 
-        if (deleteRemovedError) throw handleDbError(deleteRemovedError);
+        if (deleteRemovedError) throw handleStudentDbError(deleteRemovedError);
 
         const parentsData = normalizedParents.map((p) => ({
           ...p,
@@ -608,7 +771,7 @@ export const studentService = {
           .from('student_parents')
           .upsert(parentsData, { onConflict: 'studentId,relation' });
 
-        if (upsertParentsError) throw handleDbError(upsertParentsError);
+        if (upsertParentsError) throw handleStudentDbError(upsertParentsError);
       }
     }
 
@@ -627,7 +790,7 @@ export const studentService = {
           { onConflict: 'studentId' }
         );
 
-      if (ecoError) throw handleDbError(ecoError);
+      if (ecoError) throw handleStudentDbError(ecoError);
     }
 
     const nextClassId =
@@ -652,7 +815,7 @@ export const studentService = {
           'Siswa tidak dapat dihapus karena masih memiliki riwayat tagihan/akademik.'
         );
       }
-      throw handleDbError(error);
+      throw handleStudentDbError(error);
     }
 
     return { success: true, data: undefined, message: 'Siswa berhasil dihapus' };
@@ -678,7 +841,7 @@ export const studentService = {
             'Sebagian/seluruh siswa terpilih tidak dapat dihapus karena masih memiliki riwayat tagihan atau akademik.'
           );
         }
-        throw handleDbError(error);
+        throw handleStudentDbError(error);
       }
     }
 
@@ -703,7 +866,7 @@ export const studentService = {
       if (schoolId) query = query.eq('schoolId', schoolId);
 
       const { data, error } = await query;
-      if (error) throw handleDbError(error);
+      if (error) throw handleStudentDbError(error);
 
       if (data && data.length > 0) {
         allRows.push(...(data as unknown as RawStudentRow[]));
@@ -745,7 +908,7 @@ export const studentService = {
           'Tidak bisa dikosongkan karena masih ada riwayat Tagihan/Pembayaran siswa.'
         );
       }
-      throw handleDbError(error);
+      throw handleStudentDbError(error);
     }
 
     return { success: true, data: undefined, message: 'Seluruh data siswa dikosongkan' };
@@ -758,7 +921,11 @@ export const studentService = {
       throw new Error('Payload import kosong.');
     }
 
-    const sanitizedBatch = payload.map((item) => {
+    const sanitizedBatch = payload.map((item, idx) => {
+      if (!item.schoolId) {
+        throw new Error(`Impor gagal pada baris ke-${idx + 1}: School ID tidak valid.`);
+      }
+
       const { parents, economic, ...rest } = item;
       const normalizedCore = normalizeStudentFields(rest);
 
@@ -792,7 +959,7 @@ export const studentService = {
       });
 
       if (error) {
-        throw handleDbError(error);
+        throw handleStudentDbError(error);
       }
 
       const result = data as BulkImportRpcResponse;

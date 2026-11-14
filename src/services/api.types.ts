@@ -1,3 +1,5 @@
+// src/services/api.types.ts
+
 // Generic API response wrapper
 export interface ApiResponse<T = unknown> {
   success: boolean;

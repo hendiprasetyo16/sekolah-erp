@@ -9,6 +9,7 @@ export type Module =
   | 'finance'
   | 'schedules'
   | 'inventory'
+  | 'library'
   | 'administration'
   | 'scholarships'
   | 'reports'
@@ -36,6 +37,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import', 'approve'] },
     { module: 'schedules', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'inventory', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'library', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'administration', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'scholarships', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
@@ -54,6 +56,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'finance', actions: ['create', 'read', 'update', 'delete', 'export', 'import', 'approve'] },
     { module: 'schedules', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'inventory', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'library', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'administration', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'scholarships', actions: ['create', 'read', 'update', 'delete', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
@@ -72,6 +75,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'finance', actions: ['read', 'export', 'approve'] },
     { module: 'schedules', actions: ['read', 'export'] },
     { module: 'inventory', actions: ['read', 'export'] },
+    { module: 'library', actions: ['read', 'export'] },
     { module: 'administration', actions: ['read', 'export'] },
     { module: 'scholarships', actions: ['read', 'export'] },
     { module: 'reports', actions: ['read', 'export'] },
@@ -127,7 +131,8 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'students', actions: ['read'] },
     { module: 'teachers', actions: ['read'] },
     { module: 'schedules', actions: ['read'] },
-    { module: 'attendance', actions: ['create', 'read'] },
+    { module: 'library', actions: ['read'] },
+    { module: 'attendance', actions: ['create', 'read', 'update'] },
   ],
 
   // ==========================================
@@ -158,6 +163,8 @@ export const ROLE_PERMISSIONS: RolePermissions = {
   // ==========================================
   STAFF_PERPUS: [
     { module: 'dashboard', actions: ['read'] },
+    { module: 'library', actions: ['create', 'read', 'update', 'delete', 'export'] },
+    { module: 'students', actions: ['read'] },
     { module: 'attendance', actions: ['create', 'read'] },
   ],
 
@@ -169,6 +176,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'students', actions: ['read'] },
     { module: 'finance', actions: ['read'] },
     { module: 'schedules', actions: ['read'] },
+    { module: 'library', actions: ['read'] },
     { module: 'attendance', actions: ['read'] },
   ],
 
@@ -179,6 +187,7 @@ export const ROLE_PERMISSIONS: RolePermissions = {
     { module: 'dashboard', actions: ['read'] },
     { module: 'schedules', actions: ['read'] },
     { module: 'finance', actions: ['read'] },
+    { module: 'library', actions: ['read'] },
     { module: 'attendance', actions: ['read'] },
   ],
 };

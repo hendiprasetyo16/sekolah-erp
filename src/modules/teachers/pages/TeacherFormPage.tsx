@@ -1,7 +1,12 @@
 // src/modules/teachers/pages/TeacherFormPage.tsx
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { useForm, type Control, type Path } from 'react-hook-form';
+import {
+  useForm,
+  type Control,
+  type FieldErrors,
+  type Path,
+} from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import * as z from 'zod';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -16,6 +21,7 @@ import {
   Award,
   Briefcase,
   ShieldAlert,
+  AlertCircle,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -47,9 +53,13 @@ import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { CreateTeacherPayload } from '../types/teacher.types';
 
+type TeacherTabValue = 'personal' | 'professional' | 'tasks' | 'family';
+
 const teacherSchema = z.object({
-  fullName: z.string().min(1, 'Nama lengkap wajib diisi'),
-  gender: z.string().min(1, 'Jenis kelamin wajib diisi'),
+  fullName: z.string().trim().min(1, 'Nama lengkap wajib diisi'),
+  gender: z.enum(['L', 'P'], {
+    message: 'Jenis kelamin wajib dipilih',
+  }),
   nip: z.string().optional(),
   nuptk: z.string().optional(),
   nik: z.string().optional(),
@@ -113,12 +123,93 @@ const teacherSchema = z.object({
   nuks: z.string().optional(),
 
   joinDate: z.string().optional(),
-  baseSalary: z.string().optional(),
+  baseSalary: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || (!Number.isNaN(Number(val)) && Number(val) >= 0),
+      'Gaji pokok tidak boleh negatif'
+    ),
   subjects: z.string().optional(),
-  maxHoursPerWeek: z.string().optional(),
+  maxHoursPerWeek: z
+    .string()
+    .optional()
+    .refine(
+      (val) => !val || (!Number.isNaN(Number(val)) && Number(val) > 0),
+      'Maksimal jam per minggu harus lebih dari 0'
+    ),
 });
 
 type TeacherFormValues = z.infer<typeof teacherSchema>;
+
+// Pemetaan nama field ke Tab agar otomatis berpindah jika ada validasi error
+const FIELD_TAB_MAP: Record<keyof TeacherFormValues, TeacherTabValue> = {
+  fullName: 'personal',
+  gender: 'personal',
+  nip: 'professional',
+  nuptk: 'professional',
+  nik: 'personal',
+  noKk: 'personal',
+  birthDate: 'personal',
+  birthPlace: 'personal',
+  religion: 'personal',
+  telepon: 'personal',
+  phone: 'personal',
+  email: 'personal',
+  address: 'personal',
+  dusun: 'personal',
+  rt: 'personal',
+  rw: 'personal',
+  kelurahan: 'personal',
+  kecamatan: 'personal',
+  city: 'personal',
+  province: 'personal',
+  postalCode: 'personal',
+  lintang: 'personal',
+  bujur: 'personal',
+  namaIbuKandung: 'personal',
+  kewarganegaraan: 'personal',
+
+  status: 'professional',
+  position: 'professional',
+  isActive: 'professional',
+  skCpns: 'professional',
+  tanggalCpns: 'professional',
+  skPengangkatan: 'professional',
+  tmtPengangkatan: 'professional',
+  lembagaPengangkatan: 'professional',
+  pangkatGolongan: 'professional',
+  sumberGaji: 'professional',
+  tmtPns: 'professional',
+  karpeg: 'professional',
+  joinDate: 'professional',
+
+  tugasTambahan: 'tasks',
+  education: 'tasks',
+  major: 'tasks',
+  university: 'tasks',
+  maxHoursPerWeek: 'tasks',
+  subjects: 'tasks',
+  isCertified: 'tasks',
+  certificationNumber: 'tasks',
+  sudahLisensiKepalaSekolah: 'tasks',
+  pernahDiklatKepengawasan: 'tasks',
+  keahlianBraille: 'tasks',
+  keahlianBahasaIsyarat: 'tasks',
+  nuks: 'tasks',
+
+  statusPerkawinan: 'family',
+  namaSuamiIstri: 'family',
+  nipSuamiIstri: 'family',
+  pekerjaanSuamiIstri: 'family',
+  karisKarsu: 'family',
+  npwp: 'family',
+  namaWajibPajak: 'family',
+  baseSalary: 'family',
+  bank: 'family',
+  nomorRekeningBank: 'family',
+  rekeningAtasNama: 'family',
+};
 
 interface TeacherFormFieldProps {
   control: Control<TeacherFormValues>;
@@ -129,6 +220,7 @@ interface TeacherFormFieldProps {
   options?: { label: string; value: string }[];
   className?: string;
   labelClassName?: string;
+  min?: number;
 }
 
 function TeacherFormField({
@@ -140,6 +232,7 @@ function TeacherFormField({
   options = [],
   className = '',
   labelClassName = '',
+  min,
 }: TeacherFormFieldProps) {
   return (
     <FormField
@@ -149,7 +242,10 @@ function TeacherFormField({
         <FormItem className={className}>
           <FormLabel className={labelClassName}>{label}</FormLabel>
           {type === 'select' ? (
-            <Select onValueChange={field.onChange} value={(field.value as string) || undefined}>
+            <Select
+              onValueChange={field.onChange}
+              value={(field.value as string) || ''}
+            >
               <FormControl>
                 <SelectTrigger>
                   <SelectValue placeholder={placeholder || 'Pilih...'} />
@@ -182,6 +278,7 @@ function TeacherFormField({
             <FormControl>
               <Input
                 type={type}
+                min={type === 'number' ? min : undefined}
                 placeholder={placeholder}
                 {...field}
                 value={typeof field.value === 'boolean' ? '' : (field.value ?? '')}
@@ -198,6 +295,14 @@ function TeacherFormField({
 const formatDateForInput = (dateStr?: string | null): string =>
   dateStr ? String(dateStr).split('T')[0] : '';
 
+const normalizeGenderForForm = (gender?: string | null): 'L' | 'P' | undefined => {
+  if (!gender) return undefined;
+  const upper = gender.trim().toUpperCase();
+  if (upper === 'L' || upper === 'LAKI-LAKI' || upper === 'PRIA') return 'L';
+  if (upper === 'P' || upper === 'PEREMPUAN' || upper === 'WANITA') return 'P';
+  return undefined;
+};
+
 export function TeacherFormPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -207,12 +312,16 @@ export function TeacherFormPage() {
   const { hasPermission } = usePermission();
   const isEdit = Boolean(id);
 
+  const [activeTab, setActiveTab] = useState<TeacherTabValue>('personal');
+
   const canSubmitForm = isEdit
     ? hasPermission('teachers', 'update')
     : hasPermission('teachers', 'create');
 
   const activeSchoolId = useMemo(
-    () => normalizeTeacherSchoolId(school?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
+    () =>
+      normalizeTeacherSchoolId(school?.id) ??
+      normalizeTeacherSchoolId(currentUser?.schoolId),
     [school?.id, currentUser?.schoolId]
   );
 
@@ -238,13 +347,17 @@ export function TeacherFormPage() {
     toastUpdateSuccess:
       locale === 'id' ? 'Data guru berhasil diperbarui' : 'Teacher updated successfully',
     toastError: locale === 'id' ? 'Gagal menyimpan data guru' : 'Failed to save teacher',
+    toastValidationError:
+      locale === 'id'
+        ? 'Mohon periksa kembali isian yang wajib diisi atau belum valid.'
+        : 'Please check required or invalid fields.',
   };
 
   const form = useForm<TeacherFormValues>({
     resolver: zodResolver(teacherSchema),
     defaultValues: {
       fullName: '',
-      gender: '',
+      gender: undefined,
       nip: '',
       nuptk: '',
       nik: '',
@@ -308,10 +421,16 @@ export function TeacherFormPage() {
     },
   });
 
-  const { data: response, isLoading } = useQuery({
+  const {
+    data: response,
+    isLoading,
+    isError,
+    error: fetchError,
+  } = useQuery({
     queryKey: ['teacher', id, activeSchoolId],
     queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
     enabled: isEdit && Boolean(id) && canSubmitForm,
+    retry: false,
   });
 
   useEffect(() => {
@@ -319,7 +438,7 @@ export function TeacherFormPage() {
       const t = response.data;
       form.reset({
         fullName: t.fullName || '',
-        gender: t.gender ? t.gender.toUpperCase() : '',
+        gender: normalizeGenderForForm(t.gender),
         nip: t.nip || '',
         nuptk: t.nuptk || '',
         nik: t.nik || '',
@@ -344,7 +463,7 @@ export function TeacherFormPage() {
         education: t.education ? t.education.toUpperCase() : '',
         major: t.major || '',
         university: t.university || '',
-        status: t.status ? t.status.toUpperCase() : '',
+        status: t.status ? t.status.toUpperCase() : 'HONORER',
         position: t.position || '',
         tugasTambahan: t.tugasTambahan || '',
         isActive: t.isActive ?? true,
@@ -377,7 +496,8 @@ export function TeacherFormPage() {
         keahlianBahasaIsyarat: Boolean(t.keahlianBahasaIsyarat),
         nuks: t.nuks || '',
         joinDate: formatDateForInput(t.joinDate),
-        baseSalary: t.baseSalary !== null && t.baseSalary !== undefined ? String(t.baseSalary) : '',
+        baseSalary:
+          t.baseSalary !== null && t.baseSalary !== undefined ? String(t.baseSalary) : '',
         subjects: t.subjects || '',
         maxHoursPerWeek: String(t.maxHoursPerWeek || 24),
       });
@@ -407,7 +527,7 @@ export function TeacherFormPage() {
       const payload: CreateTeacherPayload = {
         ...values,
         schoolId: targetSchoolId,
-        gender: values.gender as 'L' | 'P',
+        gender: values.gender,
         isActive: values.isActive ?? true,
         isCertified: values.isCertified ?? false,
         baseSalary: parsedSalary,
@@ -430,6 +550,15 @@ export function TeacherFormPage() {
     },
   });
 
+  // Pindahkan tab otomatis ke field yang gagal validasi
+  const handleInvalidSubmit = (errors: FieldErrors<TeacherFormValues>) => {
+    const firstErrorField = Object.keys(errors)[0] as keyof TeacherFormValues | undefined;
+    if (firstErrorField && FIELD_TAB_MAP[firstErrorField]) {
+      setActiveTab(FIELD_TAB_MAP[firstErrorField]);
+    }
+    toast.error(dict.toastValidationError);
+  };
+
   if (!canSubmitForm) {
     return (
       <div className="flex h-96 flex-col items-center justify-center gap-4 p-4 text-center">
@@ -450,8 +579,28 @@ export function TeacherFormPage() {
 
   if (isEdit && isLoading) {
     return (
-      <div className="flex h-100 items-center justify-center">
+      <div className="flex min-h-[400px] items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
+
+  if (isEdit && isError) {
+    return (
+      <div className="flex h-96 flex-col items-center justify-center gap-4 p-4 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400">
+          <AlertCircle className="h-6 w-6" />
+        </div>
+        <p className="font-medium text-foreground">
+          {fetchError instanceof Error
+            ? fetchError.message
+            : locale === 'id'
+              ? 'Data guru tidak ditemukan.'
+              : 'Teacher data not found.'}
+        </p>
+        <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
+          {locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers'}
+        </Button>
       </div>
     );
   }
@@ -475,12 +624,19 @@ export function TeacherFormPage() {
 
       <Form {...form}>
         <form
-          onSubmit={form.handleSubmit((v: TeacherFormValues) => mutation.mutate(v))}
+          onSubmit={form.handleSubmit(
+            (v: TeacherFormValues) => mutation.mutate(v),
+            handleInvalidSubmit
+          )}
           className="space-y-6"
         >
           <Card className="shadow-sm border-border overflow-hidden">
             <CardContent className="p-4 sm:p-6">
-              <Tabs defaultValue="personal" className="w-full min-w-0">
+              <Tabs
+                value={activeTab}
+                onValueChange={(val) => setActiveTab(val as TeacherTabValue)}
+                className="w-full min-w-0"
+              >
                 <div className="w-full overflow-x-auto pb-1 mb-6">
                   <TabsList className="h-auto gap-1 bg-muted/50 p-1 flex w-max min-w-full sm:min-w-0">
                     <TabsTrigger
@@ -775,6 +931,7 @@ export function TeacherFormPage() {
                       name="maxHoursPerWeek"
                       label="Maks. Jam per Minggu"
                       type="number"
+                      min={1}
                     />
                     <div className="sm:col-span-2">
                       <TeacherFormField
@@ -881,6 +1038,7 @@ export function TeacherFormPage() {
                       name="baseSalary"
                       label="Gaji Pokok (Nominal)"
                       type="number"
+                      min={0}
                     />
                     <TeacherFormField
                       control={form.control}

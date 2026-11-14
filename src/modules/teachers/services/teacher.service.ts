@@ -39,10 +39,21 @@ const BULK_DELETE_CHUNK_SIZE = 200;
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/**
+ * Memvalidasi dan membersihkan string UUID agar aman dikirim ke query PostgreSQL.
+ */
 export const normalizeTeacherSchoolId = (value?: string | null): string | null => {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
   return UUID_REGEX.test(trimmed) ? trimmed : null;
+};
+
+const assertValidUuid = (id: string, label = 'ID guru'): string => {
+  const trimmed = typeof id === 'string' ? id.trim() : '';
+  if (!UUID_REGEX.test(trimmed)) {
+    throw new Error(`${label} tidak valid.`);
+  }
+  return trimmed;
 };
 
 // ============================================================================
@@ -71,13 +82,39 @@ const normalizeBooleanFlag = (value: unknown): boolean => {
   return false;
 };
 
+const normalizeGender = (value?: unknown): 'L' | 'P' | null => {
+  const cleaned = cleanNullableText(value);
+  if (!cleaned) return null;
+  const upper = cleaned.toUpperCase();
+  if (upper === 'L' || upper === 'LAKI-LAKI' || upper === 'LAKILAKI' || upper === 'PRIA') {
+    return 'L';
+  }
+  if (upper === 'P' || upper === 'PEREMPUAN' || upper === 'WANITA') {
+    return 'P';
+  }
+  return null;
+};
+
 const normalizeReligion = (value?: unknown): string | null => {
   const cleaned = cleanNullableText(value);
   if (!cleaned) return null;
   const upper = cleaned.toUpperCase();
   if (upper === 'KATHOLIK') return 'KATOLIK';
   if (upper === 'BUDHA') return 'BUDDHA';
+  if (upper.includes('KEPERCAYAAN')) return 'KEPERCAYAAN';
   return upper;
+};
+
+const normalizeMaritalStatus = (value?: unknown): string | null => {
+  const cleaned = cleanNullableText(value);
+  if (!cleaned) return null;
+  const upper = cleaned.toUpperCase();
+  if (upper === 'KAWIN') return 'Kawin';
+  if (upper === 'BELUM KAWIN') return 'Belum Kawin';
+  if (upper === 'JANDA/DUDA' || upper === 'JANDA' || upper === 'DUDA') {
+    return 'Janda/Duda';
+  }
+  return cleaned;
 };
 
 const normalizeNationality = (value?: unknown): string | null => {
@@ -92,6 +129,7 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
 ): Record<string, unknown> => {
   const data: Record<string, unknown> = { ...raw };
 
+  // Hapus field yang dikelola otomatis oleh database
   delete data.id;
   delete data.userId;
   delete data.createdAt;
@@ -100,8 +138,17 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
   if ('fullName' in data && typeof data.fullName === 'string') {
     data.fullName = data.fullName.replace(/\s+/g, ' ').trim();
   }
+  if ('gender' in data && data.gender !== undefined) {
+    const normalizedGender = normalizeGender(data.gender);
+    if (normalizedGender) {
+      data.gender = normalizedGender;
+    }
+  }
   if ('religion' in data) {
     data.religion = normalizeReligion(data.religion);
+  }
+  if ('statusPerkawinan' in data) {
+    data.statusPerkawinan = normalizeMaritalStatus(data.statusPerkawinan);
   }
   if ('kewarganegaraan' in data) {
     data.kewarganegaraan = normalizeNationality(data.kewarganegaraan);
@@ -167,6 +214,14 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
     }
   }
 
+  // Standarisasi huruf kapital untuk kode pendidikan & status kepegawaian
+  if (typeof data.education === 'string') {
+    data.education = data.education.toUpperCase();
+  }
+  if (typeof data.status === 'string') {
+    data.status = data.status.toUpperCase();
+  }
+
   if (data.telepon === '0') {
     data.telepon = null;
   }
@@ -191,7 +246,11 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
     if (val === undefined || val === null || val === '' || Number.isNaN(Number(val))) {
       data.baseSalary = null;
     } else {
-      data.baseSalary = Number(val);
+      const numericSalary = Number(val);
+      if (numericSalary < 0) {
+        throw new Error('Gaji pokok tidak boleh bernilai negatif.');
+      }
+      data.baseSalary = numericSalary;
     }
   }
 
@@ -237,6 +296,8 @@ const handleDbError = (error: unknown): Error => {
     message = `${rowPrefix}Format input angka, boolean, atau ID tidak valid.`;
   } else if (pgError?.code === '42501') {
     message = 'Anda tidak memiliki hak akses untuk melakukan operasi ini.';
+  } else if (pgError?.code === 'PGRST116') {
+    message = 'Data guru tidak ditemukan atau Anda tidak memiliki akses ke data ini.';
   }
 
   return new Error(message);
@@ -260,6 +321,8 @@ export const teacherService = {
     } = params;
 
     const validSchoolId = normalizeTeacherSchoolId(schoolId);
+    const safePage = Math.max(1, Math.trunc(page));
+    const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
 
     let query = supabase
       .from('teachers')
@@ -301,8 +364,8 @@ export const teacherService = {
       query = query.order('fullName', { ascending: true, nullsFirst: false });
     }
 
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
+    const from = (safePage - 1) * safeLimit;
+    const to = from + safeLimit - 1;
 
     const { data, count, error } = await query.range(from, to);
     if (error) throw handleDbError(error);
@@ -329,7 +392,7 @@ export const teacherService = {
     }));
 
     const total = count || 0;
-    const totalPages = Math.ceil(total / limit);
+    const totalPages = Math.ceil(total / safeLimit);
 
     return {
       success: true,
@@ -337,11 +400,11 @@ export const teacherService = {
         data: mappedData,
         meta: {
           total,
-          page,
-          limit,
+          page: safePage,
+          limit: safeLimit,
           totalPages,
-          hasNext: page < totalPages,
-          hasPrev: page > 1,
+          hasNext: safePage < totalPages,
+          hasPrev: safePage > 1,
         },
       },
       message: 'Berhasil mengambil data guru & pegawai',
@@ -349,12 +412,13 @@ export const teacherService = {
   },
 
   async getById(id: string, schoolId?: string): Promise<ApiResponse<TeacherDetail>> {
+    const validId = assertValidUuid(id);
     const validSchoolId = normalizeTeacherSchoolId(schoolId);
 
     let query = supabase
       .from('teachers')
       .select('*')
-      .eq('id', id);
+      .eq('id', validId);
 
     if (validSchoolId) {
       query = query.eq('schoolId', validSchoolId);
@@ -379,6 +443,14 @@ export const teacherService = {
     const normalized = normalizeTeacherFields(
       payload as CreateTeacherPayload & Record<string, unknown>
     );
+
+    if (!normalized.fullName || typeof normalized.fullName !== 'string') {
+      throw new Error('Nama lengkap guru wajib diisi.');
+    }
+    if (normalized.gender !== 'L' && normalized.gender !== 'P') {
+      throw new Error('Jenis kelamin wajib dipilih (L atau P).');
+    }
+
     normalized.schoolId = validSchoolId;
 
     const { data, error } = await supabase
@@ -393,15 +465,23 @@ export const teacherService = {
   },
 
   async update(id: string, payload: UpdateTeacherPayload): Promise<ApiResponse<TeacherDetail>> {
+    const validId = assertValidUuid(id);
     const normalized = normalizeTeacherFields(
       payload as UpdateTeacherPayload & Record<string, unknown>
     );
     delete normalized.schoolId;
 
+    if ('fullName' in normalized && !normalized.fullName) {
+      throw new Error('Nama lengkap guru tidak boleh dikosongkan.');
+    }
+    if ('gender' in normalized && normalized.gender !== 'L' && normalized.gender !== 'P') {
+      throw new Error('Jenis kelamin tidak valid (gunakan L atau P).');
+    }
+
     const { data: existing, error: fetchError } = await supabase
       .from('teachers')
       .select('id, schoolId, userId, fullName')
-      .eq('id', id)
+      .eq('id', validId)
       .single();
 
     if (fetchError) throw handleDbError(fetchError);
@@ -410,7 +490,7 @@ export const teacherService = {
       const { error: updateError } = await supabase
         .from('teachers')
         .update(normalized)
-        .eq('id', id)
+        .eq('id', validId)
         .eq('schoolId', existing.schoolId);
 
       if (updateError) throw handleDbError(updateError);
@@ -438,23 +518,36 @@ export const teacherService = {
             });
           }
         } catch {
-          // Best-effort sync
+          // Best-effort sync (tidak menggagalkan update guru jika RLS users membatasi role Operator/TU)
         }
       }
     }
 
-    return this.getById(id, existing.schoolId);
+    return this.getById(validId, existing.schoolId);
   },
 
   async delete(id: string, schoolId?: string): Promise<ApiResponse<void>> {
+    const validId = assertValidUuid(id);
     const validSchoolId = normalizeTeacherSchoolId(schoolId);
-    let query = supabase.from('teachers').delete().eq('id', id);
+
+    let query = supabase
+      .from('teachers')
+      .delete()
+      .eq('id', validId);
+
     if (validSchoolId) {
       query = query.eq('schoolId', validSchoolId);
     }
 
-    const { error } = await query;
+    // Gunakan .select('id') untuk mendeteksi jika RLS menolak penghapusan (0 baris terhapus)
+    const { data, error } = await query.select('id');
     if (error) throw handleDbError(error);
+
+    if (!data || data.length === 0) {
+      throw new Error(
+        'Data guru gagal dihapus. Pastikan data masih ada atau Anda memiliki peran Admin / Kepala Sekolah.'
+      );
+    }
 
     return {
       success: true,
@@ -465,26 +558,50 @@ export const teacherService = {
 
   async deleteMany(ids: string[], schoolId?: string): Promise<ApiResponse<{ deleted: number }>> {
     const validSchoolId = normalizeTeacherSchoolId(schoolId);
-    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    const uniqueIds = Array.from(
+      new Set(
+        ids
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => UUID_REGEX.test(item))
+      )
+    );
+
     if (uniqueIds.length === 0) {
-      return { success: true, data: { deleted: 0 }, message: 'Tidak ada data guru yang dipilih' };
+      return {
+        success: true,
+        data: { deleted: 0 },
+        message: 'Tidak ada data guru valid yang dipilih',
+      };
     }
+
+    let totalDeleted = 0;
 
     for (let i = 0; i < uniqueIds.length; i += BULK_DELETE_CHUNK_SIZE) {
       const chunk = uniqueIds.slice(i, i + BULK_DELETE_CHUNK_SIZE);
-      let query = supabase.from('teachers').delete().in('id', chunk);
+      let query = supabase
+        .from('teachers')
+        .delete()
+        .in('id', chunk);
+
       if (validSchoolId) {
         query = query.eq('schoolId', validSchoolId);
       }
 
-      const { error } = await query;
+      const { data, error } = await query.select('id');
       if (error) throw handleDbError(error);
+      totalDeleted += data?.length ?? 0;
+    }
+
+    if (totalDeleted === 0) {
+      throw new Error(
+        'Tidak ada data guru yang berhasil dihapus. Periksa hak akses Anda (khusus Admin / Kepala Sekolah).'
+      );
     }
 
     return {
       success: true,
-      data: { deleted: uniqueIds.length },
-      message: `${uniqueIds.length} data guru berhasil dihapus`,
+      data: { deleted: totalDeleted },
+      message: `${totalDeleted} data guru berhasil dihapus`,
     };
   },
 
@@ -492,7 +609,11 @@ export const teacherService = {
     const validSchoolId = normalizeTeacherSchoolId(schoolId);
     if (!validSchoolId) throw new Error('School ID tidak valid');
 
-    const { error } = await supabase.from('teachers').delete().eq('schoolId', validSchoolId);
+    const { error } = await supabase
+      .from('teachers')
+      .delete()
+      .eq('schoolId', validSchoolId);
+
     if (error) throw handleDbError(error);
 
     return {
@@ -544,6 +665,7 @@ export const teacherService = {
     const sanitizedBatch = payload.map((item) => {
       const {
         id,
+        schoolId: itemSchoolId,
         diffAction: _diffAction,
         diffFields: _diffFields,
         ...rest
@@ -551,7 +673,14 @@ export const teacherService = {
       void [_diffAction, _diffFields];
 
       const normalizedCore = normalizeTeacherFields(rest);
-      return id ? { id, ...normalizedCore } : normalizedCore;
+      const validItemSchoolId = normalizeTeacherSchoolId(itemSchoolId);
+      const validItemId = id && UUID_REGEX.test(id.trim()) ? id.trim() : undefined;
+
+      return {
+        ...(validItemId ? { id: validItemId } : {}),
+        ...(validItemSchoolId ? { schoolId: validItemSchoolId } : {}),
+        ...normalizedCore,
+      };
     });
 
     let totalInserted = 0;

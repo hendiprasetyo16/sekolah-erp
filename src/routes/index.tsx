@@ -1,3 +1,4 @@
+// src/routes/index.tsx
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { MainLayout } from '@/components/layouts/MainLayout';
 import { LoginPage } from '@/modules/auth/pages/LoginPage';
@@ -27,6 +28,7 @@ import { TeacherAttendancePage } from '@/modules/attendance/pages/TeacherAttenda
 import { AttendanceDashboardPage } from '@/modules/attendance/pages/AttendanceDashboardPage';
 import {
   InventoryPlaceholder,
+  LibraryPlaceholder,
   AdminPlaceholder,
   ScholarshipsPlaceholder,
   SettingsPlaceholder,
@@ -41,17 +43,18 @@ import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswor
 import { ProfilePage } from '@/modules/profile/pages/ProfilePage';
 
 // ============================================================================
-// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx)
+// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v14)
 // ============================================================================
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 const CLASS_EDITOR_ROLES = ['SUPER_ADMIN', 'ADMIN'] as const;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
 const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
+const LIBRARY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_PERPUS'] as const;
 const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
 const USER_MANAGEMENT_ROLES = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'STAFF_TU'] as const;
 const REPORT_ROLES = [...CORE_ADMIN_ROLES, 'BENDAHARA'] as const;
-const ATTENDANCE_RECAP_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS'] as const;
+const ATTENDANCE_RECAP_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
 const ATTENDANCE_GPS_ROLES = [
   'KEPALA_SEKOLAH',
@@ -375,6 +378,14 @@ export function AppRouter() {
             element={
               <RoleRoute allowedRoles={INVENTORY_ROLES}>
                 <InventoryPlaceholder />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/library/*"
+            element={
+              <RoleRoute allowedRoles={LIBRARY_ROLES}>
+                <LibraryPlaceholder />
               </RoleRoute>
             }
           />

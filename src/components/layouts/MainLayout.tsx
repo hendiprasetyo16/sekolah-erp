@@ -1,3 +1,4 @@
+// src/components/layout/MainLayout.tsx
 import { useState, useEffect } from 'react';
 import { Outlet, useLocation } from 'react-router-dom';
 import { WifiOff } from 'lucide-react';
@@ -11,7 +12,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { cn } from '@/utils/cn';
 
 export function MainLayout() {
-  const { sidebarCollapsed, theme } = useUIStore();
+  const sidebarCollapsed = useUIStore((state) => state.sidebarCollapsed);
   const { locale } = useTranslation();
   const location = useLocation();
 
@@ -23,20 +24,7 @@ export function MainLayout() {
   );
 
   useEffect(() => {
-    const rootElement = document.documentElement;
-    if (theme === 'dark') {
-      rootElement.classList.add('dark');
-      rootElement.classList.remove('light');
-      rootElement.style.colorScheme = 'dark';
-    } else {
-      rootElement.classList.remove('dark');
-      rootElement.classList.add('light');
-      rootElement.style.colorScheme = 'light';
-    }
-  }, [theme]);
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, behavior: 'instant' });
+    window.scrollTo({ top: 0, behavior: 'auto' });
   }, [location.pathname]);
 
   useEffect(() => {
@@ -52,7 +40,8 @@ export function MainLayout() {
     };
   }, []);
 
-  // Jika Super Admin belum memilih sekolah dan tidak sedang membuka Master Akademik (untuk daftar sekolah baru), tampilkan pemilih tenant
+  // Jika Super Admin belum memilih sekolah dan tidak sedang membuka Master Akademik
+  // (untuk mendaftarkan sekolah baru), tampilkan pemilih tenant
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
   const isMasterDataPage = location.pathname === '/academic/master-data';
 

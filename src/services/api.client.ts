@@ -1,3 +1,4 @@
+// src/services/api.client.ts
 import axios, { type AxiosError, type AxiosInstance, type InternalAxiosRequestConfig } from 'axios';
 import { env } from '@/config/env';
 
@@ -9,7 +10,9 @@ function getAccessToken(): string | null {
       const parsed = JSON.parse(stored);
       return parsed?.state?.token ?? null;
     }
-  } catch { /* ignore */ }
+  } catch {
+    // Abaikan jika storage tidak dapat dibaca
+  }
   return null;
 }
 
@@ -20,12 +23,18 @@ function getRefreshToken(): string | null {
       const parsed = JSON.parse(stored);
       return parsed?.state?.refreshToken ?? null;
     }
-  } catch { /* ignore */ }
+  } catch {
+    // Abaikan jika storage tidak dapat dibaca
+  }
   return null;
 }
 
 function clearAuthStorage(): void {
-  localStorage.removeItem('sekolah-erp-auth');
+  try {
+    localStorage.removeItem('sekolah-erp-auth');
+  } catch {
+    // Abaikan jika storage dibatasi browser
+  }
 }
 
 // Create axios instance — URL from env, never hardcoded
@@ -34,7 +43,7 @@ const apiClient: AxiosInstance = axios.create({
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
-    'Accept': 'application/json',
+    Accept: 'application/json',
   },
 });
 
@@ -62,7 +71,11 @@ let failedQueue: Array<{ resolve: (v?: unknown) => void; reject: (r?: unknown) =
 
 const processQueue = (error: Error | null, token: string | null = null) => {
   failedQueue.forEach((prom) => {
-    if (error) { prom.reject(error); } else { prom.resolve(token); }
+    if (error) {
+      prom.reject(error);
+    } else {
+      prom.resolve(token);
+    }
   });
   failedQueue = [];
 };
@@ -75,10 +88,10 @@ apiClient.interceptors.response.use(
     return response;
   },
   async (error: AxiosError) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
+    const originalRequest = error.config as (InternalAxiosRequestConfig & { _retry?: boolean }) | undefined;
 
     // Handle 401 — try token refresh
-    if (error.response?.status === 401 && !originalRequest._retry) {
+    if (error.response?.status === 401 && originalRequest && !originalRequest._retry) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {
           failedQueue.push({ resolve, reject });
@@ -117,7 +130,9 @@ apiClient.interceptors.response.use(
       } catch (refreshError) {
         processQueue(refreshError as Error);
         clearAuthStorage();
-        window.location.href = '/login';
+        if (window.location.pathname !== '/login') {
+          window.location.replace('/login');
+        }
         return Promise.reject(refreshError);
       } finally {
         isRefreshing = false;

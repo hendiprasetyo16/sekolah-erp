@@ -1,3 +1,4 @@
+// src/constants/app.constants.ts
 export const APP_NAME = 'Sistem Informasi Manajemen Sekolah';
 export const APP_SHORT_NAME = 'SIMS';
 export const APP_VERSION = '2.0.0';

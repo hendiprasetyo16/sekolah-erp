@@ -1,4 +1,4 @@
-//src/types/common.types.ts
+// src/types/common.types.ts
 export type Locale = 'id' | 'en';
 
 export type Theme = 'light' | 'dark' | 'system';
@@ -17,7 +17,7 @@ export type UserRole =
   | 'ORANG_TUA'
   | 'SISWA';
 
-export type SchoolLevel = 'SD' | 'SMP' | 'SMA' | 'SMK';
+export type SchoolLevel = 'SD' | 'MI' | 'SMP' | 'MTs' | 'SMA' | 'MA' | 'SMK' | 'MAK';
 
 export type SchoolType = 'NEGERI' | 'SWASTA';
 
@@ -25,15 +25,23 @@ export type Gender = 'L' | 'P';
 
 export type SemesterType = 'GANJIL' | 'GENAP';
 
-export type AttendanceStatus = 'HADIR' | 'IZIN' | 'SAKIT' | 'ALPHA' | 'TERLAMBAT';
+export type AttendanceStatus = 'HADIR' | 'IZIN' | 'SAKIT' | 'ALPA' | 'ALPHA' | 'TERLAMBAT';
 
-export type PaymentStatus = 'BELUM_BAYAR' | 'SEBAGIAN' | 'LUNAS' | 'DIBATALKAN';
+export type PaymentStatus = 'BELUM_BAYAR' | 'CICILAN' | 'SEBAGIAN' | 'LUNAS' | 'DIBATALKAN';
 
 export type PaymentMethod = 'TUNAI' | 'TRANSFER' | 'VA' | 'QRIS';
 
 export type ItemCondition = 'BAIK' | 'RUSAK_RINGAN' | 'RUSAK_BERAT' | 'HILANG';
 
-export type EconomicCategory = 'SANGAT_MISKIN' | 'RENTAN_MISKIN' | 'MENENGAH' | 'MAMPU';
+export type EconomicCategory =
+  | 'PRIORITAS_SANGAT_TINGGI'
+  | 'PRIORITAS_TINGGI'
+  | 'PRIORITAS_SEDANG'
+  | 'REGULER'
+  | 'SANGAT_MISKIN'
+  | 'MISKIN'
+  | 'RENTAN'
+  | 'MAMPU';
 
 export type LetterType = 'MASUK' | 'KELUAR';
 

@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+// src/components/layout/Header.tsx
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
   Bell,
@@ -25,6 +26,7 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useNotificationStore } from '@/stores/notification.store';
 import { ROLE_LABELS } from '@/constants/app.constants';
+import { getEffectiveRoles } from '@/modules/admin/types/user-management.types';
 import { getInitials } from '@/utils/format';
 import { Button } from '@/components/ui/button';
 
@@ -65,6 +67,7 @@ const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] 
  */
 const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
   dashboard: { id: 'Dasbor', en: 'Dashboard' },
+  portal: { id: 'Portal Siswa', en: 'Student Portal' },
   academic: { id: 'Akademik', en: 'Academic' },
   'master-data': { id: 'Master Akademik', en: 'Master Academic' },
   students: { id: 'Data Siswa', en: 'Students' },
@@ -77,6 +80,7 @@ const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
   bills: { id: 'Tagihan Siswa', en: 'Student Bills' },
   payments: { id: 'Pembayaran', en: 'Payments' },
   inventory: { id: 'Sarpras & Aset', en: 'Inventory' },
+  library: { id: 'Perpustakaan', en: 'Library' },
   admin: { id: 'Administrasi', en: 'Administration' },
   users: { id: 'Manajemen Akun', en: 'User Accounts' },
   scholarships: { id: 'Beasiswa', en: 'Scholarships' },
@@ -89,7 +93,7 @@ const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
   edit: { id: 'Ubah Data', en: 'Edit' },
 };
 
-const NON_ROUTABLE_SEGMENTS = new Set<string>(['academic']);
+const NON_ROUTABLE_SEGMENTS = new Set<string>(['academic', 'portal']);
 
 export function Header() {
   const { t, locale } = useTranslation();
@@ -114,8 +118,14 @@ export function Header() {
   const [isRefreshingYears, setIsRefreshingYears] = useState<boolean>(false);
   const loadedSchoolIdRef = useRef<string | null>(null);
 
-  const canAccessSettings = Boolean(
-    user?.role && (CORE_ADMIN_ROLES as readonly string[]).includes(user.role)
+  const effectiveUserRoles = useMemo(() => getEffectiveRoles(user), [user]);
+
+  const canAccessSettings = useMemo(
+    () =>
+      effectiveUserRoles.some((role) =>
+        (CORE_ADMIN_ROLES as readonly string[]).includes(role)
+      ),
+    [effectiveUserRoles]
   );
 
   useEffect(() => {
@@ -148,7 +158,6 @@ export function Header() {
       }, 5000);
 
       try {
-        // <-- PERBAIKAN BUG: Hanya ambil kolom yang benar-benar ada di tabel academic_years
         const { data, error } = await supabase
           .from('academic_years')
           .select('id, schoolId, name, startYear, endYear, isActive')
@@ -156,15 +165,24 @@ export function Header() {
           .order('startYear', { ascending: false });
 
         if (!error && Array.isArray(data)) {
-          setAcademicYears(data as AcademicYearOption[]);
+          const typedYears = data as AcademicYearOption[];
+          setAcademicYears(typedYears);
           loadedSchoolIdRef.current = targetSchoolId;
+
+          // Jika konteks academicYear belum terisi di store, pilih tahun aktif secara otomatis
+          const currentSelectedYear = useAuthStore.getState().academicYear;
+          if (!currentSelectedYear && typedYears.length > 0) {
+            const defaultYear =
+              typedYears.find((item) => item.isActive) ?? typedYears[0];
+            setAcademicYear(defaultYear as unknown as AuthAcademicYear);
+          }
         }
       } finally {
         window.clearTimeout(timeoutId);
         setIsRefreshingYears(false);
       }
     },
-    [school?.id, academicYears.length]
+    [school?.id, academicYears.length, setAcademicYear]
   );
 
   useEffect(() => {
@@ -366,10 +384,19 @@ export function Header() {
             <button
               type="button"
               onClick={handleReturnToTenantConsole}
-              className="hidden items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-emerald-500/40 hover:bg-muted md:flex"
+              title={
+                school
+                  ? locale === 'id'
+                    ? 'Ganti Sekolah'
+                    : 'Switch School'
+                  : locale === 'id'
+                    ? 'Konsol Sekolah'
+                    : 'School Console'
+              }
+              className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-emerald-500/40 hover:bg-muted"
             >
-              <Building2 size={13} className="text-emerald-600 dark:text-emerald-400" />
-              <span>
+              <Building2 size={13} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+              <span className="hidden sm:inline">
                 {school
                   ? locale === 'id'
                     ? 'Ganti Sekolah'

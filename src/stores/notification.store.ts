@@ -1,3 +1,4 @@
+// src/stores/notification.store.ts
 import { create } from 'zustand';
 
 export interface Notification {
@@ -13,6 +14,7 @@ export interface Notification {
 interface NotificationState {
   notifications: Notification[];
   unreadCount: number;
+  setNotifications: (notifications: Notification[]) => void;
   addNotification: (notification: Omit<Notification, 'id' | 'read' | 'createdAt'>) => void;
   markAsRead: (id: string) => void;
   markAllAsRead: () => void;
@@ -20,51 +22,27 @@ interface NotificationState {
   clearAll: () => void;
 }
 
-export const useNotificationStore = create<NotificationState>((set, get) => ({
-  notifications: [
-    {
-      id: '1',
-      title: 'Pembayaran SPP',
-      message: '15 siswa belum membayar SPP bulan Juni 2026',
-      type: 'warning',
-      read: false,
-      createdAt: '2026-06-10T10:00:00Z',
-      link: '/finance/arrears',
-    },
-    {
-      id: '2',
-      title: 'Surat Masuk Baru',
-      message: 'Surat dari Dinas Pendidikan - Undangan Rapat',
-      type: 'info',
-      read: false,
-      createdAt: '2026-06-10T09:00:00Z',
-      link: '/admin/letters/incoming',
-    },
-    {
-      id: '3',
-      title: 'Jadwal Berhasil Digenerate',
-      message: 'Jadwal semester genap 2025/2026 berhasil dibuat',
-      type: 'success',
-      read: true,
-      createdAt: '2026-06-09T14:00:00Z',
-      link: '/schedules/class',
-    },
-    {
-      id: '4',
-      title: 'Barang Rusak',
-      message: '3 komputer di Lab Komputer 1 dilaporkan rusak',
-      type: 'error',
-      read: false,
-      createdAt: '2026-06-09T11:00:00Z',
-      link: '/inventory',
-    },
-  ],
-  unreadCount: 3,
+function generateNotificationId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export const useNotificationStore = create<NotificationState>((set) => ({
+  notifications: [],
+  unreadCount: 0,
+
+  setNotifications: (notifications) =>
+    set({
+      notifications,
+      unreadCount: notifications.filter((n) => !n.read).length,
+    }),
 
   addNotification: (notification) => {
     const newNotification: Notification = {
       ...notification,
-      id: Date.now().toString(),
+      id: generateNotificationId(),
       read: false,
       createdAt: new Date().toISOString(),
     };

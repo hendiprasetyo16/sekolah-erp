@@ -1,3 +1,4 @@
+// src/components/maps/AttendanceMap.tsx
 import { useEffect, useMemo } from 'react';
 import { MapContainer, TileLayer, Marker, Circle, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -19,7 +20,7 @@ export interface AttendanceMapProps {
     userLat: number | null;
     userLng: number | null;
     radiusMeters: number;
-    /** Opsional: tingkat akurasi GPS perangkat pengguna dalam meter (dari GeolocationCoordinates.accuracy) */
+    /** Tingkat akurasi GPS perangkat pengguna dalam meter (dari GeolocationCoordinates.accuracy) */
     accuracyMeters?: number | null;
 }
 
@@ -64,6 +65,9 @@ export function AttendanceMap({
     const hasValidSchool = isValidCoordinate(schoolLat, schoolLng);
     const hasValidUser = isValidCoordinate(userLat, userLng);
 
+    const effectiveRadius =
+        Number.isFinite(radiusMeters) && radiusMeters > 0 ? radiusMeters : 0;
+
     const distanceMeters = useMemo(() => {
         if (!hasValidSchool || !hasValidUser) return null;
         return Math.round(
@@ -77,7 +81,14 @@ export function AttendanceMap({
     }, [hasValidSchool, hasValidUser, schoolLat, schoolLng, userLat, userLng]);
 
     const isWithinRadius =
-        distanceMeters !== null ? distanceMeters <= radiusMeters : true;
+        distanceMeters !== null && effectiveRadius > 0
+            ? distanceMeters <= effectiveRadius
+            : true;
+
+    const isLowGpsAccuracy =
+        typeof accuracyMeters === 'number' &&
+        Number.isFinite(accuracyMeters) &&
+        accuracyMeters > 100;
 
     const schoolIcon = useMemo(
         () => createPinIcon('#059669', isId ? 'Sekolah' : 'School'),
@@ -123,10 +134,10 @@ export function AttendanceMap({
                 />
 
                 {/* Lingkaran geofencing area absensi sekolah */}
-                {radiusMeters > 0 && (
+                {effectiveRadius > 0 && (
                     <Circle
                         center={schoolPos}
-                        radius={radiusMeters}
+                        radius={effectiveRadius}
                         pathOptions={{
                             color: zoneColor,
                             fillColor: zoneColor,
@@ -176,9 +187,22 @@ export function AttendanceMap({
                             : 'border-red-200 bg-red-50/95 text-red-700 dark:border-red-500/30 dark:bg-red-950/90 dark:text-red-300'
                         }`}
                 >
+                    {effectiveRadius > 0
+                        ? isId
+                            ? `Jarak: ${distanceMeters}m (Maks ${effectiveRadius}m)`
+                            : `Distance: ${distanceMeters}m (Max ${effectiveRadius}m)`
+                        : isId
+                            ? `Jarak: ${distanceMeters}m`
+                            : `Distance: ${distanceMeters}m`}
+                </div>
+            )}
+
+            {/* Peringatan jika akurasi sinyal GPS lemah (> 100m) */}
+            {isLowGpsAccuracy && (
+                <div className="pointer-events-none absolute bottom-3 left-3 z-20 rounded-full border border-amber-300 bg-amber-50/95 px-2.5 py-1 text-[11px] font-medium text-amber-800 shadow-sm backdrop-blur dark:border-amber-500/30 dark:bg-amber-950/90 dark:text-amber-300">
                     {isId
-                        ? `Jarak: ${distanceMeters}m (Maks ${radiusMeters}m)`
-                        : `Distance: ${distanceMeters}m (Max ${radiusMeters}m)`}
+                        ? `Akurasi GPS rendah (±${Math.round(accuracyMeters)}m)`
+                        : `Low GPS accuracy (±${Math.round(accuracyMeters)}m)`}
                 </div>
             )}
         </div>

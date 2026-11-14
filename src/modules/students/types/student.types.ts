@@ -38,6 +38,15 @@ export type StudentSortField =
   | 'createdAt';
 
 /**
+ * Hasil perhitungan otomatis skor prioritas PIP.
+ */
+export interface PipScoringResult {
+  pipScore: number;
+  economicCategory: EconomicCategory;
+  scoringDetails: Record<string, number>;
+}
+
+/**
  * 1. DATA RINGKAS UNTUK TABEL & EXPORT EXCEL
  */
 export interface StudentListItem {
@@ -275,7 +284,7 @@ export interface StudentBulkImportResult {
 }
 
 /**
- * 7. DATA RIWAYAT KEHADIRAN SISWA (`public.attendances`)
+ * 7. DATA RIWAYAT KEHADIRAN & MODUL TERKAIT V14
  */
 export interface StudentAttendanceRecord {
   id: string;
@@ -283,4 +292,74 @@ export interface StudentAttendanceRecord {
   status: AttendanceStatus;
   notes?: string | null;
   recordedBy: string;
+}
+
+export interface StudentClassHistoryRecord {
+  id: string;
+  createdAt: string;
+  academic_years?: {
+    id: string;
+    name: string;
+    isActive: boolean;
+  } | null;
+  classes?: {
+    id: string;
+    name: string;
+    gradeLevel: number;
+    major?: string | null;
+    teachers?: {
+      fullName: string;
+    } | null;
+  } | null;
+}
+
+export interface StudentBillRecord {
+  id: string;
+  title: string;
+  periodMonth?: number | null;
+  periodYear?: number | null;
+  totalAmount: number | string;
+  paidAmount: number | string;
+  dueDate?: string | null;
+  status: 'BELUM_LUNAS' | 'CICILAN' | 'LUNAS' | 'DIBATALKAN' | string;
+}
+
+export interface ScholarshipRecord {
+  id: string;
+  name: string;
+  type: string;
+  provider?: string | null;
+  amount?: number | string | null;
+  startDate?: string | null;
+  endDate?: string | null;
+  status: string;
+}
+
+export interface StudentLibraryLoanRecord {
+  id: string;
+  quantity: number;
+  loanDate: string;
+  dueDate: string;
+  returnDate?: string | null;
+  status: 'DIPINJAM' | 'DIKEMBALIKAN' | 'TERLAMBAT' | 'HILANG' | string;
+  fineAmount?: number | string | null;
+  library_books?: {
+    code?: string | null;
+    title: string;
+    author?: string | null;
+  } | null;
+}
+
+export interface UserStudentLinkRecord {
+  id: string;
+  relationship: string;
+  isPrimary: boolean;
+  users?: {
+    id: string;
+    fullName: string;
+    email: string;
+    role: string;
+    isActive: boolean;
+    lastLogin?: string | null;
+  } | null;
 }

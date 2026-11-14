@@ -1,21 +1,30 @@
+// src/app/providers.tsx
 import { useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'sonner';
 import { useUIStore } from '@/stores/ui.store';
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const { theme } = useUIStore();
+  const theme = useUIStore((state) => state.theme);
 
   useEffect(() => {
     const root = document.documentElement;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    const applyTheme = () => {
+      const isDark =
+        theme === 'dark' || (theme === 'system' && mediaQuery.matches);
+
+      root.classList.toggle('dark', isDark);
+      root.classList.toggle('light', !isDark);
+      root.style.colorScheme = isDark ? 'dark' : 'light';
+    };
+
+    applyTheme();
 
     if (theme === 'system') {
-      const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.classList.toggle('dark', systemDark);
-      root.classList.toggle('light', !systemDark);
-    } else {
-      root.classList.toggle('dark', theme === 'dark');
-      root.classList.toggle('light', theme === 'light');
+      mediaQuery.addEventListener('change', applyTheme);
+      return () => mediaQuery.removeEventListener('change', applyTheme);
     }
   }, [theme]);
 
@@ -28,7 +37,7 @@ export function AppProviders({ children }: { children: React.ReactNode }) {
       new QueryClient({
         defaultOptions: {
           queries: {
-            staleTime: 60 * 1000, // 1 minute
+            staleTime: 60 * 1000, // 1 menit
             refetchOnWindowFocus: false,
             retry: 1,
           },

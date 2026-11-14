@@ -1,3 +1,4 @@
+// src/stores/ui.store.ts
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { Locale, Theme } from '../types/common.types';

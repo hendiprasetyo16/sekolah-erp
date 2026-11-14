@@ -1,3 +1,4 @@
+// src/components/maps/LocationPickerMap.tsx
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { MapContainer, TileLayer, Marker, Circle, useMapEvents, useMap } from 'react-leaflet';
 import L from 'leaflet';
@@ -41,13 +42,15 @@ function SearchField({ placeholder, disabled, onSelectLocation }: SearchFieldPro
         callbackRef.current = onSelectLocation;
     }, [onSelectLocation]);
 
-
-    // // @ts-expect-error - Deklarasi tipe bawaan leaflet-geosearch belum lengkap untuk opsi style
     useEffect(() => {
         if (disabled) return;
 
         const provider = new OpenStreetMapProvider();
-        const searchControl = new GeoSearchControl({
+        const GeoSearchCtor = GeoSearchControl as unknown as new (
+            options: Record<string, unknown>
+        ) => L.Control;
+
+        const searchControl = new GeoSearchCtor({
             provider,
             style: 'bar',
             showMarker: false,
@@ -173,6 +176,9 @@ export function LocationPickerMap({
             geoDenied: isId
                 ? 'Izin lokasi ditolak. Aktifkan izin GPS pada browser Anda.'
                 : 'Location permission denied. Please enable GPS permission in your browser.',
+            geoTimeout: isId
+                ? 'Waktu pencarian sinyal GPS habis. Coba lagi di area terbuka.'
+                : 'GPS signal request timed out. Try again in an open area.',
             geoSuccess: isId
                 ? 'Koordinat berhasil diperbarui sesuai posisi Anda saat ini.'
                 : 'Coordinates updated to your current GPS position.',
@@ -213,9 +219,13 @@ export function LocationPickerMap({
                 onChange(lat, lng);
                 toast.success(t.geoSuccess);
             },
-            () => {
+            (err) => {
                 setIsLocating(false);
-                toast.error(t.geoDenied);
+                if (err.code === err.TIMEOUT) {
+                    toast.error(t.geoTimeout);
+                } else {
+                    toast.error(t.geoDenied);
+                }
             },
             {
                 enableHighAccuracy: true,
