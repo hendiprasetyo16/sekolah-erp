@@ -242,7 +242,13 @@ export const userManagementService = {
                 .range(from, from + pageSize - 1);
 
             if (validSchoolId) {
-                query = query.eq('schoolId', validSchoolId);
+                if (isSuperAdmin) {
+                    // SUPER_ADMIN memiliki schoolId = NULL (level sistem lintas sekolah),
+                    // sehingga tetap disertakan bersama seluruh pengguna sekolah yang sedang dipilih.
+                    query = query.or(`schoolId.eq.${validSchoolId},role.eq.SUPER_ADMIN`);
+                } else {
+                    query = query.eq('schoolId', validSchoolId);
+                }
             }
 
             const { data, error } = await query;
@@ -252,6 +258,13 @@ export const userManagementService = {
             allUsers.push(...batch);
             if (batch.length < pageSize) break;
         }
+
+        // Pastikan akun SUPER_ADMIN selalu tampil di urutan paling atas secara default
+        allUsers.sort((a, b) => {
+            if (a.role === 'SUPER_ADMIN' && b.role !== 'SUPER_ADMIN') return -1;
+            if (a.role !== 'SUPER_ADMIN' && b.role === 'SUPER_ADMIN') return 1;
+            return 0;
+        });
 
         return enrichUsersWithMasterData(allUsers, validSchoolId, isSuperAdmin);
     },

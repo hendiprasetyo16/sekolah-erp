@@ -1,3 +1,4 @@
+// src/modules/students/services/student.service.ts
 import { supabase } from '@/services/supabase.client';
 import type { PostgrestError } from '@supabase/supabase-js';
 import type {
@@ -100,12 +101,18 @@ const normalizeStudentFields = <T extends Record<string, unknown>>(
 ): Record<string, unknown> => {
   const data: Record<string, unknown> = { ...raw };
 
-  // Hapus properti virtual/readonly yang tidak ada di tabel `public.students`
+  // Hapus properti virtual/readonly & metadata SmartDiff agar bersih untuk DB/RPC
   delete data.id;
   delete data.className;
   delete data.gradeLevel;
   delete data.createdAt;
   delete data.updatedAt;
+  delete data.rawClassName;
+  delete data.diffAction;
+  delete data.diffFields;
+  delete data.classes;
+  delete data.student_parents;
+  delete data.student_economics;
 
   if ('nis' in data) data.nis = cleanNullableText(data.nis as string | null);
   if ('nisn' in data && typeof data.nisn === 'string') data.nisn = data.nisn.trim();
@@ -183,7 +190,6 @@ const normalizeEconomicPayload = (
   const kipNumber = cleanNullableText(economic.kipNumber);
   const kksNumber = cleanNullableText(economic.kksNumber);
 
-  // Jika nomor kartu KIP/KKS terisi di Dapodik meski kolom centang bernilai 'Tidak', tetap pertahankan
   const hasKip = Boolean(economic.hasKip) || Boolean(kipNumber);
   const hasKks = Boolean(economic.hasKks) || Boolean(kksNumber);
   const layakPip = Boolean(economic.layakPip);
@@ -268,7 +274,7 @@ const handleDbError = (error: unknown): Error => {
     message = `${rowPrefix}Format input angka atau ID tidak valid.`;
   } else if (pgError?.code === '42P10') {
     message =
-      'Skema indeks unik database belum lengkap. Jalankan Patch SQL v7.7 pada Supabase SQL Editor.';
+      'Skema indeks unik database belum lengkap. Jalankan Patch SQL pada Supabase SQL Editor.';
   } else if (pgError?.code === '42501') {
     message = 'Anda tidak memiliki hak akses untuk melakukan operasi ini.';
   }
@@ -474,7 +480,6 @@ export const studentService = {
     const { parents, economic, ...rawStudentData } = payload;
     const studentData = normalizeStudentFields(rawStudentData);
 
-    // Biarkan database memakai DEFAULT CURRENT_DATE jika entryDate tidak diisi
     if (!studentData.entryDate) {
       delete studentData.entryDate;
     }
@@ -528,22 +533,30 @@ export const studentService = {
     return this.getById(createdStudent.id, trustedSchoolId);
   },
 
-  async update(id: string, payload: UpdateStudentPayload): Promise<ApiResponse<StudentDetail>> {
+  async update(
+    id: string,
+    payload: UpdateStudentPayload,
+    schoolId?: string
+  ): Promise<ApiResponse<StudentDetail>> {
     const { parents, economic, ...rawStudentData } = payload;
 
     const studentData = normalizeStudentFields(rawStudentData);
     delete studentData.schoolId;
 
-    // Jangan menimpa kolom `entryDate` (NOT NULL) menjadi null saat update parsial
     if (!studentData.entryDate) {
       delete studentData.entryDate;
     }
 
-    const { data: existingStudent, error: fetchError } = await supabase
+    let existingQuery = supabase
       .from('students')
       .select('id, schoolId, classId')
-      .eq('id', id)
-      .single();
+      .eq('id', id);
+
+    if (schoolId) {
+      existingQuery = existingQuery.eq('schoolId', schoolId);
+    }
+
+    const { data: existingStudent, error: fetchError } = await existingQuery.single();
 
     if (fetchError) throw handleDbError(fetchError);
     const trustedSchoolId = existingStudent.schoolId;
@@ -559,50 +572,43 @@ export const studentService = {
     }
 
     if (parents !== undefined) {
-      const { data: backupParents, error: backupError } = await supabase
-        .from('student_parents')
-        .select('*')
-        .eq('studentId', id)
-        .eq('schoolId', trustedSchoolId);
-
-      if (backupError) throw handleDbError(backupError);
-
-      const { error: deleteParentsError } = await supabase
-        .from('student_parents')
-        .delete()
-        .eq('studentId', id)
-        .eq('schoolId', trustedSchoolId);
-
-      if (deleteParentsError) throw handleDbError(deleteParentsError);
-
       const validParents = parents.filter((p) => Boolean(p.fullName?.trim()));
-      if (validParents.length > 0) {
-        const parentsData = validParents.map((p) => {
-          const normalized = normalizeParentPayload(
-            p as CreateStudentParentPayload & Record<string, unknown>
-          );
-          const existingSameRel = (backupParents || []).find(
-            (bp) => bp.relation === normalized.relation
-          );
-          return {
-            ...normalized,
-            address: normalized.address ?? existingSameRel?.address ?? null,
-            studentId: id,
-            schoolId: trustedSchoolId,
-          };
-        });
+      const normalizedParents = validParents.map((p) =>
+        normalizeParentPayload(
+          p as CreateStudentParentPayload & Record<string, unknown>
+        )
+      );
 
-        const { error: insertParentsError } = await supabase
+      if (normalizedParents.length === 0) {
+        const { error: deleteAllParentsError } = await supabase
           .from('student_parents')
-          .insert(parentsData);
+          .delete()
+          .eq('studentId', id)
+          .eq('schoolId', trustedSchoolId);
 
-        if (insertParentsError) {
-          if (backupParents && backupParents.length > 0) {
-            const restoreRows = backupParents.map(({ id: _oldId, ...rest }) => rest);
-            await supabase.from('student_parents').insert(restoreRows);
-          }
-          throw handleDbError(insertParentsError);
-        }
+        if (deleteAllParentsError) throw handleDbError(deleteAllParentsError);
+      } else {
+        const activeRelations = normalizedParents.map((p) => p.relation);
+        const { error: deleteRemovedError } = await supabase
+          .from('student_parents')
+          .delete()
+          .eq('studentId', id)
+          .eq('schoolId', trustedSchoolId)
+          .not('relation', 'in', `(${activeRelations.join(',')})`);
+
+        if (deleteRemovedError) throw handleDbError(deleteRemovedError);
+
+        const parentsData = normalizedParents.map((p) => ({
+          ...p,
+          studentId: id,
+          schoolId: trustedSchoolId,
+        }));
+
+        const { error: upsertParentsError } = await supabase
+          .from('student_parents')
+          .upsert(parentsData, { onConflict: 'studentId,relation' });
+
+        if (upsertParentsError) throw handleDbError(upsertParentsError);
       }
     }
 
@@ -753,16 +759,7 @@ export const studentService = {
     }
 
     const sanitizedBatch = payload.map((item) => {
-      const {
-        id: _id,
-        rawClassName: _rawClassName,
-        diffAction: _diffAction,
-        diffFields: _diffFields,
-        parents,
-        economic,
-        ...rest
-      } = item;
-
+      const { parents, economic, ...rest } = item;
       const normalizedCore = normalizeStudentFields(rest);
 
       return {

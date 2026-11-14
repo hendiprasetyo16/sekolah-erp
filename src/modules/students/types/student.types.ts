@@ -1,3 +1,4 @@
+// src/modules/students/types/student.types.ts
 import type {
   EconomicCategory,
   Gender,
@@ -71,6 +72,7 @@ export interface StudentListItem {
  */
 export interface StudentDetail extends StudentListItem {
   schoolId: string;
+  userId?: string | null;
   noKk?: string | null;
   nickname?: string | null;
 
@@ -191,6 +193,7 @@ export type CreateStudentEconomicPayload = Omit<
 
 export interface CreateStudentPayload {
   schoolId: string;
+  userId?: string | null;
 
   nis?: string | null;
   nisn: string;
