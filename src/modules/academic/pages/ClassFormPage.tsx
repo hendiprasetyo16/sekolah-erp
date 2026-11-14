@@ -296,7 +296,8 @@ function ClassFormInner({
                                         name={field.name}
                                         ref={field.ref}
                                         onBlur={field.onBlur}
-                                        value={field.value ?? ''}
+                                        // <-- BAGIAN YANG DIPERBAIKI: Mencegah NaN masuk ke atribut value
+                                        value={Number.isNaN(field.value) ? '' : (field.value ?? '')}
                                         onChange={(event) => {
                                             const value = event.target.value;
                                             field.onChange(value === '' ? Number.NaN : Number(value));

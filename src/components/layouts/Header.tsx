@@ -28,9 +28,6 @@ import { ROLE_LABELS } from '@/constants/app.constants';
 import { getInitials } from '@/utils/format';
 import { Button } from '@/components/ui/button';
 
-/**
- * Struktur data satu item notifikasi pada panel dropdown Header.
- */
 interface HeaderNotificationItem {
   id: string;
   title: string;
@@ -38,38 +35,30 @@ interface HeaderNotificationItem {
   isRead: boolean;
 }
 
-/**
- * Kontrak slice store notifikasi yang dikonsumsi oleh komponen Header.
- */
 interface HeaderNotificationStore {
   unreadCount?: number;
   notifications?: HeaderNotificationItem[];
   markAllAsRead?: () => void;
 }
 
-/**
- * Struktur item navigasi jejak halaman (Breadcrumb).
- */
 interface BreadcrumbItem {
   label: string;
   href: string;
   isClickable: boolean;
 }
 
-/**
- * Struktur opsi Tahun Ajaran dari tabel `public.academic_years`.
- */
 interface AcademicYearOption {
   id: string;
   schoolId: string;
   name: string;
-  semester?: string | null;
+  startYear?: number;
+  endYear?: number;
   isActive: boolean;
-  startDate?: string;
-  endDate?: string;
 }
 
 type AuthAcademicYear = ReturnType<typeof useAuthStore.getState>['academicYear'];
+
+const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 
 /**
  * Kamus label dwibahasa untuk segmen URL pada Breadcrumb.
@@ -77,7 +66,7 @@ type AuthAcademicYear = ReturnType<typeof useAuthStore.getState>['academicYear']
 const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
   dashboard: { id: 'Dasbor', en: 'Dashboard' },
   academic: { id: 'Akademik', en: 'Academic' },
-  'master-data': { id: 'Data Induk', en: 'Master Data' },
+  'master-data': { id: 'Master Akademik', en: 'Master Academic' },
   students: { id: 'Data Siswa', en: 'Students' },
   teachers: { id: 'Guru & Staf', en: 'Teachers & Staff' },
   schedules: { id: 'Jadwal Pelajaran', en: 'Schedules' },
@@ -93,20 +82,15 @@ const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
   scholarships: { id: 'Beasiswa', en: 'Scholarships' },
   reports: { id: 'Laporan', en: 'Reports' },
   settings: { id: 'Pengaturan', en: 'Settings' },
+  school: { id: 'Profil Sekolah', en: 'School Profile' },
   profile: { id: 'Profil Saya', en: 'My Profile' },
   create: { id: 'Tambah Baru', en: 'Create New' },
   new: { id: 'Tambah Baru', en: 'New' },
   edit: { id: 'Ubah Data', en: 'Edit' },
 };
 
-/**
- * Daftar segmen induk yang hanya berfungsi sebagai pengelompokan URL.
- */
 const NON_ROUTABLE_SEGMENTS = new Set<string>(['academic']);
 
-/**
- * Komponen Bilah Navigasi Atas (`Header`).
- */
 export function Header() {
   const { t, locale } = useTranslation();
   const navigate = useNavigate();
@@ -115,27 +99,25 @@ export function Header() {
   const { theme, setTheme, locale: currentLocale, setLocale, setSidebarOpen } = useUIStore();
   const { user, school, academicYear, logout, setSchool, setAcademicYear } = useAuthStore();
 
-  // Membaca state notifikasi secara aman tanpa casting `any`
   const notificationStore = useNotificationStore() as unknown as HeaderNotificationStore;
   const unreadCount = notificationStore.unreadCount ?? 0;
   const notifications = notificationStore.notifications ?? [];
   const markAllAsRead = notificationStore.markAllAsRead;
 
-  // State kontrol popover & modal konfirmasi keluar
   const [userMenuOpen, setUserMenuOpen] = useState<boolean>(false);
   const [notificationOpen, setNotificationOpen] = useState<boolean>(false);
   const [yearMenuOpen, setYearMenuOpen] = useState<boolean>(false);
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
   const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
-  // State daftar tahun ajaran & cache per sekolah agar dibuka instan tanpa delay
   const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
   const [isRefreshingYears, setIsRefreshingYears] = useState<boolean>(false);
   const loadedSchoolIdRef = useRef<string | null>(null);
 
-  /**
-   * Menutup seluruh dropdown dan modal konfirmasi ketika pengguna menekan tombol `Escape`.
-   */
+  const canAccessSettings = Boolean(
+    user?.role && (CORE_ADMIN_ROLES as readonly string[]).includes(user.role)
+  );
+
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape' && !isLoggingOut) {
@@ -150,32 +132,28 @@ export function Header() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isLoggingOut]);
 
-  /**
-   * Memuat daftar Tahun Ajaran milik sekolah aktif dengan kolom ringkas dan batas waktu aman.
-   */
   const fetchSchoolAcademicYears = useCallback(
     async (forceRefresh = false): Promise<void> => {
       const targetSchoolId = school?.id;
       if (!targetSchoolId) return;
 
-      // Gunakan cache jika data untuk sekolah ini sudah pernah dimuat dan tidak dipaksa refresh
       if (!forceRefresh && loadedSchoolIdRef.current === targetSchoolId && academicYears.length > 0) {
         return;
       }
 
       setIsRefreshingYears(true);
 
-      // Pengaman timeout 5 detik agar indikator loading tidak pernah berputar terus-menerus
       const timeoutId = window.setTimeout(() => {
         setIsRefreshingYears(false);
       }, 5000);
 
       try {
+        // <-- PERBAIKAN BUG: Hanya ambil kolom yang benar-benar ada di tabel academic_years
         const { data, error } = await supabase
           .from('academic_years')
-          .select('id, schoolId, name, semester, isActive, startDate, endDate')
+          .select('id, schoolId, name, startYear, endYear, isActive')
           .eq('schoolId', targetSchoolId)
-          .order('name', { ascending: false });
+          .order('startYear', { ascending: false });
 
         if (!error && Array.isArray(data)) {
           setAcademicYears(data as AcademicYearOption[]);
@@ -189,10 +167,6 @@ export function Header() {
     [school?.id, academicYears.length]
   );
 
-  /**
-   * Pre-fetch daftar Tahun Ajaran di latar belakang saat sekolah aktif terpilih
-   * sehingga dropdown terbuka seketika (0ms) saat diklik.
-   */
   useEffect(() => {
     if (!school?.id) {
       setAcademicYears([]);
@@ -205,9 +179,6 @@ export function Header() {
     }
   }, [school?.id, fetchSchoolAcademicYears]);
 
-  /**
-   * Membuka/menutup dropdown Tahun Ajaran dan menyegarkan data di latar belakang.
-   */
   const handleToggleYearMenu = (): void => {
     const nextState = !yearMenuOpen;
     setYearMenuOpen(nextState);
@@ -219,9 +190,6 @@ export function Header() {
     }
   };
 
-  /**
-   * Mengubah konteks Tahun Ajaran yang sedang dilihat pada sesi kerja saat ini.
-   */
   const handleSelectAcademicYear = (selected: AcademicYearOption): void => {
     setAcademicYear(selected as unknown as AuthAcademicYear);
     setYearMenuOpen(false);
@@ -232,7 +200,6 @@ export function Header() {
     );
   };
 
-  // Gabungkan daftar dari server dengan tahun ajaran aktif di store agar tidak pernah kosong
   const displayedAcademicYears: AcademicYearOption[] = (() => {
     if (academicYears.length > 0) return academicYears;
     if (academicYear) {
@@ -241,9 +208,6 @@ export function Header() {
     return [];
   })();
 
-  /**
-   * Membangun daftar breadcrumb dwibahasa dari segmen URL saat ini.
-   */
   const pathSegments = location.pathname.split('/').filter(Boolean);
   const breadcrumbs: BreadcrumbItem[] = pathSegments.map((segment, idx) => {
     const isUuid = segment.length >= 24 || /^[0-9a-fA-F-]{36}$/.test(segment);
@@ -263,9 +227,6 @@ export function Header() {
   const currentPageTitle =
     breadcrumbs.length > 0 ? breadcrumbs[breadcrumbs.length - 1].label : t('sidebar.dashboard');
 
-  /**
-   * Mengakhiri sesi autentikasi pengguna secara bersih dan mengarahkan ke halaman login.
-   */
   const handleConfirmLogout = async (): Promise<void> => {
     setIsLoggingOut(true);
     try {
@@ -277,9 +238,6 @@ export function Header() {
     }
   };
 
-  /**
-   * Mengosongkan konteks sekolah aktif agar `SUPER_ADMIN` kembali ke Konsol Multi-Sekolah.
-   */
   const handleReturnToTenantConsole = (): void => {
     setSchool(null);
     setAcademicYear(null);
@@ -293,9 +251,6 @@ export function Header() {
   return (
     <>
       <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-border bg-card/95 px-4 backdrop-blur-xs sm:px-6">
-        {/* =====================================================================
-            BAGIAN KIRI: TOMBOL DRAWER MOBILE, JUDUL MOBILE & BREADCRUMB DESKTOP
-           ===================================================================== */}
         <div className="flex min-w-0 items-center gap-2.5">
           <button
             type="button"
@@ -338,11 +293,7 @@ export function Header() {
           </nav>
         </div>
 
-        {/* =====================================================================
-            BAGIAN KANAN: TAHUN AJARAN, SWITCH TENANT, KONTROL UI & PROFIL AKUN
-           ===================================================================== */}
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {/* Pengalih Cepat Tahun Ajaran Aktif */}
           {academicYear?.name && (
             <div className="relative hidden sm:block">
               <button
@@ -411,7 +362,6 @@ export function Header() {
             </div>
           )}
 
-          {/* Tombol Ganti Sekolah / Kembali ke Konsol Multi-Sekolah (Khusus SUPER_ADMIN) */}
           {user?.role === 'SUPER_ADMIN' && (
             <button
               type="button"
@@ -431,7 +381,6 @@ export function Header() {
             </button>
           )}
 
-          {/* Pengalih Bahasa Antarmuka (ID / EN) */}
           <button
             type="button"
             onClick={() => setLocale(currentLocale === 'id' ? 'en' : 'id')}
@@ -441,7 +390,6 @@ export function Header() {
             {currentLocale}
           </button>
 
-          {/* Pengalih Mode Tema (Terang / Gelap) */}
           <button
             type="button"
             onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
@@ -451,7 +399,6 @@ export function Header() {
             {theme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
           </button>
 
-          {/* Dropdown Notifikasi Sistem */}
           <div className="relative">
             <button
               type="button"
@@ -519,7 +466,6 @@ export function Header() {
 
           <div className="mx-0.5 h-5 w-px bg-border" />
 
-          {/* Dropdown Menu Profil Pengguna */}
           <div className="relative">
             <button
               type="button"
@@ -563,17 +509,19 @@ export function Header() {
                       <User size={14} className="text-muted-foreground" />
                       {t('common.profile')}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        navigate('/settings');
-                        setUserMenuOpen(false);
-                      }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
-                    >
-                      <Settings size={14} className="text-muted-foreground" />
-                      {t('common.settings')}
-                    </button>
+                    {canAccessSettings && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigate('/settings');
+                          setUserMenuOpen(false);
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-foreground transition-colors hover:bg-muted"
+                      >
+                        <Settings size={14} className="text-muted-foreground" />
+                        {t('common.settings')}
+                      </button>
+                    )}
                   </div>
                   <div className="border-t border-border p-1.5">
                     <button
@@ -595,9 +543,6 @@ export function Header() {
         </div>
       </header>
 
-      {/* =====================================================================
-          MODAL DIALOG KONFIRMASI KELUAR SESI
-         ===================================================================== */}
       {isLogoutModalOpen && (
         <div
           role="dialog"

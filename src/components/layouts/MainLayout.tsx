@@ -10,16 +10,6 @@ import { TenantSelector } from '@/modules/auth/components/TenantSelector';
 import { useTranslation } from '@/hooks/useTranslation';
 import { cn } from '@/utils/cn';
 
-/**
- * Kerangka Utama Aplikasi (`MainLayout`).
- *
- * Bertanggung jawab atas:
- * 1. Sinkronisasi tema global ('light' / 'dark') pada elemen root dokumen.
- * 2. Pengalihan otomatis ke `TenantSelector` apabila pengguna berstatus `SUPER_ADMIN`
- *    belum memilih sekolah aktif (kecuali sedang membuka halaman pendaftaran sekolah baru).
- * 3. Reset posisi scroll ke atas secara otomatis setiap kali rute halaman berubah.
- * 4. Pemantauan status koneksi internet browser agar pengguna mendapat peringatan jika offline.
- */
 export function MainLayout() {
   const { sidebarCollapsed, theme } = useUIStore();
   const { locale } = useTranslation();
@@ -28,15 +18,10 @@ export function MainLayout() {
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
 
-  // Memantau status koneksi jaringan perangkat
   const [isOffline, setIsOffline] = useState<boolean>(
     typeof navigator !== 'undefined' ? !navigator.onLine : false
   );
 
-  /**
-   * Menyinkronkan mode tema ('dark' atau 'light') pada elemen root <html>
-   * setiap kali pengguna mengubah tema melalui tombol di Header.
-   */
   useEffect(() => {
     const rootElement = document.documentElement;
     if (theme === 'dark') {
@@ -50,16 +35,10 @@ export function MainLayout() {
     }
   }, [theme]);
 
-  /**
-   * Mengembalikan posisi scroll layar ke paling atas setiap kali pengguna berpindah halaman.
-   */
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, [location.pathname]);
 
-  /**
-   * Mendengarkan perubahan status koneksi internet (`online` / `offline`).
-   */
   useEffect(() => {
     const handleOnline = (): void => setIsOffline(false);
     const handleOffline = (): void => setIsOffline(true);
@@ -73,7 +52,7 @@ export function MainLayout() {
     };
   }, []);
 
-  // Jika Super Admin belum memilih institusi dan tidak sedang di halaman Master Data, tampilkan pemilih tenant
+  // Jika Super Admin belum memilih sekolah dan tidak sedang membuka Master Akademik (untuk daftar sekolah baru), tampilkan pemilih tenant
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
   const isMasterDataPage = location.pathname === '/academic/master-data';
 
@@ -83,10 +62,8 @@ export function MainLayout() {
 
   return (
     <div className="min-h-dvh bg-muted/30 text-foreground">
-      {/* Bilah Navigasi Samping (Fixed di Desktop, Drawer di Mobile) */}
       <Sidebar />
 
-      {/* Kontainer Utama: Bergeser otomatis sesuai lebar Sidebar pada layar desktop */}
       <div
         className={cn(
           'flex min-h-dvh flex-col transition-[padding] duration-200 ease-out',
@@ -95,7 +72,6 @@ export function MainLayout() {
       >
         <Header />
 
-        {/* Banner Peringatan Koneksi Terputus (Hanya muncul saat perangkat offline) */}
         {isOffline && (
           <div
             role="status"

@@ -2,6 +2,13 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import { MainLayout } from '@/components/layouts/MainLayout';
 import { LoginPage } from '@/modules/auth/pages/LoginPage';
 import { AdminDashboard } from '@/modules/dashboard/pages/AdminDashboard';
+import { StudentDashboard } from '@/modules/dashboard/pages/StudentDashboard';
+import { ParentDashboard } from '@/modules/dashboard/pages/ParentDashboard';
+import {
+  PortalSchedulePage,
+  PortalAttendancePage,
+  PortalFinancePage,
+} from '@/modules/dashboard/pages/PortalSubPages';
 import { StudentListPage } from '@/modules/students/pages/StudentListPage';
 import { StudentFormPage } from '@/modules/students/pages/StudentFormPage';
 import { StudentDetailPage } from '@/modules/students/pages/StudentDetailPage';
@@ -17,38 +24,90 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { StudentKioskPage } from '@/modules/attendance/pages/StudentKioskPage';
 import { TeacherAttendancePage } from '@/modules/attendance/pages/TeacherAttendancePage';
 import { AttendanceDashboardPage } from '@/modules/attendance/pages/AttendanceDashboardPage';
-import { InventoryPlaceholder, AdminPlaceholder, ScholarshipsPlaceholder, SettingsPlaceholder } from './placeholder-pages';
+import {
+  InventoryPlaceholder,
+  AdminPlaceholder,
+  ScholarshipsPlaceholder,
+  SettingsPlaceholder,
+} from './placeholder-pages';
 
+// Academic module
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
 import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
 import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswordPage';
-
-// 1. IMPORT HALAMAN PROFILE PAGE BARU
 import { ProfilePage } from '@/modules/profile/pages/ProfilePage';
 
 // ============================================================================
-// KOMPONEN PENCEGAT RUTE (SATPAM APLIKASI)
+// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx)
 // ============================================================================
+const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
+const CLASS_EDITOR_ROLES = ['SUPER_ADMIN', 'ADMIN'] as const;
+const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
+const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
+const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
+const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
+const USER_MANAGEMENT_ROLES = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'STAFF_TU'] as const;
+const REPORT_ROLES = [...CORE_ADMIN_ROLES, 'BENDAHARA'] as const;
+const ATTENDANCE_RECAP_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS'] as const;
+const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
+const ATTENDANCE_GPS_ROLES = [
+  'KEPALA_SEKOLAH',
+  'OPERATOR',
+  'WALI_KELAS',
+  'GURU',
+  'STAFF_TU',
+  'STAFF_SARPRAS',
+  'BENDAHARA',
+] as const;
+
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, user } = useAuthStore();
-  const location = useLocation(); // Untuk mendeteksi user sedang berada di URL mana
+  const location = useLocation();
 
-  // 1. Jika belum login, lempar ke halaman login
   if (!isAuthenticated) return <Navigate to="/login" replace />;
 
-  // 2. CEGATAN FASE 3: Jika isFirstLogin = true, dan dia sedang tidak di halaman ganti password, paksa pindah!
   if (user?.isFirstLogin && location.pathname !== '/force-change-password') {
     return <Navigate to="/force-change-password" replace />;
   }
 
-  // 3. Jika isFirstLogin = false, tapi dia iseng mencoba buka halaman ganti password, kembalikan ke dashboard
   if (!user?.isFirstLogin && location.pathname === '/force-change-password') {
     return <Navigate to="/dashboard" replace />;
   }
 
   return <>{children}</>;
+}
+
+/**
+ * Satpam Rute Per-Role: Mencegah user membuka halaman yang bukan haknya
+ * lewat pengetikan URL manual di browser.
+ */
+function RoleRoute({
+  allowedRoles,
+  children,
+}: {
+  allowedRoles: readonly string[];
+  children: React.ReactNode;
+}) {
+  const { user } = useAuthStore();
+
+  if (!user?.role || !allowedRoles.includes(user.role)) {
+    return <Navigate to="/dashboard" replace />;
+  }
+
+  return <>{children}</>;
+}
+
+/**
+ * Pengarah Dasbor Otomatis berdasarkan role pengguna yang sedang login.
+ */
+function DashboardGate() {
+  const role = useAuthStore((state) => state.user?.role);
+
+  if (role === 'SISWA') return <StudentDashboard />;
+  if (role === 'ORANG_TUA') return <ParentDashboard />;
+  return <AdminDashboard />;
 }
 
 function PublicRoute({ children }: { children: React.ReactNode }) {
@@ -61,10 +120,10 @@ export function AppRouter() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* RUTE PUBLIK (Hanya bisa diakses jika BELUM login) */}
+        {/* RUTE PUBLIK */}
         <Route path="/login" element={<PublicRoute><LoginPage /></PublicRoute>} />
 
-        {/* RUTE STANDALONE (Sudah login, tapi tidak pakai Layout utama) */}
+        {/* RUTE STANDALONE */}
         <Route
           path="/force-change-password"
           element={
@@ -74,66 +133,267 @@ export function AppRouter() {
           }
         />
 
-        {/* RUTE TERLINDUNGI (Menggunakan Sidebar & Header) */}
+        {/* RUTE TERLINDUNGI */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-          {/* Dashboard */}
-          <Route path="/dashboard" element={<AdminDashboard />} />
-
-          {/* Academic / Master Data */}
-          <Route path="/academic/master-data" element={<MasterSettingsPage />} />
-          <Route path="/academic/classes/new" element={<ClassFormPage />} />
-          <Route path="/academic/classes/:id/edit" element={<ClassFormPage />} />
-
-          {/* Students */}
-          <Route path="/students" element={<StudentListPage />} />
-          <Route path="/students/new" element={<StudentFormPage />} />
-          <Route path="/students/:id" element={<StudentDetailPage />} />
-          <Route path="/students/:id/edit" element={<StudentFormPage />} />
-
-          {/* Teachers */}
-          <Route path="/teachers" element={<TeacherListPage />} />
-          <Route path="/teachers/new" element={<TeacherFormPage />} />
-          <Route path="/teachers/:id" element={<TeacherDetailPage />} />
-          <Route path="/teachers/:id/edit" element={<TeacherFormPage />} />
-
-          {/* Finance */}
-          <Route path="/finance" element={<FinanceDashboardPage />} />
-          <Route path="/finance/*" element={<FinanceDashboardPage />} />
-
-          {/* Schedules */}
-          <Route path="/schedules" element={<ScheduleDashboardPage />} />
-          <Route path="/schedules/*" element={<ScheduleDashboardPage />} />
-
-          {/* Reports */}
-          <Route path="/reports" element={<ReportsDashboardPage />} />
-          <Route path="/reports/*" element={<ReportsDashboardPage />} />
-
-          {/* User Management */}
-          <Route path="/admin/users" element={<UserManagementPage />} />
-
-          {/* ========================================= */}
-          {/* RUTE PROFIL PENGGUNA BARU DISISIPKAN DISINI */}
-          {/* ========================================= */}
+          {/* Dashboard Otomatis Sesuai Role + Profil Pribadi */}
+          <Route path="/dashboard" element={<DashboardGate />} />
           <Route path="/profile" element={<ProfilePage />} />
 
+          {/* Portal Siswa & Orang Tua */}
+          <Route
+            path="/portal/schedules"
+            element={
+              <RoleRoute allowedRoles={PORTAL_ROLES}>
+                <PortalSchedulePage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/portal/attendance"
+            element={
+              <RoleRoute allowedRoles={PORTAL_ROLES}>
+                <PortalAttendancePage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/portal/finance"
+            element={
+              <RoleRoute allowedRoles={PORTAL_ROLES}>
+                <PortalFinancePage />
+              </RoleRoute>
+            }
+          />
+
+          {/* Academic / Master Data */}
+          <Route
+            path="/academic/master-data"
+            element={
+              <RoleRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <MasterSettingsPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/academic/classes/new"
+            element={
+              <RoleRoute allowedRoles={CLASS_EDITOR_ROLES}>
+                <ClassFormPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/academic/classes/:id/edit"
+            element={
+              <RoleRoute allowedRoles={CLASS_EDITOR_ROLES}>
+                <ClassFormPage />
+              </RoleRoute>
+            }
+          />
+
+          {/* Students */}
+          <Route
+            path="/students"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <StudentListPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/students/new"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <StudentFormPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/students/:id"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <StudentDetailPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/students/:id/edit"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <StudentFormPage />
+              </RoleRoute>
+            }
+          />
+
+          {/* Teachers */}
+          <Route
+            path="/teachers"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <TeacherListPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/teachers/new"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <TeacherFormPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/teachers/:id"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <TeacherDetailPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/teachers/:id/edit"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <TeacherFormPage />
+              </RoleRoute>
+            }
+          />
+
+          {/* Finance */}
+          <Route
+            path="/finance"
+            element={
+              <RoleRoute allowedRoles={FINANCE_ROLES}>
+                <FinanceDashboardPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/finance/*"
+            element={
+              <RoleRoute allowedRoles={FINANCE_ROLES}>
+                <FinanceDashboardPage />
+              </RoleRoute>
+            }
+          />
+
+          {/* Schedules */}
+          <Route
+            path="/schedules"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <ScheduleDashboardPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/schedules/*"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <ScheduleDashboardPage />
+              </RoleRoute>
+            }
+          />
+
+          {/* Reports */}
+          <Route
+            path="/reports"
+            element={
+              <RoleRoute allowedRoles={REPORT_ROLES}>
+                <ReportsDashboardPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/reports/*"
+            element={
+              <RoleRoute allowedRoles={REPORT_ROLES}>
+                <ReportsDashboardPage />
+              </RoleRoute>
+            }
+          />
+
+          {/* User Management */}
+          <Route
+            path="/admin/users"
+            element={
+              <RoleRoute allowedRoles={USER_MANAGEMENT_ROLES}>
+                <UserManagementPage />
+              </RoleRoute>
+            }
+          />
+
           {/* Attendance */}
-          <Route path="/attendance" element={<AttendanceDashboardPage />} />
-          <Route path="/attendance/teacher" element={<TeacherAttendancePage />} />
+          <Route
+            path="/attendance"
+            element={
+              <RoleRoute allowedRoles={ATTENDANCE_RECAP_ROLES}>
+                <AttendanceDashboardPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/attendance/teacher"
+            element={
+              <RoleRoute allowedRoles={ATTENDANCE_GPS_ROLES}>
+                <TeacherAttendancePage />
+              </RoleRoute>
+            }
+          />
 
           {/* Settings */}
-          <Route path="/settings" element={<SettingsPlaceholder />} />
-          <Route path="/settings/*" element={<SettingsPlaceholder />} />
+          <Route
+            path="/settings/school"
+            element={<Navigate to="/academic/master-data" state={{ tab: 'sekolah' }} replace />}
+          />
+          <Route
+            path="/settings"
+            element={
+              <RoleRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <SettingsPlaceholder />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/settings/*"
+            element={
+              <RoleRoute allowedRoles={CORE_ADMIN_ROLES}>
+                <SettingsPlaceholder />
+              </RoleRoute>
+            }
+          />
 
           {/* Placeholders */}
-          <Route path="/inventory/*" element={<InventoryPlaceholder />} />
-          <Route path="/admin/*" element={<AdminPlaceholder />} />
-          <Route path="/scholarships/*" element={<ScholarshipsPlaceholder />} />
+          <Route
+            path="/inventory/*"
+            element={
+              <RoleRoute allowedRoles={INVENTORY_ROLES}>
+                <InventoryPlaceholder />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/admin/*"
+            element={
+              <RoleRoute allowedRoles={TU_ROLES}>
+                <AdminPlaceholder />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/scholarships/*"
+            element={
+              <RoleRoute allowedRoles={TU_ROLES}>
+                <ScholarshipsPlaceholder />
+              </RoleRoute>
+            }
+          />
         </Route>
 
-        {/* Kiosk Absensi Siswa - rute publik khusus layar/monitor */}
+        {/* Kiosk Absensi Siswa */}
         <Route path="/kiosk" element={<StudentKioskPage />} />
 
-        {/* Redirect: Jika rute tidak dikenali, arahkan ke dashboard */}
+        {/* Redirect */}
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

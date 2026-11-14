@@ -16,6 +16,9 @@ import {
 // INTERNAL HELPERS
 // ==========================================
 
+/**
+ * Mengambil pesan error yang mudah dibaca dari respons Supabase Edge Function.
+ */
 const extractEdgeErrorMessage = async (error: unknown): Promise<string> => {
     if (!error || typeof error !== 'object') return 'Terjadi kesalahan jaringan';
     const errObj = error as { message?: string; context?: Response };
@@ -33,6 +36,9 @@ const extractEdgeErrorMessage = async (error: unknown): Promise<string> => {
     return errObj.message || 'Terjadi kesalahan pada server';
 };
 
+/**
+ * Memanggil Edge Function dengan penanganan error yang aman untuk proses massal.
+ */
 const invokeSafe = async (
     name: string,
     body: Record<string, unknown>
@@ -52,6 +58,10 @@ const invokeSafe = async (
     }
 };
 
+/**
+ * Menjalankan proses async secara paralel dengan batas antrean (concurrency)
+ * agar server tidak kelebihan beban saat memproses banyak akun sekaligus.
+ */
 const runWithConcurrency = async <T, R>(
     items: readonly T[],
     limit: number,
@@ -72,6 +82,9 @@ const runWithConcurrency = async <T, R>(
     return results;
 };
 
+/**
+ * Merangkum hasil eksekusi massal (jumlah berhasil, gagal, dan dilewati).
+ */
 const summarizeResults = (results: InvokeResult[], skipped = 0): BatchExecutionSummary => {
     const failures = results.filter((r) => r.error || r.data?.error);
     return {
@@ -85,8 +98,20 @@ const summarizeResults = (results: InvokeResult[], skipped = 0): BatchExecutionS
 };
 
 /**
- * Memperkaya daftar akun dengan status keterhubungan ke tabel `students` (user_id)
- * dan `user_student_links` secara non-blocking.
+ * Memecah array besar menjadi beberapa potongan kecil (chunk)
+ * agar parameter `.in(...)` pada query Supabase tidak melebihi batas panjang URL.
+ */
+const chunkArray = <T>(items: readonly T[], size: number): T[][] => {
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+        chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
+};
+
+/**
+ * Memperkaya daftar akun (SISWA & ORANG_TUA) dengan status keterhubungan
+ * ke tabel `public.user_student_links` (kolom camelCase: "userId", "schoolId").
  */
 const enrichUsersWithMasterLinks = async (
     users: AppUser[],
@@ -95,61 +120,53 @@ const enrichUsersWithMasterLinks = async (
 ): Promise<AppUser[]> => {
     if (users.length === 0) return users;
 
-    const hasStudents = users.some((u) => u.role === 'SISWA');
-    const hasParents = users.some((u) => u.role === 'ORANG_TUA');
+    const targetIds = users
+        .filter((u) => u.role === 'SISWA' || u.role === 'ORANG_TUA')
+        .map((u) => u.id);
 
-    const linkedStudentUserIds = new Set<string>();
-    const parentChildrenCount = new Map<string, number>();
+    if (targetIds.length === 0) return users;
+
+    // Menyimpan jumlah siswa yang tertaut untuk setiap userId
+    const linkedCountMap = new Map<string, number>();
 
     try {
-        if (hasStudents) {
-            let studentQuery = supabase
-                .from('students')
-                .select('user_id')
-                .not('user_id', 'is', null);
+        // Pecah per 200 UUID agar aman dari error "URI Too Long"
+        const idChunks = chunkArray(targetIds, 200);
+
+        for (const chunk of idChunks) {
+            let linkQuery = supabase
+                .from('user_student_links')
+                .select('userId')
+                .in('userId', chunk);
 
             if (!isSuperAdmin && schoolId) {
-                studentQuery = studentQuery.eq('school_id', schoolId);
+                linkQuery = linkQuery.eq('schoolId', schoolId);
             }
 
-            const { data: studentRows } = await studentQuery;
-            if (Array.isArray(studentRows)) {
-                for (const row of studentRows) {
-                    const uid = (row as { user_id?: string | null }).user_id;
-                    if (uid) linkedStudentUserIds.add(uid);
-                }
-            }
-        }
-
-        if (hasParents) {
-            const parentIds = users.filter((u) => u.role === 'ORANG_TUA').map((u) => u.id);
-            const { data: linkRows } = await supabase
-                .from('user_student_links')
-                .select('user_id')
-                .in('user_id', parentIds);
-
-            if (Array.isArray(linkRows)) {
+            const { data: linkRows, error } = await linkQuery;
+            if (!error && Array.isArray(linkRows)) {
                 for (const row of linkRows) {
-                    const uid = (row as { user_id?: string | null }).user_id;
+                    const uid = (row as { userId?: string | null }).userId;
                     if (uid) {
-                        parentChildrenCount.set(uid, (parentChildrenCount.get(uid) ?? 0) + 1);
+                        linkedCountMap.set(uid, (linkedCountMap.get(uid) ?? 0) + 1);
                     }
                 }
             }
         }
     } catch {
-        // Fallback aman apabila RLS/kolom master berbeda
+        // Fallback aman agar daftar pengguna tetap tampil meskipun query tautan gagal
     }
 
     return users.map((u) => {
         if (u.role === 'SISWA') {
+            const count = linkedCountMap.get(u.id) ?? 0;
             return {
                 ...u,
-                isLinkedToMaster: linkedStudentUserIds.has(u.id),
+                isLinkedToMaster: count > 0,
             };
         }
         if (u.role === 'ORANG_TUA') {
-            const count = parentChildrenCount.get(u.id) ?? 0;
+            const count = linkedCountMap.get(u.id) ?? 0;
             return {
                 ...u,
                 isLinkedToMaster: count > 0,
@@ -165,6 +182,10 @@ const enrichUsersWithMasterLinks = async (
 // ==========================================
 
 export const userManagementService = {
+    /**
+     * Mengambil seluruh data pengguna (dengan paginasi 1000 baris per batch)
+     * lalu menggabungkannya dengan status tautan master siswa/orang tua.
+     */
     async fetchAllUsers(schoolId: string | null, isSuperAdmin: boolean): Promise<AppUser[]> {
         if (!isSuperAdmin && !schoolId) return [];
 
@@ -194,6 +215,10 @@ export const userManagementService = {
         return enrichUsersWithMasterLinks(allUsers, schoolId, isSuperAdmin);
     },
 
+    /**
+     * Membuat satu akun pengguna baru melalui Edge Function `create-user`.
+     * Sesuai constraint `users_scope_check`, SUPER_ADMIN wajib memiliki schoolId = null.
+     */
     async createUser(payload: CreateUserFormValues, schoolId: string | null): Promise<void> {
         if (payload.role !== 'SUPER_ADMIN' && !schoolId) {
             throw new Error('Pilih sekolah terlebih dahulu sebelum membuat akun sekolah.');
@@ -202,7 +227,7 @@ export const userManagementService = {
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>('create-user', {
             body: {
                 ...payload,
-                schoolId: payload.role === 'SUPER_ADMIN' ? schoolId : schoolId,
+                schoolId: payload.role === 'SUPER_ADMIN' ? null : schoolId,
             },
         });
 
@@ -214,6 +239,10 @@ export const userManagementService = {
         }
     },
 
+    /**
+     * Memperbarui nama lengkap & role pengguna, serta menyinkronkan nama siswa
+     * ke tabel `students` ("fullName") melalui relasi di `user_student_links`.
+     */
     async updateUser(params: {
         targetUser: AppUser;
         data: EditUserFormValues;
@@ -242,16 +271,29 @@ export const userManagementService = {
         const effectiveRole = isSuperAdmin ? data.role : targetUser.role;
         if (effectiveRole === 'SISWA' && targetUser.fullName !== data.fullName) {
             try {
-                await supabase
-                    .from('students')
-                    .update({ full_name: data.fullName })
-                    .eq('user_id', targetUser.id);
+                const { data: linkRow } = await supabase
+                    .from('user_student_links')
+                    .select('studentId')
+                    .eq('userId', targetUser.id)
+                    .limit(1)
+                    .maybeSingle();
+
+                const linkedStudentId = (linkRow as { studentId?: string } | null)?.studentId;
+                if (linkedStudentId) {
+                    await supabase
+                        .from('students')
+                        .update({ fullName: data.fullName })
+                        .eq('id', linkedStudentId);
+                }
             } catch {
-                // Best-effort sync agar tidak memblokir update akun utama
+                // Best-effort sync agar tidak memblokir pembaruan akun utama
             }
         }
     },
 
+    /**
+     * Mengatur ulang kata sandi pengguna melalui Edge Function `reset-password`.
+     */
     async resetPassword(targetUserId: string, newPassword: string): Promise<void> {
         const { data, error } = await supabase.functions.invoke<EdgeFunctionBody>(
             'reset-password',
@@ -268,6 +310,9 @@ export const userManagementService = {
         }
     },
 
+    /**
+     * Mengaktifkan atau memblokir akun pengguna.
+     */
     async toggleActiveStatus(params: {
         targetUser: AppUser;
         currentUserId?: string;
@@ -296,6 +341,9 @@ export const userManagementService = {
         if (error) throw new Error(error.message);
     },
 
+    /**
+     * Menghapus satu akun pengguna melalui Edge Function `delete-user`.
+     */
     async deleteUser(params: {
         targetUserId: string;
         currentUserId?: string;
@@ -319,6 +367,9 @@ export const userManagementService = {
         }
     },
 
+    /**
+     * Melakukan generate/reset akun untuk pengguna yang dicentang di tabel.
+     */
     async generateSelectedUsers(params: {
         usersTarget: AppUser[];
         activeSchoolId: string | null;
@@ -357,6 +408,10 @@ export const userManagementService = {
         return summary;
     },
 
+    /**
+     * Menjalankan generate akun massal dari data master (Guru/Siswa/Orang Tua)
+     * melalui Edge Function `generate-accounts-from-master`.
+     */
     async generateBulkFromMaster(
         targetGroup: BulkTargetGroup,
         activeSchoolId: string | null
@@ -382,6 +437,9 @@ export const userManagementService = {
         return data ?? {};
     },
 
+    /**
+     * Menghapus beberapa akun sekaligus yang dicentang pada tabel.
+     */
     async deleteSelectedUsers(params: {
         selectedIds: string[];
         allUsers: AppUser[];
@@ -417,6 +475,9 @@ export const userManagementService = {
         return summary;
     },
 
+    /**
+     * Menghapus seluruh akun berdasarkan kelompok tab (staff / siswa / orangtua).
+     */
     async deleteUsersByRoleGroup(
         targetGroup: BulkTargetGroup,
         activeSchoolId: string | null

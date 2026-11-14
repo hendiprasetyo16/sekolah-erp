@@ -32,9 +32,6 @@ import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { Module } from '@/types/permission.types';
 
-/**
- * Kontrak tipe data untuk setiap tautan menu di dalam Sidebar.
- */
 interface NavItem {
   label: string;
   icon: React.ReactNode;
@@ -43,24 +40,21 @@ interface NavItem {
   allowedRoles?: readonly string[];
 }
 
-/**
- * Kontrak tipe data untuk kelompok kategori menu di dalam Sidebar.
- */
 interface NavGroup {
   id: string;
   title: string;
   items: NavItem[];
 }
 
-// Kelompok peran standar untuk mempermudah pemeliharaan hak akses menu
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
 const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
 const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
-const ALL_STAFF_ROLES = [
-  'SUPER_ADMIN',
-  'ADMIN',
+const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
+
+// Semua guru dan staf wajib Presensi GPS, KECUALI SUPER_ADMIN dan ADMIN
+const ATTENDANCE_STAFF_ROLES = [
   'KEPALA_SEKOLAH',
   'OPERATOR',
   'WALI_KELAS',
@@ -70,12 +64,6 @@ const ALL_STAFF_ROLES = [
   'BENDAHARA',
 ] as const;
 
-/**
- * Menentukan satu `href` menu yang paling spesifik untuk `pathname` saat ini
- * (Longest-Prefix Match). Mencegah dua menu aktif bersamaan ketika ada
- * rute induk dan sub-rute sejajar (misal `/attendance` dan `/attendance/teacher`,
- * atau `/finance` dan `/finance/bills`).
- */
 function resolveMostSpecificActiveHref(pathname: string, groups: NavGroup[]): string | null {
   const normalizedPath = pathname.replace(/\/+$/, '') || '/';
   let bestMatchHref: string | null = null;
@@ -98,9 +86,6 @@ function resolveMostSpecificActiveHref(pathname: string, groups: NavGroup[]): st
   return bestMatchHref;
 }
 
-/**
- * Komponen Navigasi Samping (`Sidebar`).
- */
 export function Sidebar() {
   const { t, locale } = useTranslation();
   const { sidebarCollapsed, setSidebarCollapsed, sidebarOpen, setSidebarOpen } = useUIStore();
@@ -110,34 +95,27 @@ export function Sidebar() {
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
 
-  // Menyimpan daftar ID kelompok menu yang sedang dibuka (expanded)
   const [expandedGroups, setExpandedGroups] = useState<string[]>([
     'main',
+    'portal',
     'academic',
     'attendance',
     'management',
     'system',
   ]);
 
-  /**
-   * Membuka atau menutup bagian kelompok menu tertentu.
-   */
   const toggleGroup = (groupId: string): void => {
     setExpandedGroups((prev) =>
       prev.includes(groupId) ? prev.filter((g) => g !== groupId) : [...prev, groupId]
     );
   };
 
-  /**
-   * Menutup drawer Sidebar secara otomatis ketika tautan diklik pada layar tablet/ponsel.
-   */
   const handleLinkClick = (): void => {
     if (window.innerWidth < 1024) {
       setSidebarOpen(false);
     }
   };
 
-  // Struktur lengkap seluruh grup navigasi aplikasi
   const navGroups: NavGroup[] = [
     {
       id: 'main',
@@ -151,11 +129,36 @@ export function Sidebar() {
       ],
     },
     {
+      // Menu khusus SISWA dan ORANG_TUA
+      id: 'portal',
+      title: locale === 'id' ? 'Akademik & Keuangan' : 'Academic & Finance',
+      items: [
+        {
+          label: locale === 'id' ? 'Jadwal Pelajaran' : 'Class Schedule',
+          icon: <Calendar size={17} />,
+          href: '/portal/schedules',
+          allowedRoles: PORTAL_ROLES,
+        },
+        {
+          label: locale === 'id' ? 'Riwayat Presensi' : 'Attendance History',
+          icon: <ClipboardCheck size={17} />,
+          href: '/portal/attendance',
+          allowedRoles: PORTAL_ROLES,
+        },
+        {
+          label: locale === 'id' ? 'Tagihan & Pembayaran' : 'Bills & Payments',
+          icon: <Wallet size={17} />,
+          href: '/portal/finance',
+          allowedRoles: PORTAL_ROLES,
+        },
+      ],
+    },
+    {
       id: 'academic',
       title: t('sidebar.academic'),
       items: [
         {
-          label: t('sidebar.masterData'),
+          label: locale === 'id' ? 'Master Akademik' : 'Master Academic',
           icon: <Building2 size={17} />,
           href: '/academic/master-data',
           allowedRoles: CORE_ADMIN_ROLES,
@@ -194,7 +197,7 @@ export function Sidebar() {
           label: locale === 'id' ? 'Presensi GPS' : 'GPS Check-In',
           icon: <UserCheck size={17} />,
           href: '/attendance/teacher',
-          allowedRoles: ALL_STAFF_ROLES,
+          allowedRoles: ATTENDANCE_STAFF_ROLES,
         },
       ],
     },
@@ -272,7 +275,6 @@ export function Sidebar() {
     },
   ];
 
-  // Menyaring menu berdasarkan peran pengguna dan izin modul aktif
   const filteredGroups: NavGroup[] = navGroups
     .map((group) => ({
       ...group,
@@ -285,7 +287,6 @@ export function Sidebar() {
     }))
     .filter((group) => group.items.length > 0);
 
-  // Hitung satu `href` yang paling cocok dengan URL aktif agar tidak pernah ada menu aktif ganda
   const activeHref = useMemo(
     () => resolveMostSpecificActiveHref(location.pathname, filteredGroups),
     [location.pathname, filteredGroups]
@@ -293,7 +294,6 @@ export function Sidebar() {
 
   return (
     <>
-      {/* Backdrop gelap saat laci navigasi terbuka di layar mobile */}
       {sidebarOpen && (
         <div
           onClick={() => setSidebarOpen(false)}
@@ -309,9 +309,6 @@ export function Sidebar() {
           sidebarOpen ? 'translate-x-0' : '-translate-x-full'
         )}
       >
-        {/* =====================================================================
-            HEADER SIDEBAR: LOGO & IDENTITAS SATUAN PENDIDIKAN
-           ===================================================================== */}
         <div
           className={cn(
             'flex h-14 shrink-0 items-center border-b border-border',
@@ -358,9 +355,6 @@ export function Sidebar() {
           )}
         </div>
 
-        {/* =====================================================================
-            DAFTAR MENU NAVIGASI BERKELOMPOK
-           ===================================================================== */}
         <nav
           aria-label="Navigasi Utama"
           className={cn('flex-1 overflow-y-auto py-3', sidebarCollapsed ? 'px-2' : 'px-3')}
@@ -419,9 +413,6 @@ export function Sidebar() {
           })}
         </nav>
 
-        {/* =====================================================================
-            FOOTER SIDEBAR: TOMBOL CIUTKAN / LEBARKAN (DESKTOP)
-           ===================================================================== */}
         <div className="hidden border-t border-border p-2 lg:block">
           <button
             type="button"

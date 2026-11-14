@@ -12,8 +12,55 @@ export interface AcademicYear {
 }
 
 /**
- * Tipe data relasi (Join) ringan yang digunakan saat kita hanya
- * membutuhkan sebagian kecil data dari tabel lain.
+ * Payload untuk membuat Tahun Ajaran baru.
+ */
+export interface CreateAcademicYearPayload {
+    schoolId: string;
+    startYear: number;
+    autoCreateSemesters?: boolean;
+}
+
+/**
+ * Jenis semester sesuai aturan CHECK di database ('GANJIL' | 'GENAP').
+ */
+export type SemesterType = 'GANJIL' | 'GENAP';
+
+/**
+ * Tipe data utama untuk entitas Semester.
+ */
+export interface Semester {
+    id: string;
+    schoolId: string;
+    academicYearId: string;
+    type: SemesterType;
+    startDate: string; // Format YYYY-MM-DD
+    endDate: string;   // Format YYYY-MM-DD
+    isActive: boolean;
+    createdAt: string;
+}
+
+/**
+ * Payload untuk membuat Semester baru.
+ */
+export interface CreateSemesterPayload {
+    schoolId: string;
+    academicYearId: string;
+    type: SemesterType;
+    startDate: string;
+    endDate: string;
+    isActive?: boolean;
+}
+
+/**
+ * Payload untuk memperbarui tanggal Semester.
+ */
+export interface UpdateSemesterPayload {
+    startDate?: string;
+    endDate?: string;
+}
+
+/**
+ * Tipe data relasi (Join) ringan.
  */
 export interface AcademicYearRelation {
     id: string;
@@ -33,7 +80,6 @@ export interface StudentRelation {
 
 /**
  * Tipe data utama untuk entitas Kelas (Class/Rombel).
- * Digunakan untuk menampilkan data kelas di tabel (ClassListPage).
  */
 export interface ClassItem {
     id: string;
@@ -54,8 +100,7 @@ export interface ClassItem {
 }
 
 /**
- * Payload (Data yang dikirim) saat membuat kelas BARU.
- * Semua properti wajib diisi kecuali yang memiliki tanda '?'
+ * Payload saat membuat kelas BARU.
  */
 export interface CreateClassPayload {
     schoolId: string;
@@ -68,27 +113,16 @@ export interface CreateClassPayload {
 }
 
 /**
- * Payload (Data yang dikirim) saat MENGUBAH (Update) kelas.
+ * Payload saat MENGUBAH (Update) kelas.
  * schoolId tidak boleh diubah melalui payload update.
  */
 export type UpdateClassPayload = Partial<Omit<CreateClassPayload, 'schoolId'>>;
 
 /**
- * Hasil penghapusan massal kelas (mendukung penghapusan parsial jika sebagian kelas masih berisi siswa).
+ * Hasil penghapusan massal kelas.
  */
 export interface BulkDeleteClassesResult {
     deletedCount: number;
     skippedCount: number;
     skippedNames: string[];
 }
-/**
- * Payload (Data yang dikirim) saat MENGUBAH (Update) kelas.
- * Kita menggunakan utilitas TypeScript:
- * 1. Omit<..., 'schoolId'> : Membuang properti schoolId agar tidak bisa diubah.
- * 2. Partial<...> : Membuat semua properti yang tersisa menjadi opsional.
- */
-/**
- * schoolId tidak boleh diubah melalui payload update.
- * Identitas sekolah ditentukan dari parameter service
- * dan tetap harus divalidasi oleh RLS di Supabase.
- */
