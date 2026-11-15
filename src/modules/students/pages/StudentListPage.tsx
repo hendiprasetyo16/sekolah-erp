@@ -56,6 +56,7 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 type ExcelRow = Record<string, string>;
 type ClassRow = { id: string; name: string; gradeLevel: number };
 type SortConfig = { key: string; direction: 'asc' | 'desc' } | null;
+type DetectedExcelType = 'student' | 'teacher' | 'unknown';
 
 interface ExistingParentSnapshot {
   relation: 'AYAH' | 'IBU' | 'WALI';
@@ -156,6 +157,88 @@ const VALID_STUDENT_STATUSES = new Set<StudentStatus>([
   'DO',
   'CUTI',
 ]);
+
+// Penanda khusus untuk membedakan Excel Siswa vs Excel Guru (PTK)
+const STUDENT_COLUMN_MARKERS = new Set([
+  'nisn',
+  'nipd',
+  'rombel saat ini',
+  'rombel',
+  'kelas',
+  'data ayah',
+  'nama ayah',
+  'data ibu',
+  'nama ibu',
+  'data wali',
+  'penerima kip',
+  'nomor kip',
+  'no. kip',
+  'layak pip (usulan dari sekolah)',
+  'layak pip',
+  'penerima kps',
+  'sekolah asal',
+  'anak ke-berapa',
+]);
+
+const TEACHER_COLUMN_MARKERS = new Set([
+  'nuptk',
+  'nip',
+  'status kepegawaian',
+  'jenis ptk',
+  'jenis ptk (jabatan)',
+  'tugas tambahan',
+  'sk cpns',
+  'tanggal cpns',
+  'sk pengangkatan',
+  'tmt pengangkatan',
+  'lembaga pengangkatan',
+  'pangkat golongan',
+  'pangkat/golongan',
+  'sumber gaji',
+  'tmt pns',
+  'karpeg',
+  'nuks',
+  'sudah lisensi kepala sekolah',
+]);
+
+const detectStudentExcelSource = (
+  sheetNames: string[],
+  topRows: unknown[][],
+  cleanHeaders: string[]
+): DetectedExcelType => {
+  const normSheets = sheetNames.map((s) => s.toLowerCase().replace(/\s+/g, ' ').trim());
+  const topText = topRows
+    .slice(0, 4)
+    .flat()
+    .map((c) => String(c ?? '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .join(' | ');
+
+  const hasTeacherBanner =
+    normSheets.some((s) => s === 'daftar guru' || s === 'template_guru_ptk' || s === 'data guru') ||
+    topText.includes('daftar guru') ||
+    topText.includes('daftar ptk');
+
+  const hasStudentBanner =
+    normSheets.some(
+      (s) => s === 'daftar peserta didik' || s === 'template_siswa' || s === 'data_siswa'
+    ) || topText.includes('daftar peserta didik');
+
+  let studentScore = 0;
+  let teacherScore = 0;
+
+  for (const h of cleanHeaders) {
+    const norm = h.toLowerCase().replace(/\s+/g, ' ').trim();
+    if (!norm) continue;
+    if (STUDENT_COLUMN_MARKERS.has(norm)) studentScore++;
+    if (TEACHER_COLUMN_MARKERS.has(norm)) teacherScore++;
+  }
+
+  if (hasTeacherBanner && !hasStudentBanner) return 'teacher';
+  if (teacherScore >= 2 && teacherScore > studentScore) return 'teacher';
+  if (!hasStudentBanner && studentScore === 0) return 'unknown';
+
+  return 'student';
+};
 
 const isWelfareLabel = (label: string): boolean =>
   (WELFARE_DIFF_LABELS as readonly string[]).includes(label);
@@ -671,7 +754,6 @@ export function StudentListPage() {
     province?: string;
   } | null;
 
-  // Inisialisasi role dari Zustand store, lalu diperkaya oleh RPC v14
   const initialRoles = useMemo(
     () =>
       Array.from(
@@ -1068,7 +1150,9 @@ export function StudentListPage() {
                 c === 'fullname'
             );
             const hasIdCol = rowText.some((c) =>
-              ['nipd', 'nis', 'nisn', 'jk', 'jeniskelamin', 'l/p', 'gender'].includes(c)
+              ['nipd', 'nis', 'nisn', 'nuptk', 'nip', 'jk', 'jeniskelamin', 'l/p', 'gender'].includes(
+                c
+              )
             );
             if (hasNameCol && hasIdCol) {
               rawData = sheetRows;
@@ -1139,6 +1223,31 @@ export function StudentListPage() {
               .replace(/[\r\n]+/g, ' ');
             cleanHeaders.push(vMain.toLowerCase().trim());
           }
+        }
+
+        // Validasi silang: Pastikan file yang diunggah benar-benar file Siswa, bukan file Guru (PTK)
+        const detectedType = detectStudentExcelSource(
+          workbook.SheetNames,
+          rawData.slice(0, headerRowIndex),
+          cleanHeaders
+        );
+
+        if (detectedType === 'teacher') {
+          throw new Error(
+            tr(
+              'File ditolak! File yang Anda pilih adalah file Data Guru / PTK (terdeteksi kolom NUPTK / Status Kepegawaian / Jenis PTK). Silakan impor file ini di menu Guru & Pegawai, atau pilih file Daftar Peserta Didik (Verval PD).',
+              'File rejected! You uploaded a Teacher / PTK file (detected NUPTK / Employment Status). Please import this file in the Teachers & Staff menu, or select a Student (Verval PD) file.'
+            )
+          );
+        }
+
+        if (detectedType === 'unknown') {
+          throw new Error(
+            tr(
+              'Format file tidak dikenali sebagai data Siswa (Verval PD). Pastikan file memiliki kolom khas siswa seperti NISN, NIPD, atau Rombel/Kelas.',
+              'Unrecognized file format for Student data (Verval PD). Ensure the file contains student columns such as NISN, NIPD, or Class.'
+            )
+          );
         }
 
         const dataStartIndex = hasGroupedSubHeader ? headerRowIndex + 2 : headerRowIndex + 1;
@@ -1529,7 +1638,8 @@ export function StudentListPage() {
         setWizardState('preview');
       } catch (error: unknown) {
         toast.error(
-          getErrorMessage(error, tr('Gagal membaca file Excel', 'Failed to parse Excel file'))
+          getErrorMessage(error, tr('Gagal membaca file Excel', 'Failed to parse Excel file')),
+          { duration: 6000 }
         );
         setWizardState('idle');
       } finally {

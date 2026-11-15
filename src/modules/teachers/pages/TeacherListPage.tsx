@@ -33,6 +33,7 @@ type ExcelRow = Record<string, unknown>;
 type SortConfig = { key: string; direction: 'asc' | 'desc' } | null;
 type DeleteModalState = { isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?: string };
 type DiffFilterTab = 'all' | 'new' | 'updated' | 'unchanged';
+type DetectedExcelType = 'teacher' | 'student' | 'unknown';
 
 const PAGE_SIZE = 10;
 const FALLBACK_HEADER_ROW = 4;
@@ -139,6 +140,88 @@ const DIFF_FIELD_LABELS: Record<keyof TeacherBulkImportItem, string> = {
 // ==========================================
 const normKey = (k: string): string => k.toLowerCase().replace(/\s+/g, ' ').trim();
 
+// Penanda khusus untuk membedakan Excel Guru (PTK) vs Excel Siswa (PD)
+const TEACHER_COLUMN_MARKERS = new Set([
+  'nuptk',
+  'nip',
+  'status kepegawaian',
+  'jenis ptk',
+  'jenis ptk (jabatan)',
+  'tugas tambahan',
+  'sk cpns',
+  'tanggal cpns',
+  'sk pengangkatan',
+  'tmt pengangkatan',
+  'lembaga pengangkatan',
+  'pangkat golongan',
+  'pangkat/golongan',
+  'sumber gaji',
+  'tmt pns',
+  'karpeg',
+  'nuks',
+  'sudah lisensi kepala sekolah',
+]);
+
+const STUDENT_COLUMN_MARKERS = new Set([
+  'nisn',
+  'nipd',
+  'rombel saat ini',
+  'rombel',
+  'kelas',
+  'data ayah',
+  'nama ayah',
+  'data ibu',
+  'nama ibu',
+  'data wali',
+  'penerima kip',
+  'nomor kip',
+  'no. kip',
+  'layak pip (usulan dari sekolah)',
+  'layak pip',
+  'penerima kps',
+  'sekolah asal',
+  'anak ke-berapa',
+]);
+
+const detectTeacherExcelSource = (
+  sheetNames: string[],
+  topRows: unknown[][],
+  headerCells: string[]
+): DetectedExcelType => {
+  const normSheets = sheetNames.map((s) => normKey(s));
+  const topText = topRows
+    .slice(0, 4)
+    .flat()
+    .map((c) => normKey(String(c ?? '')))
+    .join(' | ');
+
+  const hasStudentBanner =
+    normSheets.some(
+      (s) => s === 'daftar peserta didik' || s === 'template_siswa' || s === 'data_siswa'
+    ) || topText.includes('daftar peserta didik');
+
+  const hasTeacherBanner =
+    normSheets.some((s) => s === 'daftar guru' || s === 'template_guru_ptk' || s === 'data guru') ||
+    topText.includes('daftar guru') ||
+    topText.includes('daftar ptk');
+
+  let teacherScore = 0;
+  let studentScore = 0;
+
+  for (const h of headerCells) {
+    const norm = normKey(h);
+    if (!norm) continue;
+    if (TEACHER_COLUMN_MARKERS.has(norm)) teacherScore++;
+    if (STUDENT_COLUMN_MARKERS.has(norm)) studentScore++;
+  }
+
+  if (hasStudentBanner && !hasTeacherBanner) return 'student';
+  if (studentScore >= 2 && studentScore > teacherScore) return 'student';
+  if (!hasTeacherBanner && teacherScore === 0) return 'unknown';
+
+  return 'teacher';
+};
+
 const normalizeRow = (row: ExcelRow): ExcelRow => {
   const out: ExcelRow = {};
   for (const [k, v] of Object.entries(row)) {
@@ -151,7 +234,6 @@ const getVal = (row: ExcelRow, keys: string[]): string | null => {
   for (const key of keys) {
     const v = row[normKey(key)];
     if (v !== undefined && v !== null) {
-      // Hapus apostrof awal bawaan ekspor Excel Dapodik (misal '340408...)
       const cleaned = String(v)
         .replace(/^'+/, '')
         .replace(/\s+/g, ' ')
@@ -423,7 +505,6 @@ const computeSmartDiff = (
     'keahlianBahasaIsyarat',
   ];
 
-  // Cegah duplikat baris internal di dalam satu file Excel agar RPC tidak bentrok unique constraint
   const seenNip = new Set<string>();
   const seenNuptk = new Set<string>();
   const seenNik = new Set<string>();
@@ -570,7 +651,6 @@ export function TeacherListPage() {
     province?: string;
   } | null;
 
-  // Multi-role permission checks (mengevaluasi role utama + additionalRoles + tugasTambahan Dapodik)
   const isSuperAdmin = hasRole('SUPER_ADMIN');
   const activeSchoolId = useMemo(
     () => normalizeTeacherSchoolId(schoolInfo?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
@@ -833,7 +913,6 @@ export function TeacherListPage() {
     const ws = XLSX.utils.json_to_sheet(sampleRows);
     const wb = XLSX.utils.book_new();
 
-    // Kunci kolom identitas/angka panjang sebagai teks agar tidak berubah menjadi notasi ilmiah di Excel
     const textColIndices = new Set([2, 3, 4, 5, 17, 18, 30]);
     for (const c of textColIndices) {
       const cellRef = XLSX.utils.encode_cell({ r: 1, c });
@@ -845,39 +924,39 @@ export function TeacherListPage() {
     }
 
     ws['!cols'] = [
-      { wch: 26 }, // Nama
-      { wch: 6 },  // JK
-      { wch: 22 }, // NIP
-      { wch: 20 }, // NUPTK
-      { wch: 20 }, // NIK
-      { wch: 20 }, // No KK
-      { wch: 16 }, // Tempat Lahir
-      { wch: 15 }, // Tanggal Lahir
-      { wch: 12 }, // Agama
-      { wch: 28 }, // Alamat Jalan
-      { wch: 6 },  // RT
-      { wch: 6 },  // RW
-      { wch: 16 }, // Nama Dusun
-      { wch: 18 }, // Desa/Kelurahan
-      { wch: 16 }, // Kecamatan
-      { wch: 20 }, // Kabupaten/Kota
-      { wch: 18 }, // Provinsi
-      { wch: 10 }, // Kode Pos
-      { wch: 16 }, // HP
-      { wch: 26 }, // Email
-      { wch: 20 }, // Status Kepegawaian
-      { wch: 16 }, // Jenis PTK
-      { wch: 18 }, // Tugas Tambahan
-      { wch: 18 }, // TMT Pengangkatan
-      { wch: 22 }, // Lembaga Pengangkatan
-      { wch: 16 }, // Pangkat/Golongan
-      { wch: 14 }, // Sumber Gaji
-      { wch: 22 }, // Nama Ibu Kandung
-      { wch: 18 }, // Status Perkawinan
-      { wch: 14 }, // Bank
-      { wch: 20 }, // Nomor Rekening Bank
-      { wch: 22 }, // Rekening Atas Nama
-      { wch: 16 }, // Kewarganegaraan
+      { wch: 26 },
+      { wch: 6 },
+      { wch: 22 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 20 },
+      { wch: 16 },
+      { wch: 15 },
+      { wch: 12 },
+      { wch: 28 },
+      { wch: 6 },
+      { wch: 6 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 16 },
+      { wch: 20 },
+      { wch: 18 },
+      { wch: 10 },
+      { wch: 16 },
+      { wch: 26 },
+      { wch: 20 },
+      { wch: 16 },
+      { wch: 18 },
+      { wch: 18 },
+      { wch: 22 },
+      { wch: 16 },
+      { wch: 14 },
+      { wch: 22 },
+      { wch: 18 },
+      { wch: 14 },
+      { wch: 20 },
+      { wch: 22 },
+      { wch: 16 },
     ];
 
     XLSX.utils.book_append_sheet(wb, ws, 'Template_Guru_PTK');
@@ -928,6 +1007,35 @@ export function TeacherListPage() {
       );
       if (headerRow === -1) headerRow = FALLBACK_HEADER_ROW;
 
+      const headerCells = Array.isArray(matrix[headerRow])
+        ? (matrix[headerRow] as unknown[]).map((c) => String(c ?? ''))
+        : [];
+
+      // Validasi silang: Pastikan file yang diunggah benar-benar file Guru (PTK), bukan file Siswa
+      const detectedType = detectTeacherExcelSource(
+        workbook.SheetNames,
+        matrix.slice(0, headerRow),
+        headerCells
+      );
+
+      if (detectedType === 'student') {
+        throw new Error(
+          tr(
+            'File ditolak! File yang Anda pilih adalah file Data Siswa / Peserta Didik (terdeteksi kolom NISN / NIPD / Rombel). Silakan impor file ini di menu Siswa, atau pilih file Daftar Guru (Verval PTK).',
+            'File rejected! You uploaded a Student file (detected NISN / NIPD / Class). Please import this file in the Students menu, or select a Teacher (Verval PTK) file.'
+          )
+        );
+      }
+
+      if (detectedType === 'unknown') {
+        throw new Error(
+          tr(
+            'Format file tidak dikenali sebagai data Guru / PTK. Pastikan file memiliki kolom khas PTK seperti NUPTK, NIP, Status Kepegawaian, atau Jenis PTK.',
+            'Unrecognized file format for Teacher / PTK data. Ensure the file contains PTK columns such as NUPTK, NIP, Employment Status, or PTK Type.'
+          )
+        );
+      }
+
       const jsonData = XLSX.utils.sheet_to_json<ExcelRow>(worksheet, {
         range: headerRow,
         raw: false,
@@ -969,7 +1077,7 @@ export function TeacherListPage() {
       toast.dismiss(toastId);
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : 'Gagal membaca file Excel';
-      toast.error(msg, { id: toastId });
+      toast.error(msg, { id: toastId, duration: 6000 });
     } finally {
       setIsParsingExcel(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
