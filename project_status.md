@@ -2,10 +2,10 @@
 
 ## Ringkasan
 
-Aplikasi **SekolahERP** menggunakan arsitektur *serverless* **React 19 + Vite + TypeScript** di sisi frontend dan **Supabase Cloud (PostgreSQL + Auth + Hardened RLS)** di sisi backend. 
+Aplikasi **SekolahERP** menggunakan arsitektur *serverless* **React 19 + Vite + TypeScript** di sisi frontend dan **Supabase Cloud (PostgreSQL + Auth + Hardened RLS)** di sisi backend.
 
-* **Fondasi Database (`supabase_schema.sql` v13.1):** Selesai penuh (**26 tabel**, *triggers*, RPC, dan *Hardened Row Level Security*).
-* **Aplikasi Frontend (UI & Integrasi):** Selesai bertahap hingga modul **Manajemen Guru**. Modul **Absensi** dan modul operasional lainnya masih dalam daftar pengerjaan berikutnya.
+- **Fondasi Database (`supabase_schema.sql` v14+ / v17):** Selesai penuh (**26 tabel**, *triggers*, RPC, dan *Hardened Row Level Security*).
+- **Aplikasi Frontend (UI & Integrasi):** Fondasi inti dan seluruh modul Master Data telah selesai (`auth`, `dashboard`, `academic`, `admin`, `profile`, `students`, dan `teachers`). Tahap berikutnya adalah pembangunan modul operasional (**Jadwal Pelajaran** dan **Absensi**).
 
 ---
 
@@ -15,16 +15,17 @@ Aplikasi **SekolahERP** menggunakan arsitektur *serverless* **React 19 + Vite + 
 
 | Komponen / Modul | Status | Keterangan |
 | :--- | :---: | :--- |
-| **Login Page** | ✅ Selesai | Autentikasi terhubung dengan Supabase Auth (mendukung Email / NUPTK / NIP / NIK / NISN / NIS via RPC). |
-| **Admin Dashboard** | ✅ Selesai | Halaman utama setelah login. |
-| **Data Master Akademik** | ✅ Selesai | Manajemen Profil Sekolah, Tahun Ajaran, Semester, Kelas, dan Mata Pelajaran. |
-| **Manajemen Siswa** | ✅ Selesai | List, Detail, Form CRUD (termasuk data Orang Tua, Kesejahteraan/PIP/Desil, dan Impor Excel). |
-| **Manajemen Guru** | ✅ Selesai | List, Detail, Form CRUD lengkap data PTK. |
-| **Sidebar & Header** | ✅ Selesai | Navigasi responsif dengan *toggle* tema Gelap/Terang dan dwibahasa (ID/EN). |
-| **UI Component Library** | ✅ Selesai | Komponen dasar (Button, Card, Badge, Form, Input, Label, Select, Tabs, dll.). |
-| **Auth Store & Route Guards** | ✅ Selesai | Manajemen sesi Zustand dan proteksi rute dasar (`role` utama). |
+| **Auth & Multi-Tenant Selector (`auth`)** | ✅ Selesai | Login fleksibel (Email / NUPTK / NIP / NIK / NISN / NIS via RPC) serta konsol pemilihan & pendaftaran satuan pendidikan multi-tenant. |
+| **Dashboard Utama (`dashboard`)** | ✅ Selesai | Ringkasan statistik operasional sekolah setelah login. |
+| **Master Akademik (`academic`)** | ✅ Selesai | CRUD Profil Sekolah (termasuk koordinat GPS & radius absensi), Tahun Ajaran, Semester, Kelas/Rombel (filter tingkat dinamis per jenjang), dan Mata Pelajaran. |
+| **Standarisasi Multi-Jenjang** | ✅ Selesai | *Single Source of Truth* (`school.constants.ts`) untuk 11 jenjang (`TK, RA, SD, MI, SMP, MTs, SMA, MA, SMK, SLB, PKBM`) dan rentang tingkat kelas otomatis (`0–12`). |
+| **Manajemen Siswa (`students`)** | ✅ Selesai | List, Detail, Form CRUD (termasuk data Orang Tua, Kesejahteraan/PIP/Desil, dan Impor Excel). |
+| **Manajemen Guru / PTK (`teachers`)** | ✅ Selesai | List, Detail, Form CRUD lengkap data PTK & sinkronisasi tugas tambahan. |
+| **Manajemen Akun & Multi-Role (`admin`)** | ✅ Selesai | Pengelolaan akun pengguna sekolah, sinkronisasi peran utama (`role`) dan peran tambahan (`additionalRoles`), serta kontrol hak akses. |
+| **Profil Pengguna (`profile`)** | ✅ Selesai | Halaman pengaturan profil akun dan keamanan kata sandi pengguna aktif. |
+| **Sidebar, Header & UI Library** | ✅ Selesai | Navigasi responsif dengan *toggle* tema Gelap/Terang, dwibahasa (ID/EN), dan komponen UI terstandar. |
 
-### Database & Keamanan Backend (Supabase PostgreSQL v13.1)
+### Database & Keamanan Backend (Supabase PostgreSQL v14+ / v17)
 
 | Komponen | Status | Detail |
 | :--- | :---: | :--- |
@@ -35,29 +36,30 @@ Aplikasi **SekolahERP** menggunakan arsitektur *serverless* **React 19 + Vite + 
 
 ---
 
-## 🔨 Sedang / Perlu Diselesaikan Berikutnya (Integrasi Frontend)
+## 🔨 Sedang / Akan Dikerjakan Berikutnya (Fase 2 — Operasional Harian)
 
 | Pekerjaan | Status | Keterangan |
 | :--- | :---: | :--- |
-| **Integrasi Multi-Role di Frontend** | 🔨 Belum di UI | Skema SQL sudah siap, namun `authStore`, `usePermission`, `Sidebar`, dan form manajemen user masih perlu dihubungkan ke `additionalRoles` / `get_user_all_roles()`. |
+| **Modul Jadwal Pelajaran (`/schedules/*`)** | 🔜 Prioritas 1 | Penyusunan jadwal mengajar per kelas, hari, jam pelajaran, guru pengampu, dan deteksi bentrok jadwal. |
+| **Modul Absensi (`/attendance/*`)** | 🔜 Prioritas 2 | Presensi harian siswa per kelas (Hadir/Sakit/Izin/Alpa) dan presensi mandiri Guru/Tendik berbasis GPS + radius sekolah. |
 
 ---
 
 ## 🚧 Belum Dimulai di Frontend (Tabel SQL Sudah Siap, UI Masih Placeholder)
 
-Seluruh modul di bawah ini sudah memiliki tabel, *trigger*, dan kebijakan RLS di `supabase_schema.sql`, namun halaman frontend-nya **belum dibuat**:
+Seluruh modul di bawah ini sudah memiliki tabel, *trigger*, dan kebijakan RLS di database, namun halaman frontend-nya **belum dibuat**:
 
 | Modul | Route | Fase Rencana |
 | :--- | :--- | :--- |
 | **Jadwal Pelajaran** | `/schedules/*` | Phase 2 |
 | **Absensi (Siswa & GPS Guru)** | `/attendance/*` | Phase 2 |
-| **Keuangan & Kasir SPP** | `/finance/*` | Phase 2–3 |
+| **Keuangan & Kasir SPP** | `/finance/*` | Phase 3 |
 | **Inventaris & Sarpras** | `/inventory/*` | Phase 3 |
 | **Perpustakaan** | `/library/*` | Phase 3 |
-| **Administrasi TU** | `/admin/*` | Phase 3 |
+| **Persuratan / Administrasi TU** | `/correspondence/*` atau `/tu/*` | Phase 3 |
 | **Beasiswa / PIP** | `/scholarships/*` | Phase 3–4 |
-| **Laporan** | `/reports/*` | Phase 3–4 |
-| **Pengaturan & Manajemen Akun** | `/settings/*` | Phase 4 |
+| **Laporan & Rekapitulasi** | `/reports/*` | Phase 4 |
+| **Pengaturan Lanjutan & Audit Log** | `/settings/*` | Phase 4 |
 
 ---
 
@@ -66,11 +68,12 @@ Seluruh modul di bawah ini sudah memiliki tabel, *trigger*, dan kebijakan RLS di
 ```mermaid
 graph TB
     subgraph Frontend["Frontend (React 19 + Vite + TypeScript)"]
-        DONE[Selesai: Login, Dashboard, Master Akademik, Siswa, Guru]
-        TODO[Belum UI: Multi-Role Hook, Jadwal, Absensi, Keuangan, Sarpras, Perpus, TU, Laporan]
+        DONE[Selesai: Auth, Dashboard, Academic, Admin/Multi-Role, Profile, Students, Teachers]
+        NEXT[Prioritas Berikutnya: Jadwal Pelajaran & Absensi GPS/Siswa]
+        TODO[Fase Lanjutan: Keuangan, Sarpras, Perpus, TU, Beasiswa, Laporan]
     end
 
-    subgraph Supabase["Supabase Cloud (PostgreSQL v13.1)"]
+    subgraph Supabase["Supabase Cloud (PostgreSQL v14+ / v17)"]
         AUTH[Supabase Auth]
         RPC[Security Definer RPCs & Triggers]
         RLS[Hardened RLS Multi-Tenant & Multi-Role]
@@ -80,6 +83,7 @@ graph TB
     DONE --> AUTH
     DONE --> RPC
     DONE --> RLS
+    NEXT -.-> RLS
     TODO -.-> RLS
     AUTH --> DB
     RPC --> DB

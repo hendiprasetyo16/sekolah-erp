@@ -1,16 +1,19 @@
 -- ============================================================================
--- ERP SEKOLAH v13.1 PATCH — HARDENED PRODUCTION FOUNDATION (CLEAN INSTALL)
--- Termasuk:
---   1. Anti-Overpayment Validation & Row-Level Bill Locking
---   2. Atomic Academic Year & Semester Synchronization RPCs
---   3. Hardened RLS (user_student_links & student_class_history)
---   4. Library Module Foundation (library_books & library_loans + Auto Stock)
+-- ERP SEKOLAH v17 — HARDENED PRODUCTION FOUNDATION (CLEAN SCHEMA ONLY)
+-- Pembaruan & Penyusunan Ulang v17:
+--   1. Struktur Modul Terpadu (13 Bagian Berurutan & Idempoten)
+--   2. Pemulihan Penuh Skrip dari Truncation v16 + Perapian Policy v15
+--   3. Granular PTK RLS (INSERT/UPDATE oleh TU/Operator, DELETE khusus Pimpinan)
+--   4. Safe Auth Cascade Cleanup (AFTER DELETE PTK & Guard Multi-Role Ortu/Staf)
+--   5. Sanitasi Placeholder Dapodik ('-') & Boolean Parser pada Bulk Import
+--   6. Deterministic Linked-Account Email Resolver (Guru, Siswa & Orang Tua)
+--   7. Anti-Overpayment Bill Locking & Atomic Tahun Ajaran/Semester Sync
 -- ============================================================================
 
 BEGIN;
 
 -- ============================================================================
--- 0. EXTENSIONS & RESET OBJEK LAMA (IDEMPOTENT)
+-- 01. EXTENSIONS & RESET OBJEK LAMA (IDEMPOTENT)
 -- ============================================================================
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
@@ -34,6 +37,8 @@ DROP FUNCTION IF EXISTS public.create_school_for_current_user(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_teachers(JSONB) CASCADE;
+DROP FUNCTION IF EXISTS public.clean_dapodik_str(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.parse_dapodik_bool(TEXT, BOOLEAN) CASCADE;
 
 DROP FUNCTION IF EXISTS public.map_tugas_tambahan_to_roles(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS public.get_user_all_roles() CASCADE;
@@ -84,7 +89,7 @@ DROP TABLE IF EXISTS
 CASCADE;
 
 -- ============================================================================
--- 1. SCHOOLS (MASTER TENANT SEKOLAH)
+-- 02. CORE TENANT & AKADEMIK DASAR (SCHOOLS, ACADEMIC YEARS, SEMESTERS)
 -- ============================================================================
 CREATE TABLE public.schools (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -111,9 +116,6 @@ CREATE TABLE public.schools (
 
 CREATE UNIQUE INDEX schools_npsn_key ON public.schools ("npsn");
 
--- ============================================================================
--- 2. ACADEMIC YEARS (TAHUN AJARAN)
--- ============================================================================
 CREATE TABLE public.academic_years (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -138,9 +140,6 @@ CREATE UNIQUE INDEX academic_years_school_id_key
     ON public.academic_years ("schoolId", "id");
 CREATE INDEX academic_years_school_idx ON public.academic_years ("schoolId");
 
--- ============================================================================
--- 3. SEMESTERS
--- ============================================================================
 CREATE TABLE public.semesters (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -173,7 +172,7 @@ CREATE INDEX semesters_school_idx ON public.semesters ("schoolId");
 CREATE INDEX semesters_academic_year_idx ON public.semesters ("academicYearId");
 
 -- ============================================================================
--- 4. USERS (PROFIL, MULTI-ROLE & OTORISASI TERHUBUNG KE AUTH.USERS)
+-- 03. AUTENTIKASI, OTORISASI & AUDIT (USERS, REFRESH TOKENS, AUDIT LOGS)
 -- ============================================================================
 CREATE TABLE public.users (
     "id" UUID NOT NULL,
@@ -220,12 +219,10 @@ COMMENT ON COLUMN public.users."additionalRoles" IS 'Daftar peran/tugas tambahan
 
 CREATE UNIQUE INDEX users_email_key ON public.users (lower("email"));
 CREATE INDEX users_school_idx ON public.users ("schoolId");
+CREATE INDEX users_school_active_idx ON public.users ("schoolId", "isActive");
 CREATE INDEX users_role_idx ON public.users ("role");
 CREATE INDEX users_additional_roles_gin_idx ON public.users USING GIN ("additionalRoles");
 
--- ============================================================================
--- 5. REFRESH TOKENS (LEGACY - DIKUNCI DEFAULT DENY)
--- ============================================================================
 CREATE TABLE public.refresh_tokens (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "userId" UUID NOT NULL,
@@ -241,9 +238,6 @@ CREATE TABLE public.refresh_tokens (
 CREATE UNIQUE INDEX refresh_tokens_token_key ON public.refresh_tokens ("token");
 CREATE INDEX refresh_tokens_user_idx ON public.refresh_tokens ("userId");
 
--- ============================================================================
--- 6. AUDIT LOGS
--- ============================================================================
 CREATE TABLE public.audit_logs (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "userId" UUID,
@@ -271,7 +265,7 @@ CREATE INDEX audit_logs_user_idx ON public.audit_logs ("userId");
 CREATE INDEX audit_logs_created_idx ON public.audit_logs ("createdAt" DESC);
 
 -- ============================================================================
--- 7. TEACHERS (MASTER GURU & TENDIK + KOLOM DAPODIK PTK + RELASI USERID)
+-- 04. KEPEGAWAIAN & KESISWAAN (TEACHERS, CLASSES, STUDENTS, LINKS, PARENTS, PIP)
 -- ============================================================================
 CREATE TABLE public.teachers (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -368,9 +362,6 @@ CREATE INDEX teachers_name_idx ON public.teachers ("fullName");
 CREATE INDEX teachers_status_idx ON public.teachers ("schoolId", "status");
 CREATE INDEX teachers_certified_idx ON public.teachers ("schoolId", "isCertified");
 
--- ============================================================================
--- 8. CLASSES (ROMBONGAN BELAJAR / KELAS)
--- ============================================================================
 CREATE TABLE public.classes (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -405,9 +396,6 @@ CREATE INDEX classes_school_idx ON public.classes ("schoolId");
 CREATE INDEX classes_year_idx ON public.classes ("academicYearId");
 CREATE INDEX classes_homeroom_idx ON public.classes ("homeroomTeacherId");
 
--- ============================================================================
--- 9. STUDENTS (MASTER DATA SISWA + KOLOM DAPODIK PD LENGKAP)
--- ============================================================================
 CREATE TABLE public.students (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -481,9 +469,6 @@ CREATE INDEX students_school_idx ON public.students ("schoolId");
 CREATE INDEX students_class_idx ON public.students ("classId");
 CREATE INDEX students_name_idx ON public.students ("fullName");
 
--- ============================================================================
--- 10. STUDENT CLASS HISTORY (RIWAYAT KELAS PER TAHUN AJARAN)
--- ============================================================================
 CREATE TABLE public.student_class_history (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -514,10 +499,8 @@ CREATE UNIQUE INDEX student_history_unique
 CREATE INDEX student_history_school_idx ON public.student_class_history ("schoolId");
 CREATE INDEX student_history_student_idx ON public.student_class_history ("studentId");
 CREATE INDEX student_history_year_idx ON public.student_class_history ("academicYearId");
+CREATE INDEX student_history_class_idx ON public.student_class_history ("classId");
 
--- ============================================================================
--- 11. USER <-> STUDENT LINKS (RELASI AKUN ORTU/SISWA DENGAN DATA SISWA)
--- ============================================================================
 CREATE TABLE public.user_student_links (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -547,9 +530,6 @@ CREATE UNIQUE INDEX user_student_links_one_primary_per_student
 CREATE INDEX user_student_links_school_idx ON public.user_student_links ("schoolId");
 CREATE INDEX user_student_links_student_idx ON public.user_student_links ("studentId");
 
--- ============================================================================
--- 12. STUDENT PARENTS (DATA ORANG TUA / WALI SISWA)
--- ============================================================================
 CREATE TABLE public.student_parents (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -582,9 +562,6 @@ CREATE UNIQUE INDEX student_parents_student_relation_key
 CREATE INDEX parents_school_idx ON public.student_parents ("schoolId");
 CREATE INDEX parents_student_idx ON public.student_parents ("studentId");
 
--- ============================================================================
--- 13. STUDENT ECONOMICS (KESEJAHTERAAN, KIP, PKH, DTKS, DESIL, SKORING PIP)
--- ============================================================================
 CREATE TABLE public.student_economics (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -628,7 +605,7 @@ CREATE UNIQUE INDEX student_economics_student_key ON public.student_economics ("
 CREATE INDEX economics_school_idx ON public.student_economics ("schoolId");
 
 -- ============================================================================
--- 14. ATTENDANCES (ABSENSI SISWA & ABSENSI GPS/SELFIE GURU-TENDIK)
+-- 05. KEGIATAN BELAJAR & OPERASIONAL (ATTENDANCES, SUBJECTS, SCHEDULES, INFO)
 -- ============================================================================
 CREATE TABLE public.attendances (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -682,9 +659,6 @@ CREATE INDEX attendances_date_idx ON public.attendances ("date");
 CREATE INDEX attendances_teacher_idx ON public.attendances ("teacherId");
 CREATE INDEX attendances_type_idx ON public.attendances ("type");
 
--- ============================================================================
--- 15. SUBJECTS (MATA PELAJARAN)
--- ============================================================================
 CREATE TABLE public.subjects (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -705,9 +679,6 @@ CREATE UNIQUE INDEX subjects_school_code_key
     ON public.subjects ("schoolId", "code") WHERE "code" IS NOT NULL AND trim("code") <> '';
 CREATE INDEX subjects_school_idx ON public.subjects ("schoolId");
 
--- ============================================================================
--- 16. SCHEDULE ENTRIES (JADWAL PELAJARAN)
--- ============================================================================
 CREATE TABLE public.schedule_entries (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -748,14 +719,12 @@ CREATE TABLE public.schedule_entries (
 );
 
 CREATE INDEX schedule_school_idx ON public.schedule_entries ("schoolId");
+CREATE INDEX schedule_year_idx ON public.schedule_entries ("academicYearId");
 CREATE INDEX schedule_class_idx ON public.schedule_entries ("classId");
 CREATE INDEX schedule_teacher_idx ON public.schedule_entries ("teacherId");
 CREATE INDEX schedule_day_time_idx
     ON public.schedule_entries ("schoolId", "dayOfWeek", "startTime");
 
--- ============================================================================
--- 17. ANNOUNCEMENTS (PENGUMUMAN SEKOLAH)
--- ============================================================================
 CREATE TABLE public.announcements (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -784,7 +753,7 @@ CREATE INDEX announcements_publish_idx
     ON public.announcements ("schoolId", "publishDate");
 
 -- ============================================================================
--- 18. INVENTORY ITEMS & TRANSACTIONS (SARPRAS)
+-- 06. SARPRAS, TATA USAHA & BEASISWA
 -- ============================================================================
 CREATE TABLE public.inventory_items (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -853,9 +822,6 @@ CREATE INDEX inventory_transactions_item_idx
 CREATE INDEX inventory_transactions_date_idx
     ON public.inventory_transactions ("transactionDate");
 
--- ============================================================================
--- 19. ADMINISTRATION & SCHOLARSHIPS (TU & BEASISWA)
--- ============================================================================
 CREATE TABLE public.administration_records (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID NOT NULL,
@@ -913,7 +879,7 @@ CREATE INDEX scholarships_school_idx ON public.scholarship_records ("schoolId");
 CREATE INDEX scholarships_student_idx ON public.scholarship_records ("studentId");
 
 -- ============================================================================
--- 20. FINANCE: FEE TEMPLATES, STUDENT BILLS, PAYMENT TRANSACTIONS
+-- 07. KEUANGAN SEKOLAH (FEE TEMPLATES, STUDENT BILLS, PAYMENT TRANSACTIONS)
 -- ============================================================================
 CREATE TABLE public.fee_templates (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -1003,6 +969,7 @@ CREATE UNIQUE INDEX student_bills_unique_period
     );
 CREATE INDEX bills_school_idx ON public.student_bills ("schoolId");
 CREATE INDEX bills_student_idx ON public.student_bills ("studentId");
+CREATE INDEX bills_fee_template_idx ON public.student_bills ("feeTemplateId");
 CREATE INDEX bills_year_idx ON public.student_bills ("academicYearId");
 CREATE INDEX bills_status_idx ON public.student_bills ("status");
 
@@ -1040,7 +1007,7 @@ CREATE INDEX payments_student_idx ON public.payment_transactions ("studentId");
 CREATE INDEX payments_date_idx ON public.payment_transactions ("paymentDate");
 
 -- ============================================================================
--- 20A. LIBRARY: LIBRARY BOOKS & LIBRARY LOANS (PERPUSTAKAAN / STAFF_PERPUS)
+-- 08. PERPUSTAKAAN (LIBRARY BOOKS & LIBRARY LOANS)
 -- ============================================================================
 CREATE TABLE public.library_books (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -1137,7 +1104,7 @@ CREATE INDEX library_loans_teacher_idx ON public.library_loans ("teacherId");
 CREATE INDEX library_loans_status_idx ON public.library_loans ("status");
 
 -- ============================================================================
--- 21. SECURITY & MULTI-ROLE HELPER FUNCTIONS (NON-RECURSIVE SECURITY DEFINER)
+-- 09. SECURITY & MULTI-ROLE HELPER FUNCTIONS (NON-RECURSIVE SECURITY DEFINER)
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.get_user_school_id()
 RETURNS UUID
@@ -1172,7 +1139,7 @@ CREATE OR REPLACE FUNCTION public.erp_current_user_role()
 RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $$ SELECT public.get_user_role(); $$;
 
--- Pemetaan teks Tugas Tambahan Dapodik -> Kode Role Sistem
+-- Pemetaan otomatis Tugas Tambahan Dapodik ke role sistem
 CREATE OR REPLACE FUNCTION public.map_tugas_tambahan_to_roles(p_tugas TEXT)
 RETURNS TEXT[]
 LANGUAGE plpgsql IMMUTABLE
@@ -1184,6 +1151,10 @@ DECLARE
 BEGIN
     IF v_text = '' THEN
         RETURN v_roles;
+    END IF;
+
+    IF v_text LIKE '%kepala sekolah%' AND v_text NOT LIKE '%wakil kepala%' THEN
+        v_roles := array_append(v_roles, 'KEPALA_SEKOLAH');
     END IF;
 
     IF v_text LIKE '%bendahara%' THEN
@@ -1391,7 +1362,7 @@ GRANT EXECUTE ON FUNCTION public.current_user_can_manage_library() TO authentica
 GRANT EXECUTE ON FUNCTION public.current_user_can_manage_administration() TO authenticated;
 
 -- ============================================================================
--- 22. TRIGGERS: UPDATED_AT, SECURITY FIELDS, AUTH CLEANUP, STOK, KEUANGAN & PERPUS
+-- 10. TRIGGERS: UPDATED_AT, SECURITY FIELDS, AUTH CLEANUP, STOK, KEUANGAN & PERPUS
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.update_updated_at_column()
 RETURNS TRIGGER
@@ -1485,7 +1456,8 @@ CREATE TRIGGER users_security_fields
 BEFORE UPDATE ON public.users
 FOR EACH ROW EXECUTE FUNCTION public.protect_user_security_fields();
 
--- Sinkronisasi hapus akun Auth ketika Siswa dihapus (aman untuk ortu multi-anak)
+-- Sinkronisasi hapus akun Auth ketika Siswa dihapus
+-- Aman untuk ortu multi-anak & melindungi akun pegawai/admin yang juga menjadi wali siswa
 CREATE OR REPLACE FUNCTION public.auto_delete_auth_on_student_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1500,14 +1472,36 @@ BEGIN
         WHERE "studentId" = OLD."id"
     LOOP
         IF link_record."relationship" = 'SISWA' THEN
-            DELETE FROM auth.users WHERE id = link_record."userId";
+            DELETE FROM auth.users
+            WHERE id = link_record."userId"
+              AND EXISTS (
+                  SELECT 1 FROM public.users u
+                  WHERE u."id" = link_record."userId"
+                    AND u."role" = 'SISWA'
+                    AND u."additionalRoles" = '{}'::text[]
+              )
+              AND NOT EXISTS (
+                  SELECT 1 FROM public.teachers t
+                  WHERE t."userId" = link_record."userId"
+              );
         ELSE
             IF NOT EXISTS (
                 SELECT 1 FROM public.user_student_links
                 WHERE "userId" = link_record."userId"
                   AND "studentId" <> OLD."id"
             ) THEN
-                DELETE FROM auth.users WHERE id = link_record."userId";
+                DELETE FROM auth.users
+                WHERE id = link_record."userId"
+                  AND EXISTS (
+                      SELECT 1 FROM public.users u
+                      WHERE u."id" = link_record."userId"
+                        AND u."role" = 'ORANG_TUA'
+                        AND u."additionalRoles" = '{}'::text[]
+                  )
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.teachers t
+                      WHERE t."userId" = link_record."userId"
+                  );
             END IF;
         END IF;
     END LOOP;
@@ -1519,7 +1513,8 @@ CREATE TRIGGER trg_delete_student_auth
 BEFORE DELETE ON public.students
 FOR EACH ROW EXECUTE FUNCTION public.auto_delete_auth_on_student_delete();
 
--- Sinkronisasi hapus akun Auth ketika Guru/PTK dihapus (menggunakan relasi pasti userId)
+-- Sinkronisasi hapus akun Auth ketika Guru/PTK dihapus
+-- Menggunakan AFTER DELETE agar tidak bentrok dengan ON DELETE SET NULL & melindungi akun Admin
 CREATE OR REPLACE FUNCTION public.auto_delete_auth_on_teacher_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1527,14 +1522,20 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
     IF OLD."userId" IS NOT NULL THEN
-        DELETE FROM auth.users WHERE id = OLD."userId";
+        DELETE FROM auth.users
+        WHERE id = OLD."userId"
+          AND NOT EXISTS (
+              SELECT 1 FROM public.users u
+              WHERE u."id" = OLD."userId"
+                AND u."role" IN ('SUPER_ADMIN', 'ADMIN')
+          );
     END IF;
     RETURN OLD;
 END;
 $$;
 
 CREATE TRIGGER trg_delete_teacher_auth
-BEFORE DELETE ON public.teachers
+AFTER DELETE ON public.teachers
 FOR EACH ROW EXECUTE FUNCTION public.auto_delete_auth_on_teacher_delete();
 
 -- Sinkronisasi stok inventaris otomatis dari ledger transaksi
@@ -1779,10 +1780,47 @@ BEFORE INSERT OR UPDATE OF "totalCopies" ON public.library_books
 FOR EACH ROW EXECUTE FUNCTION public.library_book_total_copies_trigger();
 
 -- ============================================================================
--- 23. RPC FUNCTIONS: LOGIN, TAHUN AJARAN & SEMESTER, ONBOARDING, & BULK IMPORT
+-- 11. RPC FUNCTIONS: LOGIN RESOLVER, TAHUN AJARAN/SEMESTER, ONBOARDING & IMPOR
 -- ============================================================================
 
--- 23A. Resolve Email dari NUPTK / NIP / NIK / NISN / NIS (untuk Login)
+-- 11A. Helper Sanitasi String & Boolean Dapodik
+CREATE OR REPLACE FUNCTION public.clean_dapodik_str(p_val TEXT)
+RETURNS TEXT
+LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT CASE
+        WHEN p_val IS NULL THEN NULL
+        WHEN trim(p_val) IN ('', '-') THEN NULL
+        ELSE trim(p_val)
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.parse_dapodik_bool(p_val TEXT, p_default BOOLEAN DEFAULT false)
+RETURNS BOOLEAN
+LANGUAGE plpgsql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_clean TEXT := lower(trim(COALESCE(p_val, '')));
+BEGIN
+    IF v_clean = '' OR v_clean = '-' THEN
+        RETURN p_default;
+    ELSIF v_clean IN ('true', 't', '1', 'yes', 'y', 'ya', 'on') THEN
+        RETURN true;
+    ELSIF v_clean IN ('false', 'f', '0', 'no', 'n', 'tidak', 'off') THEN
+        RETURN false;
+    END IF;
+    RETURN p_default;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.clean_dapodik_str(TEXT) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.parse_dapodik_bool(TEXT, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.clean_dapodik_str(TEXT) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.parse_dapodik_bool(TEXT, BOOLEAN) TO authenticated;
+
+-- 11B. Resolve Email dari NUPTK / NIP / NIK / NISN / NIS (Prioritas Akun Tertaut & Aktif)
 CREATE OR REPLACE FUNCTION public.resolve_user_email(identifier TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1791,6 +1829,7 @@ AS $$
 DECLARE
     clean_id TEXT;
     master_record RECORD;
+    v_linked_email TEXT;
 BEGIN
     IF identifier IS NULL OR trim(identifier) = '' THEN
         RETURN NULL;
@@ -1798,14 +1837,29 @@ BEGIN
 
     clean_id := REPLACE(REPLACE(trim(identifier), ' ', ''), '-', '');
 
-    -- 1. Cek Tabel Teachers
+    -- 1. Cek Tabel Teachers (Prioritaskan yang sudah tertaut userId dan aktif)
     SELECT * INTO master_record FROM public.teachers
     WHERE REPLACE(REPLACE(nuptk, ' ', ''), '-', '') = clean_id
        OR REPLACE(REPLACE(nip, ' ', ''), '-', '') = clean_id
        OR REPLACE(REPLACE(nik, ' ', ''), '-', '') = clean_id
+    ORDER BY
+        ("userId" IS NOT NULL) DESC,
+        "isActive" DESC,
+        "updatedAt" DESC
     LIMIT 1;
 
     IF FOUND THEN
+        IF master_record."userId" IS NOT NULL THEN
+            SELECT u."email" INTO v_linked_email
+            FROM public.users u
+            WHERE u."id" = master_record."userId"
+            LIMIT 1;
+
+            IF v_linked_email IS NOT NULL AND trim(v_linked_email) <> '' THEN
+                RETURN LOWER(TRIM(v_linked_email));
+            END IF;
+        END IF;
+
         IF master_record.email IS NOT NULL AND TRIM(master_record.email) <> '' THEN
             RETURN LOWER(TRIM(master_record.email));
         ELSIF master_record.nuptk IS NOT NULL AND TRIM(master_record.nuptk) <> '' THEN
@@ -1819,15 +1873,33 @@ BEGIN
         END IF;
     END IF;
 
-    -- 2. Cek Tabel Students
-    SELECT * INTO master_record FROM public.students
-    WHERE REPLACE(REPLACE(nisn, ' ', ''), '-', '') = clean_id
-       OR REPLACE(REPLACE(nis, ' ', ''), '-', '') = clean_id
-       OR REPLACE(REPLACE(nik, ' ', ''), '-', '') = clean_id
-       OR REPLACE(REPLACE("noPesertaUn", ' ', ''), '-', '') = clean_id
+    -- 2. Cek Tabel Students (Prioritaskan siswa yang memiliki akun tertaut & berstatus AKTIF)
+    SELECT s.* INTO master_record FROM public.students s
+    WHERE REPLACE(REPLACE(s.nisn, ' ', ''), '-', '') = clean_id
+       OR REPLACE(REPLACE(s.nis, ' ', ''), '-', '') = clean_id
+       OR REPLACE(REPLACE(s.nik, ' ', ''), '-', '') = clean_id
+       OR REPLACE(REPLACE(s."noPesertaUn", ' ', ''), '-', '') = clean_id
+    ORDER BY
+        EXISTS (
+            SELECT 1 FROM public.user_student_links l
+            WHERE l."studentId" = s."id" AND l."relationship" = 'SISWA'
+        ) DESC,
+        (s."status" = 'AKTIF') DESC,
+        s."updatedAt" DESC
     LIMIT 1;
 
     IF FOUND THEN
+        SELECT u."email" INTO v_linked_email
+        FROM public.user_student_links l
+        JOIN public.users u ON u."id" = l."userId"
+        WHERE l."studentId" = master_record."id"
+          AND l."relationship" = 'SISWA'
+        LIMIT 1;
+
+        IF v_linked_email IS NOT NULL AND trim(v_linked_email) <> '' THEN
+            RETURN LOWER(TRIM(v_linked_email));
+        END IF;
+
         IF master_record.email IS NOT NULL AND TRIM(master_record.email) <> '' THEN
             RETURN LOWER(TRIM(master_record.email));
         ELSIF master_record.nisn IS NOT NULL AND TRIM(master_record.nisn) <> '' THEN
@@ -1842,11 +1914,34 @@ BEGIN
     END IF;
 
     -- 3. Cek Tabel Student Parents
-    SELECT * INTO master_record FROM public.student_parents
-    WHERE REPLACE(REPLACE(nik, ' ', ''), '-', '') = clean_id
+    SELECT p.* INTO master_record FROM public.student_parents p
+    WHERE REPLACE(REPLACE(p.nik, ' ', ''), '-', '') = clean_id
+    ORDER BY
+        EXISTS (
+            SELECT 1 FROM public.user_student_links l
+            WHERE l."studentId" = p."studentId" AND l."relationship" <> 'SISWA'
+        ) DESC,
+        p."updatedAt" DESC
     LIMIT 1;
 
     IF FOUND THEN
+        SELECT u."email" INTO v_linked_email
+        FROM public.user_student_links l
+        JOIN public.users u ON u."id" = l."userId"
+        WHERE l."studentId" = master_record."studentId"
+          AND l."relationship" <> 'SISWA'
+        ORDER BY
+            CASE
+                WHEN lower(trim(u."email")) = lower(trim(COALESCE(master_record.email, ''))) THEN 0
+                WHEN l."isPrimary" = true THEN 1
+                ELSE 2
+            END
+        LIMIT 1;
+
+        IF v_linked_email IS NOT NULL AND trim(v_linked_email) <> '' THEN
+            RETURN LOWER(TRIM(v_linked_email));
+        END IF;
+
         IF master_record.email IS NOT NULL AND TRIM(master_record.email) <> '' THEN
             RETURN LOWER(TRIM(master_record.email));
         ELSIF master_record.nik IS NOT NULL AND TRIM(master_record.nik) <> '' THEN
@@ -1863,7 +1958,7 @@ $$;
 REVOKE ALL ON FUNCTION public.resolve_user_email(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.resolve_user_email(TEXT) TO anon, authenticated;
 
--- 23B. Set Tahun Ajaran Aktif + Sinkronisasi Otomatis Semester Aktif (Atomik + Advisory Lock)
+-- 11C. Set Tahun Ajaran Aktif + Sinkronisasi Otomatis Semester Aktif (Atomik + Advisory Lock)
 CREATE OR REPLACE FUNCTION public.set_active_academic_year(
     p_school_id UUID,
     p_academic_year_id UUID
@@ -1955,7 +2050,7 @@ $$;
 REVOKE ALL ON FUNCTION public.set_active_academic_year(UUID, UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.set_active_academic_year(UUID, UUID) TO authenticated;
 
--- 23B-2. Set Semester Aktif (Atomik + Sinkronisasi Tahun Ajaran Induk)
+-- 11D. Set Semester Aktif (Atomik + Sinkronisasi Tahun Ajaran Induk)
 CREATE OR REPLACE FUNCTION public.set_active_semester(
     p_school_id UUID,
     p_semester_id UUID
@@ -2026,7 +2121,7 @@ $$;
 REVOKE ALL ON FUNCTION public.set_active_semester(UUID, UUID) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.set_active_semester(UUID, UUID) TO authenticated;
 
--- 23C. Onboarding Sekolah Baru untuk Admin yang Belum Punya Sekolah
+-- 11E. Onboarding Sekolah Baru untuk Admin yang Belum Punya Sekolah
 CREATE OR REPLACE FUNCTION public.create_school_for_current_user(p_school JSONB)
 RETURNS SETOF public.schools
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2078,7 +2173,7 @@ $$;
 REVOKE ALL ON FUNCTION public.create_school_for_current_user(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.create_school_for_current_user(JSONB) TO authenticated;
 
--- 23D. Setup Tenant Baru oleh SUPER_ADMIN
+-- 11F. Setup Tenant Baru oleh SUPER_ADMIN
 CREATE OR REPLACE FUNCTION public.setup_new_tenant(
     p_school_name TEXT,
     p_npsn TEXT,
@@ -2135,7 +2230,7 @@ $$;
 REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) TO authenticated;
 
--- 23E. Bulk Import Siswa Dapodik (UPSERT + Orang Tua + Kesejahteraan/PIP + Validasi Ketat)
+-- 11G. Bulk Import Siswa Dapodik (UPSERT + Orang Tua + Kesejahteraan/PIP + Sanitasi)
 CREATE OR REPLACE FUNCTION public.bulk_import_students(batch_data JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2223,19 +2318,19 @@ BEGIN
             END IF;
         END IF;
 
-        v_clean_nis := NULLIF(trim(student_record->>'nis'), '');
-        v_clean_nisn := trim(student_record->>'nisn');
-        v_clean_nik := trim(student_record->>'nik');
+        v_clean_nis := public.clean_dapodik_str(student_record->>'nis');
+        v_clean_nisn := public.clean_dapodik_str(student_record->>'nisn');
+        v_clean_nik := public.clean_dapodik_str(student_record->>'nik');
         v_class_id := NULLIF(trim(student_record->>'classId'), '')::UUID;
         v_entry_date := NULLIF(trim(student_record->>'entryDate'), '')::DATE;
 
-        IF NULLIF(v_clean_nisn, '') IS NULL THEN
+        IF v_clean_nisn IS NULL THEN
             RAISE EXCEPTION 'NISN wajib diisi pada baris ke-%', v_index;
         END IF;
-        IF NULLIF(v_clean_nik, '') IS NULL THEN
+        IF v_clean_nik IS NULL THEN
             RAISE EXCEPTION 'NIK wajib diisi pada baris ke-%', v_index;
         END IF;
-        IF NULLIF(trim(student_record->>'fullName'), '') IS NULL THEN
+        IF public.clean_dapodik_str(student_record->>'fullName') IS NULL THEN
             RAISE EXCEPTION 'Nama lengkap siswa wajib diisi pada baris ke-%', v_index;
         END IF;
 
@@ -2251,12 +2346,12 @@ BEGIN
             RAISE EXCEPTION 'Jenis kelamin tidak valid pada baris ke-%. Gunakan L atau P.', v_index;
         END IF;
 
-        v_clean_religion := NULLIF(upper(trim(COALESCE(student_record->>'religion', ''))), '');
+        v_clean_religion := upper(public.clean_dapodik_str(student_record->>'religion'));
         IF v_clean_religion = 'KATHOLIK' THEN
             v_clean_religion := 'KATOLIK';
         END IF;
 
-        v_clean_status := COALESCE(NULLIF(upper(trim(student_record->>'status')), ''), 'AKTIF');
+        v_clean_status := COALESCE(upper(public.clean_dapodik_str(student_record->>'status')), 'AKTIF');
         IF v_clean_status NOT IN ('AKTIF', 'MUTASI_KELUAR', 'LULUS', 'DO', 'CUTI') THEN
             v_clean_status := 'AKTIF';
         END IF;
@@ -2280,6 +2375,7 @@ BEGIN
                           AND "birthDate" = COALESCE(NULLIF(trim(student_record->>'birthDate'), '')::DATE, CURRENT_DATE)
                       )
                   )
+                ORDER BY "createdAt" ASC
                 LIMIT 1
             );
         END IF;
@@ -2316,53 +2412,53 @@ BEGIN
         )
         VALUES (
             v_school_id, v_clean_nis, v_clean_nisn, v_clean_nik,
-            NULLIF(trim(student_record->>'noKk'), ''),
+            public.clean_dapodik_str(student_record->>'noKk'),
             trim(student_record->>'fullName'),
-            NULLIF(trim(student_record->>'nickname'), ''),
+            public.clean_dapodik_str(student_record->>'nickname'),
             v_clean_gender,
             COALESCE(NULLIF(trim(student_record->>'birthDate'), '')::DATE, CURRENT_DATE),
-            COALESCE(NULLIF(trim(student_record->>'birthPlace'), ''), '-'),
+            COALESCE(public.clean_dapodik_str(student_record->>'birthPlace'), '-'),
             v_clean_religion,
-            COALESCE(NULLIF(trim(student_record->>'address'), ''), '-'),
-            NULLIF(trim(student_record->>'rt'), ''),
-            NULLIF(trim(student_record->>'rw'), ''),
-            NULLIF(trim(student_record->>'dusun'), ''),
-            COALESCE(NULLIF(trim(student_record->>'kelurahan'), ''), NULLIF(trim(student_record->>'village'), '')),
-            COALESCE(NULLIF(trim(student_record->>'kecamatan'), ''), NULLIF(trim(student_record->>'district'), '')),
-            COALESCE(NULLIF(trim(student_record->>'city'), ''), '-'),
-            COALESCE(NULLIF(trim(student_record->>'province'), ''), '-'),
-            NULLIF(trim(student_record->>'postalCode'), ''),
-            NULLIF(trim(student_record->>'telepon'), ''),
-            NULLIF(trim(student_record->>'phone'), ''),
-            NULLIF(trim(student_record->>'email'), ''),
-            NULLIF(trim(student_record->>'photoUrl'), ''),
+            COALESCE(public.clean_dapodik_str(student_record->>'address'), '-'),
+            public.clean_dapodik_str(student_record->>'rt'),
+            public.clean_dapodik_str(student_record->>'rw'),
+            public.clean_dapodik_str(student_record->>'dusun'),
+            COALESCE(public.clean_dapodik_str(student_record->>'kelurahan'), public.clean_dapodik_str(student_record->>'village')),
+            COALESCE(public.clean_dapodik_str(student_record->>'kecamatan'), public.clean_dapodik_str(student_record->>'district')),
+            COALESCE(public.clean_dapodik_str(student_record->>'city'), '-'),
+            COALESCE(public.clean_dapodik_str(student_record->>'province'), '-'),
+            public.clean_dapodik_str(student_record->>'postalCode'),
+            public.clean_dapodik_str(student_record->>'telepon'),
+            public.clean_dapodik_str(student_record->>'phone'),
+            public.clean_dapodik_str(student_record->>'email'),
+            public.clean_dapodik_str(student_record->>'photoUrl'),
             v_clean_status,
             COALESCE(v_entry_date, CURRENT_DATE),
             v_class_id,
-            NULLIF(trim(student_record->>'skhun'), ''),
-            NULLIF(trim(student_record->>'noPesertaUn'), ''),
-            NULLIF(trim(student_record->>'noIjazah'), ''),
-            NULLIF(trim(student_record->>'noAktaLahir'), ''),
+            public.clean_dapodik_str(student_record->>'skhun'),
+            public.clean_dapodik_str(student_record->>'noPesertaUn'),
+            public.clean_dapodik_str(student_record->>'noIjazah'),
+            public.clean_dapodik_str(student_record->>'noAktaLahir'),
             NULLIF(trim(student_record->>'anakKe'), '')::INTEGER,
             NULLIF(trim(student_record->>'jmlSaudara'), '')::INTEGER,
-            NULLIF(trim(student_record->>'lintang'), ''),
-            NULLIF(trim(student_record->>'bujur'), ''),
+            public.clean_dapodik_str(student_record->>'lintang'),
+            public.clean_dapodik_str(student_record->>'bujur'),
             NULLIF(trim(student_record->>'beratBadan'), '')::NUMERIC(8,2),
             NULLIF(trim(student_record->>'tinggiBadan'), '')::NUMERIC(8,2),
             NULLIF(trim(student_record->>'lingkarKepala'), '')::NUMERIC(8,2),
             NULLIF(trim(student_record->>'jarakSekolah'), '')::NUMERIC(10,2),
-            NULLIF(trim(student_record->>'jenisTinggal'), ''),
-            NULLIF(trim(student_record->>'alatTransportasi'), ''),
-            NULLIF(trim(student_record->>'kebutuhanKhusus'), ''),
-            NULLIF(trim(student_record->>'sekolahAsal'), ''),
-            NULLIF(trim(student_record->>'bank'), ''),
-            NULLIF(trim(student_record->>'noRekening'), ''),
-            NULLIF(trim(student_record->>'namaRekening'), '')
+            public.clean_dapodik_str(student_record->>'jenisTinggal'),
+            public.clean_dapodik_str(student_record->>'alatTransportasi'),
+            public.clean_dapodik_str(student_record->>'kebutuhanKhusus'),
+            public.clean_dapodik_str(student_record->>'sekolahAsal'),
+            public.clean_dapodik_str(student_record->>'bank'),
+            public.clean_dapodik_str(student_record->>'noRekening'),
+            public.clean_dapodik_str(student_record->>'namaRekening')
         )
         ON CONFLICT ("schoolId", "nisn") DO UPDATE SET
             "nis"              = COALESCE(EXCLUDED."nis", public.students."nis"),
             "nik"              = CASE WHEN EXCLUDED."nik" LIKE 'NONIK-%' THEN public.students."nik" ELSE EXCLUDED."nik" END,
-            "noKk"             = CASE WHEN EXCLUDED."noKk" = '-' THEN public.students."noKk" ELSE COALESCE(EXCLUDED."noKk", public.students."noKk") END,
+            "noKk"             = COALESCE(EXCLUDED."noKk", public.students."noKk"),
             "fullName"         = EXCLUDED."fullName",
             "nickname"         = COALESCE(EXCLUDED."nickname", public.students."nickname"),
             "gender"           = EXCLUDED."gender",
@@ -2427,8 +2523,8 @@ BEGIN
         THEN
             FOR parent_record IN SELECT value FROM jsonb_array_elements(student_record->'parents')
             LOOP
-                IF NULLIF(trim(parent_record->>'fullName'), '') IS NOT NULL THEN
-                    v_relation := COALESCE(NULLIF(upper(trim(parent_record->>'relation')), ''), 'WALI');
+                IF public.clean_dapodik_str(parent_record->>'fullName') IS NOT NULL THEN
+                    v_relation := COALESCE(upper(public.clean_dapodik_str(parent_record->>'relation')), 'WALI');
                     IF v_relation NOT IN ('AYAH', 'IBU', 'WALI') THEN
                         v_relation := 'WALI';
                     END IF;
@@ -2441,15 +2537,15 @@ BEGIN
                     VALUES (
                         v_school_id, v_student_id, v_relation,
                         trim(parent_record->>'fullName'),
-                        NULLIF(trim(parent_record->>'nik'), ''),
-                        NULLIF(trim(parent_record->>'birthYear'), ''),
-                        NULLIF(trim(parent_record->>'phone'), ''),
-                        NULLIF(trim(parent_record->>'email'), ''),
-                        NULLIF(trim(parent_record->>'education'), ''),
-                        COALESCE(NULLIF(trim(parent_record->>'occupation'), ''), NULLIF(trim(parent_record->>'job'), '')),
-                        COALESCE(NULLIF(trim(parent_record->>'monthlyIncome'), ''), NULLIF(trim(parent_record->>'income'), '')),
-                        COALESCE(NULLIF(trim(parent_record->>'isAlive'), '')::BOOLEAN, true),
-                        NULLIF(trim(parent_record->>'address'), '')
+                        public.clean_dapodik_str(parent_record->>'nik'),
+                        public.clean_dapodik_str(parent_record->>'birthYear'),
+                        public.clean_dapodik_str(parent_record->>'phone'),
+                        public.clean_dapodik_str(parent_record->>'email'),
+                        public.clean_dapodik_str(parent_record->>'education'),
+                        COALESCE(public.clean_dapodik_str(parent_record->>'occupation'), public.clean_dapodik_str(parent_record->>'job')),
+                        COALESCE(public.clean_dapodik_str(parent_record->>'monthlyIncome'), public.clean_dapodik_str(parent_record->>'income')),
+                        public.parse_dapodik_bool(parent_record->>'isAlive', true),
+                        public.clean_dapodik_str(parent_record->>'address')
                     )
                     ON CONFLICT ("studentId", "relation") DO UPDATE SET
                         "fullName"      = EXCLUDED."fullName",
@@ -2469,26 +2565,26 @@ BEGIN
 
         IF student_record ? 'economic' AND jsonb_typeof(student_record->'economic') = 'object' THEN
             economic_record := student_record->'economic';
-            v_has_kip := COALESCE(NULLIF(trim(economic_record->>'hasKip'), '')::BOOLEAN, false)
-                         OR NULLIF(trim(economic_record->>'kipNumber'), '') IS NOT NULL;
+            v_has_kip := public.parse_dapodik_bool(economic_record->>'hasKip', false)
+                         OR public.clean_dapodik_str(economic_record->>'kipNumber') IS NOT NULL;
 
-            v_raw_nama_kip := NULLIF(trim(economic_record->>'namaKip'), '');
+            v_raw_nama_kip := public.clean_dapodik_str(economic_record->>'namaKip');
             v_clean_nama_kip := CASE
-                WHEN v_raw_nama_kip IS NULL OR lower(v_raw_nama_kip) IN ('0', '1', '-', 'ya', 'tidak') THEN NULL
+                WHEN v_raw_nama_kip IS NULL OR lower(v_raw_nama_kip) IN ('0', '1', 'ya', 'tidak') THEN NULL
                 ELSE v_raw_nama_kip
             END;
 
-            v_clean_kks_number := NULLIF(trim(economic_record->>'kksNumber'), '');
-            v_has_kks := COALESCE(NULLIF(trim(economic_record->>'hasKks'), '')::BOOLEAN, false)
+            v_clean_kks_number := public.clean_dapodik_str(economic_record->>'kksNumber');
+            v_has_kks := public.parse_dapodik_bool(economic_record->>'hasKks', false)
                          OR v_clean_kks_number IS NOT NULL;
 
-            v_orphan_type := NULLIF(upper(trim(economic_record->>'orphanType')), '');
+            v_orphan_type := upper(public.clean_dapodik_str(economic_record->>'orphanType'));
             IF v_orphan_type NOT IN ('YATIM', 'PIATU', 'YATIM_PIATU', 'BUKAN') THEN
                 v_orphan_type := NULL;
             END IF;
 
             v_is_orphan := COALESCE(
-                COALESCE(NULLIF(trim(economic_record->>'isOrphan'), '')::BOOLEAN, false)
+                public.parse_dapodik_bool(economic_record->>'isOrphan', false)
                 OR COALESCE(v_orphan_type IN ('YATIM', 'PIATU', 'YATIM_PIATU'), false),
                 false
             );
@@ -2502,20 +2598,20 @@ BEGIN
             )
             VALUES (
                 v_school_id, v_student_id, v_has_kip,
-                CASE WHEN v_has_kip THEN NULLIF(trim(economic_record->>'kipNumber'), '') ELSE NULL END,
+                CASE WHEN v_has_kip THEN public.clean_dapodik_str(economic_record->>'kipNumber') ELSE NULL END,
                 CASE WHEN v_has_kip THEN v_clean_nama_kip ELSE NULL END,
-                COALESCE(NULLIF(trim(economic_record->>'layakPip'), '')::BOOLEAN, false),
-                NULLIF(trim(economic_record->>'alasanLayakPip'), ''),
+                public.parse_dapodik_bool(economic_record->>'layakPip', false),
+                public.clean_dapodik_str(economic_record->>'alasanLayakPip'),
                 v_has_kks,
                 CASE WHEN v_has_kks THEN v_clean_kks_number ELSE NULL END,
-                COALESCE(NULLIF(trim(economic_record->>'hasPkh'), '')::BOOLEAN, false),
-                COALESCE(NULLIF(trim(economic_record->>'isDtks'), '')::BOOLEAN, false),
-                NULLIF(trim(economic_record->>'houseOwnership'), ''),
-                NULLIF(trim(economic_record->>'houseCondition'), ''),
+                public.parse_dapodik_bool(economic_record->>'hasPkh', false),
+                public.parse_dapodik_bool(economic_record->>'isDtks', false),
+                public.clean_dapodik_str(economic_record->>'houseOwnership'),
+                public.clean_dapodik_str(economic_record->>'houseCondition'),
                 NULLIF(trim(economic_record->>'dependentsCount'), '')::INTEGER,
                 v_is_orphan, v_orphan_type,
                 NULLIF(trim(economic_record->>'pipScore'), '')::NUMERIC(8,2),
-                NULLIF(trim(economic_record->>'economicCategory'), ''),
+                public.clean_dapodik_str(economic_record->>'economicCategory'),
                 CASE
                     WHEN economic_record ? 'scoringDetails' AND jsonb_typeof(economic_record->'scoringDetails') = 'object'
                     THEN economic_record->'scoringDetails'
@@ -2564,7 +2660,7 @@ $$;
 REVOKE ALL ON FUNCTION public.bulk_import_students(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.bulk_import_students(JSONB) TO authenticated;
 
--- 23F. Bulk Import Guru & PTK Dapodik (UPSERT + Validasi Duplikat + Partial Update Aman)
+-- 11H. Bulk Import Guru & PTK Dapodik (UPSERT + Kolom Dapodik Lengkap + Sanitasi '-')
 CREATE OR REPLACE FUNCTION public.bulk_import_teachers(batch_data JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2599,9 +2695,18 @@ DECLARE
     v_telepon TEXT;
     v_phone TEXT;
     v_email TEXT;
+    v_education TEXT;
+    v_major TEXT;
+    v_university TEXT;
     v_status TEXT;
     v_position TEXT;
+    v_is_certified BOOLEAN;
+    v_certification_number TEXT;
     v_join_date DATE;
+    v_is_active BOOLEAN;
+    v_base_salary NUMERIC(15,2);
+    v_subjects TEXT;
+    v_max_hours INTEGER;
     v_tugas_tambahan TEXT;
     v_sk_cpns TEXT;
     v_tanggal_cpns DATE;
@@ -2681,7 +2786,7 @@ BEGIN
             END IF;
         END IF;
 
-        v_full_name := NULLIF(trim(teacher_record->>'fullName'), '');
+        v_full_name := public.clean_dapodik_str(teacher_record->>'fullName');
         IF v_full_name IS NULL THEN
             RAISE EXCEPTION 'Nama lengkap guru wajib diisi pada baris ke-%', v_index;
         END IF;
@@ -2698,78 +2803,93 @@ BEGIN
             RAISE EXCEPTION 'Jenis kelamin tidak valid pada baris ke-%. Gunakan L atau P.', v_index;
         END IF;
 
-        v_nip := NULLIF(trim(teacher_record->>'nip'), '');
-        v_nuptk := NULLIF(trim(teacher_record->>'nuptk'), '');
-        v_nik := NULLIF(trim(teacher_record->>'nik'), '');
-        v_no_kk := NULLIF(trim(teacher_record->>'noKk'), '');
-        v_birth_place := NULLIF(trim(teacher_record->>'birthPlace'), '');
+        v_nip := public.clean_dapodik_str(teacher_record->>'nip');
+        v_nuptk := public.clean_dapodik_str(teacher_record->>'nuptk');
+        v_nik := public.clean_dapodik_str(teacher_record->>'nik');
+        v_no_kk := public.clean_dapodik_str(teacher_record->>'noKk');
+        v_birth_place := public.clean_dapodik_str(teacher_record->>'birthPlace');
         v_birth_date := NULLIF(trim(teacher_record->>'birthDate'), '')::DATE;
 
-        v_religion := NULLIF(upper(trim(COALESCE(teacher_record->>'religion', ''))), '');
+        v_religion := upper(public.clean_dapodik_str(teacher_record->>'religion'));
         IF v_religion = 'KATHOLIK' THEN
             v_religion := 'KATOLIK';
         END IF;
 
-        v_address := NULLIF(trim(teacher_record->>'address'), '');
-        v_dusun := NULLIF(trim(teacher_record->>'dusun'), '');
-        v_rt := NULLIF(trim(teacher_record->>'rt'), '');
-        v_rw := NULLIF(trim(teacher_record->>'rw'), '');
-        v_kelurahan := NULLIF(trim(teacher_record->>'kelurahan'), '');
-        v_kecamatan := NULLIF(trim(teacher_record->>'kecamatan'), '');
-        v_city := NULLIF(trim(teacher_record->>'city'), '');
-        v_province := NULLIF(trim(teacher_record->>'province'), '');
-        v_postal_code := NULLIF(trim(teacher_record->>'postalCode'), '');
-        v_telepon := NULLIF(trim(teacher_record->>'telepon'), '');
+        v_address := public.clean_dapodik_str(teacher_record->>'address');
+        v_dusun := public.clean_dapodik_str(teacher_record->>'dusun');
+        v_rt := public.clean_dapodik_str(teacher_record->>'rt');
+        v_rw := public.clean_dapodik_str(teacher_record->>'rw');
+        v_kelurahan := public.clean_dapodik_str(teacher_record->>'kelurahan');
+        v_kecamatan := public.clean_dapodik_str(teacher_record->>'kecamatan');
+        v_city := public.clean_dapodik_str(teacher_record->>'city');
+        v_province := public.clean_dapodik_str(teacher_record->>'province');
+        v_postal_code := public.clean_dapodik_str(teacher_record->>'postalCode');
+        v_telepon := public.clean_dapodik_str(teacher_record->>'telepon');
         IF v_telepon = '0' THEN
             v_telepon := NULL;
         END IF;
-        v_phone := NULLIF(trim(teacher_record->>'phone'), '');
-        v_email := NULLIF(trim(teacher_record->>'email'), '');
+        v_phone := public.clean_dapodik_str(teacher_record->>'phone');
+        v_email := public.clean_dapodik_str(teacher_record->>'email');
 
-        v_status := COALESCE(NULLIF(upper(trim(teacher_record->>'status')), ''), 'HONORER');
-        v_position := COALESCE(NULLIF(trim(teacher_record->>'position'), ''), 'Guru');
+        v_education := public.clean_dapodik_str(teacher_record->>'education');
+        v_major := public.clean_dapodik_str(teacher_record->>'major');
+        v_university := public.clean_dapodik_str(teacher_record->>'university');
+
+        v_status := COALESCE(upper(public.clean_dapodik_str(teacher_record->>'status')), 'HONORER');
+        v_position := COALESCE(public.clean_dapodik_str(teacher_record->>'position'), 'Guru');
+        v_is_certified := public.parse_dapodik_bool(teacher_record->>'isCertified', false);
+        v_certification_number := public.clean_dapodik_str(teacher_record->>'certificationNumber');
         v_join_date := NULLIF(trim(teacher_record->>'joinDate'), '')::DATE;
-        v_tugas_tambahan := NULLIF(trim(teacher_record->>'tugasTambahan'), '');
+        v_is_active := public.parse_dapodik_bool(teacher_record->>'isActive', true);
+        v_base_salary := NULLIF(trim(teacher_record->>'baseSalary'), '')::NUMERIC(15,2);
+        v_subjects := public.clean_dapodik_str(teacher_record->>'subjects');
 
-        v_sk_cpns := NULLIF(trim(teacher_record->>'skCpns'), '');
+        v_max_hours := NULLIF(trim(teacher_record->>'maxHoursPerWeek'), '')::INTEGER;
+        IF v_max_hours IS NULL OR v_max_hours <= 0 THEN
+            v_max_hours := 24;
+        END IF;
+
+        v_tugas_tambahan := public.clean_dapodik_str(teacher_record->>'tugasTambahan');
+
+        v_sk_cpns := public.clean_dapodik_str(teacher_record->>'skCpns');
         v_tanggal_cpns := NULLIF(trim(teacher_record->>'tanggalCpns'), '')::DATE;
-        v_sk_pengangkatan := NULLIF(trim(teacher_record->>'skPengangkatan'), '');
+        v_sk_pengangkatan := public.clean_dapodik_str(teacher_record->>'skPengangkatan');
         v_tmt_pengangkatan := NULLIF(trim(teacher_record->>'tmtPengangkatan'), '')::DATE;
-        v_lembaga_pengangkatan := NULLIF(trim(teacher_record->>'lembagaPengangkatan'), '');
+        v_lembaga_pengangkatan := public.clean_dapodik_str(teacher_record->>'lembagaPengangkatan');
         IF lower(COALESCE(v_lembaga_pengangkatan, '')) = '(tidak diisi)' THEN
             v_lembaga_pengangkatan := NULL;
         END IF;
 
-        v_pangkat_golongan := NULLIF(trim(teacher_record->>'pangkatGolongan'), '');
-        v_sumber_gaji := NULLIF(trim(teacher_record->>'sumberGaji'), '');
+        v_pangkat_golongan := public.clean_dapodik_str(teacher_record->>'pangkatGolongan');
+        v_sumber_gaji := public.clean_dapodik_str(teacher_record->>'sumberGaji');
         v_tmt_pns := NULLIF(trim(teacher_record->>'tmtPns'), '')::DATE;
-        v_karpeg := NULLIF(trim(teacher_record->>'karpeg'), '');
+        v_karpeg := public.clean_dapodik_str(teacher_record->>'karpeg');
 
-        v_nama_ibu_kandung := NULLIF(trim(teacher_record->>'namaIbuKandung'), '');
-        v_status_perkawinan := NULLIF(trim(teacher_record->>'statusPerkawinan'), '');
-        v_nama_suami_istri := NULLIF(trim(teacher_record->>'namaSuamiIstri'), '');
-        v_nip_suami_istri := NULLIF(trim(teacher_record->>'nipSuamiIstri'), '');
-        v_pekerjaan_suami_istri := NULLIF(trim(teacher_record->>'pekerjaanSuamiIstri'), '');
-        v_karis_karsu := NULLIF(trim(teacher_record->>'karisKarsu'), '');
+        v_nama_ibu_kandung := public.clean_dapodik_str(teacher_record->>'namaIbuKandung');
+        v_status_perkawinan := public.clean_dapodik_str(teacher_record->>'statusPerkawinan');
+        v_nama_suami_istri := public.clean_dapodik_str(teacher_record->>'namaSuamiIstri');
+        v_nip_suami_istri := public.clean_dapodik_str(teacher_record->>'nipSuamiIstri');
+        v_pekerjaan_suami_istri := public.clean_dapodik_str(teacher_record->>'pekerjaanSuamiIstri');
+        v_karis_karsu := public.clean_dapodik_str(teacher_record->>'karisKarsu');
 
-        v_kewarganegaraan := NULLIF(trim(teacher_record->>'kewarganegaraan'), '');
+        v_kewarganegaraan := public.clean_dapodik_str(teacher_record->>'kewarganegaraan');
         IF upper(COALESCE(v_kewarganegaraan, '')) = 'ID' THEN
             v_kewarganegaraan := 'Indonesia';
         END IF;
 
-        v_npwp := NULLIF(trim(teacher_record->>'npwp'), '');
-        v_nama_wajib_pajak := NULLIF(trim(teacher_record->>'namaWajibPajak'), '');
-        v_bank := NULLIF(trim(teacher_record->>'bank'), '');
-        v_no_rekening := NULLIF(trim(teacher_record->>'nomorRekeningBank'), '');
-        v_rekening_atas_nama := NULLIF(trim(teacher_record->>'rekeningAtasNama'), '');
-        v_lintang := NULLIF(trim(teacher_record->>'lintang'), '');
-        v_bujur := NULLIF(trim(teacher_record->>'bujur'), '');
-        v_nuks := NULLIF(trim(teacher_record->>'nuks'), '');
+        v_npwp := public.clean_dapodik_str(teacher_record->>'npwp');
+        v_nama_wajib_pajak := public.clean_dapodik_str(teacher_record->>'namaWajibPajak');
+        v_bank := public.clean_dapodik_str(teacher_record->>'bank');
+        v_no_rekening := public.clean_dapodik_str(teacher_record->>'nomorRekeningBank');
+        v_rekening_atas_nama := public.clean_dapodik_str(teacher_record->>'rekeningAtasNama');
+        v_lintang := public.clean_dapodik_str(teacher_record->>'lintang');
+        v_bujur := public.clean_dapodik_str(teacher_record->>'bujur');
+        v_nuks := public.clean_dapodik_str(teacher_record->>'nuks');
 
-        v_lisensi_kepsek := COALESCE(NULLIF(trim(teacher_record->>'sudahLisensiKepalaSekolah'), '')::BOOLEAN, false);
-        v_diklat_pengawas := COALESCE(NULLIF(trim(teacher_record->>'pernahDiklatKepengawasan'), '')::BOOLEAN, false);
-        v_braille := COALESCE(NULLIF(trim(teacher_record->>'keahlianBraille'), '')::BOOLEAN, false);
-        v_bahasa_isyarat := COALESCE(NULLIF(trim(teacher_record->>'keahlianBahasaIsyarat'), '')::BOOLEAN, false);
+        v_lisensi_kepsek := public.parse_dapodik_bool(teacher_record->>'sudahLisensiKepalaSekolah', false);
+        v_diklat_pengawas := public.parse_dapodik_bool(teacher_record->>'pernahDiklatKepengawasan', false);
+        v_braille := public.parse_dapodik_bool(teacher_record->>'keahlianBraille', false);
+        v_bahasa_isyarat := public.parse_dapodik_bool(teacher_record->>'keahlianBahasaIsyarat', false);
 
         v_existing_id := NULL;
 
@@ -2861,12 +2981,28 @@ BEGIN
                 "telepon"                   = COALESCE(v_telepon, "telepon"),
                 "phone"                     = COALESCE(v_phone, "phone"),
                 "email"                     = COALESCE(v_email, "email"),
+                "education"                 = COALESCE(v_education, "education"),
+                "major"                     = COALESCE(v_major, "major"),
+                "university"                = COALESCE(v_university, "university"),
                 "status"                    = COALESCE(v_status, "status"),
                 "position"                  = COALESCE(v_position, "position"),
+                "isCertified"               = public.parse_dapodik_bool(teacher_record->>'isCertified', "isCertified"),
+                "certificationNumber"       = COALESCE(v_certification_number, "certificationNumber"),
                 "joinDate"                  = COALESCE(v_join_date, "joinDate"),
+                "isActive"                  = public.parse_dapodik_bool(teacher_record->>'isActive', "isActive"),
+                "baseSalary"                = COALESCE(v_base_salary, "baseSalary"),
+                "subjects"                  = COALESCE(v_subjects, "subjects"),
+                "maxHoursPerWeek"           = COALESCE(
+                    CASE
+                        WHEN NULLIF(trim(teacher_record->>'maxHoursPerWeek'), '')::INTEGER > 0
+                        THEN NULLIF(trim(teacher_record->>'maxHoursPerWeek'), '')::INTEGER
+                        ELSE NULL
+                    END,
+                    "maxHoursPerWeek"
+                ),
                 "tugasTambahan"             = CASE
                     WHEN teacher_record ? 'tugasTambahan'
-                    THEN NULLIF(trim(teacher_record->>'tugasTambahan'), '')
+                    THEN public.clean_dapodik_str(teacher_record->>'tugasTambahan')
                     ELSE "tugasTambahan"
                 END,
                 "skCpns"                    = COALESCE(v_sk_cpns, "skCpns"),
@@ -2893,26 +3029,10 @@ BEGIN
                 "lintang"                   = COALESCE(v_lintang, "lintang"),
                 "bujur"                     = COALESCE(v_bujur, "bujur"),
                 "nuks"                      = COALESCE(v_nuks, "nuks"),
-                "sudahLisensiKepalaSekolah" = CASE
-                    WHEN teacher_record ? 'sudahLisensiKepalaSekolah'
-                    THEN COALESCE(NULLIF(trim(teacher_record->>'sudahLisensiKepalaSekolah'), '')::BOOLEAN, false)
-                    ELSE "sudahLisensiKepalaSekolah"
-                END,
-                "pernahDiklatKepengawasan" = CASE
-                    WHEN teacher_record ? 'pernahDiklatKepengawasan'
-                    THEN COALESCE(NULLIF(trim(teacher_record->>'pernahDiklatKepengawasan'), '')::BOOLEAN, false)
-                    ELSE "pernahDiklatKepengawasan"
-                END,
-                "keahlianBraille" = CASE
-                    WHEN teacher_record ? 'keahlianBraille'
-                    THEN COALESCE(NULLIF(trim(teacher_record->>'keahlianBraille'), '')::BOOLEAN, false)
-                    ELSE "keahlianBraille"
-                END,
-                "keahlianBahasaIsyarat" = CASE
-                    WHEN teacher_record ? 'keahlianBahasaIsyarat'
-                    THEN COALESCE(NULLIF(trim(teacher_record->>'keahlianBahasaIsyarat'), '')::BOOLEAN, false)
-                    ELSE "keahlianBahasaIsyarat"
-                END,
+                "sudahLisensiKepalaSekolah" = public.parse_dapodik_bool(teacher_record->>'sudahLisensiKepalaSekolah', "sudahLisensiKepalaSekolah"),
+                "pernahDiklatKepengawasan"  = public.parse_dapodik_bool(teacher_record->>'pernahDiklatKepengawasan', "pernahDiklatKepengawasan"),
+                "keahlianBraille"           = public.parse_dapodik_bool(teacher_record->>'keahlianBraille', "keahlianBraille"),
+                "keahlianBahasaIsyarat"     = public.parse_dapodik_bool(teacher_record->>'keahlianBahasaIsyarat', "keahlianBahasaIsyarat"),
                 "updatedAt"                 = now()
             WHERE "id" = v_existing_id
               AND "schoolId" = v_school_id;
@@ -2924,7 +3044,9 @@ BEGIN
                 "birthPlace", "birthDate", "religion",
                 "address", "dusun", "rt", "rw", "kelurahan", "kecamatan", "city", "province", "postalCode",
                 "telepon", "phone", "email",
-                "status", "position", "joinDate", "tugasTambahan",
+                "education", "major", "university",
+                "status", "position", "isCertified", "certificationNumber", "joinDate",
+                "isActive", "baseSalary", "subjects", "maxHoursPerWeek", "tugasTambahan",
                 "skCpns", "tanggalCpns", "skPengangkatan", "tmtPengangkatan",
                 "lembagaPengangkatan", "pangkatGolongan", "sumberGaji", "tmtPns", "karpeg",
                 "namaIbuKandung", "statusPerkawinan", "namaSuamiIstri", "nipSuamiIstri",
@@ -2932,15 +3054,16 @@ BEGIN
                 "npwp", "namaWajibPajak", "bank", "nomorRekeningBank", "rekeningAtasNama",
                 "lintang", "bujur", "nuks",
                 "sudahLisensiKepalaSekolah", "pernahDiklatKepengawasan",
-                "keahlianBraille", "keahlianBahasaIsyarat",
-                "isActive", "isCertified", "maxHoursPerWeek"
+                "keahlianBraille", "keahlianBahasaIsyarat"
             )
             VALUES (
                 v_school_id, v_full_name, v_gender, v_nip, v_nuptk, v_nik, v_no_kk,
                 v_birth_place, v_birth_date, v_religion,
                 v_address, v_dusun, v_rt, v_rw, v_kelurahan, v_kecamatan, v_city, v_province, v_postal_code,
                 v_telepon, v_phone, v_email,
-                v_status, v_position, COALESCE(v_join_date, v_tmt_pengangkatan), v_tugas_tambahan,
+                v_education, v_major, v_university,
+                v_status, v_position, v_is_certified, v_certification_number, COALESCE(v_join_date, v_tmt_pengangkatan),
+                v_is_active, v_base_salary, v_subjects, v_max_hours, v_tugas_tambahan,
                 v_sk_cpns, v_tanggal_cpns, v_sk_pengangkatan, v_tmt_pengangkatan,
                 v_lembaga_pengangkatan, v_pangkat_golongan, v_sumber_gaji, v_tmt_pns, v_karpeg,
                 v_nama_ibu_kandung, v_status_perkawinan, v_nama_suami_istri, v_nip_suami_istri,
@@ -2948,8 +3071,7 @@ BEGIN
                 v_npwp, v_nama_wajib_pajak, v_bank, v_no_rekening, v_rekening_atas_nama,
                 v_lintang, v_bujur, v_nuks,
                 v_lisensi_kepsek, v_diklat_pengawas,
-                v_braille, v_bahasa_isyarat,
-                true, false, 24
+                v_braille, v_bahasa_isyarat
             );
 
             v_inserted_count := v_inserted_count + 1;
@@ -2973,7 +3095,7 @@ REVOKE ALL ON FUNCTION public.bulk_import_teachers(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.bulk_import_teachers(JSONB) TO authenticated;
 
 -- ============================================================================
--- 24. ROW LEVEL SECURITY (RLS) — MULTI-TENANT & MULTI-ROLE (HARDENED)
+-- 12. ROW LEVEL SECURITY (RLS) — MULTI-TENANT & MULTI-ROLE (HARDENED)
 -- ============================================================================
 ALTER TABLE public.schools ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_years ENABLE ROW LEVEL SECURITY;
@@ -3104,25 +3226,43 @@ USING (
     )
 );
 
--- Teachers
+-- Teachers (Granular: INSERT/UPDATE oleh Manajemen/TU/Operator, DELETE khusus Pimpinan)
 CREATE POLICY teachers_select ON public.teachers FOR SELECT TO authenticated
 USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
 
-CREATE POLICY teachers_manage ON public.teachers FOR ALL TO authenticated
-USING (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+CREATE POLICY teachers_insert ON public.teachers FOR INSERT TO authenticated
+WITH CHECK (
+    public.current_user_can_manage_administration()
+    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+);
 
--- Classes
+CREATE POLICY teachers_update ON public.teachers FOR UPDATE TO authenticated
+USING (
+    public.current_user_can_manage_administration()
+    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+)
+WITH CHECK (
+    public.current_user_can_manage_administration()
+    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+);
+
+CREATE POLICY teachers_delete ON public.teachers FOR DELETE TO authenticated
+USING (
+    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH']::text[])
+    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+);
+
+-- Classes (Selaras dengan Operator Dapodik, Kepala Sekolah & Admin)
 CREATE POLICY classes_select ON public.classes FOR SELECT TO authenticated
 USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
 
 CREATE POLICY classes_manage ON public.classes FOR ALL TO authenticated
 USING (
-    public.is_school_admin()
+    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
     AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
 )
 WITH CHECK (
-    public.is_school_admin()
+    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
     AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
 );
 
@@ -3430,7 +3570,7 @@ CREATE POLICY audit_logs_insert ON public.audit_logs FOR INSERT TO authenticated
 WITH CHECK (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
 
 -- ============================================================================
--- 25. TABLE GRANTS
+-- 13. TABLE GRANTS
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
