@@ -260,8 +260,8 @@ export function DailyQuotesManagePage() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -385,7 +385,7 @@ export function DailyQuotesManagePage() {
                             </div>
                         ) : (
                             <div className="space-y-3 max-h-135 overflow-y-auto pr-1">
-                                {quotes.map((item) => {
+                                {quotes.map((item, index) => {
                                     const isGlobal = item.schoolId === null;
                                     const lockedForAdmin = !isSuperAdmin && isGlobal;
 
@@ -393,13 +393,18 @@ export function DailyQuotesManagePage() {
                                         <div
                                             key={item.id}
                                             className={`p-4 rounded-2xl border transition ${item.isActive
-                                                ? 'bg-muted/30 border-border'
-                                                : 'bg-muted/10 border-border/50 opacity-60'
+                                                    ? 'bg-muted/30 border-border'
+                                                    : 'bg-muted/10 border-border/50 opacity-60'
                                                 }`}
                                         >
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="space-y-1.5 min-w-0">
                                                     <div className="flex flex-wrap items-center gap-1.5">
+                                                        {/* Nomor Urut */}
+                                                        <span className="inline-flex items-center justify-center min-w-6 px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                                            {index + 1}.
+                                                        </span>
+
                                                         {isGlobal ? (
                                                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
                                                                 <Globe size={11} /> Global
@@ -412,8 +417,8 @@ export function DailyQuotesManagePage() {
 
                                                         <span
                                                             className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${item.isActive
-                                                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                                                                : 'bg-slate-500/15 text-slate-500'
+                                                                    ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                                                                    : 'bg-slate-500/15 text-slate-500'
                                                                 }`}
                                                         >
                                                             {item.isActive ? 'Aktif' : 'Nonaktif'}
