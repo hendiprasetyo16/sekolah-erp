@@ -17,6 +17,7 @@ import {
     CheckCircle2,
     Layers,
     AlertTriangle,
+    AlertCircle,
     Loader2,
     X,
 } from 'lucide-react';
@@ -30,56 +31,105 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { APP_NAME, APP_VERSION } from '@/constants/app.constants';
 import { Button } from '@/components/ui/button';
 
+// ============================================================================
+// TIPE DATA & KONSTANTA JENJANG PENDIDIKAN (Selaras dengan ERP_Sekolah_v17)
+// ============================================================================
+
 interface SchoolTenantRow {
     id: string;
     name: string;
     npsn: string;
-    level?: string | null;
-    educationLevel?: string | null;
+    level: string;
+    type?: string | null;
+    address?: string | null;
     city?: string | null;
     province?: string | null;
-    address?: string | null;
     logoUrl?: string | null;
-    isActive?: boolean | null;
 }
 
 interface AcademicYearRow {
     id: string;
     schoolId: string;
     name: string;
-    startYear?: number | null;
-    endYear?: number | null;
-    isActive?: boolean | null;
+    startYear: number;
+    endYear: number;
+    isActive: boolean;
+}
+
+interface SupabaseErrorShape {
+    code?: string;
+    message?: string;
+    details?: string;
 }
 
 type AuthStoreState = ReturnType<typeof useAuthStore.getState>;
-type EducationLevelFilter = 'ALL' | 'SD' | 'SMP' | 'SMA' | 'SMK';
-type SchoolLevelInput = 'SD' | 'SMP' | 'SMA' | 'SMK';
+
+/** Daftar jenjang pendidikan yang didukung sistem */
+export type SchoolLevelCode = 'TK' | 'SD' | 'SMP' | 'SMA' | 'SMK';
+type EducationLevelFilter = 'ALL' | SchoolLevelCode;
+type SchoolStatusType = 'SWASTA' | 'NEGERI';
+type ErrorContext = 'fetch' | 'create' | 'select';
 
 const LEVEL_FILTER_OPTIONS: readonly EducationLevelFilter[] = [
     'ALL',
+    'TK',
     'SD',
     'SMP',
     'SMA',
     'SMK',
 ];
 
+const SCHOOL_LEVEL_OPTIONS: readonly { value: SchoolLevelCode; labelId: string; labelEn: string }[] = [
+    { value: 'TK', labelId: 'TK / RA (Taman Kanak-Kanak)', labelEn: 'Kindergarten (TK / RA)' },
+    { value: 'SD', labelId: 'SD / MI (Sekolah Dasar)', labelEn: 'Elementary School (SD / MI)' },
+    { value: 'SMP', labelId: 'SMP / MTs (Menengah Pertama)', labelEn: 'Junior High School (SMP / MTs)' },
+    { value: 'SMA', labelId: 'SMA / MA (Menengah Atas)', labelEn: 'Senior High School (SMA / MA)' },
+    { value: 'SMK', labelId: 'SMK (Menengah Kejuruan)', labelEn: 'Vocational High School (SMK)' },
+];
+
+// ============================================================================
+// FUNGSI BANTU (NORMALISASI JENJANG, TAHUN AJARAN & PENERJEMAH ERROR)
+// ============================================================================
+
+/**
+ * Menormalkan nilai kolom `level` dari database menjadi kode jenjang standar.
+ */
 function resolveSchoolLevel(school: SchoolTenantRow): string {
-    const rawLevel = school.level ?? school.educationLevel ?? 'SEKOLAH';
-    return rawLevel.trim().toUpperCase();
+    const raw = (school.level ?? '').trim().toUpperCase();
+    if (!raw || raw === 'BELUM_DIATUR') return 'UMUM';
+    if (raw.startsWith('TK') || raw.includes('RAUDHATUL') || raw.includes('PAUD')) return 'TK';
+    if (raw.startsWith('SD') || raw.startsWith('MI')) return 'SD';
+    if (raw.startsWith('SMP') || raw.startsWith('MTS')) return 'SMP';
+    if (raw.startsWith('SMK')) return 'SMK';
+    if (raw.startsWith('SMA') || raw.startsWith('MA')) return 'SMA';
+    return raw;
 }
 
+/**
+ * Menggabungkan kota dan provinsi sekolah dengan mengabaikan placeholder '-' dari database.
+ */
 function formatSchoolLocation(school: SchoolTenantRow, fallbackText: string): string {
-    const parts = [school.city, school.province].filter(
-        (item): item is string => typeof item === 'string' && item.trim().length > 0
-    );
+    const cleanCity = school.city && school.city.trim() !== '-' ? school.city.trim() : '';
+    const cleanProvince =
+        school.province && school.province.trim() !== '-' ? school.province.trim() : '';
+
+    const parts = [cleanCity, cleanProvince].filter(Boolean);
     if (parts.length > 0) return parts.join(', ');
-    if (school.address && school.address.trim().length > 0) return school.address;
+
+    const cleanAddress =
+        school.address && school.address.trim() !== '-' ? school.address.trim() : '';
+    if (cleanAddress) return cleanAddress;
+
     return fallbackText;
 }
 
+/**
+ * Menentukan warna lencana kartu berdasarkan jenjang pendidikan.
+ */
 function getLevelBadgeStyle(level: string): string {
     switch (level) {
+        case 'TK':
+            return 'border-purple-500/25 bg-purple-500/10 text-purple-700 dark:text-purple-300';
         case 'SD':
             return 'border-rose-500/25 bg-rose-500/10 text-rose-700 dark:text-rose-300';
         case 'SMP':
@@ -92,6 +142,119 @@ function getLevelBadgeStyle(level: string): string {
             return 'border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300';
     }
 }
+
+/**
+ * Menghitung tahun ajaran berjalan berdasarkan kalender pendidikan Indonesia (mulai bulan Juli).
+ */
+function resolveCurrentAcademicYearRange(): { startYear: number; endYear: number; name: string } {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = now.getMonth(); // 0 = Januari, 6 = Juli
+    const startYear = month >= 6 ? year : year - 1;
+    const endYear = startYear + 1;
+    return {
+        startYear,
+        endYear,
+        name: `${startYear}/${endYear}`,
+    };
+}
+
+/**
+ * Menerjemahkan error database, jaringan, atau autentikasi menjadi kalimat bahasa manusia
+ * yang jelas dan mudah dipahami tanpa menampilkan kode teknis.
+ */
+function formatFriendlyError(error: unknown, isId: boolean, context: ErrorContext): string {
+    const errObj =
+        typeof error === 'object' && error !== null ? (error as SupabaseErrorShape) : {};
+    const code = errObj.code ?? '';
+    const rawMessage = (
+        error instanceof Error ? error.message : errObj.message ?? ''
+    ).toLowerCase();
+
+    // 1. Gangguan koneksi internet / server tidak terjangkau
+    if (
+        rawMessage.includes('failed to fetch') ||
+        rawMessage.includes('networkerror') ||
+        rawMessage.includes('load failed') ||
+        rawMessage.includes('network request failed')
+    ) {
+        return isId
+            ? 'Koneksi ke server terputus. Periksa sambungan internet Anda lalu coba kembali.'
+            : 'Unable to reach the server. Please check your internet connection and try again.';
+    }
+
+    // 2. Duplikasi NPSN (Unique Constraint)
+    if (
+        code === '23505' ||
+        rawMessage.includes('duplicate key') ||
+        rawMessage.includes('schools_npsn_key') ||
+        rawMessage.includes('sudah terdaftar')
+    ) {
+        return isId
+            ? 'Nomor NPSN tersebut sudah terdaftar pada satuan pendidikan lain. Silakan periksa kembali NPSN Anda.'
+            : 'This NPSN is already registered to another school. Please verify your NPSN.';
+    }
+
+    // 3. Validasi panjang/format data (Check Constraint)
+    if (code === '23514' || rawMessage.includes('schools_npsn_check')) {
+        return isId
+            ? 'Format NPSN tidak sesuai. Pastikan NPSN terdiri dari tepat 8 digit angka.'
+            : 'Invalid NPSN format. Please ensure the NPSN consists of 8 numeric digits.';
+    }
+
+    // 4. Kolom wajib belum terisi (Not-Null Constraint)
+    if (code === '23502' || rawMessage.includes('null value in column')) {
+        return isId
+            ? 'Masih ada data wajib yang belum lengkap. Silakan periksa kembali seluruh kolom formulir.'
+            : 'Some required fields are incomplete. Please review the form and try again.';
+    }
+
+    // 5. Hak akses ditolak oleh kebijakan keamanan database (RLS)
+    if (
+        code === '42501' ||
+        rawMessage.includes('row-level security') ||
+        rawMessage.includes('permission denied')
+    ) {
+        return isId
+            ? 'Akun Anda tidak memiliki izin untuk menyimpan data sekolah. Pastikan Anda masuk sebagai Super Admin.'
+            : 'Your account does not have permission to perform this action. Please sign in as Super Admin.';
+    }
+
+    // 6. Sesi login habis
+    if (code === 'PGRST301' || rawMessage.includes('jwt') || rawMessage.includes('session')) {
+        return isId
+            ? 'Sesi masuk Anda telah berakhir. Silakan keluar dan masuk kembali ke sistem.'
+            : 'Your sign-in session has expired. Please sign out and sign in again.';
+    }
+
+    // 7. Ketidaksesuaian struktur kolom database
+    if (code === 'PGRST204' || rawMessage.includes('schema cache')) {
+        return isId
+            ? 'Terjadi ketidaksesuaian struktur data dengan server. Silakan muat ulang halaman lalu coba kembali.'
+            : 'A data structure mismatch occurred with the server. Please refresh the page and try again.';
+    }
+
+    // 8. Pesan bawaan yang ramah per konteks operasi
+    if (context === 'fetch') {
+        return isId
+            ? 'Daftar satuan pendidikan belum dapat dimuat saat ini. Silakan tekan tombol Segarkan untuk mencoba kembali.'
+            : 'Unable to load the list of schools right now. Please click Refresh to try again.';
+    }
+
+    if (context === 'select') {
+        return isId
+            ? 'Ruang kerja sekolah belum dapat dibuka saat ini. Silakan coba beberapa saat lagi.'
+            : 'Unable to open the school workspace right now. Please try again shortly.';
+    }
+
+    return isId
+        ? 'Data sekolah baru belum dapat disimpan saat ini. Periksa kembali isian Anda lalu coba lagi.'
+        : 'Unable to save the new school right now. Please check your entries and try again.';
+}
+
+// ============================================================================
+// KOMPONEN UTAMA: TENANT SELECTOR
+// ============================================================================
 
 export function TenantSelector() {
     const navigate = useNavigate();
@@ -115,11 +278,15 @@ export function TenantSelector() {
     // State modal pendaftaran sekolah baru
     const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
     const [isCreatingSchool, setIsCreatingSchool] = useState<boolean>(false);
+    const [createFormError, setCreateFormError] = useState<string>('');
     const [newSchoolName, setNewSchoolName] = useState<string>('');
     const [newSchoolNpsn, setNewSchoolNpsn] = useState<string>('');
-    const [newSchoolLevel, setNewSchoolLevel] = useState<SchoolLevelInput>('SMA');
+    const [newSchoolLevel, setNewSchoolLevel] = useState<SchoolLevelCode>('TK');
+    const [newSchoolType, setNewSchoolType] = useState<SchoolStatusType>('SWASTA');
     const [newSchoolCity, setNewSchoolCity] = useState<string>('');
     const [newSchoolProvince, setNewSchoolProvince] = useState<string>('');
+
+    const defaultAcademicYear = useMemo(() => resolveCurrentAcademicYearRange(), []);
 
     useEffect(() => {
         const rootElement = document.documentElement;
@@ -138,7 +305,10 @@ export function TenantSelector() {
         const handleKeyDown = (event: KeyboardEvent): void => {
             if (event.key === 'Escape') {
                 if (!isLoggingOut) setIsLogoutModalOpen(false);
-                if (!isCreatingSchool) setIsCreateModalOpen(false);
+                if (!isCreatingSchool) {
+                    setIsCreateModalOpen(false);
+                    setCreateFormError('');
+                }
             }
         };
 
@@ -146,6 +316,9 @@ export function TenantSelector() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isLoggingOut, isCreatingSchool]);
 
+    /**
+     * Mengambil seluruh daftar satuan pendidikan yang terdaftar di database.
+     */
     const fetchSchools = useCallback(async (): Promise<void> => {
         setIsLoading(true);
         setFetchError('');
@@ -153,22 +326,16 @@ export function TenantSelector() {
         try {
             const { data, error } = await supabase
                 .from('schools')
-                .select('*')
+                .select('id, name, npsn, level, type, address, city, province, logoUrl')
                 .order('name', { ascending: true });
 
             if (error) {
-                throw new Error(error.message);
+                throw error;
             }
 
             setSchools((data as SchoolTenantRow[] | null) ?? []);
         } catch (err: unknown) {
-            const message =
-                err instanceof Error && err.message
-                    ? err.message
-                    : isId
-                        ? 'Gagal memuat daftar satuan pendidikan.'
-                        : 'Failed to load registered schools.';
-            setFetchError(message);
+            setFetchError(formatFriendlyError(err, isId, 'fetch'));
         } finally {
             setIsLoading(false);
         }
@@ -188,8 +355,8 @@ export function TenantSelector() {
             if (!matchesLevel) return false;
             if (!keyword) return true;
 
-            const haystack = [item.name, item.npsn, item.city, item.province, level]
-                .filter((val): val is string => typeof val === 'string')
+            const haystack = [item.name, item.npsn, item.city, item.province, item.type, level]
+                .filter((val): val is string => typeof val === 'string' && val.trim() !== '-')
                 .join(' ')
                 .toLowerCase();
 
@@ -197,6 +364,9 @@ export function TenantSelector() {
         });
     }, [schools, searchQuery, selectedLevel]);
 
+    /**
+     * Memilih sekolah aktif, memuat tahun ajaran aktifnya, dan membuka dasbor ruang kerja.
+     */
     const handleSelectSchool = async (selectedSchool: SchoolTenantRow): Promise<void> => {
         setSelectingSchoolId(selectedSchool.id);
 
@@ -210,7 +380,7 @@ export function TenantSelector() {
                 .limit(1);
 
             if (yearError) {
-                throw new Error(yearError.message);
+                throw yearError;
             }
 
             const activeYear = ((yearRows as AcademicYearRow[] | null) ?? [])[0] ?? null;
@@ -220,111 +390,134 @@ export function TenantSelector() {
 
             toast.success(
                 isId
-                    ? `Ruang kerja ${selectedSchool.name} dibuka.`
-                    : `Opened workspace for ${selectedSchool.name}.`
+                    ? `Ruang kerja ${selectedSchool.name} berhasil dibuka.`
+                    : `Workspace for ${selectedSchool.name} is ready.`
             );
 
             navigate('/dashboard', { replace: true });
-        } catch {
-            toast.error(
-                isId
-                    ? 'Gagal memuat konteks tahun ajaran sekolah.'
-                    : 'Failed to load school academic year context.'
-            );
+        } catch (err: unknown) {
+            toast.error(formatFriendlyError(err, isId, 'select'));
         } finally {
             setSelectingSchoolId(null);
         }
     };
 
+    const openCreateModal = (): void => {
+        setCreateFormError('');
+        setIsCreateModalOpen(true);
+    };
+
+    const closeCreateModal = (): void => {
+        if (isCreatingSchool) return;
+        setCreateFormError('');
+        setIsCreateModalOpen(false);
+    };
+
+    /**
+     * Mendaftarkan sekolah baru beserta Tahun Ajaran & Semester Ganjil aktif awal.
+     */
     const handleCreateSchool = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
         e.preventDefault();
+        setCreateFormError('');
+
         const cleanName = newSchoolName.trim();
         const cleanNpsn = newSchoolNpsn.trim();
 
-        if (!cleanName || !cleanNpsn) {
-            toast.error(
-                isId
-                    ? 'Nama sekolah dan NPSN wajib diisi.'
-                    : 'School name and NPSN are required.'
-            );
+        if (!cleanName) {
+            const msg = isId
+                ? 'Nama satuan pendidikan wajib diisi terlebih dahulu.'
+                : 'School name is required.';
+            setCreateFormError(msg);
             return;
         }
 
         if (!/^\d{8}$/.test(cleanNpsn)) {
-            toast.error(
-                isId
-                    ? 'NPSN harus terdiri dari tepat 8 digit angka.'
-                    : 'NPSN must consist of exactly 8 numeric digits.'
-            );
+            const msg = isId
+                ? 'Nomor NPSN harus terdiri dari tepat 8 digit angka.'
+                : 'NPSN must consist of exactly 8 numeric digits.';
+            setCreateFormError(msg);
             return;
         }
 
         setIsCreatingSchool(true);
         try {
+            // 1. Simpan data sekolah baru (selaras 100% dengan skema tabel public.schools v17)
             const { data: createdSchool, error: schoolError } = await supabase
                 .from('schools')
                 .insert({
                     name: cleanName,
                     npsn: cleanNpsn,
                     level: newSchoolLevel,
-                    city: newSchoolCity.trim() || null,
-                    province: newSchoolProvince.trim() || null,
-                    isActive: true,
+                    type: newSchoolType,
+                    address: '-',
+                    city: newSchoolCity.trim() || '-',
+                    province: newSchoolProvince.trim() || '-',
                 })
-                .select('*')
+                .select('id, name, npsn, level, type, address, city, province, logoUrl')
                 .single();
 
             if (schoolError || !createdSchool) {
-                if (schoolError?.code === '23505') {
-                    throw new Error(
-                        isId
-                            ? `NPSN ${cleanNpsn} sudah terdaftar di sistem.`
-                            : `NPSN ${cleanNpsn} is already registered.`
-                    );
-                }
-                throw new Error(
-                    schoolError?.message ||
-                    (isId ? 'Gagal mendaftarkan sekolah baru.' : 'Failed to register new school.')
-                );
+                throw schoolError ?? new Error('CREATE_SCHOOL_EMPTY');
             }
 
             const schoolRecord = createdSchool as SchoolTenantRow;
 
-            // Buat Tahun Ajaran awal sesuai struktur kolom database (startYear & endYear)
-            const currentYear = new Date().getFullYear();
-            const defaultYearName = `${currentYear}/${currentYear + 1}`;
-            const { error: yearInsertError } = await supabase.from('academic_years').insert({
-                schoolId: schoolRecord.id,
-                name: defaultYearName,
-                startYear: currentYear,
-                endYear: currentYear + 1,
-                isActive: true,
-            });
+            // 2. Buat Tahun Ajaran aktif awal secara otomatis
+            const { startYear, endYear, name: academicYearName } = resolveCurrentAcademicYearRange();
+            const { data: createdYear, error: yearInsertError } = await supabase
+                .from('academic_years')
+                .insert({
+                    schoolId: schoolRecord.id,
+                    name: academicYearName,
+                    startYear,
+                    endYear,
+                    isActive: true,
+                })
+                .select('id')
+                .single();
 
-            if (yearInsertError) {
+            if (yearInsertError || !createdYear) {
                 toast.warning(
                     isId
-                        ? 'Sekolah berhasil dibuat, namun Tahun Ajaran awal perlu ditambahkan manual di Master Akademik.'
-                        : 'School created, but initial Academic Year must be added manually in Master Academic.'
+                        ? 'Sekolah berhasil didaftarkan, silakan atur Tahun Ajaran di menu Master Akademik.'
+                        : 'School registered, please configure the Academic Year in Master Academic.'
                 );
+            } else {
+                // 3. Inisialisasi Semester Ganjil aktif awal pada tahun ajaran tersebut
+                const { error: semesterInsertError } = await supabase.from('semesters').insert({
+                    schoolId: schoolRecord.id,
+                    academicYearId: (createdYear as { id: string }).id,
+                    type: 'GANJIL',
+                    startDate: `${startYear}-07-13`,
+                    endDate: `${startYear}-12-20`,
+                    isActive: true,
+                });
+
+                if (semesterInsertError) {
+                    toast.warning(
+                        isId
+                            ? 'Sekolah dan Tahun Ajaran berhasil dibuat, silakan lengkapi jadwal Semester di Master Akademik.'
+                            : 'School and Academic Year created, please complete Semester dates in Master Academic.'
+                    );
+                }
             }
 
+            // Reset formulir & langsung buka ruang kerja sekolah baru
             setIsCreateModalOpen(false);
+            setCreateFormError('');
             setNewSchoolName('');
             setNewSchoolNpsn('');
+            setNewSchoolLevel('TK');
+            setNewSchoolType('SWASTA');
             setNewSchoolCity('');
             setNewSchoolProvince('');
 
             await fetchSchools();
             await handleSelectSchool(schoolRecord);
         } catch (err: unknown) {
-            const msg =
-                err instanceof Error && err.message
-                    ? err.message
-                    : isId
-                        ? 'Terjadi kesalahan saat menyimpan data sekolah.'
-                        : 'An error occurred while creating the school.';
-            toast.error(msg);
+            const friendlyMsg = formatFriendlyError(err, isId, 'create');
+            setCreateFormError(friendlyMsg);
+            toast.error(friendlyMsg);
         } finally {
             setIsCreatingSchool(false);
         }
@@ -340,11 +533,6 @@ export function TenantSelector() {
             setIsLoggingOut(false);
         }
     };
-
-    const activeSchoolCount = useMemo(
-        () => schools.filter((s) => s.isActive !== false).length,
-        [schools]
-    );
 
     const distinctLevelCount = useMemo(() => {
         const levels = new Set(schools.map((s) => resolveSchoolLevel(s)));
@@ -456,7 +644,7 @@ export function TenantSelector() {
                                     {isId ? 'Status Operasional Aktif' : 'Active Operational Status'}
                                 </p>
                                 <p className="text-lg font-bold tabular-nums text-white">
-                                    {activeSchoolCount}{' '}
+                                    {schools.length}{' '}
                                     <span className="text-xs font-normal text-emerald-100/80">
                                         {isId ? 'Terverifikasi' : 'Verified'}
                                     </span>
@@ -516,7 +704,7 @@ export function TenantSelector() {
                             <Button
                                 type="button"
                                 size="sm"
-                                onClick={() => setIsCreateModalOpen(true)}
+                                onClick={openCreateModal}
                                 className="h-9 rounded-lg bg-emerald-600 text-xs font-semibold text-white shadow-sm shadow-emerald-600/20 hover:bg-emerald-700"
                             >
                                 <Plus size={15} className="mr-1.5" />
@@ -601,7 +789,9 @@ export function TenantSelector() {
                         <h3 className="mt-3 text-sm font-bold text-foreground">
                             {isId ? 'Gagal Memuat Data Sekolah' : 'Failed to Load Schools'}
                         </h3>
-                        <p className="mt-1 text-xs text-muted-foreground">{fetchError}</p>
+                        <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-muted-foreground">
+                            {fetchError}
+                        </p>
                         <Button
                             type="button"
                             size="sm"
@@ -702,7 +892,10 @@ export function TenantSelector() {
                                             </p>
 
                                             <div className="mt-3 flex items-center gap-1.5 text-xs text-muted-foreground">
-                                                <MapPin size={13} className="shrink-0 text-emerald-600 dark:text-emerald-400" />
+                                                <MapPin
+                                                    size={13}
+                                                    className="shrink-0 text-emerald-600 dark:text-emerald-400"
+                                                />
                                                 <span className="line-clamp-1">{locationText}</span>
                                             </div>
                                         </div>
@@ -732,7 +925,7 @@ export function TenantSelector() {
 
                             <button
                                 type="button"
-                                onClick={() => setIsCreateModalOpen(true)}
+                                onClick={openCreateModal}
                                 className="group flex min-h-52.5 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-border bg-card/50 p-6 text-center transition-all hover:border-emerald-500/60 hover:bg-emerald-500/5"
                             >
                                 <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-border bg-background text-muted-foreground transition-colors group-hover:border-emerald-500/30 group-hover:bg-emerald-600 group-hover:text-white">
@@ -743,8 +936,8 @@ export function TenantSelector() {
                                 </p>
                                 <p className="mt-1 max-w-55 text-xs text-muted-foreground">
                                     {isId
-                                        ? 'Tambahkan unit satuan pendidikan baru ke dalam sistem terpadu.'
-                                        : 'Add a new educational institution into the unified platform.'}
+                                        ? 'Tambahkan unit TK, SD, SMP, SMA, atau SMK ke dalam sistem terpadu.'
+                                        : 'Add a TK, SD, SMP, SMA, or SMK institution into the unified platform.'}
                                 </p>
                             </button>
                         </div>
@@ -764,9 +957,7 @@ export function TenantSelector() {
                     aria-modal="true"
                     aria-labelledby="create-school-title"
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
-                    onClick={() => {
-                        if (!isCreatingSchool) setIsCreateModalOpen(false);
-                    }}
+                    onClick={closeCreateModal}
                 >
                     <div
                         className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
@@ -783,8 +974,8 @@ export function TenantSelector() {
                                     </h3>
                                     <p className="text-[11px] text-muted-foreground">
                                         {isId
-                                            ? 'Sekolah baru otomatis dibuatkan Tahun Ajaran aktif awal.'
-                                            : 'A default active academic year will be initialized automatically.'}
+                                            ? `Otomatis mengaktifkan TA ${defaultAcademicYear.name} (Semester Ganjil).`
+                                            : `Automatically activates AY ${defaultAcademicYear.name} (Odd Semester).`}
                                     </p>
                                 </div>
                             </div>
@@ -792,14 +983,24 @@ export function TenantSelector() {
                             <button
                                 type="button"
                                 disabled={isCreatingSchool}
-                                onClick={() => setIsCreateModalOpen(false)}
+                                onClick={closeCreateModal}
                                 className="rounded-lg p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
                             >
                                 <X size={16} />
                             </button>
                         </div>
 
-                        <form onSubmit={handleCreateSchool} className="mt-4 space-y-3.5">
+                        <form onSubmit={handleCreateSchool} className="mt-4 space-y-3.5" noValidate>
+                            {createFormError && (
+                                <div
+                                    role="alert"
+                                    className="flex items-start gap-2 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-700 dark:text-rose-300"
+                                >
+                                    <AlertCircle size={15} className="mt-0.5 shrink-0 text-rose-600 dark:text-rose-400" />
+                                    <span className="leading-relaxed">{createFormError}</span>
+                                </div>
+                            )}
+
                             <div>
                                 <label className="mb-1 block text-xs font-semibold text-foreground">
                                     {isId ? 'Nama Satuan Pendidikan *' : 'Institution Name *'}
@@ -808,8 +1009,15 @@ export function TenantSelector() {
                                     type="text"
                                     required
                                     value={newSchoolName}
-                                    onChange={(e) => setNewSchoolName(e.target.value)}
-                                    placeholder={isId ? 'Cth: SMA Muhammadiyah 1 Yogyakarta' : 'School Name'}
+                                    onChange={(e) => {
+                                        setNewSchoolName(e.target.value);
+                                        if (createFormError) setCreateFormError('');
+                                    }}
+                                    placeholder={
+                                        isId
+                                            ? 'Cth: TK ABA Pajangan / SMA Muhammadiyah 1'
+                                            : 'e.g., Muhammadiyah Kindergarten / High School'
+                                    }
                                     className="h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                 />
                             </div>
@@ -825,7 +1033,10 @@ export function TenantSelector() {
                                         maxLength={8}
                                         required
                                         value={newSchoolNpsn}
-                                        onChange={(e) => setNewSchoolNpsn(e.target.value.replace(/\D/g, ''))}
+                                        onChange={(e) => {
+                                            setNewSchoolNpsn(e.target.value.replace(/\D/g, ''));
+                                            if (createFormError) setCreateFormError('');
+                                        }}
                                         placeholder="2040xxxx"
                                         className="h-9 w-full rounded-lg border border-border bg-background px-3 font-mono text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                     />
@@ -833,19 +1044,34 @@ export function TenantSelector() {
 
                                 <div>
                                     <label className="mb-1 block text-xs font-semibold text-foreground">
-                                        {isId ? 'Jenjang *' : 'Level *'}
+                                        {isId ? 'Status Sekolah *' : 'School Status *'}
                                     </label>
                                     <select
-                                        value={newSchoolLevel}
-                                        onChange={(e) => setNewSchoolLevel(e.target.value as SchoolLevelInput)}
+                                        value={newSchoolType}
+                                        onChange={(e) => setNewSchoolType(e.target.value as SchoolStatusType)}
                                         className="h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                     >
-                                        <option value="SD">SD / MI</option>
-                                        <option value="SMP">SMP / MTs</option>
-                                        <option value="SMA">SMA / MA</option>
-                                        <option value="SMK">SMK</option>
+                                        <option value="SWASTA">{isId ? 'Swasta' : 'Private'}</option>
+                                        <option value="NEGERI">{isId ? 'Negeri' : 'Public'}</option>
                                     </select>
                                 </div>
+                            </div>
+
+                            <div>
+                                <label className="mb-1 block text-xs font-semibold text-foreground">
+                                    {isId ? 'Jenjang Pendidikan *' : 'Education Level *'}
+                                </label>
+                                <select
+                                    value={newSchoolLevel}
+                                    onChange={(e) => setNewSchoolLevel(e.target.value as SchoolLevelCode)}
+                                    className="h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                                >
+                                    {SCHOOL_LEVEL_OPTIONS.map((opt) => (
+                                        <option key={opt.value} value={opt.value}>
+                                            {isId ? opt.labelId : opt.labelEn}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div className="grid grid-cols-2 gap-3">
@@ -882,7 +1108,7 @@ export function TenantSelector() {
                                     variant="outline"
                                     size="sm"
                                     disabled={isCreatingSchool}
-                                    onClick={() => setIsCreateModalOpen(false)}
+                                    onClick={closeCreateModal}
                                 >
                                     {isId ? 'Batal' : 'Cancel'}
                                 </Button>
