@@ -37,7 +37,7 @@ export function handlePortalDbError(error: unknown): Error {
 }
 
 // ============================================================================
-// TIPE DATA STRICT SESUAI SKEMA SUPABASE
+// TIPE DATA STRICT SESUAI SKEMA SUPABASE v17
 // ============================================================================
 export interface LinkedStudentProfile {
   linkId: string;
@@ -324,10 +324,6 @@ export async function fetchLinkedStudents(
   return profiles;
 }
 
-/**
- * Mengambil riwayat presensi siswa dari tabel `student_attendance` (v14),
- * dengan cadangan otomatis ke tabel `attendances` bila skema lama masih digunakan.
- */
 /**
  * Mengambil riwayat presensi siswa dari tabel `attendances` (Skema v17).
  */

@@ -97,21 +97,33 @@ export function ParentDashboard() {
     }, [children, selectedStudentId]);
 
     // 2. Ambil Presensi Anak Terpilih
-    const { data: attendances = [], isLoading: isLoadingAttendance } = useQuery({
+    const {
+        data: attendances = [],
+        isLoading: isLoadingAttendance,
+        isError: isErrorAttendance,
+    } = useQuery({
         queryKey: ['portal-student-attendances', schoolId, activeChild?.studentId],
         enabled: Boolean(schoolId && activeChild?.studentId),
         queryFn: () => fetchStudentAttendances(schoolId!, activeChild!.studentId),
     });
 
     // 3. Ambil Jadwal Pelajaran Anak Terpilih
-    const { data: schedules = [], isLoading: isLoadingSchedules } = useQuery({
+    const {
+        data: schedules = [],
+        isLoading: isLoadingSchedules,
+        isError: isErrorSchedules,
+    } = useQuery({
         queryKey: ['portal-class-schedules', schoolId, activeChild?.classId, academicYear?.id],
         enabled: Boolean(schoolId && activeChild?.classId),
         queryFn: () => fetchClassSchedules(schoolId!, activeChild!.classId, academicYear?.id),
     });
 
     // 4. Ambil Tagihan & Pembayaran Anak Terpilih
-    const { data: finance = { bills: [], payments: [] }, isLoading: isLoadingFinance } = useQuery({
+    const {
+        data: finance = { bills: [], payments: [] },
+        isLoading: isLoadingFinance,
+        isError: isErrorFinance,
+    } = useQuery({
         queryKey: ['portal-student-finance', schoolId, activeChild?.studentId],
         enabled: Boolean(schoolId && activeChild?.studentId),
         queryFn: () => fetchStudentFinance(schoolId!, activeChild!.studentId),
@@ -123,6 +135,9 @@ export function ParentDashboard() {
         enabled: Boolean(schoolId),
         queryFn: () => fetchPortalAnnouncements(schoolId!, 'ORANG_TUA'),
     });
+
+    const hasLoadError =
+        isErrorChildren || isErrorAttendance || isErrorSchedules || isErrorFinance;
 
     // Status presensi hari ini (menggunakan tanggal lokal Indonesia)
     const todayAttendance = useMemo(() => {
@@ -234,7 +249,7 @@ export function ParentDashboard() {
             )}
 
             {/* Peringatan Error Koneksi / Server */}
-            {isErrorChildren && (
+            {hasLoadError && (
                 <motion.div
                     variants={itemVariants}
                     className="flex items-start gap-3 rounded-2xl border border-rose-300/60 bg-rose-50/70 p-4 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200"
@@ -242,8 +257,8 @@ export function ParentDashboard() {
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
                     <span>
                         {isId
-                            ? 'Gagal memuat data siswa dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
-                            : 'Failed to load student data from server. Please check your internet connection and refresh.'}
+                            ? 'Sebagian data siswa gagal dimuat dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
+                            : 'Some student data failed to load from server. Please check your internet connection and refresh.'}
                     </span>
                 </motion.div>
             )}

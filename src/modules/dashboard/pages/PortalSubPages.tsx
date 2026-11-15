@@ -162,13 +162,14 @@ export function PortalSchedulePage() {
         students,
         activeStudent,
         setSelectedStudentId,
+        isLoading: isLoadingStudent,
         isError: isErrorStudent,
         error: studentError,
     } = useActivePortalStudent();
 
     const {
         data: schedules = [],
-        isLoading,
+        isLoading: isLoadingSchedules,
         isError: isErrorSchedules,
         error: schedulesError,
     } = useQuery({
@@ -176,6 +177,8 @@ export function PortalSchedulePage() {
         enabled: Boolean(schoolId && activeStudent?.classId),
         queryFn: () => fetchClassSchedules(schoolId!, activeStudent!.classId, academicYear?.id),
     });
+
+    const isLoading = isLoadingStudent || isLoadingSchedules;
 
     const groupedByDay = useMemo(() => {
         const map = new Map<number, typeof schedules>();
@@ -287,13 +290,14 @@ export function PortalAttendancePage() {
         students,
         activeStudent,
         setSelectedStudentId,
+        isLoading: isLoadingStudent,
         isError: isErrorStudent,
         error: studentError,
     } = useActivePortalStudent();
 
     const {
         data: attendances = [],
-        isLoading,
+        isLoading: isLoadingAttendance,
         isError: isErrorAttendance,
         error: attendanceError,
     } = useQuery({
@@ -301,6 +305,8 @@ export function PortalAttendancePage() {
         enabled: Boolean(schoolId && activeStudent?.studentId),
         queryFn: () => fetchStudentAttendances(schoolId!, activeStudent!.studentId),
     });
+
+    const isLoading = isLoadingStudent || isLoadingAttendance;
 
     const summary = useMemo(() => {
         return {
@@ -463,13 +469,14 @@ export function PortalFinancePage() {
         students,
         activeStudent,
         setSelectedStudentId,
+        isLoading: isLoadingStudent,
         isError: isErrorStudent,
         error: studentError,
     } = useActivePortalStudent();
 
     const {
         data: finance = { bills: [], payments: [] },
-        isLoading,
+        isLoading: isLoadingFinance,
         isError: isErrorFinance,
         error: financeError,
     } = useQuery({
@@ -478,11 +485,21 @@ export function PortalFinancePage() {
         queryFn: () => fetchStudentFinance(schoolId!, activeStudent!.studentId),
     });
 
+    const isLoading = isLoadingStudent || isLoadingFinance;
+
     const totals = useMemo(() => {
         const totalBilled = finance.bills.reduce((acc, b) => acc + b.totalAmount, 0);
         const totalPaid = finance.bills.reduce((acc, b) => acc + b.paidAmount, 0);
         const remaining = Math.max(0, totalBilled - totalPaid);
         return { totalBilled, totalPaid, remaining };
+    }, [finance.bills]);
+
+    const billTitleMap = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const bill of finance.bills) {
+            map.set(bill.id, bill.title);
+        }
+        return map;
     }, [finance.bills]);
 
     const errorMsg =
@@ -638,6 +655,7 @@ export function PortalFinancePage() {
                             <thead className="border-b border-border bg-muted/40 text-[11px] uppercase text-muted-foreground">
                                 <tr>
                                     <th className="px-4 py-3 font-semibold">{isId ? 'Tanggal Bayar' : 'Date'}</th>
+                                    <th className="px-4 py-3 font-semibold">{isId ? 'Tagihan' : 'Bill'}</th>
                                     <th className="px-4 py-3 font-semibold">{isId ? 'Metode' : 'Method'}</th>
                                     <th className="px-4 py-3 font-semibold">{isId ? 'Nominal' : 'Amount'}</th>
                                     <th className="px-4 py-3 font-semibold">{isId ? 'Referensi' : 'Reference'}</th>
@@ -648,6 +666,9 @@ export function PortalFinancePage() {
                                     <tr key={pay.id} className="hover:bg-muted/20">
                                         <td className="whitespace-nowrap px-4 py-3 font-medium text-foreground">
                                             {formatDate(pay.paymentDate)}
+                                        </td>
+                                        <td className="px-4 py-3 text-foreground">
+                                            {billTitleMap.get(pay.billId) || '-'}
                                         </td>
                                         <td className="whitespace-nowrap px-4 py-3 text-muted-foreground">
                                             {pay.paymentMethod}

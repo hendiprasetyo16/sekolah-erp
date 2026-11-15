@@ -62,14 +62,13 @@ function getLocalTodayIso(): string {
 }
 
 /**
- * Menghasilkan tanggal awal bulan dari 5 bulan lalu (total 6 bulan terakhir) untuk filter grafik.
+ * Menghasilkan timestamp UTC ISO dari awal bulan 5 bulan lalu (pukul 00:00:00 waktu lokal)
+ * agar transaksi dini hari pada tanggal 1 di WIB/WITA/WIT tetap masuk dalam grafik.
  */
 function getSixMonthsWindowStartIso(): string {
   const now = new Date();
-  const start = new Date(now.getFullYear(), now.getMonth() - 5, 1);
-  const year = start.getFullYear();
-  const month = String(start.getMonth() + 1).padStart(2, '0');
-  return `${year}-${month}-01`;
+  const startLocal = new Date(now.getFullYear(), now.getMonth() - 5, 1, 0, 0, 0, 0);
+  return startLocal.toISOString();
 }
 
 // --- TIPE DATA ---
@@ -240,11 +239,53 @@ export function AdminDashboard() {
 
   const { user, school, academicYear } = useAuthStore();
   const schoolId = school?.id ?? null;
-  const role = user?.role ?? '';
+  const userId = user?.id ?? null;
 
-  const isManager = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH'].includes(role);
-  const canViewFinance = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'].includes(role);
-  const canPrintLetters = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH', 'STAFF_TU'].includes(role);
+  // Ambil seluruh role aktif dari RPC v17 (role utama + additionalRoles + tugasTambahan Dapodik)
+  const { data: rpcRoles = [] } = useQuery<string[]>({
+    queryKey: ['user-all-roles', schoolId, userId],
+    enabled: Boolean(userId),
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const { data, error } = await (
+        supabase.rpc as unknown as (
+          fn: string
+        ) => Promise<{ data: string[] | null; error: unknown }>
+      )('get_user_all_roles');
+
+      if (error || !Array.isArray(data)) return [];
+      return data;
+    },
+  });
+
+  const activeRoles = useMemo(() => {
+    const roleSet = new Set<string>();
+    if (user?.role) roleSet.add(user.role);
+    const extraRoles = (user as (typeof user & { additionalRoles?: string[] }) | null)
+      ?.additionalRoles;
+    if (Array.isArray(extraRoles)) {
+      for (const r of extraRoles) {
+        if (r) roleSet.add(r);
+      }
+    }
+    for (const r of rpcRoles) {
+      if (r) roleSet.add(r);
+    }
+    return Array.from(roleSet);
+  }, [user, rpcRoles]);
+
+  const hasAnyRole = (allowedRoles: string[]) =>
+    activeRoles.some((r) => allowedRoles.includes(r));
+
+  const isManager = hasAnyRole(['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH']);
+  const canViewFinance = hasAnyRole(['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA']);
+  const canPrintLetters = hasAnyRole([
+    'SUPER_ADMIN',
+    'ADMIN',
+    'OPERATOR',
+    'KEPALA_SEKOLAH',
+    'STAFF_TU',
+  ]);
 
   // 1. FETCH DATA SISWA AKTIF PER SEKOLAH
   const {
@@ -291,7 +332,7 @@ export function AdminDashboard() {
     },
   });
 
-  // 3. FETCH DATA GURU & STAF PER SEKOLAH
+  // 3. FETCH DATA GURU & STAF AKTIF PER SEKOLAH
   const {
     data: teachersCount = 0,
     isLoading: isLoadingTeachers,
@@ -304,7 +345,8 @@ export function AdminDashboard() {
       const { count, error } = await supabase
         .from('teachers')
         .select('*', { count: 'exact', head: true })
-        .eq('schoolId', schoolId);
+        .eq('schoolId', schoolId)
+        .eq('isActive', true);
 
       if (error) throw handlePortalDbError(error);
       return count ?? 0;
@@ -395,7 +437,10 @@ export function AdminDashboard() {
   });
 
   // 5. FETCH RINGKASAN OPERASIONAL HARIAN (SESUAI SKEMA DATABASE v17)
-  const { data: operationalSummary } = useQuery({
+  const {
+    data: operationalSummary,
+    isError: isErrorOperational,
+  } = useQuery({
     queryKey: ['dashboard-operational-summary', schoolId],
     enabled: Boolean(schoolId),
     queryFn: async () => {
@@ -406,27 +451,26 @@ export function AdminDashboard() {
       const todayIso = getLocalTodayIso();
 
       const [attendanceRes, damagedRes, lettersRes] = await Promise.all([
-        // Tabel gabungan presensi siswa & guru -> wajib filter type = 'SISWA'
         supabase
           .from('attendances')
           .select('status')
           .eq('schoolId', schoolId)
           .eq('type', 'SISWA')
           .eq('date', todayIso),
-        // Tabel sarana prasarana di v17 bernama 'inventory_items'
         supabase
           .from('inventory_items')
           .select('*', { count: 'exact', head: true })
           .eq('schoolId', schoolId)
           .eq('isActive', true)
           .in('condition', ['RUSAK', 'RUSAK_RINGAN', 'RUSAK_BERAT']),
-        // Tabel arsip surat/administrasi di v17 bernama 'administration_records'
         supabase
           .from('administration_records')
           .select('*', { count: 'exact', head: true })
           .eq('schoolId', schoolId)
           .eq('category', 'SURAT_MASUK'),
       ]);
+
+      if (attendanceRes.error) throw handlePortalDbError(attendanceRes.error);
 
       const attendanceRows = (attendanceRes.data as AttendanceStatusRow[] | null) ?? [];
       const presentCount = attendanceRows.filter(
@@ -514,7 +558,8 @@ export function AdminDashboard() {
   ];
 
   const quickActions = allQuickActions.filter((action) => action.allowed);
-  const hasLoadError = isErrorStudents || isErrorTeachers || isErrorFinance;
+  const hasLoadError =
+    isErrorStudents || isErrorTeachers || isErrorFinance || isErrorOperational;
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-6">
@@ -592,7 +637,7 @@ export function AdminDashboard() {
         <StatCard
           title={t('dashboard.totalTeachers')}
           value={teachersCount}
-          badgeText={isId ? 'Terdaftar' : 'Registered'}
+          badgeText={isId ? 'PTK Aktif' : 'Active'}
           badgeTone="teal"
           icon={GraduationCap}
           gradient="bg-linear-to-br from-teal-500 to-cyan-700"

@@ -21,6 +21,7 @@ import {
     EyeOff,
     CheckCircle2,
     Lock,
+    Info,
 } from 'lucide-react';
 
 import { cn } from '@/utils/cn';
@@ -51,6 +52,7 @@ interface LinkedMemberDetail {
     nip?: string | null;
     nuptk?: string | null;
     nisn?: string | null;
+    canSelfUpdateRecord: boolean;
 }
 
 type LinkedTableName = 'students' | 'teachers' | 'student_parents';
@@ -66,17 +68,26 @@ interface PasswordFormValues {
     confirmPassword: string;
 }
 
+// Daftar role resmi di ERP_Sekolah_v17_Final.sql yang berpotensi tertaut ke tabel teachers
 const TEACHER_LINKED_ROLES = new Set<string>([
-    'GURU',
-    'WALI_KELAS',
+    'ADMIN',
     'KEPALA_SEKOLAH',
-    'WAKASEK',
-    'BENDAHARA',
     'OPERATOR',
+    'BENDAHARA',
+    'WALI_KELAS',
+    'GURU',
     'STAFF_TU',
     'STAFF_SARPRAS',
-    'PUSTAKAWAN',
-    'GURU_BK',
+    'STAFF_PERPUS',
+]);
+
+// Role yang diizinkan memperbarui tabel teachers di RLS v17 (current_user_can_manage_administration)
+const CAN_UPDATE_TEACHER_ROLES = new Set<string>([
+    'SUPER_ADMIN',
+    'ADMIN',
+    'KEPALA_SEKOLAH',
+    'OPERATOR',
+    'STAFF_TU',
 ]);
 
 function resolveLinkedTable(role: string): LinkedTableName | null {
@@ -145,6 +156,38 @@ export function ProfilePage() {
 
     const activeSchoolId = school?.id ?? user?.schoolId ?? null;
     const linkedTable = user ? resolveLinkedTable(user.role) : null;
+
+    // Ambil seluruh role aktif dari RPC v17 untuk menampilkan tugas tambahan & hak akses
+    const { data: rpcRoles = [] } = useQuery<string[]>({
+        queryKey: ['user-all-roles', activeSchoolId, user?.id],
+        enabled: Boolean(user?.id),
+        staleTime: 5 * 60 * 1000,
+        queryFn: async () => {
+            const { data, error } = await (
+                supabase.rpc as unknown as (
+                    fn: string
+                ) => Promise<{ data: string[] | null; error: unknown }>
+            )('get_user_all_roles');
+
+            if (error || !Array.isArray(data)) return [];
+            return data;
+        },
+    });
+
+    const additionalRoleBadges = useMemo(() => {
+        if (!user) return [];
+        const extraFromStore =
+            (user as (typeof user & { additionalRoles?: string[] }) | null)?.additionalRoles ?? [];
+        const combined = new Set<string>([...extraFromStore, ...rpcRoles]);
+        combined.delete(user.role);
+        return Array.from(combined);
+    }, [user, rpcRoles]);
+
+    const canUpdateTeacherRecord = useMemo(() => {
+        if (!user) return false;
+        const allRoles = [user.role, ...additionalRoleBadges];
+        return allRoles.some((r) => CAN_UPDATE_TEACHER_ROLES.has(r));
+    }, [user, additionalRoleBadges]);
 
     // --- SKEMA VALIDASI ZOD DWIBAHASA ---
     const profileSchema = useMemo(
@@ -215,70 +258,131 @@ export function ProfilePage() {
     const watchedNewPassword = passwordForm.watch('newPassword');
     const passwordStrength = evaluatePasswordStrength(watchedNewPassword);
 
-    // --- QUERY: AMBIL DETAIL PROFIL TERKAIT (GURU / SISWA / ORANG TUA) ---
+    // --- QUERY: AMBIL DETAIL PROFIL TERKAIT SESUAI SKEMA v17 ---
     const { data: detailData, isLoading: detailLoading } = useQuery<LinkedMemberDetail | null>({
         queryKey: ['user-detail', user?.id, user?.role, activeSchoolId],
         enabled: Boolean(user && linkedTable),
         queryFn: async () => {
             if (!user || !linkedTable) return null;
 
-            const selectColumns =
-                linkedTable === 'teachers'
-                    ? 'id, fullName, email, phone, address, nip, nuptk'
-                    : linkedTable === 'students'
-                        ? 'id, fullName, email, phone, address, nisn'
-                        : 'id, fullName, email, phone, address';
+            // KASUS A: PTK / GURU / STAF -> Tabel `teachers` memiliki kolom `userId`
+            if (linkedTable === 'teachers') {
+                const selectColumns = 'id, fullName, email, phone, address, nip, nuptk';
 
-            // 1. Cek berdasarkan relasi userId (gunakan limit(1) agar aman jika Orang Tua memiliki > 1 anak)
-            let byUserIdQuery = supabase
-                .from(linkedTable)
-                .select(selectColumns)
-                .eq('userId', user.id)
-                .limit(1);
-
-            if (activeSchoolId) {
-                byUserIdQuery = byUserIdQuery.eq('schoolId', activeSchoolId);
-            }
-
-            const { data: userIdMatch, error: userIdError } = await byUserIdQuery.maybeSingle();
-            if (userIdError && userIdError.code !== '42501') {
-                throw new Error(formatProfileError(userIdError, isId));
-            }
-            if (userIdMatch) {
-                return userIdMatch as unknown as LinkedMemberDetail;
-            }
-
-            // 2. Fallback: Cek berdasarkan email
-            if (user.email) {
-                let byEmailQuery = supabase
-                    .from(linkedTable)
+                let byUserIdQuery = supabase
+                    .from('teachers')
                     .select(selectColumns)
-                    .eq('email', user.email)
+                    .eq('userId', user.id)
                     .limit(1);
 
                 if (activeSchoolId) {
-                    byEmailQuery = byEmailQuery.eq('schoolId', activeSchoolId);
+                    byUserIdQuery = byUserIdQuery.eq('schoolId', activeSchoolId);
                 }
 
-                const { data: emailMatch } = await byEmailQuery.maybeSingle();
-                if (emailMatch) {
-                    return emailMatch as unknown as LinkedMemberDetail;
+                const { data: userIdMatch, error: userIdError } = await byUserIdQuery.maybeSingle();
+                if (userIdError && userIdError.code !== '42501') {
+                    throw new Error(formatProfileError(userIdError, isId));
                 }
+                if (userIdMatch) {
+                    return {
+                        ...(userIdMatch as unknown as Omit<LinkedMemberDetail, 'canSelfUpdateRecord'>),
+                        canSelfUpdateRecord: canUpdateTeacherRecord,
+                    };
+                }
+
+                if (user.email) {
+                    let byEmailQuery = supabase
+                        .from('teachers')
+                        .select(selectColumns)
+                        .eq('email', user.email)
+                        .limit(1);
+
+                    if (activeSchoolId) {
+                        byEmailQuery = byEmailQuery.eq('schoolId', activeSchoolId);
+                    }
+
+                    const { data: emailMatch } = await byEmailQuery.maybeSingle();
+                    if (emailMatch) {
+                        return {
+                            ...(emailMatch as unknown as Omit<LinkedMemberDetail, 'canSelfUpdateRecord'>),
+                            canSelfUpdateRecord: canUpdateTeacherRecord,
+                        };
+                    }
+                }
+
+                return null;
             }
 
-            // 3. Fallback terakhir: Cek berdasarkan nama lengkap di sekolah aktif
-            if (activeSchoolId && user.fullName) {
-                const { data: nameMatch } = await supabase
-                    .from(linkedTable)
-                    .select(selectColumns)
+            // KASUS B: SISWA -> Relasi berada di tabel penghubung `user_student_links`
+            if (linkedTable === 'students' && activeSchoolId) {
+                const { data: linkRow } = await supabase
+                    .from('user_student_links')
+                    .select('studentId')
                     .eq('schoolId', activeSchoolId)
-                    .eq('fullName', user.fullName)
+                    .eq('userId', user.id)
+                    .order('isPrimary', { ascending: false })
                     .limit(1)
                     .maybeSingle();
 
-                if (nameMatch) {
-                    return nameMatch as unknown as LinkedMemberDetail;
+                const linkedStudentId = (linkRow as { studentId?: string } | null)?.studentId;
+                if (linkedStudentId) {
+                    const { data: studentMatch } = await supabase
+                        .from('students')
+                        .select('id, fullName, email, phone, address, nisn')
+                        .eq('schoolId', activeSchoolId)
+                        .eq('id', linkedStudentId)
+                        .maybeSingle();
+
+                    if (studentMatch) {
+                        return {
+                            ...(studentMatch as unknown as Omit<LinkedMemberDetail, 'canSelfUpdateRecord'>),
+                            canSelfUpdateRecord: false, // RLS v17 mengunci update biodata siswa ke TU/Operator
+                        };
+                    }
                 }
+
+                return null;
+            }
+
+            // KASUS C: ORANG_TUA -> Relasi ke siswa melalui `user_student_links`, lalu ambil `student_parents`
+            if (linkedTable === 'student_parents' && activeSchoolId) {
+                const { data: linkRow } = await supabase
+                    .from('user_student_links')
+                    .select('studentId, relationship')
+                    .eq('schoolId', activeSchoolId)
+                    .eq('userId', user.id)
+                    .order('isPrimary', { ascending: false })
+                    .limit(1)
+                    .maybeSingle();
+
+                const typedLink = linkRow as { studentId?: string; relationship?: string } | null;
+                if (typedLink?.studentId) {
+                    let parentQuery = supabase
+                        .from('student_parents')
+                        .select('id, fullName, email, phone, address')
+                        .eq('schoolId', activeSchoolId)
+                        .eq('studentId', typedLink.studentId);
+
+                    if (
+                        typedLink.relationship &&
+                        ['AYAH', 'IBU', 'WALI'].includes(typedLink.relationship.toUpperCase())
+                    ) {
+                        parentQuery = parentQuery.eq(
+                            'relation',
+                            typedLink.relationship.toUpperCase()
+                        );
+                    }
+
+                    const { data: parentMatch } = await parentQuery.limit(1).maybeSingle();
+                    if (parentMatch) {
+                        return {
+                            ...(parentMatch as unknown as Omit<LinkedMemberDetail, 'canSelfUpdateRecord'>),
+                            canSelfUpdateRecord: false, // RLS v17 mengunci update data ortu ke TU/Operator
+                        };
+                    }
+                }
+
+                return null;
             }
 
             return null;
@@ -320,7 +424,8 @@ export function ProfilePage() {
                 throw new Error(formatProfileError(authUpdateError, isId));
             }
 
-            if (linkedTable && detailData?.id) {
+            // Hanya perbarui tabel master (teachers) jika role pengguna memiliki izin RLS v17
+            if (linkedTable === 'teachers' && detailData?.id && detailData.canSelfUpdateRecord) {
                 const linkedPayload: Record<string, string | null> = {
                     fullName: cleanFullName,
                     phone: values.phone?.trim() ? values.phone.trim() : null,
@@ -328,7 +433,7 @@ export function ProfilePage() {
                 };
 
                 let linkedQuery = supabase
-                    .from(linkedTable)
+                    .from('teachers')
                     .update(linkedPayload)
                     .eq('id', detailData.id);
 
@@ -381,7 +486,10 @@ export function ProfilePage() {
 
     if (!user) return null;
 
-    const roleLabel = ROLE_LABELS[user.role]?.[locale] || user.role.replace(/_/g, ' ');
+    const formatRoleLabel = (r: string) =>
+        ROLE_LABELS[r]?.[locale] || r.replace(/_/g, ' ');
+
+    const roleLabel = formatRoleLabel(user.role);
 
     const identityBadge = detailData?.nip
         ? { label: 'NIP', value: detailData.nip }
@@ -441,7 +549,7 @@ export function ProfilePage() {
                             </div>
 
                             <div>
-                                <div className="flex flex-wrap items-center justify-center gap-2.5 sm:justify-start">
+                                <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
                                     <h1 className="text-xl font-bold tracking-tight text-white sm:text-2xl">
                                         {user.fullName}
                                     </h1>
@@ -449,6 +557,14 @@ export function ProfilePage() {
                                         <ShieldCheck size={13} />
                                         {roleLabel}
                                     </span>
+                                    {additionalRoleBadges.map((extraRole) => (
+                                        <span
+                                            key={extraRole}
+                                            className="inline-flex items-center gap-1 rounded-full border border-teal-200/30 bg-teal-400/20 px-2.5 py-0.5 text-[11px] font-medium text-teal-50 backdrop-blur-md"
+                                        >
+                                            + {formatRoleLabel(extraRole)}
+                                        </span>
+                                    ))}
                                 </div>
 
                                 <p className="mt-1.5 flex items-center justify-center gap-1.5 text-xs text-emerald-100/90 sm:justify-start sm:text-sm">
@@ -601,7 +717,17 @@ export function ProfilePage() {
                                                                     : 'Phone / WhatsApp Number'}
                                                             </FormLabel>
                                                             <FormControl>
-                                                                <Input type="tel" placeholder="08xxxxxxxxxx" {...field} />
+                                                                <Input
+                                                                    type="tel"
+                                                                    placeholder="08xxxxxxxxxx"
+                                                                    disabled={!detailData.canSelfUpdateRecord}
+                                                                    className={
+                                                                        !detailData.canSelfUpdateRecord
+                                                                            ? 'cursor-not-allowed bg-muted/70 text-muted-foreground'
+                                                                            : undefined
+                                                                    }
+                                                                    {...field}
+                                                                />
                                                             </FormControl>
                                                             <FormMessage />
                                                         </FormItem>
@@ -623,6 +749,12 @@ export function ProfilePage() {
                                                                             ? 'Masukkan alamat lengkap tempat tinggal'
                                                                             : 'Enter full residential address'
                                                                     }
+                                                                    disabled={!detailData.canSelfUpdateRecord}
+                                                                    className={
+                                                                        !detailData.canSelfUpdateRecord
+                                                                            ? 'cursor-not-allowed bg-muted/70 text-muted-foreground'
+                                                                            : undefined
+                                                                    }
                                                                     {...field}
                                                                 />
                                                             </FormControl>
@@ -630,6 +762,17 @@ export function ProfilePage() {
                                                         </FormItem>
                                                     )}
                                                 />
+
+                                                {!detailData.canSelfUpdateRecord && (
+                                                    <div className="flex items-start gap-2 rounded-xl border border-border bg-muted/40 p-3 text-[11px] text-muted-foreground">
+                                                        <Info size={14} className="mt-0.5 shrink-0 text-emerald-600" />
+                                                        <span>
+                                                            {isId
+                                                                ? 'Perubahan nomor telepon dan alamat pada data induk Dapodik dilakukan melalui Tata Usaha / Operator Sekolah.'
+                                                                : 'Changes to phone number and address in master records are managed by School Administration.'}
+                                                        </span>
+                                                    </div>
+                                                )}
                                             </>
                                         )}
 

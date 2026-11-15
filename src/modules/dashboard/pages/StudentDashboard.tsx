@@ -89,21 +89,33 @@ export function StudentDashboard() {
     const student = linkedProfiles[0] ?? null;
 
     // 2. Ambil Data Presensi Siswa
-    const { data: attendances = [], isLoading: isLoadingAttendance } = useQuery({
+    const {
+        data: attendances = [],
+        isLoading: isLoadingAttendance,
+        isError: isErrorAttendance,
+    } = useQuery({
         queryKey: ['portal-student-attendances', schoolId, student?.studentId],
         enabled: Boolean(schoolId && student?.studentId),
         queryFn: () => fetchStudentAttendances(schoolId!, student!.studentId),
     });
 
     // 3. Ambil Jadwal Pelajaran Kelas Siswa
-    const { data: schedules = [], isLoading: isLoadingSchedules } = useQuery({
+    const {
+        data: schedules = [],
+        isLoading: isLoadingSchedules,
+        isError: isErrorSchedules,
+    } = useQuery({
         queryKey: ['portal-class-schedules', schoolId, student?.classId, academicYear?.id],
         enabled: Boolean(schoolId && student?.classId),
         queryFn: () => fetchClassSchedules(schoolId!, student!.classId, academicYear?.id),
     });
 
     // 4. Ambil Data Tagihan & Pembayaran
-    const { data: finance = { bills: [], payments: [] }, isLoading: isLoadingFinance } = useQuery({
+    const {
+        data: finance = { bills: [], payments: [] },
+        isLoading: isLoadingFinance,
+        isError: isErrorFinance,
+    } = useQuery({
         queryKey: ['portal-student-finance', schoolId, student?.studentId],
         enabled: Boolean(schoolId && student?.studentId),
         queryFn: () => fetchStudentFinance(schoolId!, student!.studentId),
@@ -115,6 +127,9 @@ export function StudentDashboard() {
         enabled: Boolean(schoolId),
         queryFn: () => fetchPortalAnnouncements(schoolId!, 'SISWA'),
     });
+
+    const hasLoadError =
+        isErrorProfile || isErrorAttendance || isErrorSchedules || isErrorFinance;
 
     const attendanceStats = useMemo(() => {
         const now = new Date();
@@ -217,7 +232,7 @@ export function StudentDashboard() {
             </motion.div>
 
             {/* Peringatan Error Koneksi / Server */}
-            {isErrorProfile && (
+            {hasLoadError && (
                 <motion.div
                     variants={itemVariants}
                     className="flex items-start gap-3 rounded-2xl border border-rose-300/60 bg-rose-50/70 p-4 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200"
@@ -225,8 +240,8 @@ export function StudentDashboard() {
                     <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
                     <span>
                         {isId
-                            ? 'Gagal memuat data profil dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
-                            : 'Failed to load profile data from server. Please check your internet connection and refresh.'}
+                            ? 'Sebagian data akademik gagal dimuat dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
+                            : 'Some academic data failed to load from server. Please check your internet connection and refresh.'}
                     </span>
                 </motion.div>
             )}
