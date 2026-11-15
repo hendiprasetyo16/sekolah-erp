@@ -1,3 +1,4 @@
+// src/modules/profile/pages/ProfilePage.tsx
 import { useState, useEffect, useMemo } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -68,12 +69,25 @@ interface PasswordFormValues {
     confirmPassword: string;
 }
 
+const TEACHER_LINKED_ROLES = new Set<string>([
+    'GURU',
+    'WALI_KELAS',
+    'KEPALA_SEKOLAH',
+    'WAKASEK',
+    'BENDAHARA',
+    'OPERATOR',
+    'STAFF_TU',
+    'STAFF_SARPRAS',
+    'PUSTAKAWAN',
+    'GURU_BK',
+]);
+
 /**
  * Menentukan tabel relasi profil berdasarkan peran pengguna.
  */
 function resolveLinkedTable(role: string): LinkedTableName | null {
     if (role === 'SISWA') return 'students';
-    if (['GURU', 'WALI_KELAS', 'STAFF_TU', 'STAFF_SARPRAS'].includes(role)) return 'teachers';
+    if (TEACHER_LINKED_ROLES.has(role)) return 'teachers';
     if (role === 'ORANG_TUA') return 'student_parents';
     return null;
 }
@@ -180,30 +194,56 @@ export function ProfilePage() {
         queryFn: async () => {
             if (!user || !linkedTable) return null;
 
-            let primaryQuery = supabase
+            const selectColumns =
+                linkedTable === 'teachers'
+                    ? 'id, fullName, email, phone, address, nip, nuptk'
+                    : linkedTable === 'students'
+                        ? 'id, fullName, email, phone, address, nisn'
+                        : 'id, fullName, email, phone, address';
+
+            // 1. Cek berdasarkan relasi userId terlebih dahulu
+            let byUserIdQuery = supabase
                 .from(linkedTable)
-                .select('id, fullName, email, phone, address, nip, nuptk, nisn')
-                .eq('email', user.email);
+                .select(selectColumns)
+                .eq('userId', user.id);
 
             if (activeSchoolId) {
-                primaryQuery = primaryQuery.eq('schoolId', activeSchoolId);
+                byUserIdQuery = byUserIdQuery.eq('schoolId', activeSchoolId);
             }
 
-            const { data: primaryMatch } = await primaryQuery.maybeSingle();
-            if (primaryMatch) {
-                return primaryMatch as LinkedMemberDetail;
+            const { data: userIdMatch } = await byUserIdQuery.maybeSingle();
+            if (userIdMatch) {
+                return userIdMatch as unknown as LinkedMemberDetail;
             }
 
-            if (activeSchoolId) {
-                const { data: fallbackMatch } = await supabase
+            // 2. Fallback: Cek berdasarkan email
+            if (user.email) {
+                let byEmailQuery = supabase
                     .from(linkedTable)
-                    .select('id, fullName, email, phone, address, nip, nuptk, nisn')
+                    .select(selectColumns)
+                    .eq('email', user.email);
+
+                if (activeSchoolId) {
+                    byEmailQuery = byEmailQuery.eq('schoolId', activeSchoolId);
+                }
+
+                const { data: emailMatch } = await byEmailQuery.maybeSingle();
+                if (emailMatch) {
+                    return emailMatch as unknown as LinkedMemberDetail;
+                }
+            }
+
+            // 3. Fallback terakhir: Cek berdasarkan nama lengkap di sekolah aktif
+            if (activeSchoolId && user.fullName) {
+                const { data: nameMatch } = await supabase
+                    .from(linkedTable)
+                    .select(selectColumns)
                     .eq('schoolId', activeSchoolId)
                     .eq('fullName', user.fullName)
                     .maybeSingle();
 
-                if (fallbackMatch) {
-                    return fallbackMatch as LinkedMemberDetail;
+                if (nameMatch) {
+                    return nameMatch as unknown as LinkedMemberDetail;
                 }
             }
 
@@ -324,7 +364,8 @@ export function ProfilePage() {
 
     const hasMetadataRow =
         Boolean(school) ||
-        (!detailLoading && (Boolean(identityBadge) || Boolean(detailData?.phone) || Boolean(detailData?.address)));
+        (!detailLoading &&
+            (Boolean(identityBadge) || Boolean(detailData?.phone) || Boolean(detailData?.address)));
 
     return (
         <motion.div
@@ -333,8 +374,8 @@ export function ProfilePage() {
             className="mx-auto max-w-4xl space-y-6"
         >
             {/* =====================================================================
-          HERO CARD PROFIL: EMERALD-TEAL GLASSMORPHISM (SELARAS TENANT SELECTOR)
-         ===================================================================== */}
+                HERO CARD PROFIL: EMERALD-TEAL GLASSMORPHISM
+               ===================================================================== */}
             <div className="relative overflow-hidden rounded-2xl border border-emerald-800/25 text-white shadow-md">
                 {/* Lapisan 1: Gradien Emerald ke Teal */}
                 <div className="absolute inset-0 bg-linear-to-br from-emerald-600 via-teal-700 to-emerald-950 dark:from-emerald-950 dark:via-teal-950 dark:to-slate-950" />
@@ -428,8 +469,8 @@ export function ProfilePage() {
             </div>
 
             {/* =====================================================================
-          KONTEN TAB PENGATURAN PROFIL & KEAMANAN SANDI
-         ===================================================================== */}
+                KONTEN TAB PENGATURAN PROFIL & KEAMANAN SANDI
+               ===================================================================== */}
             <div className="overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-xs">
                 <Tabs
                     value={activeTab}
@@ -468,13 +509,17 @@ export function ProfilePage() {
                                         )}
                                         className="space-y-4"
                                     >
-                                        {/* Email Read-Only */}
+                                        {/* Email Read-Only (Menggunakan <label> standar, bukan <FormLabel>) */}
                                         <div className="space-y-1.5">
-                                            <FormLabel className="text-xs font-semibold">
+                                            <label
+                                                htmlFor="system-email-readonly"
+                                                className="block text-xs font-semibold leading-none text-foreground"
+                                            >
                                                 {locale === 'id' ? 'Alamat Email Sistem' : 'System Email Address'}
-                                            </FormLabel>
+                                            </label>
                                             <div className="relative">
                                                 <Input
+                                                    id="system-email-readonly"
                                                     value={user.email}
                                                     disabled
                                                     className="cursor-not-allowed bg-muted/70 pr-9 text-muted-foreground"
