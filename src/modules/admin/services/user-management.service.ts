@@ -540,7 +540,7 @@ export const userManagementService = {
         }
 
         const { data, error } = await supabase.functions.invoke<BulkGenerateResponse>(
-            'bulk-generate-accounts',
+            'generate-accounts-from-master',
             {
                 body: { targetGroup, schoolId: validSchoolId },
             }
