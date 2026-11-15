@@ -42,9 +42,6 @@ import {
 } from '@/components/ui/form';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
-/**
- * Representasi data detail pengguna dari tabel relasi (`teachers`, `students`, atau `student_parents`).
- */
 interface LinkedMemberDetail {
     id: string;
     fullName?: string | null;
@@ -82,9 +79,6 @@ const TEACHER_LINKED_ROLES = new Set<string>([
     'GURU_BK',
 ]);
 
-/**
- * Menentukan tabel relasi profil berdasarkan peran pengguna.
- */
 function resolveLinkedTable(role: string): LinkedTableName | null {
     if (role === 'SISWA') return 'students';
     if (TEACHER_LINKED_ROLES.has(role)) return 'teachers';
@@ -92,9 +86,6 @@ function resolveLinkedTable(role: string): LinkedTableName | null {
     return null;
 }
 
-/**
- * Menghitung skor kekuatan kata sandi (0 - 4) untuk umpan balik visual.
- */
 function evaluatePasswordStrength(password: string): number {
     if (!password) return 0;
     let score = 0;
@@ -105,8 +96,46 @@ function evaluatePasswordStrength(password: string): number {
     return score;
 }
 
+/**
+ * Menerjemahkan error Supabase Auth & Database menjadi pesan ramah dwibahasa.
+ */
+function formatProfileError(error: unknown, isId: boolean): string {
+    const errObj = error as { message?: string; code?: string };
+    const raw = errObj?.message || '';
+    const lower = raw.toLowerCase();
+
+    if (lower.includes('network error') || lower.includes('failed to fetch')) {
+        return isId
+            ? 'Koneksi ke server terputus. Periksa jaringan internet Anda.'
+            : 'Connection to server failed. Please check your internet connection.';
+    }
+    if (lower.includes('different from the old password')) {
+        return isId
+            ? 'Kata sandi baru harus berbeda dari kata sandi Anda saat ini.'
+            : 'New password must be different from your current password.';
+    }
+    if (lower.includes('auth session missing') || lower.includes('jwt')) {
+        return isId
+            ? 'Sesi login Anda telah berakhir. Silakan keluar lalu masuk kembali.'
+            : 'Your session has expired. Please log out and sign in again.';
+    }
+    if (errObj?.code === '42501') {
+        return isId
+            ? 'Anda tidak memiliki izin untuk mengubah data tersebut.'
+            : 'You do not have permission to update this record.';
+    }
+
+    return (
+        raw ||
+        (isId
+            ? 'Terjadi kesalahan saat menyimpan perubahan.'
+            : 'An error occurred while saving changes.')
+    );
+}
+
 export function ProfilePage() {
     const { locale } = useTranslation();
+    const isId = locale === 'id';
     const queryClient = useQueryClient();
     const { user, school } = useAuthStore();
 
@@ -126,14 +155,14 @@ export function ProfilePage() {
                     .trim()
                     .min(
                         3,
-                        locale === 'id'
+                        isId
                             ? 'Nama lengkap minimal 3 karakter'
                             : 'Full name must be at least 3 characters'
                     ),
                 phone: z.string().trim().optional(),
                 address: z.string().trim().optional(),
             }),
-        [locale]
+        [isId]
     );
 
     const passwordSchema = useMemo(
@@ -144,7 +173,7 @@ export function ProfilePage() {
                         .string()
                         .min(
                             8,
-                            locale === 'id'
+                            isId
                                 ? 'Kata sandi baru minimal 8 karakter'
                                 : 'New password must be at least 8 characters'
                         ),
@@ -152,19 +181,18 @@ export function ProfilePage() {
                         .string()
                         .min(
                             8,
-                            locale === 'id'
+                            isId
                                 ? 'Konfirmasi kata sandi minimal 8 karakter'
                                 : 'Confirm password must be at least 8 characters'
                         ),
                 })
                 .refine((data) => data.newPassword === data.confirmPassword, {
-                    message:
-                        locale === 'id'
-                            ? 'Konfirmasi kata sandi tidak cocok'
-                            : 'Password confirmation does not match',
+                    message: isId
+                        ? 'Konfirmasi kata sandi tidak cocok'
+                        : 'Password confirmation does not match',
                     path: ['confirmPassword'],
                 }),
-        [locale]
+        [isId]
     );
 
     const profileForm = useForm<ProfileFormValues>({
@@ -201,17 +229,21 @@ export function ProfilePage() {
                         ? 'id, fullName, email, phone, address, nisn'
                         : 'id, fullName, email, phone, address';
 
-            // 1. Cek berdasarkan relasi userId terlebih dahulu
+            // 1. Cek berdasarkan relasi userId (gunakan limit(1) agar aman jika Orang Tua memiliki > 1 anak)
             let byUserIdQuery = supabase
                 .from(linkedTable)
                 .select(selectColumns)
-                .eq('userId', user.id);
+                .eq('userId', user.id)
+                .limit(1);
 
             if (activeSchoolId) {
                 byUserIdQuery = byUserIdQuery.eq('schoolId', activeSchoolId);
             }
 
-            const { data: userIdMatch } = await byUserIdQuery.maybeSingle();
+            const { data: userIdMatch, error: userIdError } = await byUserIdQuery.maybeSingle();
+            if (userIdError && userIdError.code !== '42501') {
+                throw new Error(formatProfileError(userIdError, isId));
+            }
             if (userIdMatch) {
                 return userIdMatch as unknown as LinkedMemberDetail;
             }
@@ -221,7 +253,8 @@ export function ProfilePage() {
                 let byEmailQuery = supabase
                     .from(linkedTable)
                     .select(selectColumns)
-                    .eq('email', user.email);
+                    .eq('email', user.email)
+                    .limit(1);
 
                 if (activeSchoolId) {
                     byEmailQuery = byEmailQuery.eq('schoolId', activeSchoolId);
@@ -240,6 +273,7 @@ export function ProfilePage() {
                     .select(selectColumns)
                     .eq('schoolId', activeSchoolId)
                     .eq('fullName', user.fullName)
+                    .limit(1)
                     .maybeSingle();
 
                 if (nameMatch) {
@@ -251,9 +285,6 @@ export function ProfilePage() {
         },
     });
 
-    /**
-     * Menyinkronkan nilai formulir ketika data pengguna atau detail relasi selesai dimuat.
-     */
     useEffect(() => {
         if (!user) return;
         profileForm.reset({
@@ -266,47 +297,58 @@ export function ProfilePage() {
     // --- MUTATION: SIMPAN PERUBAHAN PROFIL ---
     const updateProfileMutation = useMutation({
         mutationFn: async (values: ProfileFormValues): Promise<void> => {
-            if (!user) throw new Error('User session not found');
+            if (!user) {
+                throw new Error(isId ? 'Sesi pengguna tidak ditemukan.' : 'User session not found.');
+            }
+
+            const cleanFullName = values.fullName.replace(/\s+/g, ' ').trim();
 
             const { error: userUpdateError } = await supabase
                 .from('users')
-                .update({ fullName: values.fullName })
+                .update({ fullName: cleanFullName })
                 .eq('id', user.id);
 
             if (userUpdateError) {
-                throw new Error(userUpdateError.message);
+                throw new Error(formatProfileError(userUpdateError, isId));
             }
 
-            await supabase.auth.updateUser({
-                data: { full_name: values.fullName },
+            const { error: authUpdateError } = await supabase.auth.updateUser({
+                data: { full_name: cleanFullName },
             });
+
+            if (authUpdateError) {
+                throw new Error(formatProfileError(authUpdateError, isId));
+            }
 
             if (linkedTable && detailData?.id) {
                 const linkedPayload: Record<string, string | null> = {
-                    fullName: values.fullName,
-                    phone: values.phone ? values.phone : null,
-                    address: values.address ? values.address : null,
+                    fullName: cleanFullName,
+                    phone: values.phone?.trim() ? values.phone.trim() : null,
+                    address: values.address?.trim() ? values.address.trim() : null,
                 };
 
-                const { error: linkedError } = await supabase
+                let linkedQuery = supabase
                     .from(linkedTable)
                     .update(linkedPayload)
                     .eq('id', detailData.id);
 
+                if (activeSchoolId) {
+                    linkedQuery = linkedQuery.eq('schoolId', activeSchoolId);
+                }
+
+                const { error: linkedError } = await linkedQuery;
                 if (linkedError) {
-                    throw new Error(linkedError.message);
+                    throw new Error(formatProfileError(linkedError, isId));
                 }
             }
 
             useAuthStore.setState({
-                user: { ...user, fullName: values.fullName },
+                user: { ...user, fullName: cleanFullName },
             });
         },
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: ['user-detail'] });
-            toast.success(
-                locale === 'id' ? 'Profil berhasil diperbarui.' : 'Profile updated successfully.'
-            );
+            toast.success(isId ? 'Profil berhasil diperbarui.' : 'Profile updated successfully.');
         },
         onError: (err: Error) => {
             toast.error(err.message);
@@ -321,12 +363,12 @@ export function ProfilePage() {
             });
 
             if (error) {
-                throw new Error(error.message);
+                throw new Error(formatProfileError(error, isId));
             }
         },
         onSuccess: () => {
             toast.success(
-                locale === 'id' ? 'Kata sandi berhasil diperbarui.' : 'Password updated successfully.'
+                isId ? 'Kata sandi berhasil diperbarui.' : 'Password updated successfully.'
             );
             passwordForm.reset();
             setShowNewPassword(false);
@@ -349,10 +391,9 @@ export function ProfilePage() {
                 ? { label: 'NISN', value: detailData.nisn }
                 : null;
 
-    const strengthLabels =
-        locale === 'id'
-            ? ['Belum diisi', 'Lemah', 'Cukup', 'Kuat', 'Sangat Kuat']
-            : ['Empty', 'Weak', 'Fair', 'Strong', 'Very Strong'];
+    const strengthLabels = isId
+        ? ['Belum diisi', 'Lemah', 'Cukup', 'Kuat', 'Sangat Kuat']
+        : ['Empty', 'Weak', 'Fair', 'Strong', 'Very Strong'];
 
     const strengthBarColors = [
         'bg-muted',
@@ -373,20 +414,15 @@ export function ProfilePage() {
             animate={{ opacity: 1, y: 0 }}
             className="mx-auto max-w-4xl space-y-6"
         >
-            {/* =====================================================================
-                HERO CARD PROFIL: EMERALD-TEAL GLASSMORPHISM
-               ===================================================================== */}
+            {/* HERO CARD PROFIL */}
             <div className="relative overflow-hidden rounded-2xl border border-emerald-800/25 text-white shadow-md">
-                {/* Lapisan 1: Gradien Emerald ke Teal */}
                 <div className="absolute inset-0 bg-linear-to-br from-emerald-600 via-teal-700 to-emerald-950 dark:from-emerald-950 dark:via-teal-950 dark:to-slate-950" />
 
-                {/* Lapisan 2: Pendar cahaya lembut (Ambient Glow) */}
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0">
                     <div className="absolute -top-20 -left-16 h-64 w-64 rounded-full bg-emerald-300/20 blur-3xl" />
                     <div className="absolute -bottom-24 right-10 h-72 w-72 rounded-full bg-teal-400/15 blur-3xl" />
                 </div>
 
-                {/* Lapisan 3: Pola grid halus */}
                 <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-0 opacity-[0.05]"
@@ -397,11 +433,9 @@ export function ProfilePage() {
                     }}
                 />
 
-                {/* Konten Utama di Atas Lapisan Kaca */}
                 <div className="relative z-10 p-6 sm:p-8">
                     <div className="flex flex-col items-center justify-between gap-5 sm:flex-row sm:items-center">
                         <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:text-left">
-                            {/* Avatar Kaca (Frosted Glass Avatar) */}
                             <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/15 text-2xl font-bold text-white shadow-lg shadow-emerald-950/25 backdrop-blur-md sm:h-24 sm:w-24 sm:text-3xl">
                                 {getInitials(user.fullName)}
                             </div>
@@ -424,14 +458,12 @@ export function ProfilePage() {
                             </div>
                         </div>
 
-                        {/* Lencana Status Verifikasi Kaca */}
                         <div className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/25 bg-white/15 px-3.5 py-2 text-xs font-semibold text-white shadow-xs backdrop-blur-md">
                             <CheckCircle2 size={14} className="text-emerald-200" />
-                            <span>{locale === 'id' ? 'Akun Terverifikasi' : 'Verified Account'}</span>
+                            <span>{isId ? 'Akun Terverifikasi' : 'Verified Account'}</span>
                         </div>
                     </div>
 
-                    {/* Baris Pill Metadata Kaca (Sekolah, Nomor Induk, Telepon, Alamat) */}
                     {hasMetadataRow && (
                         <div className="mt-6 flex flex-wrap items-center gap-2.5 border-t border-white/15 pt-4">
                             {school && (
@@ -468,9 +500,7 @@ export function ProfilePage() {
                 </div>
             </div>
 
-            {/* =====================================================================
-                KONTEN TAB PENGATURAN PROFIL & KEAMANAN SANDI
-               ===================================================================== */}
+            {/* KONTEN TAB PENGATURAN PROFIL & KEAMANAN SANDI */}
             <div className="overflow-hidden rounded-2xl border border-border bg-card text-card-foreground shadow-xs">
                 <Tabs
                     value={activeTab}
@@ -480,11 +510,11 @@ export function ProfilePage() {
                         <TabsList className="bg-muted/60">
                             <TabsTrigger value="profil" className="flex items-center gap-2 text-xs">
                                 <User size={14} />
-                                {locale === 'id' ? 'Informasi Pribadi' : 'Personal Information'}
+                                {isId ? 'Informasi Pribadi' : 'Personal Information'}
                             </TabsTrigger>
                             <TabsTrigger value="keamanan" className="flex items-center gap-2 text-xs">
                                 <KeyRound size={14} />
-                                {locale === 'id' ? 'Keamanan & Sandi' : 'Security & Password'}
+                                {isId ? 'Keamanan & Sandi' : 'Security & Password'}
                             </TabsTrigger>
                         </TabsList>
                     </div>
@@ -494,10 +524,10 @@ export function ProfilePage() {
                         <TabsContent value="profil" className="m-0 outline-none">
                             <div className="max-w-xl">
                                 <h2 className="text-base font-bold text-foreground">
-                                    {locale === 'id' ? 'Detail Identitas Pengguna' : 'User Identity Details'}
+                                    {isId ? 'Detail Identitas Pengguna' : 'User Identity Details'}
                                 </h2>
                                 <p className="mt-0.5 mb-6 text-xs text-muted-foreground">
-                                    {locale === 'id'
+                                    {isId
                                         ? 'Perbarui nama tampilan dan informasi kontak yang terhubung dengan akun Anda.'
                                         : 'Update the display name and contact information linked to your account.'}
                                 </p>
@@ -509,13 +539,12 @@ export function ProfilePage() {
                                         )}
                                         className="space-y-4"
                                     >
-                                        {/* Email Read-Only (Menggunakan <label> standar, bukan <FormLabel>) */}
                                         <div className="space-y-1.5">
                                             <label
                                                 htmlFor="system-email-readonly"
                                                 className="block text-xs font-semibold leading-none text-foreground"
                                             >
-                                                {locale === 'id' ? 'Alamat Email Sistem' : 'System Email Address'}
+                                                {isId ? 'Alamat Email Sistem' : 'System Email Address'}
                                             </label>
                                             <div className="relative">
                                                 <Input
@@ -530,25 +559,24 @@ export function ProfilePage() {
                                                 />
                                             </div>
                                             <p className="text-[11px] text-muted-foreground">
-                                                {locale === 'id'
+                                                {isId
                                                     ? 'Email terikat dengan kredensial autentikasi utama dan hanya dapat diubah oleh Administrator.'
                                                     : 'Email is bound to primary authentication credentials and can only be changed by an Administrator.'}
                                             </p>
                                         </div>
 
-                                        {/* Nama Lengkap */}
                                         <FormField
                                             control={profileForm.control}
                                             name="fullName"
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel className="text-xs font-semibold">
-                                                        {locale === 'id' ? 'Nama Lengkap' : 'Full Name'}
+                                                        {isId ? 'Nama Lengkap' : 'Full Name'}
                                                     </FormLabel>
                                                     <FormControl>
                                                         <Input
                                                             placeholder={
-                                                                locale === 'id'
+                                                                isId
                                                                     ? 'Masukkan nama lengkap beserta gelar'
                                                                     : 'Enter your full name'
                                                             }
@@ -560,7 +588,6 @@ export function ProfilePage() {
                                             )}
                                         />
 
-                                        {/* Nomor Telepon & Alamat (Tampil jika akun tertaut dengan data Guru/Siswa/Orang Tua) */}
                                         {detailData && (
                                             <>
                                                 <FormField
@@ -569,7 +596,7 @@ export function ProfilePage() {
                                                     render={({ field }) => (
                                                         <FormItem>
                                                             <FormLabel className="text-xs font-semibold">
-                                                                {locale === 'id'
+                                                                {isId
                                                                     ? 'Nomor Telepon / WhatsApp'
                                                                     : 'Phone / WhatsApp Number'}
                                                             </FormLabel>
@@ -587,12 +614,12 @@ export function ProfilePage() {
                                                     render={({ field }) => (
                                                         <FormItem>
                                                             <FormLabel className="text-xs font-semibold">
-                                                                {locale === 'id' ? 'Alamat Domisili' : 'Residential Address'}
+                                                                {isId ? 'Alamat Domisili' : 'Residential Address'}
                                                             </FormLabel>
                                                             <FormControl>
                                                                 <Input
                                                                     placeholder={
-                                                                        locale === 'id'
+                                                                        isId
                                                                             ? 'Masukkan alamat lengkap tempat tinggal'
                                                                             : 'Enter full residential address'
                                                                     }
@@ -617,7 +644,7 @@ export function ProfilePage() {
                                                 ) : (
                                                     <Save className="mr-2 h-4 w-4" />
                                                 )}
-                                                {locale === 'id' ? 'Simpan Perubahan' : 'Save Changes'}
+                                                {isId ? 'Simpan Perubahan' : 'Save Changes'}
                                             </Button>
                                         </div>
                                     </form>
@@ -629,10 +656,10 @@ export function ProfilePage() {
                         <TabsContent value="keamanan" className="m-0 outline-none">
                             <div className="max-w-xl">
                                 <h2 className="text-base font-bold text-foreground">
-                                    {locale === 'id' ? 'Pembaruan Kata Sandi' : 'Password Update'}
+                                    {isId ? 'Pembaruan Kata Sandi' : 'Password Update'}
                                 </h2>
                                 <p className="mt-0.5 mb-6 text-xs text-muted-foreground">
-                                    {locale === 'id'
+                                    {isId
                                         ? 'Gunakan kombinasi minimal 8 karakter berupa huruf besar, huruf kecil, dan angka untuk melindungi akun.'
                                         : 'Use at least 8 characters combining uppercase, lowercase, and numbers to protect your account.'}
                                 </p>
@@ -644,14 +671,13 @@ export function ProfilePage() {
                                         )}
                                         className="space-y-4"
                                     >
-                                        {/* Kata Sandi Baru */}
                                         <FormField
                                             control={passwordForm.control}
                                             name="newPassword"
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel className="text-xs font-semibold">
-                                                        {locale === 'id' ? 'Kata Sandi Baru' : 'New Password'}
+                                                        {isId ? 'Kata Sandi Baru' : 'New Password'}
                                                     </FormLabel>
                                                     <FormControl>
                                                         <div className="relative">
@@ -667,10 +693,10 @@ export function ProfilePage() {
                                                                 className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
                                                                 aria-label={
                                                                     showNewPassword
-                                                                        ? locale === 'id'
+                                                                        ? isId
                                                                             ? 'Sembunyikan kata sandi'
                                                                             : 'Hide password'
-                                                                        : locale === 'id'
+                                                                        : isId
                                                                             ? 'Lihat kata sandi'
                                                                             : 'Show password'
                                                                 }
@@ -680,7 +706,6 @@ export function ProfilePage() {
                                                         </div>
                                                     </FormControl>
 
-                                                    {/* Indikator Kekuatan Kata Sandi */}
                                                     {watchedNewPassword.length > 0 && (
                                                         <div className="pt-1.5">
                                                             <div className="grid grid-cols-4 gap-1.5">
@@ -697,7 +722,7 @@ export function ProfilePage() {
                                                                 ))}
                                                             </div>
                                                             <p className="mt-1 text-[11px] text-muted-foreground">
-                                                                {locale === 'id' ? 'Kekuatan sandi:' : 'Password strength:'}{' '}
+                                                                {isId ? 'Kekuatan sandi:' : 'Password strength:'}{' '}
                                                                 <span className="font-semibold text-foreground">
                                                                     {strengthLabels[passwordStrength]}
                                                                 </span>
@@ -710,14 +735,13 @@ export function ProfilePage() {
                                             )}
                                         />
 
-                                        {/* Konfirmasi Kata Sandi */}
                                         <FormField
                                             control={passwordForm.control}
                                             name="confirmPassword"
                                             render={({ field }) => (
                                                 <FormItem>
                                                     <FormLabel className="text-xs font-semibold">
-                                                        {locale === 'id'
+                                                        {isId
                                                             ? 'Konfirmasi Kata Sandi Baru'
                                                             : 'Confirm New Password'}
                                                     </FormLabel>
@@ -735,10 +759,10 @@ export function ProfilePage() {
                                                                 className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
                                                                 aria-label={
                                                                     showConfirmPassword
-                                                                        ? locale === 'id'
+                                                                        ? isId
                                                                             ? 'Sembunyikan konfirmasi kata sandi'
                                                                             : 'Hide confirm password'
-                                                                        : locale === 'id'
+                                                                        : isId
                                                                             ? 'Lihat konfirmasi kata sandi'
                                                                             : 'Show confirm password'
                                                                 }
@@ -763,7 +787,7 @@ export function ProfilePage() {
                                                 ) : (
                                                     <KeyRound className="mr-2 h-4 w-4" />
                                                 )}
-                                                {locale === 'id' ? 'Perbarui Kata Sandi' : 'Update Password'}
+                                                {isId ? 'Perbarui Kata Sandi' : 'Update Password'}
                                             </Button>
                                         </div>
                                     </form>

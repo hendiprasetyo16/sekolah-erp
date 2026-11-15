@@ -1,9 +1,44 @@
+// src/modules/dashboard/services/portal.service.ts
 import { supabase } from '@/services/supabase.client';
+import type { PostgrestError } from '@supabase/supabase-js';
 
 // ============================================================================
-// TIPE DATA STRICT SESUAI SKEMA SUPABASE v7.4
+// PARAMETER YANG DAPAT DISESUAIKAN
 // ============================================================================
+const ATTENDANCE_HISTORY_LIMIT = 180;
+const PAYMENT_HISTORY_LIMIT = 60;
+const ANNOUNCEMENT_LIMIT = 6;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+function isValidUuid(value?: string | null): value is string {
+  return typeof value === 'string' && UUID_REGEX.test(value.trim());
+}
+
+// ============================================================================
+// ERROR HANDLER POSTGRESQL & JARINGAN UNTUK PORTAL
+// ============================================================================
+export function handlePortalDbError(error: unknown): Error {
+  const pgError = error as PostgrestError;
+  const rawMessage = pgError?.message || 'Terjadi kesalahan saat memuat data portal.';
+  const lowerMsg = rawMessage.toLowerCase();
+
+  if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+    return new Error('Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.');
+  }
+  if (pgError?.code === '42501') {
+    return new Error('Anda tidak memiliki hak akses untuk melihat data ini.');
+  }
+  if (pgError?.code === '22P02') {
+    return new Error('Format identitas data tidak valid.');
+  }
+
+  return new Error(rawMessage);
+}
+
+// ============================================================================
+// TIPE DATA STRICT SESUAI SKEMA SUPABASE
+// ============================================================================
 export interface LinkedStudentProfile {
   linkId: string;
   relationship: string;
@@ -128,6 +163,16 @@ interface SubjectRow {
   name: string;
 }
 
+interface RawAttendanceRow {
+  id: string;
+  studentId: string;
+  date: string;
+  status: string;
+  notes?: string | null;
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
+}
+
 interface RawBillRow {
   id: string;
   title: string;
@@ -161,6 +206,10 @@ export async function fetchLinkedStudents(
   schoolId: string,
   userId: string
 ): Promise<LinkedStudentProfile[]> {
+  if (!isValidUuid(schoolId) || !isValidUuid(userId)) {
+    return [];
+  }
+
   const { data: linksData, error: linksError } = await supabase
     .from('user_student_links')
     .select('id, studentId, relationship, isPrimary')
@@ -168,7 +217,10 @@ export async function fetchLinkedStudents(
     .eq('userId', userId)
     .order('isPrimary', { ascending: false });
 
-  if (linksError || !linksData || linksData.length === 0) {
+  if (linksError) {
+    throw handlePortalDbError(linksError);
+  }
+  if (!linksData || linksData.length === 0) {
     return [];
   }
 
@@ -181,7 +233,10 @@ export async function fetchLinkedStudents(
     .eq('schoolId', schoolId)
     .in('id', studentIds);
 
-  if (studentsError || !studentsData) {
+  if (studentsError) {
+    throw handlePortalDbError(studentsError);
+  }
+  if (!studentsData || studentsData.length === 0) {
     return [];
   }
 
@@ -196,11 +251,15 @@ export async function fetchLinkedStudents(
   const teacherMap = new Map<string, TeacherRow>();
 
   if (classIds.length > 0) {
-    const { data: classesData } = await supabase
+    const { data: classesData, error: classesError } = await supabase
       .from('classes')
       .select('id, name, gradeLevel, major, homeroomTeacherId')
       .eq('schoolId', schoolId)
       .in('id', classIds);
+
+    if (classesError) {
+      throw handlePortalDbError(classesError);
+    }
 
     const classes = (classesData as ClassRow[] | null) ?? [];
     for (const cls of classes) {
@@ -214,11 +273,15 @@ export async function fetchLinkedStudents(
     );
 
     if (homeroomTeacherIds.length > 0) {
-      const { data: teachersData } = await supabase
+      const { data: teachersData, error: teachersError } = await supabase
         .from('teachers')
         .select('id, fullName, phone')
         .eq('schoolId', schoolId)
         .in('id', homeroomTeacherIds);
+
+      if (teachersError) {
+        throw handlePortalDbError(teachersError);
+      }
 
       const teachers = (teachersData as TeacherRow[] | null) ?? [];
       for (const tch of teachers) {
@@ -262,23 +325,64 @@ export async function fetchLinkedStudents(
 }
 
 /**
- * Mengambil riwayat presensi siswa dari tabel attendances (type = 'SISWA').
+ * Mengambil riwayat presensi siswa dari tabel `student_attendance` (v14),
+ * dengan cadangan otomatis ke tabel `attendances` bila skema lama masih digunakan.
  */
 export async function fetchStudentAttendances(
   schoolId: string,
   studentId: string
 ): Promise<StudentAttendanceRecord[]> {
+  if (!isValidUuid(schoolId) || !isValidUuid(studentId)) {
+    return [];
+  }
+
   const { data, error } = await supabase
-    .from('attendances')
-    .select('id, studentId, date, status, notes, checkInTime, checkOutTime')
+    .from('student_attendance')
+    .select('id, studentId, date, status, notes')
     .eq('schoolId', schoolId)
     .eq('studentId', studentId)
-    .eq('type', 'SISWA')
     .order('date', { ascending: false })
-    .limit(180);
+    .limit(ATTENDANCE_HISTORY_LIMIT);
 
-  if (error || !data) return [];
-  return data as StudentAttendanceRecord[];
+  if (error) {
+    // Fallback otomatis jika skema database menggunakan tabel `attendances`
+    if (error.code === '42P01' || error.code === '42703') {
+      const fallback = await supabase
+        .from('attendances')
+        .select('id, studentId, date, status, notes, checkInTime, checkOutTime')
+        .eq('schoolId', schoolId)
+        .eq('studentId', studentId)
+        .eq('type', 'SISWA')
+        .order('date', { ascending: false })
+        .limit(ATTENDANCE_HISTORY_LIMIT);
+
+      if (fallback.error) {
+        throw handlePortalDbError(fallback.error);
+      }
+
+      return ((fallback.data as RawAttendanceRow[] | null) ?? []).map((row) => ({
+        id: row.id,
+        studentId: row.studentId,
+        date: row.date,
+        status: row.status,
+        notes: row.notes ?? null,
+        checkInTime: row.checkInTime ?? null,
+        checkOutTime: row.checkOutTime ?? null,
+      }));
+    }
+
+    throw handlePortalDbError(error);
+  }
+
+  return ((data as RawAttendanceRow[] | null) ?? []).map((row) => ({
+    id: row.id,
+    studentId: row.studentId,
+    date: row.date,
+    status: row.status,
+    notes: row.notes ?? null,
+    checkInTime: row.checkInTime ?? null,
+    checkOutTime: row.checkOutTime ?? null,
+  }));
 }
 
 /**
@@ -289,7 +393,9 @@ export async function fetchClassSchedules(
   classId: string | null,
   academicYearId?: string | null
 ): Promise<StudentScheduleItem[]> {
-  if (!classId) return [];
+  if (!isValidUuid(schoolId) || !isValidUuid(classId)) {
+    return [];
+  }
 
   let query = supabase
     .from('schedule_entries')
@@ -300,12 +406,17 @@ export async function fetchClassSchedules(
     .order('dayOfWeek', { ascending: true })
     .order('startTime', { ascending: true });
 
-  if (academicYearId) {
+  if (isValidUuid(academicYearId)) {
     query = query.eq('academicYearId', academicYearId);
   }
 
   const { data, error } = await query;
-  if (error || !data || data.length === 0) return [];
+  if (error) {
+    throw handlePortalDbError(error);
+  }
+  if (!data || data.length === 0) {
+    return [];
+  }
 
   const entries = data as ScheduleEntryRow[];
 
@@ -318,12 +429,27 @@ export async function fetchClassSchedules(
 
   const [subjectsRes, teachersRes] = await Promise.all([
     subjectIds.length > 0
-      ? supabase.from('subjects').select('id, code, name').eq('schoolId', schoolId).in('id', subjectIds)
-      : Promise.resolve({ data: [] as SubjectRow[] }),
+      ? supabase
+          .from('subjects')
+          .select('id, code, name')
+          .eq('schoolId', schoolId)
+          .in('id', subjectIds)
+      : Promise.resolve({ data: [] as SubjectRow[], error: null }),
     teacherIds.length > 0
-      ? supabase.from('teachers').select('id, fullName, phone').eq('schoolId', schoolId).in('id', teacherIds)
-      : Promise.resolve({ data: [] as TeacherRow[] }),
+      ? supabase
+          .from('teachers')
+          .select('id, fullName, phone')
+          .eq('schoolId', schoolId)
+          .in('id', teacherIds)
+      : Promise.resolve({ data: [] as TeacherRow[], error: null }),
   ]);
+
+  if (subjectsRes.error) {
+    throw handlePortalDbError(subjectsRes.error);
+  }
+  if (teachersRes.error) {
+    throw handlePortalDbError(teachersRes.error);
+  }
 
   const subjectMap = new Map<string, SubjectRow>(
     ((subjectsRes.data as SubjectRow[] | null) ?? []).map((s) => [s.id, s])
@@ -356,6 +482,10 @@ export async function fetchStudentFinance(
   schoolId: string,
   studentId: string
 ): Promise<{ bills: StudentBillItem[]; payments: StudentPaymentItem[] }> {
+  if (!isValidUuid(schoolId) || !isValidUuid(studentId)) {
+    return { bills: [], payments: [] };
+  }
+
   const [billsRes, paymentsRes] = await Promise.all([
     supabase
       .from('student_bills')
@@ -371,8 +501,15 @@ export async function fetchStudentFinance(
       .eq('studentId', studentId)
       .eq('status', 'BERHASIL')
       .order('paymentDate', { ascending: false })
-      .limit(60),
+      .limit(PAYMENT_HISTORY_LIMIT),
   ]);
+
+  if (billsRes.error) {
+    throw handlePortalDbError(billsRes.error);
+  }
+  if (paymentsRes.error) {
+    throw handlePortalDbError(paymentsRes.error);
+  }
 
   const bills: StudentBillItem[] = ((billsRes.data as RawBillRow[] | null) ?? []).map((b) => ({
     id: b.id,
@@ -407,6 +544,10 @@ export async function fetchPortalAnnouncements(
   schoolId: string,
   roleTarget: 'SISWA' | 'ORANG_TUA'
 ): Promise<PortalAnnouncementItem[]> {
+  if (!isValidUuid(schoolId)) {
+    return [];
+  }
+
   const { data, error } = await supabase
     .from('announcements')
     .select('id, title, content, target, isPinned, publishDate, expireDate')
@@ -414,9 +555,14 @@ export async function fetchPortalAnnouncements(
     .in('target', ['SEMUA', roleTarget])
     .order('isPinned', { ascending: false })
     .order('publishDate', { ascending: false })
-    .limit(6);
+    .limit(ANNOUNCEMENT_LIMIT);
 
-  if (error || !data) return [];
+  if (error) {
+    throw handlePortalDbError(error);
+  }
+  if (!data) {
+    return [];
+  }
 
   const now = Date.now();
   return (data as PortalAnnouncementItem[]).filter(

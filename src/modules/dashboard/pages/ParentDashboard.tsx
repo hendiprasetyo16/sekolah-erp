@@ -1,3 +1,4 @@
+// src/modules/dashboard/pages/ParentDashboard.tsx
 import { useState, useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -45,6 +46,26 @@ function getCurrentIsoDayOfWeek(): number {
     return jsDay === 0 ? 7 : jsDay;
 }
 
+function getLocalTodayIso(): string {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function formatAttendanceStatusLabel(status: string, isId: boolean): string {
+    const map: Record<string, [string, string]> = {
+        HADIR: ['Hadir', 'Present'],
+        TERLAMBAT: ['Terlambat', 'Late'],
+        SAKIT: ['Sakit', 'Sick'],
+        IZIN: ['Izin', 'Excused'],
+        ALPA: ['Alpa', 'Absent'],
+    };
+    const pair = map[status];
+    return pair ? (isId ? pair[0] : pair[1]) : status;
+}
+
 export function ParentDashboard() {
     const { locale } = useTranslation();
     const isId = locale === 'id';
@@ -56,7 +77,11 @@ export function ParentDashboard() {
     const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
 
     // 1. Ambil daftar putra/putri yang terhubung ke akun Orang Tua / Wali ini
-    const { data: children = [], isLoading: isLoadingChildren } = useQuery({
+    const {
+        data: children = [],
+        isLoading: isLoadingChildren,
+        isError: isErrorChildren,
+    } = useQuery({
         queryKey: ['portal-linked-students', schoolId, userId],
         enabled: Boolean(schoolId && userId),
         queryFn: () => fetchLinkedStudents(schoolId!, userId!),
@@ -99,9 +124,9 @@ export function ParentDashboard() {
         queryFn: () => fetchPortalAnnouncements(schoolId!, 'ORANG_TUA'),
     });
 
-    // Status presensi hari ini
+    // Status presensi hari ini (menggunakan tanggal lokal Indonesia)
     const todayAttendance = useMemo(() => {
-        const todayIso = new Date().toISOString().slice(0, 10);
+        const todayIso = getLocalTodayIso();
         return attendances.find((a) => a.date === todayIso) ?? null;
     }, [attendances]);
 
@@ -132,9 +157,7 @@ export function ParentDashboard() {
 
     return (
         <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-6">
-            {/* =====================================================================
-          WELCOME BANNER ORANG TUA / WALI
-         ===================================================================== */}
+            {/* WELCOME BANNER ORANG TUA / WALI */}
             <motion.div variants={itemVariants} className="relative overflow-hidden rounded-2xl p-6 lg:p-8">
                 <div className="absolute inset-0 bg-linear-to-r from-emerald-600 via-teal-700 to-emerald-900" />
                 <div
@@ -179,9 +202,7 @@ export function ParentDashboard() {
                 </div>
             </motion.div>
 
-            {/* =====================================================================
-          PEMILIH ANAK (JIKA TERHUBUNG KE LEBIH DARI 1 SISWA)
-         ===================================================================== */}
+            {/* PEMILIH ANAK (JIKA TERHUBUNG KE LEBIH DARI 1 SISWA) */}
             {children.length > 1 && (
                 <motion.div
                     variants={itemVariants}
@@ -212,8 +233,23 @@ export function ParentDashboard() {
                 </motion.div>
             )}
 
+            {/* Peringatan Error Koneksi / Server */}
+            {isErrorChildren && (
+                <motion.div
+                    variants={itemVariants}
+                    className="flex items-start gap-3 rounded-2xl border border-rose-300/60 bg-rose-50/70 p-4 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200"
+                >
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <span>
+                        {isId
+                            ? 'Gagal memuat data siswa dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
+                            : 'Failed to load student data from server. Please check your internet connection and refresh.'}
+                    </span>
+                </motion.div>
+            )}
+
             {/* Peringatan jika akun Orang Tua belum ditautkan ke siswa mana pun */}
-            {!isLoadingChildren && !activeChild && (
+            {!isLoadingChildren && !isErrorChildren && !activeChild && (
                 <motion.div
                     variants={itemVariants}
                     className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50/70 p-5 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
@@ -234,9 +270,7 @@ export function ParentDashboard() {
                 </motion.div>
             )}
 
-            {/* =====================================================================
-          KARTU IDENTITAS ANAK AKTIF
-         ===================================================================== */}
+            {/* KARTU IDENTITAS ANAK AKTIF */}
             {activeChild && (
                 <motion.div
                     variants={itemVariants}
@@ -279,11 +313,8 @@ export function ParentDashboard() {
                 </motion.div>
             )}
 
-            {/* =====================================================================
-          4 KARTU METRIK RINGKAS ANAK
-         ===================================================================== */}
+            {/* 4 KARTU METRIK RINGKAS ANAK */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {/* Status Kehadiran Hari Ini */}
                 <motion.div
                     variants={itemVariants}
                     className="rounded-2xl border border-border bg-card p-5 shadow-xs"
@@ -301,7 +332,7 @@ export function ParentDashboard() {
                     ) : (
                         <p className="text-xl font-bold text-foreground">
                             {todayAttendance
-                                ? todayAttendance.status
+                                ? formatAttendanceStatusLabel(todayAttendance.status, isId)
                                 : isId
                                     ? 'Belum Tercatat'
                                     : 'Not Recorded'}
@@ -316,7 +347,6 @@ export function ParentDashboard() {
                     </p>
                 </motion.div>
 
-                {/* Persentase Kehadiran Bulan Ini */}
                 <motion.div
                     variants={itemVariants}
                     className="rounded-2xl border border-border bg-card p-5 shadow-xs"
@@ -339,7 +369,6 @@ export function ParentDashboard() {
                     </p>
                 </motion.div>
 
-                {/* Jadwal Pelajaran Hari Ini */}
                 <motion.div
                     variants={itemVariants}
                     className="rounded-2xl border border-border bg-card p-5 shadow-xs"
@@ -364,7 +393,6 @@ export function ParentDashboard() {
                     </p>
                 </motion.div>
 
-                {/* Tagihan Belum Lunas */}
                 <motion.div
                     variants={itemVariants}
                     className="rounded-2xl border border-border bg-card p-5 shadow-xs"
@@ -404,11 +432,8 @@ export function ParentDashboard() {
                 </motion.div>
             </div>
 
-            {/* =====================================================================
-          DETAIL JADWAL HARI INI, TAGIHAN & PENGUMUMAN
-         ===================================================================== */}
+            {/* DETAIL JADWAL HARI INI, TAGIHAN & PENGUMUMAN */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                {/* Jadwal Pelajaran Anak Hari Ini */}
                 <motion.div
                     variants={itemVariants}
                     className="rounded-2xl border border-border bg-card p-5 shadow-xs lg:col-span-2"
@@ -470,7 +495,6 @@ export function ParentDashboard() {
                     )}
                 </motion.div>
 
-                {/* Kolom Kanan: Rincian Tagihan Belum Lunas & Pengumuman */}
                 <div className="space-y-6">
                     <motion.div
                         variants={itemVariants}

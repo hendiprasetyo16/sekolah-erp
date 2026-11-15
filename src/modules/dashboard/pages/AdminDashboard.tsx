@@ -1,3 +1,4 @@
+// src/modules/dashboard/pages/AdminDashboard.tsx
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -16,6 +17,7 @@ import {
   UserPlus,
   BarChart3,
   Building2,
+  AlertCircle,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -36,6 +38,7 @@ import { cn } from '@/utils/cn';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatCurrency, formatNumber, formatDate } from '@/utils/format';
+import { handlePortalDbError } from '../services/portal.service';
 
 const containerVariants = {
   hidden: { opacity: 0 },
@@ -46,6 +49,28 @@ const itemVariants = {
   hidden: { opacity: 0, y: 16 },
   show: { opacity: 1, y: 0 },
 };
+
+/**
+ * Menghasilkan tanggal YYYY-MM-DD sesuai zona waktu lokal pengguna (WIB/WITA/WIT).
+ */
+function getLocalTodayIso(): string {
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Menghasilkan tanggal awal bulan dari 5 bulan lalu (total 6 bulan terakhir) untuk filter grafik.
+ */
+function getSixMonthsWindowStartIso(): string {
+  const now = new Date();
+  const start = new Date(now.getFullYear(), now.getMonth() - 5, 1);
+  const year = start.getFullYear();
+  const month = String(start.getMonth() + 1).padStart(2, '0');
+  return `${year}-${month}-01`;
+}
 
 // --- TIPE DATA ---
 interface StudentSummaryRow {
@@ -120,9 +145,6 @@ const QUICK_ACTION_TONE_STYLES: Record<QuickActionItem['tone'], string> = {
   rose: 'bg-rose-500/10 text-rose-600 dark:text-rose-400',
 };
 
-/**
- * Memformat angka nominal besar pada sumbu Y grafik menjadi ringkas (Jt / Rb).
- */
 function formatCompactAxisValue(value: number): string {
   if (value === 0) return '0';
   if (value >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)} M`;
@@ -131,9 +153,6 @@ function formatCompactAxisValue(value: number): string {
   return String(value);
 }
 
-/**
- * Tooltip adaptif tema (Light & Dark mode) untuk seluruh grafik Recharts.
- */
 function CustomTooltip({
   active,
   payload,
@@ -167,9 +186,6 @@ function CustomTooltip({
   );
 }
 
-/**
- * Kartu Metrik Utama Dasbor.
- */
 function StatCard({
   title,
   value,
@@ -220,8 +236,8 @@ function StatCard({
 
 export function AdminDashboard() {
   const { t, locale } = useTranslation();
+  const isId = locale === 'id';
 
-  // 1. KONTEKS PENGGUNA, SEKOLAH AKTIF & HAK AKSES (RBAC)
   const { user, school, academicYear } = useAuthStore();
   const schoolId = school?.id ?? null;
   const role = user?.role ?? '';
@@ -230,8 +246,12 @@ export function AdminDashboard() {
   const canViewFinance = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'].includes(role);
   const canPrintLetters = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'KEPALA_SEKOLAH', 'STAFF_TU'].includes(role);
 
-  // 2. FETCH DATA SISWA AKTIF PER SEKOLAH
-  const { data: studentsData = [], isLoading: isLoadingStudents } = useQuery<StudentSummaryRow[]>({
+  // 1. FETCH DATA SISWA AKTIF PER SEKOLAH
+  const {
+    data: studentsData = [],
+    isLoading: isLoadingStudents,
+    isError: isErrorStudents,
+  } = useQuery<StudentSummaryRow[]>({
     queryKey: ['dashboard-students-data', schoolId],
     enabled: Boolean(schoolId),
     queryFn: async () => {
@@ -241,12 +261,12 @@ export function AdminDashboard() {
         .select('id, gender, status')
         .eq('schoolId', schoolId);
 
-      if (error || !data) return [];
-      return data as StudentSummaryRow[];
+      if (error) throw handlePortalDbError(error);
+      return (data as StudentSummaryRow[] | null) ?? [];
     },
   });
 
-  // 3. FETCH DATA PENERIMA PIP PER SEKOLAH
+  // 2. FETCH DATA PENERIMA PIP PER SEKOLAH
   const { data: pipCount = 0 } = useQuery<number>({
     queryKey: ['dashboard-pip-count', schoolId],
     enabled: Boolean(schoolId),
@@ -264,14 +284,19 @@ export function AdminDashboard() {
           .select('*', { count: 'exact', head: true })
           .eq('schoolId', schoolId)
           .or('hasKip.eq.true,layakPip.eq.true');
+        if (fallback.error) return 0;
         return fallback.count ?? 0;
       }
       return count ?? 0;
     },
   });
 
-  // 4. FETCH DATA GURU & STAF PER SEKOLAH
-  const { data: teachersCount = 0, isLoading: isLoadingTeachers } = useQuery<number>({
+  // 3. FETCH DATA GURU & STAF PER SEKOLAH
+  const {
+    data: teachersCount = 0,
+    isLoading: isLoadingTeachers,
+    isError: isErrorTeachers,
+  } = useQuery<number>({
     queryKey: ['dashboard-teachers-count', schoolId],
     enabled: Boolean(schoolId),
     queryFn: async () => {
@@ -281,13 +306,17 @@ export function AdminDashboard() {
         .select('*', { count: 'exact', head: true })
         .eq('schoolId', schoolId);
 
-      if (error) return 0;
+      if (error) throw handlePortalDbError(error);
       return count ?? 0;
     },
   });
 
-  // 5. FETCH DATA KEUANGAN REAL-TIME PER SEKOLAH (KHUSUS MANAJER & BENDAHARA)
-  const { data: financeData, isLoading: isLoadingFinance } = useQuery({
+  // 4. FETCH DATA KEUANGAN 6 BULAN TERAKHIR PER SEKOLAH
+  const {
+    data: financeData,
+    isLoading: isLoadingFinance,
+    isError: isErrorFinance,
+  } = useQuery({
     queryKey: ['dashboard-finance-data', schoolId],
     enabled: Boolean(schoolId) && canViewFinance,
     queryFn: async () => {
@@ -295,18 +324,24 @@ export function AdminDashboard() {
         return { monthlyRevenue: 0, pendingPayments: 0, revenueData: [] };
       }
 
+      const sixMonthsStartIso = getSixMonthsWindowStartIso();
+
       const [incomeRes, billsRes] = await Promise.all([
         supabase
           .from('payment_transactions')
           .select('amount, paymentDate')
           .eq('schoolId', schoolId)
-          .eq('status', 'BERHASIL'),
+          .eq('status', 'BERHASIL')
+          .gte('paymentDate', sixMonthsStartIso),
         supabase
           .from('student_bills')
           .select('totalAmount, paidAmount')
           .eq('schoolId', schoolId)
           .in('status', ['BELUM_BAYAR', 'CICILAN']),
       ]);
+
+      if (incomeRes.error) throw handlePortalDbError(incomeRes.error);
+      if (billsRes.error) throw handlePortalDbError(billsRes.error);
 
       const now = new Date();
       const currentMonth = now.getMonth();
@@ -315,9 +350,8 @@ export function AdminDashboard() {
       let currentMonthIncome = 0;
       const monthNamesId = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
       const monthNamesEn = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const monthLabels = locale === 'id' ? monthNamesId : monthNamesEn;
+      const monthLabels = isId ? monthNamesId : monthNamesEn;
 
-      // Siapkan 6 bulan terakhir secara berurutan
       const chartBuckets: { key: string; month: string; pemasukan: number }[] = [];
       for (let i = 5; i >= 0; i--) {
         const d = new Date(currentYear, currentMonth - i, 1);
@@ -360,7 +394,7 @@ export function AdminDashboard() {
     },
   });
 
-  // 6. FETCH RINGKASAN OPERASIONAL HARIAN (PRESENSI HARI INI, SARPRAS RUSAK, SURAT MASUK)
+  // 5. FETCH RINGKASAN OPERASIONAL HARIAN (MENGGUNAKAN TANGGAL LOKAL)
   const { data: operationalSummary } = useQuery({
     queryKey: ['dashboard-operational-summary', schoolId],
     enabled: Boolean(schoolId),
@@ -369,7 +403,7 @@ export function AdminDashboard() {
         return { attendanceRate: 0, damagedAssets: 0, incomingLetters: 0 };
       }
 
-      const todayIso = new Date().toISOString().slice(0, 10);
+      const todayIso = getLocalTodayIso();
 
       const [attendanceRes, damagedRes, lettersRes] = await Promise.all([
         supabase
@@ -390,7 +424,9 @@ export function AdminDashboard() {
       ]);
 
       const attendanceRows = (attendanceRes.data as AttendanceStatusRow[] | null) ?? [];
-      const presentCount = attendanceRows.filter((row) => row.status === 'HADIR').length;
+      const presentCount = attendanceRows.filter(
+        (row) => row.status === 'HADIR' || row.status === 'TERLAMBAT'
+      ).length;
       const attendanceRate =
         attendanceRows.length > 0 ? Math.round((presentCount / attendanceRows.length) * 100) : 0;
 
@@ -402,7 +438,6 @@ export function AdminDashboard() {
     },
   });
 
-  // --- KALKULASI DATA SISWA AKTIF ---
   const activeStudents = useMemo(
     () => studentsData.filter((s) => !s.status || s.status === 'AKTIF'),
     [studentsData]
@@ -417,17 +452,16 @@ export function AdminDashboard() {
     const maleCount = activeStudents.filter((s) => s.gender === 'L').length;
     const femaleCount = activeStudents.filter((s) => s.gender === 'P').length;
     return [
-      { name: locale === 'id' ? 'Laki-laki' : 'Male', value: maleCount, color: '#0ea5e9' },
-      { name: locale === 'id' ? 'Perempuan' : 'Female', value: femaleCount, color: '#ec4899' },
+      { name: isId ? 'Laki-laki' : 'Male', value: maleCount, color: '#0ea5e9' },
+      { name: isId ? 'Perempuan' : 'Female', value: femaleCount, color: '#ec4899' },
     ];
-  }, [activeStudents, locale]);
+  }, [activeStudents, isId]);
 
-  // 7. QUICK ACTIONS DENGAN RUTE YANG VALID SESUAI SIDEBAR
   const allQuickActions: QuickActionItem[] = [
     {
       id: 'add-student',
       icon: UserPlus,
-      label: locale === 'id' ? 'Data Siswa' : 'Students',
+      label: isId ? 'Data Siswa' : 'Students',
       tone: 'sky',
       path: '/students',
       allowed: isManager,
@@ -435,7 +469,7 @@ export function AdminDashboard() {
     {
       id: 'receive-payment',
       icon: CreditCard,
-      label: locale === 'id' ? 'Terima Pembayaran' : 'Receive Payment',
+      label: isId ? 'Terima Pembayaran' : 'Receive Payment',
       tone: 'emerald',
       path: '/finance/payments',
       allowed: canViewFinance,
@@ -443,7 +477,7 @@ export function AdminDashboard() {
     {
       id: 'attendance-report',
       icon: ClipboardCheck,
-      label: locale === 'id' ? 'Rekap Presensi' : 'Attendance',
+      label: isId ? 'Rekap Presensi' : 'Attendance',
       tone: 'amber',
       path: '/attendance',
       allowed: true,
@@ -451,7 +485,7 @@ export function AdminDashboard() {
     {
       id: 'administration',
       icon: FileText,
-      label: locale === 'id' ? 'Administrasi Surat' : 'Administration',
+      label: isId ? 'Administrasi Surat' : 'Administration',
       tone: 'violet',
       path: '/admin',
       allowed: canPrintLetters,
@@ -459,7 +493,7 @@ export function AdminDashboard() {
     {
       id: 'schedules',
       icon: Calendar,
-      label: locale === 'id' ? 'Jadwal Pelajaran' : 'Schedules',
+      label: isId ? 'Jadwal Pelajaran' : 'Schedules',
       tone: 'teal',
       path: '/schedules',
       allowed: true,
@@ -467,7 +501,7 @@ export function AdminDashboard() {
     {
       id: 'reports',
       icon: BarChart3,
-      label: locale === 'id' ? 'Laporan Terpadu' : 'Reports',
+      label: isId ? 'Laporan Terpadu' : 'Reports',
       tone: 'rose',
       path: '/reports',
       allowed: canViewFinance || isManager,
@@ -475,12 +509,11 @@ export function AdminDashboard() {
   ];
 
   const quickActions = allQuickActions.filter((action) => action.allowed);
+  const hasLoadError = isErrorStudents || isErrorTeachers || isErrorFinance;
 
   return (
     <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-6">
-      {/* =====================================================================
-          WELCOME BANNER EMERALD-TEAL DENGAN IDENTITAS SEKOLAH AKTIF
-         ===================================================================== */}
+      {/* WELCOME BANNER */}
       <motion.div variants={itemVariants} className="relative overflow-hidden rounded-2xl p-6 lg:p-8">
         <div className="absolute inset-0 bg-linear-to-r from-emerald-600 via-teal-700 to-emerald-900" />
         <div
@@ -507,7 +540,7 @@ export function AdminDashboard() {
               {t('dashboard.welcome', { name: user?.fullName?.split(' ')[0] || 'User' })}
             </h1>
             <p className="text-sm text-emerald-100/85">
-              {locale === 'id'
+              {isId
                 ? 'Ringkasan operasional akademik, presensi, dan keuangan satuan pendidikan hari ini.'
                 : 'Today’s operational summary for academics, attendance, and school finance.'}
             </p>
@@ -523,9 +556,19 @@ export function AdminDashboard() {
         </div>
       </motion.div>
 
-      {/* =====================================================================
-          KARTU STATISTIK UTAMA (MENYESUAIKAN HAK AKSES KEUANGAN)
-         ===================================================================== */}
+      {/* PERINGATAN JIKA SEBAGIAN DATA GAGAL DIMUAT */}
+      {hasLoadError && (
+        <div className="flex items-center gap-3 rounded-2xl border border-rose-300/60 bg-rose-50/70 p-4 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+          <AlertCircle className="h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+          <span>
+            {isId
+              ? 'Sebagian statistik gagal dimuat dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
+              : 'Some dashboard statistics failed to load. Please check your internet connection and refresh.'}
+          </span>
+        </div>
+      )}
+
+      {/* KARTU STATISTIK UTAMA */}
       <div
         className={cn(
           'grid grid-cols-1 gap-4 sm:grid-cols-2',
@@ -535,7 +578,7 @@ export function AdminDashboard() {
         <StatCard
           title={t('dashboard.totalStudents')}
           value={totalStudents}
-          badgeText={locale === 'id' ? 'Siswa Aktif' : 'Active'}
+          badgeText={isId ? 'Siswa Aktif' : 'Active'}
           badgeTone="emerald"
           icon={Users}
           gradient="bg-linear-to-br from-emerald-500 to-teal-700"
@@ -544,7 +587,7 @@ export function AdminDashboard() {
         <StatCard
           title={t('dashboard.totalTeachers')}
           value={teachersCount}
-          badgeText={locale === 'id' ? 'Terdaftar' : 'Registered'}
+          badgeText={isId ? 'Terdaftar' : 'Registered'}
           badgeTone="teal"
           icon={GraduationCap}
           gradient="bg-linear-to-br from-teal-500 to-cyan-700"
@@ -556,7 +599,7 @@ export function AdminDashboard() {
             <StatCard
               title={t('dashboard.monthlyRevenue')}
               value={monthlyRevenue}
-              badgeText={locale === 'id' ? 'Bulan Ini' : 'This Month'}
+              badgeText={isId ? 'Bulan Ini' : 'This Month'}
               badgeTone="violet"
               icon={Wallet}
               gradient="bg-linear-to-br from-violet-500 to-indigo-700"
@@ -566,7 +609,7 @@ export function AdminDashboard() {
             <StatCard
               title={t('dashboard.pendingPayments')}
               value={pendingPayments}
-              badgeText={locale === 'id' ? 'Belum Lunas' : 'Unpaid'}
+              badgeText={isId ? 'Belum Lunas' : 'Unpaid'}
               badgeTone="amber"
               icon={AlertTriangle}
               gradient="bg-linear-to-br from-amber-500 to-orange-600"
@@ -577,9 +620,7 @@ export function AdminDashboard() {
         )}
       </div>
 
-      {/* =====================================================================
-          KARTU STATISTIK OPERASIONAL SEKUNDER
-         ===================================================================== */}
+      {/* KARTU STATISTIK OPERASIONAL SEKUNDER */}
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         {[
           {
@@ -627,9 +668,7 @@ export function AdminDashboard() {
         ))}
       </div>
 
-      {/* =====================================================================
-          BARIS GRAFIK ANALITIK (PEMASUKAN 6 BULAN & DISTRIBUSI GENDER SISWA)
-         ===================================================================== */}
+      {/* BARIS GRAFIK ANALITIK */}
       <div
         className={cn(
           'grid gap-4',
@@ -645,7 +684,7 @@ export function AdminDashboard() {
               <div>
                 <h3 className="text-sm font-bold text-foreground">{t('dashboard.revenueChart')}</h3>
                 <p className="text-[11px] text-muted-foreground">
-                  {locale === 'id'
+                  {isId
                     ? 'Rekapitulasi transaksi pembayaran terverifikasi 6 bulan terakhir'
                     : 'Verified payment transactions over the last 6 months'}
                 </p>
@@ -653,7 +692,7 @@ export function AdminDashboard() {
               <div className="flex items-center gap-1.5 text-xs">
                 <span className="h-2.5 w-2.5 rounded-full bg-emerald-500" />
                 <span className="font-medium text-muted-foreground">
-                  {locale === 'id' ? 'Pemasukan' : 'Income'}
+                  {isId ? 'Pemasukan' : 'Income'}
                 </span>
               </div>
             </div>
@@ -665,12 +704,12 @@ export function AdminDashboard() {
                   <div className="max-w-xs rounded-xl border border-border bg-card/95 p-4 text-center shadow-md">
                     <Wallet className="mx-auto mb-2 h-7 w-7 text-emerald-600 dark:text-emerald-400" />
                     <p className="text-xs font-bold text-foreground">
-                      {locale === 'id'
+                      {isId
                         ? 'Belum Ada Transaksi Pembayaran'
                         : 'No Payment Transactions Yet'}
                     </p>
                     <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">
-                      {locale === 'id'
+                      {isId
                         ? 'Grafik akan terisi otomatis saat pembayaran tagihan siswa tercatat.'
                         : 'Chart will populate automatically as student bill payments are recorded.'}
                     </p>
@@ -700,16 +739,10 @@ export function AdminDashboard() {
                     width={52}
                     tickFormatter={formatCompactAxisValue}
                   />
-                  <RechartsTooltip
-                    content={
-                      <CustomTooltip
-                        valueFormat="currency"
-                      />
-                    }
-                  />
+                  <RechartsTooltip content={<CustomTooltip valueFormat="currency" />} />
                   <Area
                     type="monotone"
-                    name={locale === 'id' ? 'Pemasukan' : 'Income'}
+                    name={isId ? 'Pemasukan' : 'Income'}
                     dataKey="pemasukan"
                     stroke="#10b981"
                     fill="url(#gradIncomeEmerald)"
@@ -731,7 +764,7 @@ export function AdminDashboard() {
               {t('dashboard.studentDistribution')}
             </h3>
             <p className="text-[11px] text-muted-foreground">
-              {locale === 'id' ? 'Proporsi peserta didik aktif' : 'Active student gender ratio'}
+              {isId ? 'Proporsi peserta didik aktif' : 'Active student gender ratio'}
             </p>
           </div>
 
@@ -774,9 +807,7 @@ export function AdminDashboard() {
         </motion.div>
       </div>
 
-      {/* =====================================================================
-          AKSES CEPAT MODUL OPERASIONAL (QUICK ACTIONS)
-         ===================================================================== */}
+      {/* AKSES CEPAT MODUL OPERASIONAL */}
       {quickActions.length > 0 && (
         <motion.div
           variants={itemVariants}

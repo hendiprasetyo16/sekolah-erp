@@ -1,3 +1,4 @@
+// src/modules/dashboard/pages/PortalSubPages.tsx
 import { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -44,13 +45,45 @@ const DAY_NAMES_EN: Record<number, string> = {
     7: 'Sunday',
 };
 
+function formatAttendanceStatusLabel(status: string, isId: boolean): string {
+    const map: Record<string, [string, string]> = {
+        HADIR: ['Hadir', 'Present'],
+        TERLAMBAT: ['Terlambat', 'Late'],
+        SAKIT: ['Sakit', 'Sick'],
+        IZIN: ['Izin', 'Excused'],
+        ALPA: ['Alpa', 'Absent'],
+    };
+    const pair = map[status];
+    return pair ? (isId ? pair[0] : pair[1]) : status;
+}
+
+function formatBillStatusLabel(status: string, isId: boolean): string {
+    const map: Record<string, [string, string]> = {
+        LUNAS: ['Lunas', 'Paid'],
+        CICILAN: ['Cicilan', 'Installment'],
+        BELUM_BAYAR: ['Belum Bayar', 'Unpaid'],
+        DIBATALKAN: ['Dibatalkan', 'Cancelled'],
+    };
+    const pair = map[status];
+    return pair ? (isId ? pair[0] : pair[1]) : status.replace(/_/g, ' ');
+}
+
+function PortalErrorBanner({ message }: { message: string }) {
+    return (
+        <div className="flex items-start gap-3 rounded-2xl border border-rose-300/60 bg-rose-50/70 p-4 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+            <span>{message}</span>
+        </div>
+    );
+}
+
 function useActivePortalStudent() {
     const { user, school } = useAuthStore();
     const schoolId = school?.id ?? null;
     const userId = user?.id ?? null;
     const [selectedStudentId, setSelectedStudentId] = useState<string | null>(null);
 
-    const { data: students = [], isLoading } = useQuery({
+    const { data: students = [], isLoading, isError, error } = useQuery({
         queryKey: ['portal-linked-students', schoolId, userId],
         enabled: Boolean(schoolId && userId),
         queryFn: () => fetchLinkedStudents(schoolId!, userId!),
@@ -71,6 +104,8 @@ function useActivePortalStudent() {
         activeStudent,
         setSelectedStudentId,
         isLoading,
+        isError,
+        error,
     };
 }
 
@@ -122,9 +157,21 @@ export function PortalSchedulePage() {
     const { locale } = useTranslation();
     const isId = locale === 'id';
     const { academicYear } = useAuthStore();
-    const { schoolId, students, activeStudent, setSelectedStudentId } = useActivePortalStudent();
+    const {
+        schoolId,
+        students,
+        activeStudent,
+        setSelectedStudentId,
+        isError: isErrorStudent,
+        error: studentError,
+    } = useActivePortalStudent();
 
-    const { data: schedules = [], isLoading } = useQuery({
+    const {
+        data: schedules = [],
+        isLoading,
+        isError: isErrorSchedules,
+        error: schedulesError,
+    } = useQuery({
         queryKey: ['portal-class-schedules', schoolId, activeStudent?.classId, academicYear?.id],
         enabled: Boolean(schoolId && activeStudent?.classId),
         queryFn: () => fetchClassSchedules(schoolId!, activeStudent!.classId, academicYear?.id),
@@ -140,6 +187,11 @@ export function PortalSchedulePage() {
         return Array.from(map.entries()).sort((a, b) => a[0] - b[0]);
     }, [schedules]);
 
+    const errorMsg =
+        (isErrorStudent && (studentError as Error)?.message) ||
+        (isErrorSchedules && (schedulesError as Error)?.message) ||
+        null;
+
     return (
         <div className="space-y-6">
             <div>
@@ -154,6 +206,8 @@ export function PortalSchedulePage() {
                             : 'Active class timetable'}
                 </p>
             </div>
+
+            {errorMsg && <PortalErrorBanner message={errorMsg} />}
 
             <ChildSelectorBar
                 students={students}
@@ -228,9 +282,21 @@ export function PortalSchedulePage() {
 export function PortalAttendancePage() {
     const { locale } = useTranslation();
     const isId = locale === 'id';
-    const { schoolId, students, activeStudent, setSelectedStudentId } = useActivePortalStudent();
+    const {
+        schoolId,
+        students,
+        activeStudent,
+        setSelectedStudentId,
+        isError: isErrorStudent,
+        error: studentError,
+    } = useActivePortalStudent();
 
-    const { data: attendances = [], isLoading } = useQuery({
+    const {
+        data: attendances = [],
+        isLoading,
+        isError: isErrorAttendance,
+        error: attendanceError,
+    } = useQuery({
         queryKey: ['portal-student-attendances', schoolId, activeStudent?.studentId],
         enabled: Boolean(schoolId && activeStudent?.studentId),
         queryFn: () => fetchStudentAttendances(schoolId!, activeStudent!.studentId),
@@ -245,6 +311,11 @@ export function PortalAttendancePage() {
             alpa: attendances.filter((a) => a.status === 'ALPA').length,
         };
     }, [attendances]);
+
+    const errorMsg =
+        (isErrorStudent && (studentError as Error)?.message) ||
+        (isErrorAttendance && (attendanceError as Error)?.message) ||
+        null;
 
     return (
         <div className="space-y-6">
@@ -261,6 +332,8 @@ export function PortalAttendancePage() {
                 </p>
             </div>
 
+            {errorMsg && <PortalErrorBanner message={errorMsg} />}
+
             <ChildSelectorBar
                 students={students}
                 activeStudent={activeStudent}
@@ -268,14 +341,34 @@ export function PortalAttendancePage() {
                 isId={isId}
             />
 
-            {/* Ringkasan Status */}
+            {/* Ringkasan Status Dwibahasa */}
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
                 {[
-                    { label: 'Hadir', count: summary.hadir, tone: 'text-emerald-600 bg-emerald-500/10' },
-                    { label: 'Terlambat', count: summary.terlambat, tone: 'text-amber-600 bg-amber-500/10' },
-                    { label: 'Sakit', count: summary.sakit, tone: 'text-sky-600 bg-sky-500/10' },
-                    { label: 'Izin', count: summary.izin, tone: 'text-violet-600 bg-violet-500/10' },
-                    { label: 'Alpa', count: summary.alpa, tone: 'text-rose-600 bg-rose-500/10' },
+                    {
+                        label: isId ? 'Hadir' : 'Present',
+                        count: summary.hadir,
+                        tone: 'text-emerald-600 bg-emerald-500/10',
+                    },
+                    {
+                        label: isId ? 'Terlambat' : 'Late',
+                        count: summary.terlambat,
+                        tone: 'text-amber-600 bg-amber-500/10',
+                    },
+                    {
+                        label: isId ? 'Sakit' : 'Sick',
+                        count: summary.sakit,
+                        tone: 'text-sky-600 bg-sky-500/10',
+                    },
+                    {
+                        label: isId ? 'Izin' : 'Excused',
+                        count: summary.izin,
+                        tone: 'text-violet-600 bg-violet-500/10',
+                    },
+                    {
+                        label: isId ? 'Alpa' : 'Absent',
+                        count: summary.alpa,
+                        tone: 'text-rose-600 bg-rose-500/10',
+                    },
                 ].map((item) => (
                     <div
                         key={item.label}
@@ -336,7 +429,7 @@ export function PortalAttendancePage() {
                                                                 : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
                                                 )}
                                             >
-                                                {row.status}
+                                                {formatAttendanceStatusLabel(row.status, isId)}
                                             </span>
                                         </td>
                                         <td className="whitespace-nowrap px-4 py-3 tabular-nums text-muted-foreground">
@@ -365,9 +458,21 @@ export function PortalAttendancePage() {
 export function PortalFinancePage() {
     const { locale } = useTranslation();
     const isId = locale === 'id';
-    const { schoolId, students, activeStudent, setSelectedStudentId } = useActivePortalStudent();
+    const {
+        schoolId,
+        students,
+        activeStudent,
+        setSelectedStudentId,
+        isError: isErrorStudent,
+        error: studentError,
+    } = useActivePortalStudent();
 
-    const { data: finance = { bills: [], payments: [] }, isLoading } = useQuery({
+    const {
+        data: finance = { bills: [], payments: [] },
+        isLoading,
+        isError: isErrorFinance,
+        error: financeError,
+    } = useQuery({
         queryKey: ['portal-student-finance', schoolId, activeStudent?.studentId],
         enabled: Boolean(schoolId && activeStudent?.studentId),
         queryFn: () => fetchStudentFinance(schoolId!, activeStudent!.studentId),
@@ -379,6 +484,11 @@ export function PortalFinancePage() {
         const remaining = Math.max(0, totalBilled - totalPaid);
         return { totalBilled, totalPaid, remaining };
     }, [finance.bills]);
+
+    const errorMsg =
+        (isErrorStudent && (studentError as Error)?.message) ||
+        (isErrorFinance && (financeError as Error)?.message) ||
+        null;
 
     return (
         <div className="space-y-6">
@@ -394,6 +504,8 @@ export function PortalFinancePage() {
                             : 'Tuition bills and payment history'}
                 </p>
             </div>
+
+            {errorMsg && <PortalErrorBanner message={errorMsg} />}
 
             <ChildSelectorBar
                 students={students}
@@ -495,7 +607,7 @@ export function PortalFinancePage() {
                                                     ) : (
                                                         <AlertCircle size={11} />
                                                     )}
-                                                    {bill.status}
+                                                    {formatBillStatusLabel(bill.status, isId)}
                                                 </span>
                                             </td>
                                         </tr>

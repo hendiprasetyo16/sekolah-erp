@@ -1,3 +1,4 @@
+// src/modules/dashboard/pages/StudentDashboard.tsx
 import { useMemo } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
@@ -40,7 +41,7 @@ const itemVariants = {
 };
 
 function getCurrentIsoDayOfWeek(): number {
-    const jsDay = new Date().getDay(); // 0 (Minggu) - 6 (Sabtu)
+    const jsDay = new Date().getDay();
     return jsDay === 0 ? 7 : jsDay;
 }
 
@@ -54,6 +55,18 @@ function isClassOngoing(startTime: string, endTime: string): boolean {
     return hhmm >= startTime.slice(0, 5) && hhmm <= endTime.slice(0, 5);
 }
 
+function formatAttendanceStatusLabel(status: string, isId: boolean): string {
+    const map: Record<string, [string, string]> = {
+        HADIR: ['Hadir', 'Present'],
+        TERLAMBAT: ['Terlambat', 'Late'],
+        SAKIT: ['Sakit', 'Sick'],
+        IZIN: ['Izin', 'Excused'],
+        ALPA: ['Alpa', 'Absent'],
+    };
+    const pair = map[status];
+    return pair ? (isId ? pair[0] : pair[1]) : status;
+}
+
 export function StudentDashboard() {
     const { locale } = useTranslation();
     const isId = locale === 'id';
@@ -63,7 +76,11 @@ export function StudentDashboard() {
     const userId = user?.id ?? null;
 
     // 1. Ambil Profil Siswa yang terhubung dengan akun ini
-    const { data: linkedProfiles = [], isLoading: isLoadingProfile } = useQuery({
+    const {
+        data: linkedProfiles = [],
+        isLoading: isLoadingProfile,
+        isError: isErrorProfile,
+    } = useQuery({
         queryKey: ['portal-linked-students', schoolId, userId],
         enabled: Boolean(schoolId && userId),
         queryFn: () => fetchLinkedStudents(schoolId!, userId!),
@@ -99,7 +116,6 @@ export function StudentDashboard() {
         queryFn: () => fetchPortalAnnouncements(schoolId!, 'SISWA'),
     });
 
-    // Kalkulasi statistik presensi bulan berjalan
     const attendanceStats = useMemo(() => {
         const now = new Date();
         const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
@@ -116,13 +132,11 @@ export function StudentDashboard() {
         return { hadir, sakit, izin, alpa, rate, total: thisMonthRows.length };
     }, [attendances]);
 
-    // Jadwal hari ini
     const todaySchedules = useMemo(() => {
         const todayDay = getCurrentIsoDayOfWeek();
         return schedules.filter((s) => s.dayOfWeek === todayDay);
     }, [schedules]);
 
-    // Total sisa tagihan belum lunas
     const unpaidTotal = useMemo(() => {
         return finance.bills
             .filter((b) => b.status === 'BELUM_BAYAR' || b.status === 'CICILAN')
@@ -137,9 +151,7 @@ export function StudentDashboard() {
 
     return (
         <motion.div variants={containerVariants} initial="hidden" animate="show" className="space-y-6">
-            {/* =====================================================================
-          WELCOME BANNER SISWA
-         ===================================================================== */}
+            {/* WELCOME BANNER SISWA */}
             <motion.div variants={itemVariants} className="relative overflow-hidden rounded-2xl p-6 lg:p-8">
                 <div className="absolute inset-0 bg-linear-to-r from-emerald-600 via-teal-700 to-emerald-900" />
                 <div
@@ -188,9 +200,7 @@ export function StudentDashboard() {
                                 </>
                             ) : (
                                 <span>
-                                    {isId
-                                        ? 'Portal Akademik Peserta Didik'
-                                        : 'Student Academic Portal'}
+                                    {isId ? 'Portal Akademik Peserta Didik' : 'Student Academic Portal'}
                                 </span>
                             )}
                         </div>
@@ -206,8 +216,23 @@ export function StudentDashboard() {
                 </div>
             </motion.div>
 
+            {/* Peringatan Error Koneksi / Server */}
+            {isErrorProfile && (
+                <motion.div
+                    variants={itemVariants}
+                    className="flex items-start gap-3 rounded-2xl border border-rose-300/60 bg-rose-50/70 p-4 text-xs text-rose-900 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200"
+                >
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-rose-600 dark:text-rose-400" />
+                    <span>
+                        {isId
+                            ? 'Gagal memuat data profil dari server. Periksa koneksi internet Anda lalu muat ulang halaman.'
+                            : 'Failed to load profile data from server. Please check your internet connection and refresh.'}
+                    </span>
+                </motion.div>
+            )}
+
             {/* Peringatan jika akun belum ditautkan oleh Admin */}
-            {!isLoadingProfile && !student && (
+            {!isLoadingProfile && !isErrorProfile && !student && (
                 <motion.div
                     variants={itemVariants}
                     className="flex items-start gap-3 rounded-2xl border border-amber-300/60 bg-amber-50/70 p-5 text-amber-950 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
@@ -228,9 +253,7 @@ export function StudentDashboard() {
                 </motion.div>
             )}
 
-            {/* =====================================================================
-          4 KARTU RINGKASAN UTAMA SISWA
-         ===================================================================== */}
+            {/* 4 KARTU RINGKASAN UTAMA SISWA */}
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
                 <motion.div
                     variants={itemVariants}
@@ -341,11 +364,8 @@ export function StudentDashboard() {
                 </motion.div>
             </div>
 
-            {/* =====================================================================
-          BARIS UTAMA: JADWAL HARI INI & PRESENSI / PENGUMUMAN
-         ===================================================================== */}
+            {/* BARIS UTAMA: JADWAL HARI INI & PRESENSI / PENGUMUMAN */}
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                {/* Jadwal Pelajaran Hari Ini */}
                 <motion.div
                     variants={itemVariants}
                     className="rounded-2xl border border-border bg-card p-5 shadow-xs lg:col-span-2"
@@ -432,9 +452,7 @@ export function StudentDashboard() {
                     )}
                 </motion.div>
 
-                {/* Kolom Kanan: Riwayat Presensi Terbaru & Pengumuman */}
                 <div className="space-y-6">
-                    {/* Presensi Terbaru */}
                     <motion.div
                         variants={itemVariants}
                         className="rounded-2xl border border-border bg-card p-5 shadow-xs"
@@ -487,7 +505,7 @@ export function StudentDashboard() {
                                                             : 'bg-rose-500/15 text-rose-700 dark:text-rose-300'
                                             )}
                                         >
-                                            {att.status}
+                                            {formatAttendanceStatusLabel(att.status, isId)}
                                         </span>
                                     </div>
                                 ))}
@@ -495,7 +513,6 @@ export function StudentDashboard() {
                         )}
                     </motion.div>
 
-                    {/* Pengumuman Sekolah */}
                     <motion.div
                         variants={itemVariants}
                         className="rounded-2xl border border-border bg-card p-5 shadow-xs"
