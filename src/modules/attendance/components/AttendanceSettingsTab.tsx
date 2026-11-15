@@ -117,9 +117,9 @@ export function AttendanceSettingsTab() {
     const [holidays, setHolidays] = useState<HolidayRecord[]>([]);
     const [isLoadingHolidays, setIsLoadingHolidays] = useState<boolean>(false);
 
-    // Opsi Tampilan Daftar vs Kalender 12 Bulan
+    // Default tampilan adalah Kalender
     const [holidayViewMode, setHolidayViewMode] = useState<'LIST' | 'CALENDAR'>(
-        'LIST'
+        'CALENDAR'
     );
 
     // Checklist ID untuk Hapus Terpilih / Hapus Semua
@@ -930,51 +930,56 @@ export function AttendanceSettingsTab() {
 
                 {/* Panel Kontrol Sinkronisasi Server API + Kalender Muhammadiyah */}
                 <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
-                    <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
-                        <div className="flex flex-wrap items-center gap-2.5">
-                            <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 shrink-0">
-                                <Server size={15} />
-                                Server API:
-                            </span>
-                            <select
-                                value={selectedApiProvider}
-                                onChange={(e) =>
-                                    setSelectedApiProvider(e.target.value as HolidayApiProviderId)
-                                }
-                                className="form-input w-auto! min-w-56 text-xs py-1.5 px-3 bg-card shrink-0"
-                            >
-                                {HOLIDAY_API_PROVIDER_OPTIONS.map((opt) => (
-                                    <option key={opt.id} value={opt.id}>
-                                        {opt.label}
-                                    </option>
-                                ))}
-                            </select>
+                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                        {/* Baris 1: Server API, Baris 2: Kalender (Sejajar Rapi di Bawah Server API) */}
+                        <div className="flex flex-col gap-2.5 flex-1">
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                                <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 sm:w-24 shrink-0">
+                                    <Server size={15} />
+                                    Server API:
+                                </span>
+                                <select
+                                    value={selectedApiProvider}
+                                    onChange={(e) =>
+                                        setSelectedApiProvider(e.target.value as HolidayApiProviderId)
+                                    }
+                                    className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
+                                >
+                                    {HOLIDAY_API_PROVIDER_OPTIONS.map((opt) => (
+                                        <option key={opt.id} value={opt.id}>
+                                            {opt.label}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
 
-                            <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1 shrink-0">
-                                <Moon size={14} />
-                                Kalender:
-                            </span>
-                            <select
-                                value={calendarRefMode}
-                                onChange={(e) =>
-                                    setCalendarRefMode(e.target.value as CalendarReferenceMode)
-                                }
-                                className="form-input w-auto! min-w-52 text-xs py-1.5 px-3 bg-card shrink-0"
-                            >
-                                <option value="MUHAMMADIYAH">
-                                    Muhammadiyah (KHGT / Hisab)
-                                </option>
-                                <option value="PEMERINTAH">
-                                    Pemerintah (SKB 3 Menteri)
-                                </option>
-                            </select>
+                            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 sm:w-24 shrink-0">
+                                    <Moon size={15} />
+                                    Kalender:
+                                </span>
+                                <select
+                                    value={calendarRefMode}
+                                    onChange={(e) =>
+                                        setCalendarRefMode(e.target.value as CalendarReferenceMode)
+                                    }
+                                    className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
+                                >
+                                    <option value="MUHAMMADIYAH">
+                                        Muhammadiyah (KHGT / Hisab)
+                                    </option>
+                                    <option value="PEMERINTAH">
+                                        Pemerintah (SKB 3 Menteri)
+                                    </option>
+                                </select>
+                            </div>
                         </div>
 
                         <button
                             type="button"
                             onClick={handleFetchFromServer}
                             disabled={isFetchingServer}
-                            className="btn-primary text-xs py-2 px-4 bg-blue-600 hover:bg-blue-700 shrink-0 self-start xl:self-auto"
+                            className="btn-primary text-xs py-2.5 px-4 bg-blue-600 hover:bg-blue-700 shrink-0 self-start md:self-center"
                         >
                             {isFetchingServer ? (
                                 <Loader2 size={14} className="animate-spin" />
@@ -1242,29 +1247,18 @@ export function AttendanceSettingsTab() {
                 </form>
 
                 {/* ====================================================================
-            DAFTAR TANGGAL MERAH (OPSI MODE DAFTAR VS MODE KALENDER + BULK DELETE)
+            DAFTAR TANGGAL MERAH (DEFAULT KALENDER + OPSI DAFTAR + BULK DELETE)
         ==================================================================== */}
                 <div className="space-y-3">
-                    {/* Baris Judul, Switcher Daftar/Kalender, Dropdown Tahun, & + Tambah Tahun SEJAJAR */}
+                    {/* Baris Judul, Switcher Kalender/Daftar, Dropdown Tahun, & + Tambah Tahun SEJAJAR */}
                     <div className="flex flex-wrap items-center justify-between gap-2.5">
                         <div className="flex flex-wrap items-center gap-2.5">
                             <h3 className="text-xs font-bold">
                                 Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
                             </h3>
 
-                            {/* Switcher Tampilan: Mode Daftar vs Mode Kalender */}
+                            {/* Switcher Tampilan: Kalender (Default) vs Daftar */}
                             <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
-                                <button
-                                    type="button"
-                                    onClick={() => setHolidayViewMode('LIST')}
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'LIST'
-                                        ? 'bg-card text-foreground shadow-sm'
-                                        : 'text-muted-foreground hover:text-foreground'
-                                        }`}
-                                >
-                                    <List size={13} />
-                                    Daftar
-                                </button>
                                 <button
                                     type="button"
                                     onClick={() => setHolidayViewMode('CALENDAR')}
@@ -1275,6 +1269,17 @@ export function AttendanceSettingsTab() {
                                 >
                                     <Calendar size={13} />
                                     Kalender
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setHolidayViewMode('LIST')}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'LIST'
+                                        ? 'bg-card text-foreground shadow-sm'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                >
+                                    <List size={13} />
+                                    Daftar
                                 </button>
                             </div>
                         </div>
@@ -1335,7 +1340,7 @@ export function AttendanceSettingsTab() {
                                 </label>
                             ) : (
                                 <span className="text-[11px] text-muted-foreground">
-                                    Tampilan Kalender 12 Bulan ({filterYear}) dengan Pasaran Jawa
+                                    Tampilan Kalender ({filterYear}) dengan Pasaran Jawa
                                 </span>
                             )}
 
