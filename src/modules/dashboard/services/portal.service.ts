@@ -328,6 +328,9 @@ export async function fetchLinkedStudents(
  * Mengambil riwayat presensi siswa dari tabel `student_attendance` (v14),
  * dengan cadangan otomatis ke tabel `attendances` bila skema lama masih digunakan.
  */
+/**
+ * Mengambil riwayat presensi siswa dari tabel `attendances` (Skema v17).
+ */
 export async function fetchStudentAttendances(
   schoolId: string,
   studentId: string
@@ -337,40 +340,15 @@ export async function fetchStudentAttendances(
   }
 
   const { data, error } = await supabase
-    .from('student_attendance')
-    .select('id, studentId, date, status, notes')
+    .from('attendances')
+    .select('id, studentId, date, status, notes, checkInTime, checkOutTime')
     .eq('schoolId', schoolId)
     .eq('studentId', studentId)
+    .eq('type', 'SISWA')
     .order('date', { ascending: false })
     .limit(ATTENDANCE_HISTORY_LIMIT);
 
   if (error) {
-    // Fallback otomatis jika skema database menggunakan tabel `attendances`
-    if (error.code === '42P01' || error.code === '42703') {
-      const fallback = await supabase
-        .from('attendances')
-        .select('id, studentId, date, status, notes, checkInTime, checkOutTime')
-        .eq('schoolId', schoolId)
-        .eq('studentId', studentId)
-        .eq('type', 'SISWA')
-        .order('date', { ascending: false })
-        .limit(ATTENDANCE_HISTORY_LIMIT);
-
-      if (fallback.error) {
-        throw handlePortalDbError(fallback.error);
-      }
-
-      return ((fallback.data as RawAttendanceRow[] | null) ?? []).map((row) => ({
-        id: row.id,
-        studentId: row.studentId,
-        date: row.date,
-        status: row.status,
-        notes: row.notes ?? null,
-        checkInTime: row.checkInTime ?? null,
-        checkOutTime: row.checkOutTime ?? null,
-      }));
-    }
-
     throw handlePortalDbError(error);
   }
 

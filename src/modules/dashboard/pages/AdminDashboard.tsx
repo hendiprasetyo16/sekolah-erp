@@ -394,7 +394,7 @@ export function AdminDashboard() {
     },
   });
 
-  // 5. FETCH RINGKASAN OPERASIONAL HARIAN (MENGGUNAKAN TANGGAL LOKAL)
+  // 5. FETCH RINGKASAN OPERASIONAL HARIAN (SESUAI SKEMA DATABASE v17)
   const { data: operationalSummary } = useQuery({
     queryKey: ['dashboard-operational-summary', schoolId],
     enabled: Boolean(schoolId),
@@ -406,21 +406,26 @@ export function AdminDashboard() {
       const todayIso = getLocalTodayIso();
 
       const [attendanceRes, damagedRes, lettersRes] = await Promise.all([
+        // Tabel gabungan presensi siswa & guru -> wajib filter type = 'SISWA'
         supabase
-          .from('student_attendance')
+          .from('attendances')
           .select('status')
           .eq('schoolId', schoolId)
+          .eq('type', 'SISWA')
           .eq('date', todayIso),
+        // Tabel sarana prasarana di v17 bernama 'inventory_items'
         supabase
-          .from('assets')
+          .from('inventory_items')
           .select('*', { count: 'exact', head: true })
           .eq('schoolId', schoolId)
+          .eq('isActive', true)
           .in('condition', ['RUSAK', 'RUSAK_RINGAN', 'RUSAK_BERAT']),
+        // Tabel arsip surat/administrasi di v17 bernama 'administration_records'
         supabase
-          .from('letters')
+          .from('administration_records')
           .select('*', { count: 'exact', head: true })
           .eq('schoolId', schoolId)
-          .eq('type', 'MASUK'),
+          .eq('category', 'SURAT_MASUK'),
       ]);
 
       const attendanceRows = (attendanceRes.data as AttendanceStatusRow[] | null) ?? [];
