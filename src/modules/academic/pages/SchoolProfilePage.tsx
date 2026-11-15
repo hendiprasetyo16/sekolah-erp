@@ -1,3 +1,4 @@
+// modules/academic/pages/SchoolProfilePage.tsx
 import type { ComponentType } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -10,6 +11,10 @@ import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTranslation } from '@/hooks/useTranslation';
 import { LocationPickerMap } from '@/components/map/LocationPickerMap';
+import {
+    SCHOOL_LEVEL_CHOICES,
+    SCHOOL_STATUS_CHOICES,
+} from '@/constants/school.constants';
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -31,14 +36,63 @@ import {
 } from '@/components/ui/select';
 
 // ==========================================
-// SCHEMA VALIDASI PROFIL SEKOLAH
+// HELPER LABEL WAJIB (BINTANG MERAH) & VALIDASI
 // ==========================================
+
+function RequiredLabel({ text }: { text: string }) {
+    return (
+        <FormLabel>
+            {text}{' '}
+            <span className="font-bold text-destructive" aria-hidden="true">
+                *
+            </span>
+        </FormLabel>
+    );
+}
 
 const toNumberOrNull = (v: unknown): number | null => {
     if (v === '' || v === null || v === undefined) return null;
     const n = Number(v);
     return Number.isFinite(n) ? n : null;
 };
+
+const cleanDbPlaceholder = (value: string | null | undefined): string => {
+    if (!value || value.trim() === '-') return '';
+    return value.trim();
+};
+
+function formatSchoolProfileError(error: unknown, isId: boolean): string {
+    const errObj =
+        typeof error === 'object' && error !== null
+            ? (error as { code?: string; message?: string })
+            : {};
+    const code = errObj.code ?? '';
+    const msg = (error instanceof Error ? error.message : errObj.message ?? '').toLowerCase();
+
+    if (msg.includes('failed to fetch') || msg.includes('networkerror')) {
+        return isId
+            ? 'Koneksi ke server terputus. Periksa jaringan internet Anda lalu coba kembali.'
+            : 'Unable to reach the server. Please check your internet connection.';
+    }
+    if (code === '23505' || msg.includes('schools_npsn_key') || msg.includes('duplicate key')) {
+        return isId
+            ? 'Nomor NPSN tersebut sudah terdaftar pada sekolah lain.'
+            : 'This NPSN is already registered to another school.';
+    }
+    if (code === '23514' || msg.includes('schools_npsn_check')) {
+        return isId
+            ? 'NPSN harus terdiri dari tepat 8 digit angka.'
+            : 'NPSN must consist of exactly 8 numeric digits.';
+    }
+    if (code === '42501' || msg.includes('row-level security') || msg.includes('permission denied')) {
+        return isId
+            ? 'Anda tidak memiliki hak akses untuk memperbarui profil sekolah ini.'
+            : 'You do not have permission to update this school profile.';
+    }
+    return isId
+        ? 'Gagal menyimpan profil sekolah. Periksa kembali isian Anda lalu coba lagi.'
+        : 'Failed to save school profile. Please verify your entries and try again.';
+}
 
 const schoolSchema = z
     .object({
@@ -49,8 +103,8 @@ const schoolSchema = z
             .regex(/^\d{8}$/, 'NPSN harus terdiri dari tepat 8 angka / NPSN must contain exactly 8 digits'),
         level: z.string().min(1, 'Jenjang wajib dipilih / Level is required'),
         type: z.string().min(1, 'Status wajib dipilih / Status is required'),
-        address: z.string().trim().min(5, 'Alamat wajib diisi / Address is required'),
-        city: z.string().trim().min(3, 'Kota wajib diisi / City is required'),
+        address: z.string().trim().min(5, 'Alamat lengkap wajib diisi (minimal 5 karakter) / Address is required'),
+        city: z.string().trim().min(3, 'Kabupaten/Kota wajib diisi / City is required'),
         province: z.string().trim().min(3, 'Provinsi wajib diisi / Province is required'),
         phone: z.string().optional(),
         email: z.string().email('Email tidak valid / Invalid email').optional().or(z.literal('')),
@@ -87,7 +141,7 @@ const MapComponent = LocationPickerMap as unknown as ComponentType<LocationPicke
 
 async function getSchoolRecord(id: string) {
     const { data, error } = await supabase.from('schools').select('*').eq('id', id).maybeSingle();
-    if (error) throw new Error(error.message);
+    if (error) throw error;
     return data;
 }
 
@@ -114,12 +168,16 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
             ? 'Akun Anda belum terhubung dengan data sekolah mana pun. Silakan hubungi Super Admin untuk menghubungkan akun Anda.'
             : 'Your account is not linked to any school yet. Please contact a Super Admin.',
         nameLabel: isId ? 'Nama Sekolah' : 'School Name',
-        levelLabel: isId ? 'Jenjang' : 'Level',
-        statusLabel: isId ? 'Status' : 'Status',
+        npsnLabel: 'NPSN',
+        levelLabel: isId ? 'Jenjang Pendidikan' : 'Education Level',
+        statusLabel: isId ? 'Status Sekolah' : 'School Status',
         contactLabel: isId ? 'Alamat & Kontak' : 'Address & Contact',
         address: isId ? 'Alamat Lengkap' : 'Full Address',
+        addressPh: isId ? 'Cth: Jl. Pendidikan No. 12, Sendangtirto' : 'e.g., 12 Education Street',
         city: isId ? 'Kabupaten / Kota' : 'City / District',
+        cityPh: isId ? 'Cth: Sleman' : 'e.g., Sleman',
         province: isId ? 'Provinsi' : 'Province',
+        provincePh: isId ? 'Cth: DI Yogyakarta' : 'e.g., DI Yogyakarta',
         phone: isId ? 'Telepon' : 'Phone',
         gpsLabel: isId ? 'Pengaturan Lokasi GPS (Absensi)' : 'GPS Location Settings (Attendance)',
         radiusLabel: isId ? 'Radius Toleransi (Meter)' : 'Tolerance Radius (Meters)',
@@ -131,20 +189,21 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
             : 'New school created! Academic Year & Class tabs are now unlocked.',
         phLevel: isId ? 'Pilih Jenjang' : 'Select Level',
         phStatus: isId ? 'Pilih Status' : 'Select Status',
-        statusPublic: isId ? 'NEGERI / PUBLIC' : 'PUBLIC',
-        statusPrivate: isId ? 'SWASTA / PRIVATE' : 'PRIVATE',
     };
+
+    const rawLevel = String(schoolData?.level ?? '').trim().toUpperCase();
+    const rawType = String(schoolData?.type ?? '').trim().toUpperCase();
 
     const form = useForm<SchoolFormValues>({
         resolver: zodResolver(schoolSchema),
         defaultValues: {
             name: schoolData?.name ?? '',
             npsn: schoolData?.npsn ?? '',
-            level: String(schoolData?.level ?? '').trim().toUpperCase(),
-            type: String(schoolData?.type ?? '').trim().toUpperCase(),
-            address: schoolData?.address ?? '',
-            city: schoolData?.city ?? '',
-            province: schoolData?.province ?? '',
+            level: rawLevel === 'BELUM_DIATUR' ? '' : rawLevel,
+            type: rawType === 'BELUM_DIATUR' ? '' : rawType,
+            address: cleanDbPlaceholder(schoolData?.address),
+            city: cleanDbPlaceholder(schoolData?.city),
+            province: cleanDbPlaceholder(schoolData?.province),
             phone: schoolData?.phone ?? '',
             email: schoolData?.email ?? '',
             latitude: toNumberOrNull(schoolData?.latitude),
@@ -177,7 +236,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                     .eq('id', schoolData.id)
                     .select()
                     .single();
-                if (error) throw new Error(error.message);
+                if (error) throw error;
                 return data;
             }
 
@@ -191,7 +250,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                 .insert({ ...normalizedPayload, id: newSchoolId })
                 .select()
                 .single();
-            if (schoolErr) throw new Error(schoolErr.message);
+            if (schoolErr) throw schoolErr;
             return newSchool;
         },
         onSuccess: (data) => {
@@ -199,7 +258,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
             onSuccess(data);
             queryClient.setQueryData(['school-profile', data.id], data);
         },
-        onError: (error: Error) => toast.error(error.message),
+        onError: (error: unknown) => toast.error(formatSchoolProfileError(error, isId)),
     });
 
     if (!isEdit && !canCreate) {
@@ -235,7 +294,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                         name="name"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.nameLabel}</FormLabel>
+                                <RequiredLabel text={t.nameLabel} />
                                 <FormControl>
                                     <Input {...field} disabled={isFormDisabled} />
                                 </FormControl>
@@ -248,7 +307,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                         name="npsn"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>NPSN</FormLabel>
+                                <RequiredLabel text={t.npsnLabel} />
                                 <FormControl>
                                     <Input maxLength={8} inputMode="numeric" {...field} disabled={isFormDisabled} />
                                 </FormControl>
@@ -261,7 +320,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                         name="level"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.levelLabel}</FormLabel>
+                                <RequiredLabel text={t.levelLabel} />
                                 <Select value={field.value || ''} onValueChange={field.onChange} disabled={isFormDisabled}>
                                     <FormControl>
                                         <SelectTrigger>
@@ -269,9 +328,9 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                                         </SelectTrigger>
                                     </FormControl>
                                     <SelectContent>
-                                        {['TK', 'SD', 'SMP', 'SMA', 'SMK', 'MI', 'MTs', 'MA'].map((lvl) => (
-                                            <SelectItem key={lvl} value={lvl}>
-                                                {lvl}
+                                        {SCHOOL_LEVEL_CHOICES.map((lvl) => (
+                                            <SelectItem key={lvl.value} value={lvl.value}>
+                                                {isId ? lvl.labelId : lvl.labelEn}
                                             </SelectItem>
                                         ))}
                                     </SelectContent>
@@ -285,7 +344,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                         name="type"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.statusLabel}</FormLabel>
+                                <RequiredLabel text={t.statusLabel} />
                                 <Select value={field.value || ''} onValueChange={field.onChange} disabled={isFormDisabled}>
                                     <FormControl>
                                         <SelectTrigger>
@@ -293,8 +352,11 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                                         </SelectTrigger>
                                     </FormControl>
                                     <SelectContent>
-                                        <SelectItem value="NEGERI">{t.statusPublic}</SelectItem>
-                                        <SelectItem value="SWASTA">{t.statusPrivate}</SelectItem>
+                                        {SCHOOL_STATUS_CHOICES.map((st) => (
+                                            <SelectItem key={st.value} value={st.value}>
+                                                {isId ? st.labelId : st.labelEn}
+                                            </SelectItem>
+                                        ))}
                                     </SelectContent>
                                 </Select>
                                 <FormMessage />
@@ -310,9 +372,9 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                         name="address"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.address}</FormLabel>
+                                <RequiredLabel text={t.address} />
                                 <FormControl>
-                                    <Input {...field} disabled={isFormDisabled} />
+                                    <Input placeholder={t.addressPh} {...field} disabled={isFormDisabled} />
                                 </FormControl>
                                 <FormMessage />
                             </FormItem>
@@ -324,9 +386,9 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                             name="city"
                             render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>{t.city}</FormLabel>
+                                    <RequiredLabel text={t.city} />
                                     <FormControl>
-                                        <Input {...field} disabled={isFormDisabled} />
+                                        <Input placeholder={t.cityPh} {...field} disabled={isFormDisabled} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>
@@ -337,9 +399,9 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                             name="province"
                             render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>{t.province}</FormLabel>
+                                    <RequiredLabel text={t.province} />
                                     <FormControl>
-                                        <Input {...field} disabled={isFormDisabled} />
+                                        <Input placeholder={t.provincePh} {...field} disabled={isFormDisabled} />
                                     </FormControl>
                                     <FormMessage />
                                 </FormItem>
@@ -432,7 +494,7 @@ function SchoolProfileForm({ schoolData, canEdit, canCreate, onSuccess }: School
                             name="attendanceRadiusMeters"
                             render={({ field }) => (
                                 <FormItem>
-                                    <FormLabel>{t.radiusLabel}</FormLabel>
+                                    <RequiredLabel text={t.radiusLabel} />
                                     <FormControl>
                                         <Input
                                             type="number"

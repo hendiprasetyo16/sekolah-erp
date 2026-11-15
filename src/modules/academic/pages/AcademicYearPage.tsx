@@ -1,3 +1,4 @@
+// src/modules/academic/pages/AcademicYearPage.tsx
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -38,10 +39,12 @@ type DeleteModalState = {
     name?: string;
 };
 
+type AuthStoreState = ReturnType<typeof useAuthStore.getState>;
+
 export function AcademicYearPage() {
     const { locale } = useTranslation();
     const queryClient = useQueryClient();
-    const { school: authSchool, user } = useAuthStore();
+    const { school: authSchool, user, setAcademicYear } = useAuthStore();
     const isId = locale === 'id';
 
     const schoolId = authSchool?.id;
@@ -102,7 +105,7 @@ export function AcademicYearPage() {
         btnDelete: isId ? 'Hapus' : 'Delete',
         btnSave: isId ? 'Simpan' : 'Save',
         createModalTitle: isId ? 'Tambah Tahun Ajaran Baru' : 'Add New Academic Year',
-        startYearLabel: isId ? 'Tahun Mulai' : 'Start Year',
+        startYearLabel: isId ? 'Tahun Mulai *' : 'Start Year *',
         autoSemLabel: isId
             ? 'Otomatis buat Semester Ganjil & Genap'
             : 'Automatically create Odd & Even Semesters',
@@ -120,13 +123,15 @@ export function AcademicYearPage() {
         semYearLabel: isId ? 'Pilih Tahun Ajaran:' : 'Select Academic Year:',
         semOdd: isId ? 'Semester Ganjil' : 'Odd Semester (Ganjil)',
         semEven: isId ? 'Semester Genap' : 'Even Semester (Genap)',
-        semStart: isId ? 'Tanggal Mulai' : 'Start Date',
-        semEnd: isId ? 'Tanggal Selesai' : 'End Date',
+        semStart: isId ? 'Tanggal Mulai *' : 'Start Date *',
+        semEnd: isId ? 'Tanggal Selesai *' : 'End Date *',
         semSaved: isId ? 'Periode semester berhasil disimpan.' : 'Semester period saved.',
         semActivated: isId ? 'Semester aktif berhasil diperbarui.' : 'Active semester updated.',
+        semInvalidDate: isId
+            ? 'Tanggal mulai dan tanggal selesai semester wajib diisi, serta tanggal selesai harus setelah tanggal mulai.'
+            : 'Start and end dates are required, and end date must be after start date.',
     };
 
-    // Query Tahun Ajaran
     const { data: academicYearsResponse, isLoading: isAyLoading } = useQuery({
         queryKey: ['academic-years', schoolId],
         queryFn: () => academicService.getAcademicYears(schoolId || ''),
@@ -138,7 +143,6 @@ export function AcademicYearPage() {
         [academicYearsResponse?.data]
     );
 
-    // Sinkronkan default tahun mulai saat membuka modal tambah
     const openCreateModal = () => {
         const nextYear =
             academicYears.length > 0
@@ -149,7 +153,6 @@ export function AcademicYearPage() {
         setCreateModalOpen(true);
     };
 
-    // Sinkronkan tahun ajaran terpilih pada bagian Semester
     useEffect(() => {
         if (academicYears.length === 0) {
             setManagedYearId('');
@@ -161,7 +164,6 @@ export function AcademicYearPage() {
         }
     }, [academicYears, managedYearId]);
 
-    // Query Semester untuk tahun ajaran terpilih
     const { data: semestersResponse, isLoading: isSemLoading } = useQuery({
         queryKey: ['semesters', schoolId, managedYearId],
         queryFn: () => academicService.getSemesters(schoolId || '', managedYearId),
@@ -173,7 +175,6 @@ export function AcademicYearPage() {
         [semestersResponse?.data]
     );
 
-    // Isi draft tanggal semester setiap kali data semester atau tahun ajaran berubah
     useEffect(() => {
         const targetYear = academicYears.find((ay) => ay.id === managedYearId);
         const startY = targetYear?.startYear ?? new Date().getFullYear();
@@ -261,7 +262,6 @@ export function AcademicYearPage() {
         };
     }, [deleteModal.isOpen, closeDeleteModal]);
 
-    // Mutasi Tahun Ajaran
     const createYearMutation = useMutation({
         mutationFn: () => {
             if (!schoolId) throw new Error('School ID tidak ditemukan.');
@@ -273,6 +273,9 @@ export function AcademicYearPage() {
         },
         onSuccess: async (res) => {
             toast.success(res.message || t.toastAyCreated);
+            if (res.data?.isActive) {
+                setAcademicYear(res.data as unknown as AuthStoreState['academicYear']);
+            }
             setCreateModalOpen(false);
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['academic-years', schoolId] }),
@@ -288,7 +291,11 @@ export function AcademicYearPage() {
             if (!schoolId) throw new Error('School ID tidak ditemukan.');
             return academicService.setActiveAcademicYear(schoolId, id);
         },
-        onSuccess: async () => {
+        onSuccess: async (_res, id) => {
+            const targetYear = academicYears.find((ay) => ay.id === id);
+            if (targetYear) {
+                setAcademicYear({ ...targetYear, isActive: true } as unknown as AuthStoreState['academicYear']);
+            }
             toast.success(t.toastAyActive);
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['academic-years', schoolId] }),
@@ -319,7 +326,6 @@ export function AcademicYearPage() {
         },
     });
 
-    // Mutasi Semester
     const saveSemesterMutation = useMutation({
         mutationFn: async ({
             type,
@@ -330,6 +336,9 @@ export function AcademicYearPage() {
         }) => {
             if (!schoolId || !managedYearId) throw new Error('Data tahun ajaran belum dipilih.');
             const draft = semesterDrafts[type];
+            if (!draft.startDate || !draft.endDate || draft.endDate <= draft.startDate) {
+                throw new Error(t.semInvalidDate);
+            }
             if (existing) {
                 return academicService.updateSemester(schoolId, existing.id, {
                     startDate: draft.startDate,
@@ -358,6 +367,10 @@ export function AcademicYearPage() {
             return academicService.setActiveSemester(schoolId, semesterId);
         },
         onSuccess: async () => {
+            const parentYear = academicYears.find((ay) => ay.id === managedYearId);
+            if (parentYear) {
+                setAcademicYear({ ...parentYear, isActive: true } as unknown as AuthStoreState['academicYear']);
+            }
             toast.success(t.semActivated);
             await Promise.all([
                 queryClient.invalidateQueries({ queryKey: ['semesters', schoolId] }),
@@ -832,6 +845,7 @@ export function AcademicYearPage() {
                                                         </label>
                                                         <Input
                                                             type="date"
+                                                            required
                                                             value={draft.startDate}
                                                             disabled={!canManageMaster}
                                                             onChange={(e) =>
@@ -851,6 +865,7 @@ export function AcademicYearPage() {
                                                         </label>
                                                         <Input
                                                             type="date"
+                                                            required
                                                             value={draft.endDate}
                                                             disabled={!canManageMaster}
                                                             onChange={(e) =>

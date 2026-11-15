@@ -1,3 +1,4 @@
+// src/modules/academic/services/academic.service.ts
 import { supabase } from '@/services/supabase.client';
 import type { PostgrestError } from '@supabase/supabase-js';
 import type { ApiResponse } from '@/services/api.types';
@@ -45,15 +46,24 @@ const handleDbError = (error: unknown): Error => {
         error instanceof Error
             ? error.message
             : pgError?.message || 'Terjadi kesalahan pada database.';
+    const lowerMessage = rawMessage.toLowerCase();
 
-    if (pgError?.code === '23505' || rawMessage.includes('unique constraint')) {
-        if (rawMessage.includes('academic_years_school_year_key')) {
+    if (
+        lowerMessage.includes('failed to fetch') ||
+        lowerMessage.includes('networkerror') ||
+        lowerMessage.includes('network request failed')
+    ) {
+        return new Error('Koneksi ke server terputus. Periksa sambungan internet Anda lalu coba kembali.');
+    }
+
+    if (pgError?.code === '23505' || lowerMessage.includes('unique constraint') || lowerMessage.includes('duplicate key')) {
+        if (lowerMessage.includes('academic_years_school_year_key')) {
             return new Error('Tahun ajaran tersebut sudah terdaftar di sekolah ini.');
         }
-        if (rawMessage.includes('semesters_academic_year_type_key')) {
+        if (lowerMessage.includes('semesters_academic_year_type_key')) {
             return new Error('Semester (Ganjil/Genap) tersebut sudah ada pada tahun ajaran ini.');
         }
-        if (rawMessage.includes('classes_school_year_name_key')) {
+        if (lowerMessage.includes('classes_school_year_name_key')) {
             return new Error('Nama kelas tersebut sudah digunakan pada tahun ajaran yang dipilih.');
         }
         return new Error('Data sudah terdaftar (duplikat).');
@@ -66,14 +76,22 @@ const handleDbError = (error: unknown): Error => {
     }
 
     if (pgError?.code === '23514') {
-        if (rawMessage.includes('semesters_date_check')) {
+        if (lowerMessage.includes('semesters_date_check')) {
             return new Error('Tanggal selesai semester harus lebih besar dari tanggal mulai.');
         }
         return new Error('Data tidak memenuhi aturan validasi database.');
     }
 
-    if (pgError?.code === '42501') {
+    if (pgError?.code === '23502' || lowerMessage.includes('null value in column')) {
+        return new Error('Masih ada kolom wajib yang belum terisi.');
+    }
+
+    if (pgError?.code === '42501' || lowerMessage.includes('row-level security') || lowerMessage.includes('permission denied')) {
         return new Error('Anda tidak memiliki izin akses untuk melakukan operasi ini.');
+    }
+
+    if (pgError?.code === 'PGRST301' || lowerMessage.includes('jwt')) {
+        return new Error('Sesi masuk Anda telah berakhir. Silakan masuk kembali ke sistem.');
     }
 
     return new Error(rawMessage);
@@ -171,7 +189,6 @@ export const academicService = {
         const endYear = payload.startYear + 1;
         const name = `${payload.startYear}/${endYear}`;
 
-        // Cek apakah sudah ada tahun ajaran aktif di sekolah ini
         const { data: activeYears, error: checkActiveErr } = await supabase
             .from('academic_years')
             .select('id')
@@ -199,7 +216,6 @@ export const academicService = {
 
         if (insertErr) throw handleDbError(insertErr);
 
-        // Opsional: otomatis buat Semester Ganjil & Genap bawaan kalender pendidikan Indonesia
         if (payload.autoCreateSemesters) {
             const { error: semErr } = await supabase.from('semesters').insert([
                 {
@@ -338,7 +354,6 @@ export const academicService = {
             throw new Error('Tahun ajaran terpilih tidak dapat dihapus karena masih digunakan oleh kelas.');
         }
 
-        // Hapus semester terkait terlebih dahulu (karena relasi FK semesters -> academic_years ON DELETE RESTRICT)
         const { error: delSemError } = await supabase
             .from('semesters')
             .delete()
@@ -487,7 +502,6 @@ export const academicService = {
             throw new Error('Semester tidak ditemukan pada sekolah ini.');
         }
 
-        // Pastikan tahun ajaran induknya juga aktif
         await this.setActiveAcademicYear(schoolId, targetSemester.academicYearId);
 
         const { error: offError } = await supabase
@@ -642,7 +656,7 @@ export const academicService = {
         }
 
         if (!isValidGradeLevel(payload.gradeLevel)) {
-            throw new Error('Tingkat kelas harus antara 0 (TK/PAUD) hingga 12.');
+            throw new Error('Tingkat kelas harus antara 0 (TK/PAUD/TKLB) hingga 12.');
         }
 
         if (!Number.isInteger(payload.capacity) || payload.capacity < 1 || payload.capacity > 500) {
@@ -730,7 +744,7 @@ export const academicService = {
         }
 
         if (payload.gradeLevel !== undefined && !isValidGradeLevel(payload.gradeLevel)) {
-            throw new Error('Tingkat kelas harus antara 0 (TK/PAUD) hingga 12.');
+            throw new Error('Tingkat kelas harus antara 0 (TK/PAUD/TKLB) hingga 12.');
         }
 
         if (

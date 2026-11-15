@@ -29,10 +29,27 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useUIStore } from '@/stores/ui.store';
 import { useTranslation } from '@/hooks/useTranslation';
 import { APP_NAME, APP_VERSION } from '@/constants/app.constants';
+import {
+    type SchoolLevelCode,
+    type SchoolLevelFilterGroup,
+    type SchoolStatusCode,
+    SCHOOL_LEVEL_CHOICES,
+    SCHOOL_STATUS_CHOICES,
+    SCHOOL_LEVEL_FILTER_TABS,
+    formatSchoolLevelBadge,
+    resolveSchoolFilterGroup,
+} from '@/constants/school.constants';
 import { Button } from '@/components/ui/button';
+import {
+    Select,
+    SelectContent,
+    SelectItem,
+    SelectTrigger,
+    SelectValue,
+} from '@/components/ui/select';
 
 // ============================================================================
-// TIPE DATA & KONSTANTA JENJANG PENDIDIKAN (Selaras dengan ERP_Sekolah_v17)
+// TIPE DATA (Selaras dengan ERP_Sekolah_v17)
 // ============================================================================
 
 interface SchoolTenantRow {
@@ -63,51 +80,12 @@ interface SupabaseErrorShape {
 }
 
 type AuthStoreState = ReturnType<typeof useAuthStore.getState>;
-
-/** Daftar jenjang pendidikan yang didukung sistem */
-export type SchoolLevelCode = 'TK' | 'SD' | 'SMP' | 'SMA' | 'SMK';
-type EducationLevelFilter = 'ALL' | SchoolLevelCode;
-type SchoolStatusType = 'SWASTA' | 'NEGERI';
 type ErrorContext = 'fetch' | 'create' | 'select';
 
-const LEVEL_FILTER_OPTIONS: readonly EducationLevelFilter[] = [
-    'ALL',
-    'TK',
-    'SD',
-    'SMP',
-    'SMA',
-    'SMK',
-];
-
-const SCHOOL_LEVEL_OPTIONS: readonly { value: SchoolLevelCode; labelId: string; labelEn: string }[] = [
-    { value: 'TK', labelId: 'TK / RA (Taman Kanak-Kanak)', labelEn: 'Kindergarten (TK / RA)' },
-    { value: 'SD', labelId: 'SD / MI (Sekolah Dasar)', labelEn: 'Elementary School (SD / MI)' },
-    { value: 'SMP', labelId: 'SMP / MTs (Menengah Pertama)', labelEn: 'Junior High School (SMP / MTs)' },
-    { value: 'SMA', labelId: 'SMA / MA (Menengah Atas)', labelEn: 'Senior High School (SMA / MA)' },
-    { value: 'SMK', labelId: 'SMK (Menengah Kejuruan)', labelEn: 'Vocational High School (SMK)' },
-];
-
 // ============================================================================
-// FUNGSI BANTU (NORMALISASI JENJANG, TAHUN AJARAN & PENERJEMAH ERROR)
+// FUNGSI BANTU
 // ============================================================================
 
-/**
- * Menormalkan nilai kolom `level` dari database menjadi kode jenjang standar.
- */
-function resolveSchoolLevel(school: SchoolTenantRow): string {
-    const raw = (school.level ?? '').trim().toUpperCase();
-    if (!raw || raw === 'BELUM_DIATUR') return 'UMUM';
-    if (raw.startsWith('TK') || raw.includes('RAUDHATUL') || raw.includes('PAUD')) return 'TK';
-    if (raw.startsWith('SD') || raw.startsWith('MI')) return 'SD';
-    if (raw.startsWith('SMP') || raw.startsWith('MTS')) return 'SMP';
-    if (raw.startsWith('SMK')) return 'SMK';
-    if (raw.startsWith('SMA') || raw.startsWith('MA')) return 'SMA';
-    return raw;
-}
-
-/**
- * Menggabungkan kota dan provinsi sekolah dengan mengabaikan placeholder '-' dari database.
- */
 function formatSchoolLocation(school: SchoolTenantRow, fallbackText: string): string {
     const cleanCity = school.city && school.city.trim() !== '-' ? school.city.trim() : '';
     const cleanProvince =
@@ -123,11 +101,8 @@ function formatSchoolLocation(school: SchoolTenantRow, fallbackText: string): st
     return fallbackText;
 }
 
-/**
- * Menentukan warna lencana kartu berdasarkan jenjang pendidikan.
- */
-function getLevelBadgeStyle(level: string): string {
-    switch (level) {
+function getLevelBadgeStyle(filterGroup: string): string {
+    switch (filterGroup) {
         case 'TK':
             return 'border-purple-500/25 bg-purple-500/10 text-purple-700 dark:text-purple-300';
         case 'SD':
@@ -138,18 +113,19 @@ function getLevelBadgeStyle(level: string): string {
             return 'border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300';
         case 'SMK':
             return 'border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300';
+        case 'SLB':
+            return 'border-indigo-500/25 bg-indigo-500/10 text-indigo-700 dark:text-indigo-300';
+        case 'PKBM':
+            return 'border-cyan-500/25 bg-cyan-500/10 text-cyan-700 dark:text-cyan-300';
         default:
             return 'border-teal-500/25 bg-teal-500/10 text-teal-700 dark:text-teal-300';
     }
 }
 
-/**
- * Menghitung tahun ajaran berjalan berdasarkan kalender pendidikan Indonesia (mulai bulan Juli).
- */
 function resolveCurrentAcademicYearRange(): { startYear: number; endYear: number; name: string } {
     const now = new Date();
     const year = now.getFullYear();
-    const month = now.getMonth(); // 0 = Januari, 6 = Juli
+    const month = now.getMonth();
     const startYear = month >= 6 ? year : year - 1;
     const endYear = startYear + 1;
     return {
@@ -159,10 +135,6 @@ function resolveCurrentAcademicYearRange(): { startYear: number; endYear: number
     };
 }
 
-/**
- * Menerjemahkan error database, jaringan, atau autentikasi menjadi kalimat bahasa manusia
- * yang jelas dan mudah dipahami tanpa menampilkan kode teknis.
- */
 function formatFriendlyError(error: unknown, isId: boolean, context: ErrorContext): string {
     const errObj =
         typeof error === 'object' && error !== null ? (error as SupabaseErrorShape) : {};
@@ -171,7 +143,6 @@ function formatFriendlyError(error: unknown, isId: boolean, context: ErrorContex
         error instanceof Error ? error.message : errObj.message ?? ''
     ).toLowerCase();
 
-    // 1. Gangguan koneksi internet / server tidak terjangkau
     if (
         rawMessage.includes('failed to fetch') ||
         rawMessage.includes('networkerror') ||
@@ -183,7 +154,6 @@ function formatFriendlyError(error: unknown, isId: boolean, context: ErrorContex
             : 'Unable to reach the server. Please check your internet connection and try again.';
     }
 
-    // 2. Duplikasi NPSN (Unique Constraint)
     if (
         code === '23505' ||
         rawMessage.includes('duplicate key') ||
@@ -195,21 +165,18 @@ function formatFriendlyError(error: unknown, isId: boolean, context: ErrorContex
             : 'This NPSN is already registered to another school. Please verify your NPSN.';
     }
 
-    // 3. Validasi panjang/format data (Check Constraint)
     if (code === '23514' || rawMessage.includes('schools_npsn_check')) {
         return isId
             ? 'Format NPSN tidak sesuai. Pastikan NPSN terdiri dari tepat 8 digit angka.'
             : 'Invalid NPSN format. Please ensure the NPSN consists of 8 numeric digits.';
     }
 
-    // 4. Kolom wajib belum terisi (Not-Null Constraint)
     if (code === '23502' || rawMessage.includes('null value in column')) {
         return isId
             ? 'Masih ada data wajib yang belum lengkap. Silakan periksa kembali seluruh kolom formulir.'
             : 'Some required fields are incomplete. Please review the form and try again.';
     }
 
-    // 5. Hak akses ditolak oleh kebijakan keamanan database (RLS)
     if (
         code === '42501' ||
         rawMessage.includes('row-level security') ||
@@ -220,21 +187,18 @@ function formatFriendlyError(error: unknown, isId: boolean, context: ErrorContex
             : 'Your account does not have permission to perform this action. Please sign in as Super Admin.';
     }
 
-    // 6. Sesi login habis
     if (code === 'PGRST301' || rawMessage.includes('jwt') || rawMessage.includes('session')) {
         return isId
             ? 'Sesi masuk Anda telah berakhir. Silakan keluar dan masuk kembali ke sistem.'
             : 'Your sign-in session has expired. Please sign out and sign in again.';
     }
 
-    // 7. Ketidaksesuaian struktur kolom database
     if (code === 'PGRST204' || rawMessage.includes('schema cache')) {
         return isId
             ? 'Terjadi ketidaksesuaian struktur data dengan server. Silakan muat ulang halaman lalu coba kembali.'
             : 'A data structure mismatch occurred with the server. Please refresh the page and try again.';
     }
 
-    // 8. Pesan bawaan yang ramah per konteks operasi
     if (context === 'fetch') {
         return isId
             ? 'Daftar satuan pendidikan belum dapat dimuat saat ini. Silakan tekan tombol Segarkan untuk mencoba kembali.'
@@ -263,26 +227,23 @@ export function TenantSelector() {
     const { user, logout, setSchool, setAcademicYear } = useAuthStore();
     const { theme, setTheme, locale: currentLocale, setLocale } = useUIStore();
 
-    // State daftar sekolah & status pemuatan
     const [schools, setSchools] = useState<SchoolTenantRow[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [selectingSchoolId, setSelectingSchoolId] = useState<string | null>(null);
     const [fetchError, setFetchError] = useState<string>('');
 
-    // State pencarian, filter jenjang, & modal konfirmasi keluar
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [selectedLevel, setSelectedLevel] = useState<EducationLevelFilter>('ALL');
+    const [selectedLevel, setSelectedLevel] = useState<SchoolLevelFilterGroup>('ALL');
     const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
     const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
-    // State modal pendaftaran sekolah baru
     const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
     const [isCreatingSchool, setIsCreatingSchool] = useState<boolean>(false);
     const [createFormError, setCreateFormError] = useState<string>('');
     const [newSchoolName, setNewSchoolName] = useState<string>('');
     const [newSchoolNpsn, setNewSchoolNpsn] = useState<string>('');
     const [newSchoolLevel, setNewSchoolLevel] = useState<SchoolLevelCode>('TK');
-    const [newSchoolType, setNewSchoolType] = useState<SchoolStatusType>('SWASTA');
+    const [newSchoolType, setNewSchoolType] = useState<SchoolStatusCode>('SWASTA');
     const [newSchoolCity, setNewSchoolCity] = useState<string>('');
     const [newSchoolProvince, setNewSchoolProvince] = useState<string>('');
 
@@ -303,6 +264,7 @@ export function TenantSelector() {
 
     useEffect(() => {
         const handleKeyDown = (event: KeyboardEvent): void => {
+            if (event.defaultPrevented) return;
             if (event.key === 'Escape') {
                 if (!isLoggingOut) setIsLogoutModalOpen(false);
                 if (!isCreatingSchool) {
@@ -316,9 +278,6 @@ export function TenantSelector() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [isLoggingOut, isCreatingSchool]);
 
-    /**
-     * Mengambil seluruh daftar satuan pendidikan yang terdaftar di database.
-     */
     const fetchSchools = useCallback(async (): Promise<void> => {
         setIsLoading(true);
         setFetchError('');
@@ -349,13 +308,14 @@ export function TenantSelector() {
         const keyword = searchQuery.trim().toLowerCase();
 
         return schools.filter((item) => {
-            const level = resolveSchoolLevel(item);
-            const matchesLevel = selectedLevel === 'ALL' || level === selectedLevel;
+            const filterGroup = resolveSchoolFilterGroup(item.level);
+            const badgeText = formatSchoolLevelBadge(item.level);
+            const matchesLevel = selectedLevel === 'ALL' || filterGroup === selectedLevel;
 
             if (!matchesLevel) return false;
             if (!keyword) return true;
 
-            const haystack = [item.name, item.npsn, item.city, item.province, item.type, level]
+            const haystack = [item.name, item.npsn, item.city, item.province, item.type, badgeText, filterGroup]
                 .filter((val): val is string => typeof val === 'string' && val.trim() !== '-')
                 .join(' ')
                 .toLowerCase();
@@ -364,9 +324,6 @@ export function TenantSelector() {
         });
     }, [schools, searchQuery, selectedLevel]);
 
-    /**
-     * Memilih sekolah aktif, memuat tahun ajaran aktifnya, dan membuka dasbor ruang kerja.
-     */
     const handleSelectSchool = async (selectedSchool: SchoolTenantRow): Promise<void> => {
         setSelectingSchoolId(selectedSchool.id);
 
@@ -413,9 +370,6 @@ export function TenantSelector() {
         setIsCreateModalOpen(false);
     };
 
-    /**
-     * Mendaftarkan sekolah baru beserta Tahun Ajaran & Semester Ganjil aktif awal.
-     */
     const handleCreateSchool = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
         e.preventDefault();
         setCreateFormError('');
@@ -424,24 +378,25 @@ export function TenantSelector() {
         const cleanNpsn = newSchoolNpsn.trim();
 
         if (!cleanName) {
-            const msg = isId
-                ? 'Nama satuan pendidikan wajib diisi terlebih dahulu.'
-                : 'School name is required.';
-            setCreateFormError(msg);
+            setCreateFormError(
+                isId
+                    ? 'Nama satuan pendidikan wajib diisi terlebih dahulu.'
+                    : 'School name is required.'
+            );
             return;
         }
 
         if (!/^\d{8}$/.test(cleanNpsn)) {
-            const msg = isId
-                ? 'Nomor NPSN harus terdiri dari tepat 8 digit angka.'
-                : 'NPSN must consist of exactly 8 numeric digits.';
-            setCreateFormError(msg);
+            setCreateFormError(
+                isId
+                    ? 'Nomor NPSN harus terdiri dari tepat 8 digit angka.'
+                    : 'NPSN must consist of exactly 8 numeric digits.'
+            );
             return;
         }
 
         setIsCreatingSchool(true);
         try {
-            // 1. Simpan data sekolah baru (selaras 100% dengan skema tabel public.schools v17)
             const { data: createdSchool, error: schoolError } = await supabase
                 .from('schools')
                 .insert({
@@ -462,7 +417,6 @@ export function TenantSelector() {
 
             const schoolRecord = createdSchool as SchoolTenantRow;
 
-            // 2. Buat Tahun Ajaran aktif awal secara otomatis
             const { startYear, endYear, name: academicYearName } = resolveCurrentAcademicYearRange();
             const { data: createdYear, error: yearInsertError } = await supabase
                 .from('academic_years')
@@ -483,7 +437,6 @@ export function TenantSelector() {
                         : 'School registered, please configure the Academic Year in Master Academic.'
                 );
             } else {
-                // 3. Inisialisasi Semester Ganjil aktif awal pada tahun ajaran tersebut
                 const { error: semesterInsertError } = await supabase.from('semesters').insert({
                     schoolId: schoolRecord.id,
                     academicYearId: (createdYear as { id: string }).id,
@@ -502,7 +455,6 @@ export function TenantSelector() {
                 }
             }
 
-            // Reset formulir & langsung buka ruang kerja sekolah baru
             setIsCreateModalOpen(false);
             setCreateFormError('');
             setNewSchoolName('');
@@ -535,7 +487,7 @@ export function TenantSelector() {
     };
 
     const distinctLevelCount = useMemo(() => {
-        const levels = new Set(schools.map((s) => resolveSchoolLevel(s)));
+        const levels = new Set(schools.map((s) => formatSchoolLevelBadge(s.level)));
         return levels.size;
     }, [schools]);
 
@@ -737,20 +689,13 @@ export function TenantSelector() {
                         </div>
 
                         <div className="flex flex-wrap items-center gap-1.5">
-                            {LEVEL_FILTER_OPTIONS.map((levelOption) => {
-                                const isSelected = selectedLevel === levelOption;
-                                const label =
-                                    levelOption === 'ALL'
-                                        ? isId
-                                            ? 'Semua Jenjang'
-                                            : 'All Levels'
-                                        : levelOption;
-
+                            {SCHOOL_LEVEL_FILTER_TABS.map((tab) => {
+                                const isSelected = selectedLevel === tab.value;
                                 return (
                                     <button
-                                        key={levelOption}
+                                        key={tab.value}
                                         type="button"
-                                        onClick={() => setSelectedLevel(levelOption)}
+                                        onClick={() => setSelectedLevel(tab.value)}
                                         className={cn(
                                             'rounded-lg px-2.5 py-1 text-xs font-medium transition-colors',
                                             isSelected
@@ -758,7 +703,7 @@ export function TenantSelector() {
                                                 : 'border border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground'
                                         )}
                                     >
-                                        {label}
+                                        {isId ? tab.labelId : tab.labelEn}
                                     </button>
                                 );
                             })}
@@ -827,7 +772,8 @@ export function TenantSelector() {
 
                         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                             {filteredSchools.map((schoolItem) => {
-                                const level = resolveSchoolLevel(schoolItem);
+                                const badgeLabel = formatSchoolLevelBadge(schoolItem.level);
+                                const filterGroup = resolveSchoolFilterGroup(schoolItem.level);
                                 const isSelecting = selectingSchoolId === schoolItem.id;
                                 const locationText = formatSchoolLocation(
                                     schoolItem,
@@ -873,10 +819,10 @@ export function TenantSelector() {
                                                 <span
                                                     className={cn(
                                                         'rounded-md border px-2.5 py-0.5 text-[11px] font-bold tracking-wide',
-                                                        getLevelBadgeStyle(level)
+                                                        getLevelBadgeStyle(filterGroup)
                                                     )}
                                                 >
-                                                    {level}
+                                                    {badgeLabel}
                                                 </span>
                                             </div>
 
@@ -934,10 +880,10 @@ export function TenantSelector() {
                                 <p className="mt-3 text-sm font-bold text-foreground">
                                     {isId ? 'Daftarkan Sekolah Baru' : 'Register New School'}
                                 </p>
-                                <p className="mt-1 max-w-55 text-xs text-muted-foreground">
+                                <p className="mt-1 max-w-60 text-xs text-muted-foreground">
                                     {isId
-                                        ? 'Tambahkan unit TK, SD, SMP, SMA, atau SMK ke dalam sistem terpadu.'
-                                        : 'Add a TK, SD, SMP, SMA, or SMK institution into the unified platform.'}
+                                        ? 'Tambahkan unit TK, RA, SD, MI, SMP, MTs, SMA, MA, SMK, SLB, atau PKBM.'
+                                        : 'Add a TK, RA, SD, MI, SMP, MTs, SMA, MA, SMK, SLB, or PKBM institution.'}
                                 </p>
                             </button>
                         </div>
@@ -957,10 +903,12 @@ export function TenantSelector() {
                     aria-modal="true"
                     aria-labelledby="create-school-title"
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
-                    onClick={closeCreateModal}
+                    onMouseDown={(e) => {
+                        if (e.target === e.currentTarget) closeCreateModal();
+                    }}
                 >
                     <div
-                        className="w-full max-w-md rounded-2xl border border-border bg-card p-6 shadow-xl"
+                        className="max-h-[90dvh] w-full max-w-md overflow-y-auto rounded-2xl border border-border bg-card p-6 shadow-xl"
                         onClick={(e) => e.stopPropagation()}
                     >
                         <div className="flex items-center justify-between border-b border-border pb-3.5">
@@ -1003,11 +951,13 @@ export function TenantSelector() {
 
                             <div>
                                 <label className="mb-1 block text-xs font-semibold text-foreground">
-                                    {isId ? 'Nama Satuan Pendidikan *' : 'Institution Name *'}
+                                    {isId ? 'Nama Satuan Pendidikan' : 'Institution Name'}{' '}
+                                    <span className="font-bold text-destructive" aria-hidden="true">*</span>
                                 </label>
                                 <input
                                     type="text"
                                     required
+                                    disabled={isCreatingSchool}
                                     value={newSchoolName}
                                     onChange={(e) => {
                                         setNewSchoolName(e.target.value);
@@ -1015,8 +965,8 @@ export function TenantSelector() {
                                     }}
                                     placeholder={
                                         isId
-                                            ? 'Cth: TK ABA Pajangan / SMA Muhammadiyah 1'
-                                            : 'e.g., Muhammadiyah Kindergarten / High School'
+                                            ? 'Cth: SD Muhammadiyah Pajangan 1'
+                                            : 'e.g., Muhammadiyah Elementary School'
                                     }
                                     className="h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                                 />
@@ -1025,13 +975,15 @@ export function TenantSelector() {
                             <div className="grid grid-cols-2 gap-3">
                                 <div>
                                     <label className="mb-1 block text-xs font-semibold text-foreground">
-                                        NPSN *
+                                        NPSN{' '}
+                                        <span className="font-bold text-destructive" aria-hidden="true">*</span>
                                     </label>
                                     <input
                                         type="text"
                                         inputMode="numeric"
                                         maxLength={8}
                                         required
+                                        disabled={isCreatingSchool}
                                         value={newSchoolNpsn}
                                         onChange={(e) => {
                                             setNewSchoolNpsn(e.target.value.replace(/\D/g, ''));
@@ -1044,34 +996,53 @@ export function TenantSelector() {
 
                                 <div>
                                     <label className="mb-1 block text-xs font-semibold text-foreground">
-                                        {isId ? 'Status Sekolah *' : 'School Status *'}
+                                        {isId ? 'Status Sekolah' : 'School Status'}{' '}
+                                        <span className="font-bold text-destructive" aria-hidden="true">*</span>
                                     </label>
-                                    <select
+                                    <Select
                                         value={newSchoolType}
-                                        onChange={(e) => setNewSchoolType(e.target.value as SchoolStatusType)}
-                                        className="h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                                        onValueChange={(value) => setNewSchoolType(value as SchoolStatusCode)}
+                                        disabled={isCreatingSchool}
                                     >
-                                        <option value="SWASTA">{isId ? 'Swasta' : 'Private'}</option>
-                                        <option value="NEGERI">{isId ? 'Negeri' : 'Public'}</option>
-                                    </select>
+                                        <SelectTrigger className="h-9 w-full text-xs">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent position="popper" sideOffset={4} className="z-60">
+                                            {SCHOOL_STATUS_CHOICES.map((st) => (
+                                                <SelectItem key={st.value} value={st.value} className="text-xs">
+                                                    {isId ? st.labelId : st.labelEn}
+                                                </SelectItem>
+                                            ))}
+                                        </SelectContent>
+                                    </Select>
                                 </div>
                             </div>
 
                             <div>
                                 <label className="mb-1 block text-xs font-semibold text-foreground">
-                                    {isId ? 'Jenjang Pendidikan *' : 'Education Level *'}
+                                    {isId ? 'Jenjang Pendidikan' : 'Education Level'}{' '}
+                                    <span className="font-bold text-destructive" aria-hidden="true">*</span>
                                 </label>
-                                <select
+                                <Select
                                     value={newSchoolLevel}
-                                    onChange={(e) => setNewSchoolLevel(e.target.value as SchoolLevelCode)}
-                                    className="h-9 w-full rounded-lg border border-border bg-background px-3 text-xs text-foreground focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
+                                    onValueChange={(value) => setNewSchoolLevel(value as SchoolLevelCode)}
+                                    disabled={isCreatingSchool}
                                 >
-                                    {SCHOOL_LEVEL_OPTIONS.map((opt) => (
-                                        <option key={opt.value} value={opt.value}>
-                                            {isId ? opt.labelId : opt.labelEn}
-                                        </option>
-                                    ))}
-                                </select>
+                                    <SelectTrigger className="h-9 w-full text-xs">
+                                        <SelectValue />
+                                    </SelectTrigger>
+                                    <SelectContent
+                                        position="popper"
+                                        sideOffset={4}
+                                        className="z-60 max-h-56"
+                                    >
+                                        {SCHOOL_LEVEL_CHOICES.map((opt) => (
+                                            <SelectItem key={opt.value} value={opt.value} className="text-xs">
+                                                {isId ? opt.labelId : opt.labelEn}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
                             </div>
 
                             <div className="grid grid-cols-2 gap-3">
@@ -1081,6 +1052,7 @@ export function TenantSelector() {
                                     </label>
                                     <input
                                         type="text"
+                                        disabled={isCreatingSchool}
                                         value={newSchoolCity}
                                         onChange={(e) => setNewSchoolCity(e.target.value)}
                                         placeholder={isId ? 'Cth: Sleman' : 'City'}
@@ -1094,6 +1066,7 @@ export function TenantSelector() {
                                     </label>
                                     <input
                                         type="text"
+                                        disabled={isCreatingSchool}
                                         value={newSchoolProvince}
                                         onChange={(e) => setNewSchoolProvince(e.target.value)}
                                         placeholder={isId ? 'Cth: DI Yogyakarta' : 'Province'}
@@ -1134,8 +1107,10 @@ export function TenantSelector() {
                     aria-modal="true"
                     aria-labelledby="tenant-logout-title"
                     className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
-                    onClick={() => {
-                        if (!isLoggingOut) setIsLogoutModalOpen(false);
+                    onMouseDown={(e) => {
+                        if (e.target === e.currentTarget && !isLoggingOut) {
+                            setIsLogoutModalOpen(false);
+                        }
                     }}
                 >
                     <div

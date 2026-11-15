@@ -247,7 +247,8 @@ export function ClassListPage() {
             ? 'Sekolah tidak ditemukan. Silakan masuk kembali.'
             : 'School context is missing. Please sign in again.',
         gradePrefix: isId ? 'Kelas' : 'Grade',
-        gradeTk: isId ? 'TK / PAUD' : 'Kindergarten',
+        // Ubah baris 173 di src/modules/academic/pages/ClassListPage.tsx:
+        gradeTk: isId ? 'TK / RA / PAUD' : 'Kindergarten / RA',
         noTeacher: isId ? 'Belum diatur' : 'Not set',
         toastDelSuccess: isId
             ? 'Kelas berhasil dihapus.'

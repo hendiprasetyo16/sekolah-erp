@@ -1,3 +1,4 @@
+// src/modules/academic/pages/ClassFormPage.tsx
 import { useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
@@ -11,6 +12,10 @@ import { supabase } from '@/services/supabase.client';
 import { academicService } from '../services/academic.service';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTranslation } from '@/hooks/useTranslation';
+import {
+    getAllowedGradesForSchoolLevel,
+    getDefaultGradeForSchoolLevel,
+} from '@/constants/school.constants';
 import type {
     AcademicYear,
     ClassItem,
@@ -40,6 +45,17 @@ import {
 const CLASS_LIST_ROUTE = '/academic/master-data';
 const CLASS_LIST_STATE = { state: { tab: 'kelas' } };
 
+function RequiredLabel({ text }: { text: string }) {
+    return (
+        <FormLabel>
+            {text}{' '}
+            <span className="font-bold text-destructive" aria-hidden="true">
+                *
+            </span>
+        </FormLabel>
+    );
+}
+
 const classSchema = z.object({
     name: z
         .string()
@@ -47,7 +63,9 @@ const classSchema = z.object({
         .min(2, 'Nama kelas minimal 2 karakter / Class name must be at least 2 characters')
         .max(100, 'Nama kelas maksimal 100 karakter / Class name must be at most 100 characters'),
     gradeLevel: z.coerce
-        .number()
+        .number({
+            invalid_type_error: 'Tingkat wajib dipilih / Grade is required',
+        })
         .int('Tingkat harus berupa bilangan bulat / Grade must be a whole number')
         .min(0, 'Pilih tingkat / Select a grade')
         .max(12, 'Tingkat maksimal 12 / Maximum grade is 12'),
@@ -57,7 +75,9 @@ const classSchema = z.object({
         .min(1, 'Tahun ajaran wajib dipilih / Academic year is required'),
     homeroomTeacherId: z.string().optional(),
     capacity: z.coerce
-        .number()
+        .number({
+            invalid_type_error: 'Kapasitas wajib diisi / Capacity is required',
+        })
         .int('Kapasitas harus berupa bilangan bulat / Capacity must be a whole number')
         .min(1, 'Kapasitas minimal 1 / Minimum capacity is 1')
         .max(500, 'Kapasitas maksimal 500 / Maximum capacity is 500'),
@@ -81,6 +101,7 @@ interface ClassFormInnerProps {
     teachers: TeacherOption[];
     isEdit: boolean;
     schoolId: string;
+    schoolLevel?: string;
     classId?: string;
 }
 
@@ -99,6 +120,7 @@ function ClassFormInner({
     teachers,
     isEdit,
     schoolId,
+    schoolLevel,
     classId,
 }: ClassFormInnerProps) {
     const { locale } = useTranslation();
@@ -114,17 +136,17 @@ function ClassFormInner({
             gradeLabel: isId ? 'Tingkat / Kelas' : 'Grade Level',
             gradePlaceholder: isId ? 'Pilih Tingkat' : 'Select Grade',
             nameLabel: isId ? 'Nama Rombel' : 'Class Name',
-            namePlaceholder: isId ? 'Contoh: Kelas 1A, 10 RPL A' : 'e.g. Class 1A, Grade 10A',
+            namePlaceholder: isId ? 'Contoh: Kelas 1A, TK A, RA B, Paket C 10A' : 'e.g. Class 1A, Grade 10A',
             capacityLabel: isId ? 'Kapasitas Maksimal' : 'Maximum Capacity',
             teacherLabel: isId ? 'Wali Kelas (Opsional)' : 'Homeroom Teacher (Optional)',
             teacherPlaceholder: isId ? 'Pilih Wali Kelas' : 'Select Teacher',
             noTeacher: isId ? '-- Belum Ada Wali Kelas --' : '-- No Homeroom Teacher --',
-            majorLabel: isId ? 'Jurusan (Opsional)' : 'Major (Optional)',
-            majorPlaceholder: isId ? 'Contoh: RPL, TKJ (jika relevan)' : 'e.g. Software Engineering, if applicable',
+            majorLabel: isId ? 'Jurusan / Program (Opsional)' : 'Major / Program (Optional)',
+            majorPlaceholder: isId ? 'Contoh: RPL, TKJ, IPA, Paket C' : 'e.g. Software Engineering, if applicable',
             btnCancel: isId ? 'Batal' : 'Cancel',
             btnSave: isId ? 'Simpan Perubahan' : 'Save Changes',
             btnCreate: isId ? 'Buat Kelas' : 'Create Class',
-            gradeTk: isId ? 'TK / PAUD' : 'Kindergarten / Pre-K',
+            gradeTk: isId ? 'TK / RA / PAUD / TKLB' : 'Kindergarten / RA / Pre-K',
             gradeNum: (num: number) => (isId ? `Tingkat ${num}` : `Grade ${num}`),
             toastSuccessUpdate: isId ? 'Kelas berhasil diperbarui.' : 'Class updated successfully.',
             toastSuccessCreate: isId ? 'Kelas berhasil ditambahkan.' : 'Class created successfully.',
@@ -143,11 +165,29 @@ function ClassFormInner({
         return activeYear?.id ?? academicYears[0]?.id ?? '';
     }, [initialData?.academicYearId, academicYears]);
 
+    const defaultGradeLevel = useMemo(() => {
+        if (initialData?.gradeLevel !== undefined && initialData?.gradeLevel !== null) {
+            return Number(initialData.gradeLevel);
+        }
+        return getDefaultGradeForSchoolLevel(schoolLevel);
+    }, [initialData?.gradeLevel, schoolLevel]);
+
+    const availableGrades = useMemo(
+        () =>
+            getAllowedGradesForSchoolLevel(
+                schoolLevel,
+                initialData?.gradeLevel !== undefined && initialData?.gradeLevel !== null
+                    ? Number(initialData.gradeLevel)
+                    : null,
+            ),
+        [schoolLevel, initialData?.gradeLevel],
+    );
+
     const form = useForm<ClassFormValues>({
         resolver: zodResolver(classSchema),
         defaultValues: {
             name: initialData?.name ?? '',
-            gradeLevel: Number(initialData?.gradeLevel ?? 1),
+            gradeLevel: defaultGradeLevel,
             academicYearId: defaultAcademicYearId,
             homeroomTeacherId: initialData?.homeroomTeacherId ?? 'none',
             capacity: Number(initialData?.capacity ?? 36),
@@ -215,7 +255,7 @@ function ClassFormInner({
                         name="academicYearId"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.ayLabel} <span className="text-red-500">*</span></FormLabel>
+                                <RequiredLabel text={t.ayLabel} />
                                 <Select value={field.value || ''} onValueChange={field.onChange} disabled={mutation.isPending}>
                                     <FormControl>
                                         <SelectTrigger><SelectValue placeholder={t.ayPlaceholder} /></SelectTrigger>
@@ -238,7 +278,7 @@ function ClassFormInner({
                         name="gradeLevel"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.gradeLabel} <span className="text-red-500">*</span></FormLabel>
+                                <RequiredLabel text={t.gradeLabel} />
                                 <Select
                                     value={field.value !== undefined ? String(field.value) : ''}
                                     onValueChange={(value) => field.onChange(Number(value))}
@@ -248,9 +288,10 @@ function ClassFormInner({
                                         <SelectTrigger><SelectValue placeholder={t.gradePlaceholder} /></SelectTrigger>
                                     </FormControl>
                                     <SelectContent className="max-h-75">
-                                        <SelectItem value="0">{t.gradeTk}</SelectItem>
-                                        {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((number) => (
-                                            <SelectItem key={number} value={String(number)}>{t.gradeNum(number)}</SelectItem>
+                                        {availableGrades.map((gradeNumber) => (
+                                            <SelectItem key={gradeNumber} value={String(gradeNumber)}>
+                                                {gradeNumber === 0 ? t.gradeTk : t.gradeNum(gradeNumber)}
+                                            </SelectItem>
                                         ))}
                                     </SelectContent>
                                 </Select>
@@ -266,7 +307,7 @@ function ClassFormInner({
                         name="name"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.nameLabel} <span className="text-red-500">*</span></FormLabel>
+                                <RequiredLabel text={t.nameLabel} />
                                 <FormControl>
                                     <Input
                                         autoComplete="off"
@@ -286,7 +327,7 @@ function ClassFormInner({
                         name="capacity"
                         render={({ field }) => (
                             <FormItem>
-                                <FormLabel>{t.capacityLabel} <span className="text-red-500">*</span></FormLabel>
+                                <RequiredLabel text={t.capacityLabel} />
                                 <FormControl>
                                     <Input
                                         type="number"
@@ -296,7 +337,6 @@ function ClassFormInner({
                                         name={field.name}
                                         ref={field.ref}
                                         onBlur={field.onBlur}
-                                        // <-- BAGIAN YANG DIPERBAIKI: Mencegah NaN masuk ke atribut value
                                         value={Number.isNaN(field.value) ? '' : (field.value ?? '')}
                                         onChange={(event) => {
                                             const value = event.target.value;
@@ -553,6 +593,7 @@ export function ClassFormPage() {
                             teachers={teachersQuery.data ?? []}
                             isEdit={isEdit}
                             schoolId={schoolId}
+                            schoolLevel={school?.level}
                             classId={id}
                         />
                     ) : null}
