@@ -3,7 +3,7 @@ import { supabase } from '@/services/supabase.client';
 import type { User, School, AcademicYear, UserRole } from '@/types/common.types';
 
 /**
- * Daftar seluruh kode role yang didukung sistem (termasuk role baru STAFF_PERPUS).
+ * Daftar seluruh kode role yang didukung sistem (termasuk role STAFF_PERPUS).
  */
 export type EffectiveUserRole = UserRole | 'STAFF_PERPUS';
 
@@ -43,9 +43,10 @@ export type AuthResult =
   | { success: false; data: null; message: string };
 
 /**
- * Daftar key localStorage yang berkaitan dengan sesi autentikasi.
+ * Daftar key localStorage & sessionStorage yang berkaitan dengan sesi autentikasi.
  */
 const AUTH_STORAGE_KEYS = ['sekolah-erp-auth', 'auth-storage'] as const;
+const SESSION_ONLY_FLAG_KEY = 'sekolah-erp-session-only';
 
 /**
  * Helper aman untuk mengekstrak pesan error dari tipe `unknown`.
@@ -67,7 +68,7 @@ function extractErrorMessage(error: unknown, fallbackMessage: string): string {
 
 /**
  * Menerjemahkan teks Tugas Tambahan dari Excel Dapodik menjadi kode role sistem.
- * Kamu bisa menyesuaikan kata kunci di bawah ini sesuai kebutuhan sekolah.
+ * Kata kunci di bawah ini dapat disesuaikan dengan kebutuhan penugasan sekolah.
  */
 export function mapTugasTambahanToRoles(tugasTambahan?: string | null): EffectiveUserRole[] {
   if (!tugasTambahan) return [];
@@ -102,8 +103,8 @@ function normalizeUserProfile(rawProfile: Record<string, unknown>): UserWithAddi
 }
 
 /**
- * Mengambil kolom `tugasTambahan` dari tabel `teachers` (jika akun tertaut ke data guru)
- * lalu menggabungkan hasilnya ke dalam `additionalRoles`.
+ * Mengambil kolom `tugasTambahan` dari tabel `teachers` serta memanggil RPC
+ * `get_user_all_roles()` agar peran efektif di frontend selaras dengan RLS server.
  */
 async function enrichProfileWithTeacherDuties(
   profile: UserWithAdditionalRoles
@@ -113,19 +114,34 @@ async function enrichProfileWithTeacherDuties(
   }
 
   try {
-    const { data: teacherRow } = await supabase
-      .from('teachers')
-      .select('tugasTambahan')
-      .eq('userId', profile.id)
-      .eq('schoolId', profile.schoolId)
-      .maybeSingle();
+    const [teacherRes, rpcRes] = await Promise.all([
+      supabase
+        .from('teachers')
+        .select('tugasTambahan')
+        .eq('userId', profile.id)
+        .eq('schoolId', profile.schoolId)
+        .maybeSingle(),
+      (
+        supabase.rpc as unknown as (
+          fn: string
+        ) => Promise<{ data: string[] | null; error: unknown }>
+      )('get_user_all_roles'),
+    ]);
 
     const tugasTambahan =
-      (teacherRow as { tugasTambahan?: string | null } | null)?.tugasTambahan ?? null;
+      (teacherRes.data as { tugasTambahan?: string | null } | null)?.tugasTambahan ?? null;
 
     const dutyRoles = mapTugasTambahanToRoles(tugasTambahan);
+    const rpcRoles = Array.isArray(rpcRes.data)
+      ? (rpcRes.data as EffectiveUserRole[])
+      : [];
+
     const mergedExtras = Array.from(
-      new Set<EffectiveUserRole>([...(profile.additionalRoles ?? []), ...dutyRoles])
+      new Set<EffectiveUserRole>([
+        ...(profile.additionalRoles ?? []),
+        ...dutyRoles,
+        ...rpcRoles,
+      ])
     ).filter((r) => r !== profile.role);
 
     return {
@@ -260,6 +276,7 @@ export const authService = {
       await supabase.auth.signOut();
     } finally {
       AUTH_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+      sessionStorage.removeItem(SESSION_ONLY_FLAG_KEY);
     }
   },
 
@@ -272,9 +289,7 @@ export const authService = {
     try {
       const { data, error } = await supabase
         .from('users')
-        .select(
-          'id, email, "fullName", role, "additionalRoles", "avatarUrl", "schoolId", "isActive", "isFirstLogin", "lastLogin"'
-        )
+        .select('*')
         .eq('id', userId)
         .eq('isActive', true)
         .single();
@@ -314,7 +329,8 @@ export const authService = {
   },
 
   /**
-   * Mengambil tahun ajaran yang sedang aktif (`isActive = true`) untuk sekolah tertentu.
+   * Mengambil tahun ajaran aktif (`isActive = true`) atau tahun terbaru untuk sekolah tertentu.
+   * Menggunakan `.limit(1)` agar aman dari error PGRST116 jika terdapat lebih dari satu baris aktif.
    */
   async getActiveAcademicYear(schoolId: string): Promise<AcademicYear | null> {
     try {
@@ -322,11 +338,12 @@ export const authService = {
         .from('academic_years')
         .select('*')
         .eq('schoolId', schoolId)
-        .eq('isActive', true)
-        .maybeSingle();
+        .order('isActive', { ascending: false })
+        .order('startYear', { ascending: false })
+        .limit(1);
 
-      if (error || !data) return null;
-      return data as AcademicYear;
+      if (error || !Array.isArray(data) || data.length === 0) return null;
+      return data[0] as AcademicYear;
     } catch {
       return null;
     }

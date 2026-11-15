@@ -43,10 +43,10 @@ import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswor
 import { ProfilePage } from '@/modules/profile/pages/ProfilePage';
 
 // ============================================================================
-// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v14)
+// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v17)
 // ============================================================================
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
-const CLASS_EDITOR_ROLES = ['SUPER_ADMIN', 'ADMIN'] as const;
+const CLASS_EDITOR_ROLES = CORE_ADMIN_ROLES;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
 const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
@@ -96,10 +96,13 @@ function RoleRoute({
   allowedRoles: readonly string[];
   children: React.ReactNode;
 }) {
-  const { user } = useAuthStore();
-  const effectiveRoles = getEffectiveRoles(user);
+  const { user, getEffectiveRoles: storeGetEffectiveRoles } = useAuthStore();
 
-  const isAllowed = effectiveRoles.some((userRole) => allowedRoles.includes(userRole));
+  const combinedRoles = Array.from(
+    new Set<string>([...getEffectiveRoles(user), ...storeGetEffectiveRoles()])
+  );
+
+  const isAllowed = combinedRoles.some((userRole) => allowedRoles.includes(userRole));
 
   if (!isAllowed) {
     return <Navigate to="/dashboard" replace />;
@@ -142,7 +145,7 @@ export function AppRouter() {
           }
         />
 
-        {/* RUTE TERLINDUNGI */}
+        {/* RUTE TERLINDUNGI (MainLayout otomatis menampilkan TenantSelector jika SUPER_ADMIN belum memilih sekolah) */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
           {/* Dashboard Otomatis Sesuai Role + Profil Pribadi */}
           <Route path="/dashboard" element={<DashboardGate />} />

@@ -101,7 +101,15 @@ export function Header() {
   const location = useLocation();
 
   const { theme, setTheme, locale: currentLocale, setLocale, setSidebarOpen } = useUIStore();
-  const { user, school, academicYear, logout, setSchool, setAcademicYear } = useAuthStore();
+  const {
+    user,
+    school,
+    academicYear,
+    logout,
+    setSchool,
+    setAcademicYear,
+    getEffectiveRoles: storeGetEffectiveRoles,
+  } = useAuthStore();
 
   const notificationStore = useNotificationStore() as unknown as HeaderNotificationStore;
   const unreadCount = notificationStore.unreadCount ?? 0;
@@ -118,7 +126,13 @@ export function Header() {
   const [isRefreshingYears, setIsRefreshingYears] = useState<boolean>(false);
   const loadedSchoolIdRef = useRef<string | null>(null);
 
-  const effectiveUserRoles = useMemo(() => getEffectiveRoles(user), [user]);
+  const effectiveUserRoles = useMemo(() => {
+    const combined = new Set<string>([
+      ...getEffectiveRoles(user),
+      ...storeGetEffectiveRoles(),
+    ]);
+    return Array.from(combined);
+  }, [user, storeGetEffectiveRoles]);
 
   const canAccessSettings = useMemo(
     () =>
@@ -169,7 +183,6 @@ export function Header() {
           setAcademicYears(typedYears);
           loadedSchoolIdRef.current = targetSchoolId;
 
-          // Jika konteks academicYear belum terisi di store, pilih tahun aktif secara otomatis
           const currentSelectedYear = useAuthStore.getState().academicYear;
           if (!currentSelectedYear && typedYears.length > 0) {
             const defaultYear =
@@ -204,7 +217,7 @@ export function Header() {
     setUserMenuOpen(false);
 
     if (nextState) {
-      void fetchSchoolAcademicYears(false);
+      void fetchSchoolAcademicYears(true);
     }
   };
 
@@ -218,13 +231,13 @@ export function Header() {
     );
   };
 
-  const displayedAcademicYears: AcademicYearOption[] = (() => {
+  const displayedAcademicYears: AcademicYearOption[] = useMemo(() => {
     if (academicYears.length > 0) return academicYears;
     if (academicYear) {
       return [academicYear as unknown as AcademicYearOption];
     }
     return [];
-  })();
+  }, [academicYears, academicYear]);
 
   const pathSegments = location.pathname.split('/').filter(Boolean);
   const breadcrumbs: BreadcrumbItem[] = pathSegments.map((segment, idx) => {
@@ -265,6 +278,8 @@ export function Header() {
   const roleDisplay = user?.role
     ? ROLE_LABELS[user.role]?.[locale] || user.role.replace(/_/g, ' ')
     : '';
+
+  const showAcademicYearSwitcher = Boolean(academicYear?.name) || displayedAcademicYears.length > 0;
 
   return (
     <>
@@ -312,7 +327,7 @@ export function Header() {
         </div>
 
         <div className="flex items-center gap-1.5 sm:gap-2">
-          {academicYear?.name && (
+          {showAcademicYearSwitcher && (
             <div className="relative hidden sm:block">
               <button
                 type="button"
@@ -323,7 +338,13 @@ export function Header() {
                 }
               >
                 <CalendarRange size={13} className="text-emerald-600 dark:text-emerald-400" />
-                <span className="tabular-nums">TA {academicYear.name}</span>
+                <span className="tabular-nums">
+                  {academicYear?.name
+                    ? `TA ${academicYear.name}`
+                    : locale === 'id'
+                      ? 'Pilih TA'
+                      : 'Select AY'}
+                </span>
                 <ChevronDown
                   size={12}
                   className={cn(
@@ -348,7 +369,7 @@ export function Header() {
 
                     <div className="max-h-60 overflow-y-auto p-1.5">
                       {displayedAcademicYears.map((item) => {
-                        const isCurrent = item.id === academicYear.id;
+                        const isCurrent = item.id === academicYear?.id;
                         return (
                           <button
                             key={item.id}

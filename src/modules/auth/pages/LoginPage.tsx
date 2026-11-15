@@ -1,3 +1,4 @@
+// src/modules/auth/pages/LoginPage.tsx
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -24,45 +25,26 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useUIStore } from '@/stores/ui.store';
 import { APP_NAME, APP_VERSION } from '@/constants/app.constants';
 
-/**
- * Kontrak tipe data untuk kartu fitur pada panel kaca (glassmorphism) di sisi kiri.
- * Menggunakan `LucideIcon` agar ketat secara tipe data dan bebas dari `any`.
- */
 interface GlassFeatureCard {
   icon: LucideIcon;
   title: string;
   subtitle: string;
 }
 
-/**
- * Halaman Gerbang Masuk Utama (LoginPage).
- *
- * Fitur utama:
- * 1. Tata letak responsif otomatis berbasis grid 12-kolom (`7:5`) dan tinggi layar dinamis (`min-h-dvh`)
- *    agar tidak terpotong di layar laptop standar maupun menyisakan ruang kosong berlebih di layar lebar.
- * 2. Estetika Emerald-Teal dengan pendar cahaya lembut (ambient glow) dan kartu kaca (glassmorphism).
- * 3. Autentikasi multi-identitas terpusat (Email, NIP, NUPTK, NISN, atau NIK) melalui `useAuthStore`.
- */
 export function LoginPage() {
   const { t, locale } = useTranslation();
   const navigate = useNavigate();
   const { login, isLoading: storeLoading } = useAuthStore();
   const { theme, setTheme, locale: currentLocale, setLocale } = useUIStore();
 
-  // State input kredensial pengguna
   const [identifier, setIdentifier] = useState<string>('');
   const [password, setPassword] = useState<string>('');
   const [rememberSession, setRememberSession] = useState<boolean>(true);
 
-  // State kontrol antarmuka (visibilitas kata sandi, status kirim, dan pesan kesalahan)
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
 
-  /**
-   * Menyinkronkan tema terang ('light') atau gelap ('dark') pada elemen root <html>
-   * setiap kali pengguna mengganti mode tampilan di halaman login.
-   */
   useEffect(() => {
     const rootElement = document.documentElement;
     if (theme === 'dark') {
@@ -76,14 +58,6 @@ export function LoginPage() {
     }
   }, [theme]);
 
-  /**
-   * Menangani pengiriman formulir masuk:
-   * 1. Mengirim `identifier` & `password` ke `authStore.login` (resolusi NIP/NISN/NIK ke email
-   *    ditangani langsung oleh `authService`).
-   * 2. Jika akun baru pertama kali masuk (`isFirstLogin === true`), arahkan wajib ke
-   *    halaman pembaruan kata sandi (`/force-change-password`).
-   * 3. Jika akun sudah aktif normal, arahkan langsung ke `/dashboard`.
-   */
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>): Promise<void> => {
     e.preventDefault();
     if (!identifier.trim() || !password) return;
@@ -92,12 +66,13 @@ export function LoginPage() {
     setErrorMessage('');
 
     try {
-      const result = await login(identifier, password);
+      const result = await login(identifier, password, rememberSession);
 
       if (result.success) {
         if (result.user?.isFirstLogin) {
           navigate('/force-change-password', { replace: true });
         } else {
+          // MainLayout otomatis menampilkan TenantSelector jika SUPER_ADMIN belum memiliki sekolah aktif
           navigate('/dashboard', { replace: true });
         }
         return;
@@ -111,9 +86,6 @@ export function LoginPage() {
     }
   };
 
-  /**
-   * Menampilkan instruksi resmi pemulihan kata sandi melalui Operator/Admin Sekolah.
-   */
   const handleForgotPassword = (): void => {
     const message =
       locale === 'id'
@@ -123,23 +95,16 @@ export function LoginPage() {
     toast.info(message, { duration: 5000 });
   };
 
-  /**
-   * Mengubah mode tema antara terang ('light') dan gelap ('dark').
-   */
   const handleToggleTheme = (): void => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
   };
 
-  /**
-   * Mengubah bahasa antarmuka antara Bahasa Indonesia ('id') dan Bahasa Inggris ('en').
-   */
   const handleToggleLocale = (): void => {
     setLocale(currentLocale === 'id' ? 'en' : 'id');
   };
 
   const isBusy = isSubmitting || storeLoading;
 
-  // Data 3 pilar modul utama untuk ditampilkan pada kartu kaca (glassmorphism)
   const glassFeatures: GlassFeatureCard[] = [
     {
       icon: GraduationCap,
@@ -160,23 +125,16 @@ export function LoginPage() {
 
   return (
     <div className="min-h-dvh grid grid-cols-1 lg:grid-cols-12 bg-muted/30 text-foreground transition-colors duration-300">
-      {/* =====================================================================
-          PANEL KIRI (7 KOLOM): EMERALD-TEAL GRADIENT, AMBIENT GLOW & GLASS CARDS
-          Menggunakan padding & tipografi adaptif agar seluruh kartu kaca di bawah
-          tampil utuh di layar laptop standar maupun layar lebar.
-         ===================================================================== */}
+      {/* PANEL KIRI */}
       <aside className="hidden lg:flex lg:col-span-7 relative overflow-hidden">
-        {/* Lapisan 1: Gradien utama Emerald ke Teal */}
         <div className="absolute inset-0 bg-linear-to-br from-emerald-600 via-teal-700 to-emerald-950 dark:from-emerald-950 dark:via-teal-950 dark:to-slate-950" />
 
-        {/* Lapisan 2: Pendar cahaya lembut (Ambient Neon Glow) */}
         <div aria-hidden="true" className="pointer-events-none absolute inset-0">
           <div className="absolute -top-16 -left-16 h-72 w-72 rounded-full bg-emerald-300/20 blur-3xl" />
           <div className="absolute bottom-8 right-8 h-80 w-80 rounded-full bg-teal-400/15 blur-3xl" />
           <div className="absolute top-1/2 left-1/3 h-60 w-60 -translate-y-1/2 rounded-full bg-emerald-400/10 blur-3xl" />
         </div>
 
-        {/* Lapisan 3: Tekstur garis grid tipis */}
         <div
           aria-hidden="true"
           className="pointer-events-none absolute inset-0 opacity-[0.05]"
@@ -187,9 +145,7 @@ export function LoginPage() {
           }}
         />
 
-        {/* Lapisan 4: Konten utama dengan distribusi ruang vertikal otomatis */}
         <div className="relative z-10 mx-auto flex w-full max-w-3xl flex-col justify-between p-7 xl:p-12 text-white">
-          {/* Header Identitas Aplikasi */}
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-white/15 backdrop-blur-md shadow-md shadow-emerald-950/20">
               <School size={22} className="text-white" />
@@ -209,7 +165,6 @@ export function LoginPage() {
             </div>
           </div>
 
-          {/* Blok Tajuk Utama (Ukuran adaptif agar tidak memakan tinggi berlebih) */}
           <div className="my-auto py-4">
             <div className="mb-3.5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-emerald-100 backdrop-blur-md">
               <ShieldCheck size={14} className="text-emerald-200" />
@@ -241,7 +196,6 @@ export function LoginPage() {
             </p>
           </div>
 
-          {/* Baris 3 Kartu Kaca (Glassmorphism Cards) Kompak & Utuh */}
           <div className="grid grid-cols-3 gap-3 xl:gap-4">
             {glassFeatures.map((feature) => {
               const IconComponent = feature.icon;
@@ -264,13 +218,8 @@ export function LoginPage() {
         </div>
       </aside>
 
-      {/* =====================================================================
-          PANEL KANAN (5 KOLOM): FORMULIR AUTENTIKASI DALAM BINGKAI KARTU
-          Menggunakan latar `bg-muted/30` dengan kartu `bg-card` agar proporsional
-          dan tidak menyisakan ruang putih kosong yang melebar.
-         ===================================================================== */}
+      {/* PANEL KANAN */}
       <main className="col-span-1 lg:col-span-5 flex flex-col justify-between p-4 sm:p-6 xl:p-8 bg-muted/30">
-        {/* Baris Kontrol Atas: Logo Mobile + Pengalih Bahasa & Tema */}
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2.5 lg:hidden">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
@@ -304,7 +253,6 @@ export function LoginPage() {
           </div>
         </div>
 
-        {/* Kontainer Kartu Formulir Login (Terpusat & Terbingkai Rapi) */}
         <div className="mx-auto my-auto w-full max-w-105 py-3">
           <div className="rounded-2xl border border-border bg-card p-6 sm:p-7 shadow-sm">
             <div className="mb-5">
@@ -315,7 +263,6 @@ export function LoginPage() {
             </div>
 
             <form onSubmit={handleLogin} className="space-y-4">
-              {/* Kolom Input Identitas (Email / NIP / NUPTK / NISN / NIK) */}
               <div>
                 <label
                   htmlFor="login-identifier"
@@ -350,7 +297,6 @@ export function LoginPage() {
                 </div>
               </div>
 
-              {/* Kolom Input Kata Sandi */}
               <div>
                 <label
                   htmlFor="login-password"
@@ -391,7 +337,6 @@ export function LoginPage() {
                 </div>
               </div>
 
-              {/* Opsi Ingat Saya & Lupa Kata Sandi */}
               <div className="flex items-center justify-between pt-0.5">
                 <label className="flex items-center gap-2 cursor-pointer select-none">
                   <input
@@ -411,7 +356,6 @@ export function LoginPage() {
                 </button>
               </div>
 
-              {/* Notifikasi Kesalahan Login */}
               {errorMessage && (
                 <div
                   role="alert"
@@ -421,7 +365,6 @@ export function LoginPage() {
                 </div>
               )}
 
-              {/* Tombol Submit dengan Aksen Glow Emerald */}
               <button
                 id="login-submit"
                 type="submit"
@@ -446,7 +389,6 @@ export function LoginPage() {
           </div>
         </div>
 
-        {/* Footer Identitas Sistem */}
         <div className="text-center text-[11px] text-muted-foreground">
           {APP_NAME} v{APP_VERSION} —{' '}
           {locale === 'id' ? 'Sistem Manajemen Sekolah' : 'School Management System'}

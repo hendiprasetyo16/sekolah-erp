@@ -1,3 +1,4 @@
+// src/modules/auth/store/auth.store.ts
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { School, AcademicYear } from '@/types/common.types';
@@ -7,6 +8,9 @@ import {
   type EffectiveUserRole,
   type UserWithAdditionalRoles,
 } from '../services/auth.service';
+
+const SESSION_ONLY_MODE_KEY = 'sekolah-erp-session-only-mode';
+const SESSION_ALIVE_TAB_KEY = 'sekolah-erp-tab-alive';
 
 /**
  * Kontrak hasil pemanggilan action `login` pada AuthStore.
@@ -37,7 +41,11 @@ interface AuthState {
   getEffectiveRoles: () => EffectiveUserRole[];
   hasAnyRole: (allowedRoles: readonly string[]) => boolean;
 
-  login: (identifier: string, password: string) => Promise<StoreLoginResult>;
+  login: (
+    identifier: string,
+    password: string,
+    rememberSession?: boolean
+  ) => Promise<StoreLoginResult>;
   logout: () => Promise<void>;
 }
 
@@ -109,12 +117,24 @@ export const useAuthStore = create<AuthState>()(
        * Menjalankan proses login melalui `authService` dan menyimpan seluruh
        * konteks sesi (`user`, `activeRole`, `school`, `academicYear`) ke dalam store.
        */
-      login: async (identifier: string, password: string): Promise<StoreLoginResult> => {
+      login: async (
+        identifier: string,
+        password: string,
+        rememberSession = true
+      ): Promise<StoreLoginResult> => {
         set({ isLoading: true });
         try {
           const response = await authService.login({ identifier, password });
 
           if (response.success) {
+            if (rememberSession) {
+              localStorage.removeItem(SESSION_ONLY_MODE_KEY);
+              sessionStorage.removeItem(SESSION_ALIVE_TAB_KEY);
+            } else {
+              localStorage.setItem(SESSION_ONLY_MODE_KEY, '1');
+              sessionStorage.setItem(SESSION_ALIVE_TAB_KEY, '1');
+            }
+
             set({
               user: response.data.user,
               activeRole: response.data.user.role,
@@ -150,6 +170,8 @@ export const useAuthStore = create<AuthState>()(
        * sekaligus mengakhiri sesi di server Supabase Auth.
        */
       logout: async (): Promise<void> => {
+        localStorage.removeItem(SESSION_ONLY_MODE_KEY);
+        sessionStorage.removeItem(SESSION_ALIVE_TAB_KEY);
         set({
           user: null,
           activeRole: null,
@@ -170,6 +192,18 @@ export const useAuthStore = create<AuthState>()(
         academicYear: state.academicYear,
         isAuthenticated: state.isAuthenticated,
       }),
+      onRehydrateStorage: () => (state) => {
+        // Jika pengguna memilih tidak menyimpan sesi ("Ingat Saya" tidak dicentang)
+        // dan browser baru dibuka kembali, bersihkan sesi secara otomatis.
+        if (
+          typeof window !== 'undefined' &&
+          localStorage.getItem(SESSION_ONLY_MODE_KEY) === '1' &&
+          sessionStorage.getItem(SESSION_ALIVE_TAB_KEY) !== '1' &&
+          state?.isAuthenticated
+        ) {
+          void state.logout();
+        }
+      },
     }
   )
 );

@@ -1,4 +1,5 @@
-import { useState, useEffect } from 'react';
+// src/modules/auth/pages/ForceChangePasswordPage.tsx
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -38,9 +39,6 @@ import {
     FormMessage,
 } from '@/components/ui/form';
 
-/**
- * Daftar kata sandi lemah/bawaan yang dilarang digunakan sebagai kata sandi baru.
- */
 const FORBIDDEN_DEFAULT_PASSWORDS: readonly string[] = [
     '12345678',
     '123456789',
@@ -50,11 +48,6 @@ const FORBIDDEN_DEFAULT_PASSWORDS: readonly string[] = [
     'admin123',
 ];
 
-/**
- * Membangun skema validasi Zod secara dinamis mengikuti bahasa antarmuka ('id' atau 'en').
- * Memastikan kata sandi baru minimal 8 karakter, bukan sandi bawaan umum,
- * dan cocok dengan kolom konfirmasi kata sandi.
- */
 function createChangePasswordSchema(locale: string) {
     const isId = locale === 'id';
 
@@ -90,24 +83,14 @@ function createChangePasswordSchema(locale: string) {
         });
 }
 
-/**
- * Tipe data terinferensi dari skema validasi formulir ganti kata sandi.
- */
 type ChangePasswordFormValues = z.infer<ReturnType<typeof createChangePasswordSchema>>;
 
-/**
- * Kontrak tipe data untuk kartu kaca (glassmorphism) pada panel informasi kiri.
- */
 interface SecurityGlassCard {
     icon: LucideIcon;
     title: string;
     subtitle: string;
 }
 
-/**
- * Helper aman untuk mengekstrak pesan kesalahan dari objek `unknown`
- * tanpa menggunakan tipe `any`.
- */
 function getErrorMessage(error: unknown, fallback: string): string {
     if (error instanceof Error && error.message.trim().length > 0) {
         return error.message;
@@ -123,38 +106,26 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return fallback;
 }
 
-/**
- * Halaman Pembaruan Kata Sandi Wajib (`ForceChangePasswordPage`).
- *
- * Ditampilkan secara otomatis ketika pengguna berhasil masuk menggunakan akun baru
- * yang masih memiliki penanda `isFirstLogin === true`.
- * Tata letak dibuat identik dengan `LoginPage` (grid adaptif 7:5 dengan `min-h-dvh`,
- * panel Emerald-Teal glassmorphism di kiri, dan kartu formulir di kanan).
- */
 export function ForceChangePasswordPage() {
     const navigate = useNavigate();
     const { t, locale } = useTranslation();
     const { user, setUser, logout } = useAuthStore();
     const { theme, setTheme, locale: currentLocale, setLocale } = useUIStore();
 
-    // State status pengiriman & visibilitas masing-masing kolom kata sandi
     const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
     const [showNewPassword, setShowNewPassword] = useState<boolean>(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
 
-    // Inisialisasi React Hook Form dengan validasi Zod dwibahasa
+    const passwordSchema = useMemo(() => createChangePasswordSchema(locale), [locale]);
+
     const form = useForm<ChangePasswordFormValues>({
-        resolver: zodResolver(createChangePasswordSchema(locale)),
+        resolver: zodResolver(passwordSchema),
         defaultValues: {
             newPassword: '',
             confirmPassword: '',
         },
     });
 
-    /**
-     * Menyinkronkan tema terang ('light') atau gelap ('dark') pada elemen root <html>
-     * agar tampilan tetap konsisten meskipun halaman dimuat ulang secara langsung.
-     */
     useEffect(() => {
         const rootElement = document.documentElement;
         if (theme === 'dark') {
@@ -168,13 +139,6 @@ export function ForceChangePasswordPage() {
         }
     }, [theme]);
 
-    /**
-     * Memproses pembaruan kata sandi baru:
-     * 1. Memvalidasi keberadaan sesi pengguna aktif (`user.id`).
-     * 2. Memperbarui kredensial kata sandi langsung pada layanan Supabase Auth.
-     * 3. Mencabut status `isFirstLogin` menjadi `false` pada tabel `public.users`.
-     * 4. Menyinkronkan state global Zustand dan mengarahkan pengguna ke `/dashboard`.
-     */
     const onSubmit = async (values: ChangePasswordFormValues): Promise<void> => {
         if (!user?.id) {
             toast.error(
@@ -188,7 +152,6 @@ export function ForceChangePasswordPage() {
 
         setIsSubmitting(true);
         try {
-            // Langkah 1: Perbarui kata sandi pada Supabase Auth
             const { error: authError } = await supabase.auth.updateUser({
                 password: values.newPassword,
             });
@@ -197,13 +160,10 @@ export function ForceChangePasswordPage() {
                 throw new Error(authError.message);
             }
 
-            // Langkah 2: Perbarui status `isFirstLogin` di tabel profil `public.users`
+            // Trigger database otomatis mengelola kolom updatedAt
             const { error: dbError } = await supabase
                 .from('users')
-                .update({
-                    isFirstLogin: false,
-                    updatedAt: new Date().toISOString(),
-                })
+                .update({ isFirstLogin: false })
                 .eq('id', user.id);
 
             if (dbError) {
@@ -214,7 +174,6 @@ export function ForceChangePasswordPage() {
                 );
             }
 
-            // Langkah 3: Perbarui state lokal Zustand agar tidak diminta ganti sandi lagi
             setUser({ ...user, isFirstLogin: false });
 
             toast.success(
@@ -223,6 +182,7 @@ export function ForceChangePasswordPage() {
                     : 'Personal password saved successfully. Redirecting to workspace...'
             );
 
+            // MainLayout otomatis menampilkan TenantSelector jika SUPER_ADMIN belum memilih sekolah
             navigate('/dashboard', { replace: true });
         } catch (error: unknown) {
             toast.error(
@@ -238,29 +198,19 @@ export function ForceChangePasswordPage() {
         }
     };
 
-    /**
-     * Membatalkan proses aktivasi sandi baru dan mengeluarkan pengguna ke halaman login.
-     */
     const handleCancelAndLogout = async (): Promise<void> => {
         await logout();
         navigate('/login', { replace: true });
     };
 
-    /**
-     * Mengubah mode tema antara terang ('light') dan gelap ('dark').
-     */
     const handleToggleTheme = (): void => {
         setTheme(theme === 'dark' ? 'light' : 'dark');
     };
 
-    /**
-     * Mengubah bahasa antarmuka antara Bahasa Indonesia ('id') dan Bahasa Inggris ('en').
-     */
     const handleToggleLocale = (): void => {
         setLocale(currentLocale === 'id' ? 'en' : 'id');
     };
 
-    // Data 3 kartu kaca (glassmorphism) pada panel kiri yang menjelaskan standar keamanan akun
     const securityHighlights: SecurityGlassCard[] = [
         {
             icon: ShieldCheck,
@@ -281,22 +231,15 @@ export function ForceChangePasswordPage() {
 
     return (
         <div className="min-h-dvh grid grid-cols-1 lg:grid-cols-12 bg-muted/30 text-foreground transition-colors duration-300">
-            {/* =====================================================================
-          PANEL KIRI (7 KOLOM): EMERALD-TEAL GRADIENT, AMBIENT GLOW & GLASS CARDS
-          Identik dengan panel kiri pada `LoginPage` untuk menjaga kontinuitas visual.
-         ===================================================================== */}
             <aside className="hidden lg:flex lg:col-span-7 relative overflow-hidden">
-                {/* Lapisan 1: Gradien utama Emerald ke Teal */}
                 <div className="absolute inset-0 bg-linear-to-br from-emerald-600 via-teal-700 to-emerald-950 dark:from-emerald-950 dark:via-teal-950 dark:to-slate-950" />
 
-                {/* Lapisan 2: Pendar cahaya lembut (Ambient Neon Glow) */}
                 <div aria-hidden="true" className="pointer-events-none absolute inset-0">
                     <div className="absolute -top-16 -left-16 h-72 w-72 rounded-full bg-emerald-300/20 blur-3xl" />
                     <div className="absolute bottom-8 right-8 h-80 w-80 rounded-full bg-teal-400/15 blur-3xl" />
                     <div className="absolute top-1/2 left-1/3 h-60 w-60 -translate-y-1/2 rounded-full bg-emerald-400/10 blur-3xl" />
                 </div>
 
-                {/* Lapisan 3: Tekstur garis grid tipis */}
                 <div
                     aria-hidden="true"
                     className="pointer-events-none absolute inset-0 opacity-[0.05]"
@@ -307,9 +250,7 @@ export function ForceChangePasswordPage() {
                     }}
                 />
 
-                {/* Lapisan 4: Konten utama dengan distribusi ruang vertikal otomatis */}
                 <div className="relative z-10 mx-auto flex w-full max-w-3xl flex-col justify-between p-7 xl:p-12 text-white">
-                    {/* Header Identitas Aplikasi */}
                     <div className="flex items-center gap-3">
                         <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-white/25 bg-white/15 backdrop-blur-md shadow-md shadow-emerald-950/20">
                             <School size={22} className="text-white" />
@@ -329,7 +270,6 @@ export function ForceChangePasswordPage() {
                         </div>
                     </div>
 
-                    {/* Blok Tajuk Aktivasi & Keamanan Akun */}
                     <div className="my-auto py-4">
                         <div className="mb-3.5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1 text-xs font-medium text-emerald-100 backdrop-blur-md">
                             <LockKeyhole size={14} className="text-emerald-200" />
@@ -361,7 +301,6 @@ export function ForceChangePasswordPage() {
                         </p>
                     </div>
 
-                    {/* Baris 3 Kartu Kaca (Glassmorphism Cards) Kompak & Utuh */}
                     <div className="grid grid-cols-3 gap-3 xl:gap-4">
                         {securityHighlights.map((item) => {
                             const IconComponent = item.icon;
@@ -384,11 +323,7 @@ export function ForceChangePasswordPage() {
                 </div>
             </aside>
 
-            {/* =====================================================================
-          PANEL KANAN (5 KOLOM): FORMULIR PEMBARUAN KATA SANDI DALAM KARTU
-         ===================================================================== */}
             <main className="col-span-1 lg:col-span-5 flex flex-col justify-between p-4 sm:p-6 xl:p-8 bg-muted/30">
-                {/* Baris Kontrol Atas: Logo Mobile + Pengalih Bahasa & Tema */}
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2.5 lg:hidden">
                         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
@@ -422,10 +357,8 @@ export function ForceChangePasswordPage() {
                     </div>
                 </div>
 
-                {/* Kontainer Kartu Formulir Pembaruan Sandi */}
                 <div className="mx-auto my-auto w-full max-w-105 py-3">
                     <div className="rounded-2xl border border-border bg-card p-6 sm:p-7 shadow-sm">
-                        {/* Tajuk Kartu */}
                         <div className="mb-4">
                             <h2 className="text-xl font-bold tracking-tight text-card-foreground">
                                 {locale === 'id' ? 'Pembaruan Kata Sandi Wajib' : 'Mandatory Password Update'}
@@ -437,7 +370,6 @@ export function ForceChangePasswordPage() {
                             </p>
                         </div>
 
-                        {/* Badge Identitas Akun yang Sedang Diaktifkan */}
                         {user && (
                             <div className="mb-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-xs">
                                 <p className="font-semibold text-foreground truncate">{user.fullName}</p>
@@ -447,7 +379,6 @@ export function ForceChangePasswordPage() {
 
                         <Form {...form}>
                             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-3.5">
-                                {/* Field Kata Sandi Baru */}
                                 <FormField
                                     control={form.control}
                                     name="newPassword"
@@ -486,7 +417,6 @@ export function ForceChangePasswordPage() {
                                     )}
                                 />
 
-                                {/* Field Konfirmasi Kata Sandi Baru */}
                                 <FormField
                                     control={form.control}
                                     name="confirmPassword"
@@ -529,7 +459,6 @@ export function ForceChangePasswordPage() {
                                     )}
                                 />
 
-                                {/* Tombol Aksi Utama & Tombol Batal */}
                                 <div className="pt-2 space-y-2">
                                     <Button
                                         type="submit"
@@ -564,7 +493,6 @@ export function ForceChangePasswordPage() {
                     </div>
                 </div>
 
-                {/* Footer Identitas Sistem */}
                 <div className="text-center text-[11px] text-muted-foreground">
                     {APP_NAME} v{APP_VERSION} —{' '}
                     {locale === 'id' ? 'Sistem Manajemen Sekolah' : 'School Management System'}

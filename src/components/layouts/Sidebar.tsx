@@ -58,7 +58,6 @@ const LIBRARY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_PERPUS']
 const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
 
-// Semua guru dan staf wajib Presensi GPS, KECUALI SUPER_ADMIN dan ADMIN
 const ATTENDANCE_STAFF_ROLES = [
   'KEPALA_SEKOLAH',
   'OPERATOR',
@@ -100,6 +99,7 @@ export function Sidebar() {
 
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
+  const storeEffectiveRoles = useAuthStore((state) => state.getEffectiveRoles);
 
   const [expandedGroups, setExpandedGroups] = useState<string[]>([
     'main',
@@ -135,7 +135,6 @@ export function Sidebar() {
       ],
     },
     {
-      // Menu khusus SISWA dan ORANG_TUA
       id: 'portal',
       title: locale === 'id' ? 'Akademik & Keuangan' : 'Academic & Finance',
       items: [
@@ -287,8 +286,14 @@ export function Sidebar() {
     },
   ];
 
-  // Gabungkan Role Utama + Additional Roles + Tugas Tambahan Dapodik menjadi satu daftar
-  const effectiveUserRoles = useMemo(() => getEffectiveRoles(user), [user]);
+  // Gabungkan Role Utama + Additional Roles + Tugas Tambahan Dapodik dari kedua sumber
+  const effectiveUserRoles = useMemo(() => {
+    const combined = new Set<string>([
+      ...getEffectiveRoles(user),
+      ...storeEffectiveRoles(),
+    ]);
+    return Array.from(combined);
+  }, [user, storeEffectiveRoles]);
 
   const filteredGroups: NavGroup[] = useMemo(
     () =>
