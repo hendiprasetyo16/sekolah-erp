@@ -1,14 +1,15 @@
 // src/modules/attendance/utils/holidayApiService.ts
-import {
-  normalizeHolidayDate,
-  type ParsedHolidayRow,
-} from './excelHolidayParser';
+import type { ParsedHolidayRow } from './excelHolidayParser';
 
 export type HolidayApiProviderId =
   | 'AUTO'
-  | 'DAYOFF_API'
-  | 'HARILIBUR_API'
-  | 'LIBUR_DENO';
+  | 'TANGGAL_MERAH_UPSET'
+  | 'API_HARI_LIBUR_VERCEL'
+  | 'OPICA_API_LIBUR'
+  | 'KRESNASATYA_CLOUDFLARE'
+  | 'KRESNASATYA_NETLIFY'
+  | 'KRESNASATYA_VERCEL'
+  | 'BUILTIN_MUHAMMADIYAH';
 
 export type CalendarReferenceMode = 'MUHAMMADIYAH' | 'PEMERINTAH';
 
@@ -23,57 +24,156 @@ export interface FetchHolidayServerResult {
 }
 
 /**
- * Daftar 3 Server API Kalender Libur Indonesia + Mode Otomatis Bergantian
+ * Daftar 6 Server API Kalender Libur Indonesia + Mode Otomatis Bergantian + Cadangan Lokal
  */
 export const HOLIDAY_API_PROVIDER_OPTIONS: HolidayApiProviderOption[] = [
   {
     id: 'AUTO',
-    label: 'Otomatis (Bergantian 3 Server)',
+    label: 'Otomatis (Bergantian 6 Server Aktif)',
   },
   {
-    id: 'DAYOFF_API',
-    label: 'Server 1: Dayoff API (Nasional + Cuti)',
+    id: 'TANGGAL_MERAH_UPSET',
+    label: 'Server 1: Tanggal Merah API (upset.dev)',
   },
   {
-    id: 'HARILIBUR_API',
-    label: 'Server 2: API Hari Libur (Vercel)',
+    id: 'API_HARI_LIBUR_VERCEL',
+    label: 'Server 2: API Hari Libur (api-hari-libur.vercel.app)',
   },
   {
-    id: 'LIBUR_DENO',
-    label: 'Server 3: Libur API (Deno)',
+    id: 'OPICA_API_LIBUR',
+    label: 'Server 3: API Libur Indonesia (app.opica.id)',
+  },
+  {
+    id: 'KRESNASATYA_CLOUDFLARE',
+    label: 'Server 4: Hari Libur Cloudflare (pages.dev)',
+  },
+  {
+    id: 'KRESNASATYA_NETLIFY',
+    label: 'Server 5: Hari Libur Netlify (netlify.app)',
+  },
+  {
+    id: 'KRESNASATYA_VERCEL',
+    label: 'Server 6: Hari Libur Vercel (api-harilibur.vercel.app)',
+  },
+  {
+    id: 'BUILTIN_MUHAMMADIYAH',
+    label: 'Cadangan Lokal (Offline 2026–2028)',
   },
 ];
 
-// Batas waktu tunggu cepat per server (5 detik) agar segera pindah jika server lambat
-const FETCH_TIMEOUT_MS = 5000;
+// Batas waktu tunggu per server (4 detik) sebelum otomatis berpindah ke server berikutnya
+const FETCH_TIMEOUT_MS = 4000;
 
 interface SingleProviderConfig {
-  id: Exclude<HolidayApiProviderId, 'AUTO'>;
+  id: Exclude<HolidayApiProviderId, 'AUTO' | 'BUILTIN_MUHAMMADIYAH'>;
   name: string;
   buildUrl: (year: number) => string;
 }
 
+/**
+ * Konfigurasi Endpoint untuk ke-6 Server API Publik Indonesia
+ */
 const SINGLE_PROVIDERS: SingleProviderConfig[] = [
   {
-    id: 'DAYOFF_API',
-    name: 'Server 1 (Dayoff API)',
-    buildUrl: (year) => `https://dayoffapi.vercel.app/api?year=${year}`,
+    id: 'TANGGAL_MERAH_UPSET',
+    name: 'Server 1 (Tanggal Merah API)',
+    buildUrl: (year) => `https://tanggalmerah.upset.dev/api/holidays?year=${year}`,
   },
   {
-    id: 'HARILIBUR_API',
+    id: 'API_HARI_LIBUR_VERCEL',
     name: 'Server 2 (API Hari Libur)',
-    buildUrl: (year) => `https://api-harilibur.vercel.app/api?year=${year}`,
+    buildUrl: (year) => `https://api-hari-libur.vercel.app/api?year=${year}`,
   },
   {
-    id: 'LIBUR_DENO',
-    name: 'Server 3 (Libur Deno)',
-    buildUrl: (year) => `https://libur.deno.dev/api?year=${year}`,
+    id: 'OPICA_API_LIBUR',
+    name: 'Server 3 (Opica API Libur)',
+    buildUrl: (year) => `https://app.opica.id/api-libur/api?year=${year}`,
+  },
+  {
+    id: 'KRESNASATYA_CLOUDFLARE',
+    name: 'Server 4 (Cloudflare Pages)',
+    buildUrl: (year) => `https://api-harilibur.pages.dev/api?year=${year}`,
+  },
+  {
+    id: 'KRESNASATYA_NETLIFY',
+    name: 'Server 5 (Netlify)',
+    buildUrl: (year) => `https://api-harilibur.netlify.app/api?year=${year}`,
+  },
+  {
+    id: 'KRESNASATYA_VERCEL',
+    name: 'Server 6 (Vercel)',
+    buildUrl: (year) => `https://api-harilibur.vercel.app/api?year=${year}`,
   },
 ];
 
 /**
- * Referensi tanggal penting Kalender Muhammadiyah (KHGT / Hisab)
- * Digunakan untuk menambah Awal Puasa (1 Ramadan) & menyesuaikan Idul Fitri jika berbeda dari SKB Pemerintah
+ * Data cadangan lokal (2026-2028) sebagai pengaman terakhir jika jaringan sekolah offline
+ */
+const BUILTIN_FALLBACK_HOLIDAYS: Record<number, ParsedHolidayRow[]> = {
+  2026: [
+    { date: '2026-01-01', name: 'Tahun Baru 2026 Masehi' },
+    { date: '2026-01-16', name: 'Isra Mikraj Nabi Muhammad SAW' },
+    { date: '2026-02-16', name: 'Cuti Bersama Tahun Baru Imlek 2577' },
+    { date: '2026-02-17', name: 'Tahun Baru Imlek 2577 Kongzili' },
+    { date: '2026-03-18', name: 'Cuti Bersama Hari Suci Nyepi' },
+    { date: '2026-03-19', name: 'Hari Suci Nyepi Tahun Baru Saka 1948' },
+    { date: '2026-03-20', name: 'Cuti Bersama Idul Fitri 1447 H' },
+    { date: '2026-03-21', name: 'Hari Raya Idul Fitri 1447 H' },
+    { date: '2026-03-22', name: 'Hari Raya Idul Fitri 1447 H (Hari Kedua)' },
+    { date: '2026-03-23', name: 'Cuti Bersama Idul Fitri 1447 H' },
+    { date: '2026-03-24', name: 'Cuti Bersama Idul Fitri 1447 H' },
+    { date: '2026-04-03', name: 'Wafat Yesus Kristus' },
+    { date: '2026-04-05', name: 'Kebangkitan Yesus Kristus (Paskah)' },
+    { date: '2026-05-01', name: 'Hari Buruh Internasional' },
+    { date: '2026-05-14', name: 'Kenaikan Yesus Kristus' },
+    { date: '2026-05-15', name: 'Cuti Bersama Kenaikan Yesus Kristus' },
+    { date: '2026-05-27', name: 'Hari Raya Idul Adha 1447 H' },
+    { date: '2026-05-28', name: 'Cuti Bersama Idul Adha 1447 H' },
+    { date: '2026-05-31', name: 'Hari Raya Waisak 2570 BE' },
+    { date: '2026-06-01', name: 'Hari Lahir Pancasila' },
+    { date: '2026-06-16', name: 'Tahun Baru Islam 1448 H' },
+    { date: '2026-08-17', name: 'Hari Kemerdekaan Republik Indonesia' },
+    { date: '2026-08-25', name: 'Maulid Nabi Muhammad SAW' },
+    { date: '2026-12-24', name: 'Cuti Bersama Kelahiran Yesus Kristus' },
+    { date: '2026-12-25', name: 'Kelahiran Yesus Kristus (Natal)' },
+  ],
+  2027: [
+    { date: '2027-01-01', name: 'Tahun Baru 2027 Masehi' },
+    { date: '2027-01-05', name: 'Isra Mikraj Nabi Muhammad SAW' },
+    { date: '2027-02-06', name: 'Tahun Baru Imlek 2578 Kongzili' },
+    { date: '2027-03-09', name: 'Hari Suci Nyepi Tahun Baru Saka 1949' },
+    { date: '2027-03-10', name: 'Hari Raya Idul Fitri 1448 H' },
+    { date: '2027-03-11', name: 'Hari Raya Idul Fitri 1448 H (Hari Kedua)' },
+    { date: '2027-03-26', name: 'Wafat Yesus Kristus' },
+    { date: '2027-03-28', name: 'Kebangkitan Yesus Kristus (Paskah)' },
+    { date: '2027-05-01', name: 'Hari Buruh Internasional' },
+    { date: '2027-05-06', name: 'Kenaikan Yesus Kristus' },
+    { date: '2027-05-17', name: 'Hari Raya Idul Adha 1448 H' },
+    { date: '2027-05-20', name: 'Hari Raya Waisak 2571 BE' },
+    { date: '2027-06-01', name: 'Hari Lahir Pancasila' },
+    { date: '2027-06-06', name: 'Tahun Baru Islam 1449 H' },
+    { date: '2027-08-14', name: 'Maulid Nabi Muhammad SAW' },
+    { date: '2027-08-17', name: 'Hari Kemerdekaan Republik Indonesia' },
+    { date: '2027-12-25', name: 'Kelahiran Yesus Kristus (Natal)' },
+  ],
+  2028: [
+    { date: '2028-01-01', name: 'Tahun Baru 2028 Masehi' },
+    { date: '2028-01-26', name: 'Tahun Baru Imlek 2579 Kongzili' },
+    { date: '2028-02-27', name: 'Hari Raya Idul Fitri 1449 H' },
+    { date: '2028-02-28', name: 'Hari Raya Idul Fitri 1449 H (Hari Kedua)' },
+    { date: '2028-03-27', name: 'Hari Suci Nyepi Tahun Baru Saka 1950' },
+    { date: '2028-04-14', name: 'Wafat Yesus Kristus' },
+    { date: '2028-05-01', name: 'Hari Buruh Internasional' },
+    { date: '2028-05-05', name: 'Hari Raya Idul Adha 1449 H' },
+    { date: '2028-05-25', name: 'Kenaikan Yesus Kristus' },
+    { date: '2028-06-01', name: 'Hari Lahir Pancasila' },
+    { date: '2028-08-17', name: 'Hari Kemerdekaan Republik Indonesia' },
+    { date: '2028-12-25', name: 'Kelahiran Yesus Kristus (Natal)' },
+  ],
+};
+
+/**
+ * Penyesuaian khusus Kalender Muhammadiyah (KHGT / Hisab)
  */
 const MUHAMMADIYAH_CALENDAR_NOTES: Record<
   number,
@@ -117,21 +217,39 @@ interface RawHolidayApiItem {
   holiday_date?: string;
   date?: string;
   keterangan?: string;
+  description?: string;
   holiday_name?: string;
   localName?: string;
   name?: string;
+  type?: string;
+  holiday_type?: string;
   is_cuti?: boolean;
   is_national_holiday?: boolean;
 }
 
-function ensurePaddedIsoDate(rawDate: string): string | null {
-  const trimmed = rawDate.trim();
-  const simpleYmd = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-  if (simpleYmd) {
-    const [, y, m, d] = simpleYmd;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+/**
+ * Mengekstrak array data libur dari berbagai bentuk pembungkus JSON server
+ * (Array langsung, { data: [...] }, { holidays: [...] }, atau { result: [...] })
+ */
+function extractRawHolidayList(payload: unknown): RawHolidayApiItem[] {
+  if (Array.isArray(payload)) {
+    return payload as RawHolidayApiItem[];
   }
-  return normalizeHolidayDate(trimmed);
+  if (typeof payload === 'object' && payload !== null) {
+    const obj = payload as Record<string, unknown>;
+    if (Array.isArray(obj.data)) return obj.data as RawHolidayApiItem[];
+    if (Array.isArray(obj.holidays)) return obj.holidays as RawHolidayApiItem[];
+    if (Array.isArray(obj.result)) return obj.result as RawHolidayApiItem[];
+  }
+  return [];
+}
+
+function normalizeIsoDateString(rawDate: string): string | null {
+  const trimmed = String(rawDate || '').trim();
+  const match = trimmed.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (!match) return null;
+  const [, y, m, d] = match;
+  return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
 }
 
 /**
@@ -146,7 +264,6 @@ function applyMuhammadiyahCalendar(
   let adjusted = [...rows];
 
   if (ref?.idulFitriDates && ref.idulFitriDates.length > 0) {
-    // Ganti entri utama Idul Fitri dari pemerintah dengan tanggal Idul Fitri Muhammadiyah
     adjusted = adjusted.filter(
       (r) =>
         !(
@@ -164,7 +281,6 @@ function applyMuhammadiyahCalendar(
     }
   }
 
-  // Hapus duplikat tanggal jika ada, pertahankan yang paling spesifik
   const dedupMap = new Map<string, ParsedHolidayRow>();
   for (const item of adjusted) {
     dedupMap.set(item.date, item);
@@ -176,7 +292,7 @@ function applyMuhammadiyahCalendar(
 }
 
 /**
- * Mengambil data dari satu server spesifik dengan batas waktu cepat
+ * Mengambil dan menormalisasi data dari satu server spesifik
  */
 async function fetchFromSingleProvider(
   provider: SingleProviderConfig,
@@ -197,17 +313,11 @@ async function fetchFromSingleProvider(
     });
 
     if (!response.ok) {
-      throw new Error(`${provider.name} merespons status ${response.status}`);
+      throw new Error(`${provider.name} status ${response.status}`);
     }
 
     const payload: unknown = await response.json();
-    const rawList: RawHolidayApiItem[] = Array.isArray(payload)
-      ? (payload as RawHolidayApiItem[])
-      : typeof payload === 'object' &&
-          payload !== null &&
-          Array.isArray((payload as { data?: unknown }).data)
-        ? (payload as { data: RawHolidayApiItem[] }).data
-        : [];
+    const rawList = extractRawHolidayList(payload);
 
     const results: ParsedHolidayRow[] = [];
 
@@ -215,18 +325,25 @@ async function fetchFromSingleProvider(
       const rawDate = item.tanggal ?? item.holiday_date ?? item.date ?? '';
       const rawName = (
         item.keterangan ??
+        item.description ??
         item.holiday_name ??
         item.localName ??
         item.name ??
         ''
       ).trim();
 
-      const normalizedDate = ensurePaddedIsoDate(rawDate);
+      const normalizedDate = normalizeIsoDateString(rawDate);
       if (!normalizedDate || !rawName) continue;
       if (!normalizedDate.startsWith(`${year}-`)) continue;
 
+      const rawType = String(
+        item.type ?? item.holiday_type ?? ''
+      ).toLowerCase();
+
       const isCuti =
         Boolean(item.is_cuti) ||
+        rawType.includes('cuti') ||
+        rawType.includes('collective') ||
         rawName.toLowerCase().includes('cuti bersama') ||
         item.is_national_holiday === false;
 
@@ -244,9 +361,7 @@ async function fetchFromSingleProvider(
     }
 
     if (results.length === 0) {
-      throw new Error(
-        `${provider.name} tidak mengembalikan data untuk tahun ${year}`
-      );
+      throw new Error(`${provider.name} data tahun ${year} kosong`);
     }
 
     results.sort((a, b) => a.date.localeCompare(b.date));
@@ -257,7 +372,7 @@ async function fetchFromSingleProvider(
 }
 
 /**
- * Fungsi utama: sinkronisasi 3 server API + opsi penyesuaian Kalender Muhammadiyah
+ * Fungsi utama: sinkronisasi 6 server API + pelaporan progres + cadangan otomatis
  */
 export async function fetchHolidaysFromServer(options: {
   year: number;
@@ -265,6 +380,7 @@ export async function fetchHolidaysFromServer(options: {
   providerId: HolidayApiProviderId;
   calendarMode: CalendarReferenceMode;
   includeAwalRamadan: boolean;
+  onProgress?: (statusText: string) => void;
 }): Promise<FetchHolidayServerResult> {
   const {
     year,
@@ -272,7 +388,39 @@ export async function fetchHolidaysFromServer(options: {
     providerId,
     calendarMode,
     includeAwalRamadan,
+    onProgress,
   } = options;
+
+  const finalizeRows = (
+    baseRows: ParsedHolidayRow[],
+    sourceName: string
+  ): FetchHolidayServerResult => {
+    const finalRows =
+      calendarMode === 'MUHAMMADIYAH'
+        ? applyMuhammadiyahCalendar(baseRows, year, includeAwalRamadan)
+        : baseRows;
+
+    return {
+      rows: finalRows,
+      usedProviderLabel:
+        calendarMode === 'MUHAMMADIYAH'
+          ? `${sourceName} + Kalender Muhammadiyah`
+          : sourceName,
+    };
+  };
+
+  // Jika user memilih langsung Cadangan Lokal
+  if (providerId === 'BUILTIN_MUHAMMADIYAH') {
+    const localRows = (BUILTIN_FALLBACK_HOLIDAYS[year] ?? []).filter((r) =>
+      includeCutiBersama ? true : !r.name.toLowerCase().includes('cuti bersama')
+    );
+    if (localRows.length === 0) {
+      throw new Error(
+        `Cadangan lokal belum tersedia untuk tahun ${year}. Pilih Server 1–6 atau Import Excel.`
+      );
+    }
+    return finalizeRows(localRows, 'Cadangan Lokal');
+  }
 
   const targetProviders =
     providerId === 'AUTO'
@@ -281,30 +429,23 @@ export async function fetchHolidaysFromServer(options: {
 
   const errorMessages: string[] = [];
 
-  for (const provider of targetProviders) {
+  for (let i = 0; i < targetProviders.length; i++) {
+    const provider = targetProviders[i];
+    onProgress?.(
+      `Menghubungkan ${provider.name} (${i + 1}/${targetProviders.length})...`
+    );
+
     try {
       const rawRows = await fetchFromSingleProvider(
         provider,
         year,
         includeCutiBersama
       );
-
-      const finalRows =
-        calendarMode === 'MUHAMMADIYAH'
-          ? applyMuhammadiyahCalendar(rawRows, year, includeAwalRamadan)
-          : rawRows;
-
-      return {
-        rows: finalRows,
-        usedProviderLabel:
-          calendarMode === 'MUHAMMADIYAH'
-            ? `${provider.name} + Penyesuaian Muhammadiyah`
-            : provider.name,
-      };
+      return finalizeRows(rawRows, provider.name);
     } catch (err: unknown) {
       const msg =
         err instanceof Error && err.name === 'AbortError'
-          ? `${provider.name} timeout (${FETCH_TIMEOUT_MS / 1000}d)`
+          ? `${provider.name} timeout`
           : err instanceof Error
             ? err.message
             : String(err);
@@ -312,9 +453,16 @@ export async function fetchHolidaysFromServer(options: {
     }
   }
 
+  // Jika mode AUTO dan keenam server eksternal gagal, pakai Cadangan Lokal (2026-2028)
+  if (providerId === 'AUTO' && BUILTIN_FALLBACK_HOLIDAYS[year]) {
+    onProgress?.('Semua server luar sibuk, memuat dari Cadangan Lokal...');
+    const localRows = BUILTIN_FALLBACK_HOLIDAYS[year].filter((r) =>
+      includeCutiBersama ? true : !r.name.toLowerCase().includes('cuti bersama')
+    );
+    return finalizeRows(localRows, 'Cadangan Lokal (Auto-Fallback)');
+  }
+
   throw new Error(
-    providerId === 'AUTO'
-      ? `Ketiga server gagal dihubungi (${errorMessages.join(' | ')}).`
-      : errorMessages[0] ?? 'Gagal terhubung ke server hari libur.'
+    `Gagal terhubung ke server (${errorMessages.join(' | ')}). Coba pilih server lain atau gunakan Cadangan Lokal.`
   );
 }

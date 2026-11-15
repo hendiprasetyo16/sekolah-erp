@@ -17,6 +17,11 @@ import {
     Briefcase,
     Server,
     Moon,
+    Loader2,
+    Pencil,
+    List,
+    Calendar,
+    X,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -32,6 +37,8 @@ import {
     type HolidayApiProviderId,
     type CalendarReferenceMode,
 } from '../utils/holidayApiService';
+import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
+import { HolidayCalendarView } from './HolidayCalendarView';
 
 const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
 const INITIAL_BASE_YEARS = [2026, 2027, 2028];
@@ -73,7 +80,7 @@ export function AttendanceSettingsTab() {
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
     const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
 
-    // 2. State Tahun, Pilihan 3 Server API, Mode Muhammadiyah, & Hari Libur
+    // 2. State Tahun, Pilihan Server API, Mode Muhammadiyah, & Hari Libur
     const [filterYear, setFilterYear] = useState<number>(() =>
         new Date().getFullYear()
     );
@@ -98,11 +105,41 @@ export function AttendanceSettingsTab() {
     const [includeAwalRamadan, setIncludeAwalRamadan] = useState<boolean>(true);
     const [isFetchingServer, setIsFetchingServer] = useState<boolean>(false);
 
+    // Status langsung di dalam kotak Sync
+    const [syncFeedback, setSyncFeedback] = useState<{
+        status: 'loading' | 'success' | 'error';
+        text: string;
+    } | null>(null);
+
     const [holidayScope, setHolidayScope] = useState<'GLOBAL' | 'SCHOOL'>(
         isSuperAdmin ? 'GLOBAL' : 'SCHOOL'
     );
     const [holidays, setHolidays] = useState<HolidayRecord[]>([]);
     const [isLoadingHolidays, setIsLoadingHolidays] = useState<boolean>(false);
+
+    // Opsi Tampilan Daftar vs Kalender 12 Bulan
+    const [holidayViewMode, setHolidayViewMode] = useState<'LIST' | 'CALENDAR'>(
+        'LIST'
+    );
+
+    // Checklist ID untuk Hapus Terpilih / Hapus Semua
+    const [selectedHolidayIds, setSelectedHolidayIds] = useState<string[]>([]);
+
+    // Modal Edit Hari Libur
+    const [editingHoliday, setEditingHoliday] = useState<HolidayRecord | null>(
+        null
+    );
+    const [editDateInput, setEditDateInput] = useState<string>('');
+    const [editNameInput, setEditNameInput] = useState<string>('');
+    const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
+
+    // Modal Konfirmasi Hapus Modern (menggantikan window.confirm)
+    const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
+        title: string;
+        description: string;
+        targetIds: string[];
+    } | null>(null);
+    const [isDeletingHolidays, setIsDeletingHolidays] = useState<boolean>(false);
 
     // Tambah 1 tanggal libur manual
     const [newHolidayDate, setNewHolidayDate] = useState<string>('');
@@ -220,10 +257,10 @@ export function AttendanceSettingsTab() {
         });
 
         setFilterYear(nextYear);
-        showToast(
-            'success',
-            `Tahun ${nextYear} berhasil ditambahkan! Klik "Sync dari Server (${nextYear})" atau "Import Excel" untuk mengisi tanggal merah.`
-        );
+        setSyncFeedback({
+            status: 'success',
+            text: `Tahun ${nextYear} ditambahkan. Klik "Sync dari Server (${nextYear})" untuk menarik jadwal liburnya.`,
+        });
     };
 
     // Simpan pengaturan jam masuk, toleransi keterlambatan, jam pulang, dan hari kerja
@@ -272,6 +309,7 @@ export function AttendanceSettingsTab() {
     // Muat daftar hari libur untuk tahun terpilih + deteksi semua tahun yang ada di DB
     const loadHolidays = useCallback(async () => {
         setIsLoadingHolidays(true);
+        setSelectedHolidayIds([]);
         try {
             let query = supabase
                 .from('national_holidays')
@@ -324,7 +362,7 @@ export function AttendanceSettingsTab() {
     const resolvedHolidaySchoolId =
         isSuperAdmin && holidayScope === 'GLOBAL' ? null : selectedSchoolId || null;
 
-    // Simpan batch hari libur
+    // Simpan batch hari libur ke Supabase
     const upsertHolidayRows = async (rows: ParsedHolidayRow[]) => {
         const validRows = rows.filter(
             (r) => r.date.trim().length === 10 && r.name.trim().length > 0
@@ -386,9 +424,14 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Ambil Data Hari Libur Nasional & Cuti Bersama dari 3 Server API
+    // Ambil Data Hari Libur Nasional & Cuti Bersama dari Server API
     const handleFetchFromServer = async () => {
         setIsFetchingServer(true);
+        setSyncFeedback({
+            status: 'loading',
+            text: `Sedang menarik data libur tahun ${filterYear}...`,
+        });
+
         try {
             const { rows, usedProviderLabel } = await fetchHolidaysFromServer({
                 year: filterYear,
@@ -397,19 +440,24 @@ export function AttendanceSettingsTab() {
                 calendarMode: calendarRefMode,
                 includeAwalRamadan:
                     calendarRefMode === 'MUHAMMADIYAH' && includeAwalRamadan,
+                onProgress: (statusText) => {
+                    setSyncFeedback({ status: 'loading', text: statusText });
+                },
             });
 
             setPreviewRows(rows);
             setPreviewSourceLabel(`${usedProviderLabel} — Tahun ${filterYear}`);
-            showToast(
-                'success',
-                `Berhasil menarik ${rows.length} data libur tahun ${filterYear} dari ${usedProviderLabel}! Kamu bisa edit tanggal di bawah sebelum Simpan ke Database.`
-            );
+            setSyncFeedback({
+                status: 'success',
+                text: `Berhasil menarik ${rows.length} tanggal merah dari ${usedProviderLabel}! Silakan cek pratinjau di bawah lalu klik "Simpan ke Database".`,
+            });
         } catch (err: unknown) {
-            showToast(
-                'error',
-                err instanceof Error ? err.message : 'Gagal mengambil data dari server.'
-            );
+            const errMsg =
+                err instanceof Error ? err.message : 'Gagal mengambil data dari server.';
+            setSyncFeedback({
+                status: 'error',
+                text: errMsg,
+            });
         } finally {
             setIsFetchingServer(false);
         }
@@ -419,7 +467,10 @@ export function AttendanceSettingsTab() {
     const handleAddSingleHoliday = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newHolidayDate || newHolidayName.trim().length < 3) {
-            showToast('error', 'Isi tanggal dan keterangan hari libur dengan lengkap.');
+            setSyncFeedback({
+                status: 'error',
+                text: 'Isi tanggal dan keterangan hari libur dengan lengkap.',
+            });
             return;
         }
 
@@ -433,14 +484,68 @@ export function AttendanceSettingsTab() {
             setNewHolidayDate('');
             setNewHolidayName('');
             await loadHolidays();
-            showToast('success', 'Hari libur berhasil ditambahkan ke database!');
+            setSyncFeedback({
+                status: 'success',
+                text: 'Hari libur berhasil ditambahkan ke database!',
+            });
         } catch (err: unknown) {
-            showToast(
-                'error',
-                err instanceof Error ? err.message : 'Gagal menambahkan hari libur.'
-            );
+            setSyncFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error ? err.message : 'Gagal menambahkan hari libur.',
+            });
         } finally {
             setIsAddingHoliday(false);
+        }
+    };
+
+    // Buka Modal Edit Hari Libur
+    const handleOpenEditModal = (item: HolidayRecord) => {
+        if (!isSuperAdmin && item.schoolId === null) {
+            setSyncFeedback({
+                status: 'error',
+                text: 'Hari Libur Nasional Global hanya dapat diubah oleh Super Admin.',
+            });
+            return;
+        }
+        setEditingHoliday(item);
+        setEditDateInput(item.date);
+        setEditNameInput(item.name);
+    };
+
+    // Simpan Perubahan dari Modal Edit
+    const handleSaveEditHoliday = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!editingHoliday) return;
+        if (!editDateInput || editNameInput.trim().length < 3) {
+            return;
+        }
+
+        setIsSavingEdit(true);
+        try {
+            const { error } = await supabase
+                .from('national_holidays')
+                .update({
+                    date: editDateInput,
+                    name: editNameInput.trim(),
+                })
+                .eq('id', editingHoliday.id);
+
+            if (error) throw error;
+            setEditingHoliday(null);
+            await loadHolidays();
+            setSyncFeedback({
+                status: 'success',
+                text: `Perubahan hari libur "${editNameInput.trim()}" berhasil disimpan!`,
+            });
+        } catch (err: unknown) {
+            setSyncFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error ? err.message : 'Gagal memperbarui hari libur.',
+            });
+        } finally {
+            setIsSavingEdit(false);
         }
     };
 
@@ -455,23 +560,24 @@ export function AttendanceSettingsTab() {
         try {
             const parsed = await parseHolidaySpreadsheetFile(file);
             if (parsed.length === 0) {
-                showToast(
-                    'error',
-                    'Tidak ada baris valid ditemukan. Pastikan kolom 1 adalah Tanggal (YYYY-MM-DD) dan kolom 2 adalah Keterangan.'
-                );
+                setSyncFeedback({
+                    status: 'error',
+                    text: 'Tidak ada baris valid ditemukan di file. Pastikan kolom 1 adalah Tanggal (YYYY-MM-DD) dan kolom 2 adalah Keterangan.',
+                });
                 return;
             }
             setPreviewRows(parsed);
             setPreviewSourceLabel(`File ${file.name}`);
-            showToast(
-                'success',
-                `Berhasil membaca ${parsed.length} tanggal libur dari file. Periksa pratinjau lalu klik Simpan ke Database.`
-            );
+            setSyncFeedback({
+                status: 'success',
+                text: `Berhasil membaca ${parsed.length} tanggal dari file ${file.name}. Klik "Simpan ke Database" di bawah untuk menyimpan.`,
+            });
         } catch (err: unknown) {
-            showToast(
-                'error',
-                err instanceof Error ? err.message : 'Gagal membaca file Excel/CSV.'
-            );
+            setSyncFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error ? err.message : 'Gagal membaca file Excel/CSV.',
+            });
         }
     };
 
@@ -489,47 +595,77 @@ export function AttendanceSettingsTab() {
             setPreviewRows([]);
             setPreviewSourceLabel('');
             await loadHolidays();
-            showToast(
-                'success',
-                `${countSaved} data hari libur & cuti bersama berhasil disimpan ke database!`
-            );
+            setSyncFeedback({
+                status: 'success',
+                text: `${countSaved} data hari libur & cuti bersama berhasil disimpan ke database!`,
+            });
         } catch (err: unknown) {
-            showToast(
-                'error',
-                err instanceof Error ? err.message : 'Gagal menyimpan data ke database.'
-            );
+            setSyncFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error
+                        ? err.message
+                        : 'Gagal menyimpan data ke database.',
+            });
         } finally {
             setIsImporting(false);
         }
     };
 
-    const handleDeleteHoliday = async (item: HolidayRecord) => {
-        if (!isSuperAdmin && item.schoolId === null) {
-            showToast(
-                'error',
-                'Hari Libur Nasional Global hanya dapat dihapus oleh Super Admin.'
-            );
+    // Daftar item yang boleh dihapus oleh user saat ini
+    const deletableHolidays = useMemo(
+        () => holidays.filter((item) => isSuperAdmin || item.schoolId !== null),
+        [holidays, isSuperAdmin]
+    );
+
+    const isAllSelected =
+        deletableHolidays.length > 0 &&
+        deletableHolidays.every((h) => selectedHolidayIds.includes(h.id));
+
+    const toggleSelectAll = () => {
+        if (isAllSelected) {
+            setSelectedHolidayIds([]);
+        } else {
+            setSelectedHolidayIds(deletableHolidays.map((h) => h.id));
+        }
+    };
+
+    const toggleSelectOne = (id: string) => {
+        setSelectedHolidayIds((prev) =>
+            prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+        );
+    };
+
+    // Eksekusi Hapus dari Modal Konfirmasi Modern
+    const handleConfirmDeleteExecution = async () => {
+        if (!deleteConfirmModal || deleteConfirmModal.targetIds.length === 0) {
             return;
         }
 
-        if (!window.confirm(`Hapus hari libur "${item.name}" (${item.date})?`)) {
-            return;
-        }
-
+        setIsDeletingHolidays(true);
         try {
             const { error } = await supabase
                 .from('national_holidays')
                 .delete()
-                .eq('id', item.id);
+                .in('id', deleteConfirmModal.targetIds);
 
             if (error) throw error;
-            showToast('success', 'Hari libur berhasil dihapus.');
+            const deletedCount = deleteConfirmModal.targetIds.length;
+            setDeleteConfirmModal(null);
+            setSelectedHolidayIds([]);
             await loadHolidays();
+            setSyncFeedback({
+                status: 'success',
+                text: `${deletedCount} data hari libur berhasil dihapus dari database.`,
+            });
         } catch (err: unknown) {
-            showToast(
-                'error',
-                err instanceof Error ? err.message : 'Gagal menghapus hari libur.'
-            );
+            setSyncFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error ? err.message : 'Gagal menghapus hari libur.',
+            });
+        } finally {
+            setIsDeletingHolidays(false);
         }
     };
 
@@ -537,7 +673,7 @@ export function AttendanceSettingsTab() {
 
     return (
         <div className="space-y-6">
-            {/* Toast Notifikasi */}
+            {/* Toast Notifikasi Atas */}
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
@@ -755,7 +891,7 @@ export function AttendanceSettingsTab() {
             </form>
 
             {/* ====================================================================
-          BAGIAN 2: HARI LIBUR NASIONAL & CUTI BERSAMA (3 SERVER API + EXCEL + DB)
+          BAGIAN 2: HARI LIBUR NASIONAL & CUTI BERSAMA (SERVER API + EXCEL + DB)
       ==================================================================== */}
             <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-border pb-3">
@@ -765,7 +901,7 @@ export function AttendanceSettingsTab() {
                             Kalender Hari Libur Nasional, Cuti Bersama & Sekolah
                         </h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                            Sinkronisasi cepat dari 3 server kalender nasional (dengan penyesuaian Muhammadiyah), impor file Excel (.xlsx / .csv), atau input manual.
+                            Sinkronisasi cepat dari 6 server kalender nasional (dengan penyesuaian Muhammadiyah), impor file Excel (.xlsx / .csv), atau input manual.
                         </p>
                     </div>
 
@@ -792,7 +928,7 @@ export function AttendanceSettingsTab() {
                     </div>
                 </div>
 
-                {/* Panel Kontrol Sinkronisasi 3 Server API + Kalender Muhammadiyah */}
+                {/* Panel Kontrol Sinkronisasi Server API + Kalender Muhammadiyah */}
                 <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
                     <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
                         <div className="flex flex-wrap items-center gap-2.5">
@@ -840,9 +976,13 @@ export function AttendanceSettingsTab() {
                             disabled={isFetchingServer}
                             className="btn-primary text-xs py-2 px-4 bg-blue-600 hover:bg-blue-700 shrink-0 self-start xl:self-auto"
                         >
-                            <Server size={14} className={isFetchingServer ? 'animate-pulse' : ''} />
+                            {isFetchingServer ? (
+                                <Loader2 size={14} className="animate-spin" />
+                            ) : (
+                                <Server size={14} />
+                            )}
                             {isFetchingServer
-                                ? 'Menghubungkan Server...'
+                                ? 'Menarik Data...'
                                 : `Sync dari Server (${filterYear})`}
                         </button>
                     </div>
@@ -902,6 +1042,27 @@ export function AttendanceSettingsTab() {
                             </div>
                         )}
                     </div>
+
+                    {/* Indikator Status Langsung */}
+                    {syncFeedback && (
+                        <div
+                            className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
+                                ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
+                                : syncFeedback.status === 'success'
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                                    : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                                }`}
+                        >
+                            {syncFeedback.status === 'loading' ? (
+                                <Loader2 size={15} className="animate-spin shrink-0" />
+                            ) : syncFeedback.status === 'success' ? (
+                                <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                            ) : (
+                                <AlertTriangle size={15} className="text-red-600 shrink-0" />
+                            )}
+                            <span>{syncFeedback.text}</span>
+                        </div>
+                    )}
                 </div>
 
                 {/* Kotak Pratinjau Hasil Server / Excel (Tanggal & Keterangan Bisa Diedit Langsung) */}
@@ -962,62 +1123,76 @@ export function AttendanceSettingsTab() {
                             <table className="w-full text-xs">
                                 <thead className="bg-muted/60 text-left">
                                     <tr>
-                                        <th className="py-2 px-3 font-semibold w-40">Tanggal (Bisa Edit)</th>
-                                        <th className="py-2 px-3 font-semibold">Keterangan Libur / Cuti (Bisa Edit)</th>
+                                        <th className="py-2 px-3 font-semibold w-12">No</th>
+                                        <th className="py-2 px-3 font-semibold w-40">Tanggal</th>
+                                        <th className="py-2 px-3 font-semibold w-36">Pasaran Jawa</th>
+                                        <th className="py-2 px-3 font-semibold">Keterangan Libur / Cuti</th>
                                         <th className="py-2 px-3 font-semibold w-14 text-right">Hapus</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border">
-                                    {previewRows.map((row, idx) => (
-                                        <tr key={`preview-${idx}`}>
-                                            <td className="py-1.5 px-3">
-                                                <input
-                                                    type="date"
-                                                    value={row.date}
-                                                    onChange={(e) =>
-                                                        setPreviewRows((prev) =>
-                                                            prev.map((item, i) =>
-                                                                i === idx
-                                                                    ? { ...item, date: e.target.value }
-                                                                    : item
+                                    {previewRows.map((row, idx) => {
+                                        const jawaInfo =
+                                            row.date.length === 10
+                                                ? getJavaneseDateInfo(row.date)
+                                                : null;
+                                        return (
+                                            <tr key={`preview-${idx}`}>
+                                                <td className="py-1.5 px-3 font-mono text-muted-foreground">
+                                                    {idx + 1}
+                                                </td>
+                                                <td className="py-1.5 px-3">
+                                                    <input
+                                                        type="date"
+                                                        value={row.date}
+                                                        onChange={(e) =>
+                                                            setPreviewRows((prev) =>
+                                                                prev.map((item, i) =>
+                                                                    i === idx
+                                                                        ? { ...item, date: e.target.value }
+                                                                        : item
+                                                                )
                                                             )
-                                                        )
-                                                    }
-                                                    className="form-input w-auto! text-xs py-1 px-2 font-mono text-red-500 font-semibold"
-                                                />
-                                            </td>
-                                            <td className="py-1.5 px-3">
-                                                <input
-                                                    type="text"
-                                                    value={row.name}
-                                                    onChange={(e) =>
-                                                        setPreviewRows((prev) =>
-                                                            prev.map((item, i) =>
-                                                                i === idx
-                                                                    ? { ...item, name: e.target.value }
-                                                                    : item
+                                                        }
+                                                        className="form-input w-auto! text-xs py-1 px-2 font-mono text-red-500 font-semibold"
+                                                    />
+                                                </td>
+                                                <td className="py-1.5 px-3 text-[11px] font-medium text-muted-foreground">
+                                                    {jawaInfo?.hariPasaran ?? '-'}
+                                                </td>
+                                                <td className="py-1.5 px-3">
+                                                    <input
+                                                        type="text"
+                                                        value={row.name}
+                                                        onChange={(e) =>
+                                                            setPreviewRows((prev) =>
+                                                                prev.map((item, i) =>
+                                                                    i === idx
+                                                                        ? { ...item, name: e.target.value }
+                                                                        : item
+                                                                )
                                                             )
-                                                        )
-                                                    }
-                                                    className="form-input w-full text-xs py-1 px-2"
-                                                />
-                                            </td>
-                                            <td className="py-1.5 px-3 text-right">
-                                                <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                        setPreviewRows((prev) =>
-                                                            prev.filter((_, i) => i !== idx)
-                                                        )
-                                                    }
-                                                    className="p-1.5 text-red-500 hover:bg-red-500/15 rounded"
-                                                    title="Kecualikan tanggal ini"
-                                                >
-                                                    <Trash2 size={13} />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
+                                                        }
+                                                        className="form-input w-full text-xs py-1 px-2"
+                                                    />
+                                                </td>
+                                                <td className="py-1.5 px-3 text-right">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setPreviewRows((prev) =>
+                                                                prev.filter((_, i) => i !== idx)
+                                                            )
+                                                        }
+                                                        className="p-1.5 text-red-500 hover:bg-red-500/15 rounded"
+                                                        title="Kecualikan tanggal ini"
+                                                    >
+                                                        <Trash2 size={13} />
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
                                 </tbody>
                             </table>
                         </div>
@@ -1066,12 +1241,43 @@ export function AttendanceSettingsTab() {
                     </div>
                 </form>
 
-                {/* Daftar Hari Libur Tersimpan di Database + Pilihan Tahun & Tombol "+ Tambah Tahun" SEJAJAR */}
-                <div className="space-y-2.5">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                        <h3 className="text-xs font-bold">
-                            Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
-                        </h3>
+                {/* ====================================================================
+            DAFTAR TANGGAL MERAH (OPSI MODE DAFTAR VS MODE KALENDER + BULK DELETE)
+        ==================================================================== */}
+                <div className="space-y-3">
+                    {/* Baris Judul, Switcher Daftar/Kalender, Dropdown Tahun, & + Tambah Tahun SEJAJAR */}
+                    <div className="flex flex-wrap items-center justify-between gap-2.5">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                            <h3 className="text-xs font-bold">
+                                Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
+                            </h3>
+
+                            {/* Switcher Tampilan: Mode Daftar vs Mode Kalender */}
+                            <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
+                                <button
+                                    type="button"
+                                    onClick={() => setHolidayViewMode('LIST')}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'LIST'
+                                        ? 'bg-card text-foreground shadow-sm'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                >
+                                    <List size={13} />
+                                    Daftar
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setHolidayViewMode('CALENDAR')}
+                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'CALENDAR'
+                                        ? 'bg-card text-foreground shadow-sm'
+                                        : 'text-muted-foreground hover:text-foreground'
+                                        }`}
+                                >
+                                    <Calendar size={13} />
+                                    Kalender
+                                </button>
+                            </div>
+                        </div>
 
                         {/* Kontainer 1 Baris Sejajar untuk Dropdown Tahun + Tombol Tambah Tahun + Refresh */}
                         <div className="flex items-center gap-2 shrink-0">
@@ -1111,10 +1317,84 @@ export function AttendanceSettingsTab() {
                         </div>
                     </div>
 
+                    {/* Toolbar Pilih Semua & Hapus Terpilih / Hapus Semua */}
+                    {!isLoadingHolidays && deletableHolidays.length > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-muted/35 border border-border text-xs">
+                            {holidayViewMode === 'LIST' ? (
+                                <label className="flex items-center gap-2 cursor-pointer font-semibold select-none">
+                                    <input
+                                        type="checkbox"
+                                        checked={isAllSelected}
+                                        onChange={toggleSelectAll}
+                                        className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer"
+                                    />
+                                    <span>
+                                        Pilih Semua ({selectedHolidayIds.length}/
+                                        {deletableHolidays.length} dipilih)
+                                    </span>
+                                </label>
+                            ) : (
+                                <span className="text-[11px] text-muted-foreground">
+                                    Tampilan Kalender 12 Bulan ({filterYear}) dengan Pasaran Jawa
+                                </span>
+                            )}
+
+                            <div className="flex flex-wrap items-center gap-2">
+                                {holidayViewMode === 'LIST' && selectedHolidayIds.length > 0 && (
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setDeleteConfirmModal({
+                                                title: `Hapus ${selectedHolidayIds.length} Tanggal Merah Terpilih?`,
+                                                description: `Anda akan menghapus ${selectedHolidayIds.length} data tanggal merah yang dicentang dari database. Tindakan ini tidak dapat dibatalkan.`,
+                                                targetIds: selectedHolidayIds,
+                                            })
+                                        }
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition"
+                                    >
+                                        <Trash2 size={13} />
+                                        Hapus Terpilih ({selectedHolidayIds.length})
+                                    </button>
+                                )}
+
+                                <button
+                                    type="button"
+                                    onClick={() =>
+                                        setDeleteConfirmModal({
+                                            title: `Hapus Semua Tanggal Merah Tahun ${filterYear}?`,
+                                            description: `Seluruh ${deletableHolidays.length} data hari libur tahun ${filterYear} yang dapat Anda kelola akan dihapus permanen dari database.`,
+                                            targetIds: deletableHolidays.map((h) => h.id),
+                                        })
+                                    }
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 transition"
+                                >
+                                    <Trash2 size={13} />
+                                    Hapus Semua ({deletableHolidays.length})
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Konten Utama: Loading / Kosong / Mode Kalender / Mode Daftar */}
                     {isLoadingHolidays ? (
                         <div className="py-8 text-center text-xs opacity-70">
                             Memuat data hari libur dari database...
                         </div>
+                    ) : holidayViewMode === 'CALENDAR' ? (
+                        <HolidayCalendarView
+                            year={filterYear}
+                            holidays={holidays}
+                            workDaysMode={workDaysMode}
+                            isSuperAdmin={isSuperAdmin}
+                            onClickEditHoliday={handleOpenEditModal}
+                            onClickAddHolidayOnDate={(isoDate) => {
+                                setNewHolidayDate(isoDate);
+                                setSyncFeedback({
+                                    status: 'success',
+                                    text: `Tanggal ${isoDate} dipilih pada formulir di atas. Ketik keterangannya lalu klik "+ Tambah Libur".`,
+                                });
+                            }}
+                        />
                     ) : holidays.length === 0 ? (
                         <div className="py-8 text-center text-xs opacity-75 border border-dashed border-border rounded-xl space-y-2 px-4">
                             <p>
@@ -1122,31 +1402,61 @@ export function AttendanceSettingsTab() {
                                 <strong>{filterYear}</strong>.
                             </p>
                             <p className="text-[11px] opacity-75">
-                                Klik tombol <strong>Sync dari Server ({filterYear})</strong> di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama, atau gunakan <strong>Import Excel / CSV</strong>.
+                                Klik tombol <strong>Sync dari Server ({filterYear})</strong> di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama, lalu klik <strong>Simpan ke Database</strong>.
                             </p>
                         </div>
                     ) : (
-                        <div className="max-h-72 overflow-y-auto rounded-xl border border-border divide-y divide-border">
-                            {holidays.map((item) => {
+                        <div className="max-h-96 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+                            {holidays.map((item, index) => {
                                 const isGlobal = item.schoolId === null;
                                 const isCuti = item.name.toLowerCase().includes('cuti bersama');
-                                const lockedForAdmin = !isSuperAdmin && isGlobal;
+                                const canManageItem = isSuperAdmin || !isGlobal;
+                                const isChecked = selectedHolidayIds.includes(item.id);
+                                const jawaInfo = getJavaneseDateInfo(item.date);
 
                                 return (
                                     <div
                                         key={item.id}
-                                        className="p-3 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
+                                        className={`p-3 flex items-center justify-between gap-3 transition text-xs ${isChecked ? 'bg-emerald-500/10' : 'hover:bg-muted/30'
+                                            }`}
                                     >
-                                        <div className="flex flex-wrap items-center gap-2 min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                                            {/* Checkbox Pilih */}
+                                            {canManageItem ? (
+                                                <input
+                                                    type="checkbox"
+                                                    checked={isChecked}
+                                                    onChange={() => toggleSelectOne(item.id)}
+                                                    className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer shrink-0"
+                                                />
+                                            ) : (
+                                                <span className="w-4 shrink-0" />
+                                            )}
+
+                                            {/* Nomor Urut */}
+                                            <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
+                                                {index + 1}.
+                                            </span>
+
+                                            {/* Tanggal ISO */}
                                             <span className="font-mono font-bold text-red-500 bg-red-500/10 px-2.5 py-1 rounded-lg shrink-0">
                                                 {item.date}
                                             </span>
+
+                                            {/* Hari & Pasaran Jawa */}
+                                            <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shrink-0">
+                                                {jawaInfo.hariPasaran}
+                                            </span>
+
+                                            {/* Keterangan Libur */}
                                             <span className="font-medium truncate">{item.name}</span>
+
                                             {isCuti && (
                                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300">
                                                     Cuti Bersama
                                                 </span>
                                             )}
+
                                             {isGlobal ? (
                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
                                                     <Globe size={10} /> Nasional
@@ -1158,15 +1468,32 @@ export function AttendanceSettingsTab() {
                                             )}
                                         </div>
 
-                                        {!lockedForAdmin && (
-                                            <button
-                                                type="button"
-                                                onClick={() => handleDeleteHoliday(item)}
-                                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition shrink-0"
-                                                title="Hapus hari libur"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
+                                        {/* Tombol Aksi: Edit & Hapus */}
+                                        {canManageItem && (
+                                            <div className="flex items-center gap-1 shrink-0">
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleOpenEditModal(item)}
+                                                    className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-500/15 transition"
+                                                    title="Edit tanggal atau keterangan"
+                                                >
+                                                    <Pencil size={14} />
+                                                </button>
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setDeleteConfirmModal({
+                                                            title: 'Hapus Tanggal Merah?',
+                                                            description: `Apakah Anda yakin ingin menghapus "${item.name}" (${jawaInfo.fullFormattedDate})?`,
+                                                            targetIds: [item.id],
+                                                        })
+                                                    }
+                                                    className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
+                                                    title="Hapus hari libur"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
                                         )}
                                     </div>
                                 );
@@ -1175,6 +1502,135 @@ export function AttendanceSettingsTab() {
                     )}
                 </div>
             </div>
+
+            {/* ====================================================================
+          MODAL 1: EDIT TANGGAL & KETERANGAN HARI LIBUR
+      ==================================================================== */}
+            {editingHoliday && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+                    <form
+                        onSubmit={handleSaveEditHoliday}
+                        className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150"
+                    >
+                        <div className="flex items-center justify-between border-b border-border pb-3">
+                            <div className="flex items-center gap-2">
+                                <div className="p-2 rounded-lg bg-blue-500/15 text-blue-600">
+                                    <Pencil size={16} />
+                                </div>
+                                <div>
+                                    <h3 className="text-sm font-bold">Edit Tanggal Merah</h3>
+                                    <p className="text-[11px] text-muted-foreground">
+                                        Perbarui tanggal atau keterangan hari libur
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setEditingHoliday(null)}
+                                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        <div className="space-y-3">
+                            <div>
+                                <label className="block text-xs font-semibold mb-1">
+                                    Tanggal Libur *
+                                </label>
+                                <input
+                                    type="date"
+                                    required
+                                    value={editDateInput}
+                                    onChange={(e) => setEditDateInput(e.target.value)}
+                                    className="form-input w-full text-xs font-mono"
+                                />
+                                {editDateInput.length === 10 && (
+                                    <p className="text-[11px] text-emerald-600 dark:text-emerald-300 mt-1 font-medium">
+                                        Kalender Jawa:{' '}
+                                        {getJavaneseDateInfo(editDateInput).fullFormattedDate}
+                                    </p>
+                                )}
+                            </div>
+
+                            <div>
+                                <label className="block text-xs font-semibold mb-1">
+                                    Keterangan Hari Libur *
+                                </label>
+                                <input
+                                    type="text"
+                                    required
+                                    value={editNameInput}
+                                    onChange={(e) => setEditNameInput(e.target.value)}
+                                    className="form-input w-full text-xs"
+                                />
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => setEditingHoliday(null)}
+                                disabled={isSavingEdit}
+                                className="btn-secondary text-xs py-2 px-4"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="submit"
+                                disabled={isSavingEdit}
+                                className="btn-primary text-xs py-2 px-4 font-bold"
+                            >
+                                <Save size={14} />
+                                {isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            )}
+
+            {/* ====================================================================
+          MODAL 2: KONFIRMASI HAPUS MODERN & PROFESIONAL
+      ==================================================================== */}
+            {deleteConfirmModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
+                    <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">
+                        <div className="flex items-start gap-3">
+                            <div className="p-2.5 rounded-xl bg-red-500/15 text-red-600 shrink-0">
+                                <AlertTriangle size={20} />
+                            </div>
+                            <div className="space-y-1">
+                                <h3 className="text-sm font-bold text-foreground">
+                                    {deleteConfirmModal.title}
+                                </h3>
+                                <p className="text-xs text-muted-foreground leading-relaxed">
+                                    {deleteConfirmModal.description}
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-3 border-t border-border">
+                            <button
+                                type="button"
+                                onClick={() => setDeleteConfirmModal(null)}
+                                disabled={isDeletingHolidays}
+                                className="btn-secondary text-xs py-2 px-4"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                onClick={handleConfirmDeleteExecution}
+                                disabled={isDeletingHolidays}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+                            >
+                                <Trash2 size={14} />
+                                {isDeletingHolidays ? 'Menghapus...' : 'Ya, Hapus Sekarang'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
