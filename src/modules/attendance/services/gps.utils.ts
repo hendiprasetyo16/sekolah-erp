@@ -1,12 +1,6 @@
+// src/modules/attendance/services/gps.utils.ts
 /**
- * GPS Utility - Kalkulasi jarak dan deteksi Mock GPS
- *
- * Catatan: Deteksi Mock GPS di browser adalah BEST EFFORT.
- * Tidak ada cara 100% pasti mendeteksi mock GPS di web.
- * Kita menggunakan kombinasi sinyal yang mencurigakan:
- *  - accuracy terlalu sempurna (< 5 meter)
- *  - altitude null (emulator/mock biasanya tidak punya altitude)
- *  - speed negatif atau 0 tepat (tidak natural)
+ * GPS, Timezone & Image Compression Utility
  */
 
 export interface GpsPosition {
@@ -16,6 +10,31 @@ export interface GpsPosition {
   altitude?: number | null;
   speed?: number | null;
   isMock: boolean;
+}
+
+/**
+ * Mengambil tanggal lokal perangkat (WIB/WITA/WIT) dalam format 'YYYY-MM-DD'
+ * Menghindari bug UTC antara jam 00:00 - 06:59 WIB
+ */
+export function getLocalDateString(date: Date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Mengecek apakah waktu saat ini sudah melewati batas jam masuk (format 'HH:mm')
+ */
+export function isAfterDeadline(deadline: string = '07:30', now: Date = new Date()): boolean {
+  const [hourStr, minStr] = deadline.split(':');
+  const targetHour = Number(hourStr) || 7;
+  const targetMin = Number(minStr) || 30;
+
+  const currentHour = now.getHours();
+  const currentMin = now.getMinutes();
+
+  return currentHour > targetHour || (currentHour === targetHour && currentMin > targetMin);
 }
 
 /**
@@ -41,52 +60,49 @@ export function calculateDistance(
 }
 
 /**
- * Cek apakah koordinat adalah mock GPS berdasarkan karakteristik mencurigakan
+ * Deteksi heuristik Mock GPS (Best Effort di Browser)
+ * Tidak memblokir speed === 0 karena perangkat Android/iOS nyata saat diam sering mengembalikan speed 0.
  */
 export function detectMockGps(position: GeolocationPosition): boolean {
   const { coords } = position;
 
-  // Sinyal 1: Akurasi terlalu sempurna (< 5 meter) — tidak natural untuk GPS nyata
-  if (coords.accuracy < 5) return true;
+  // Sinyal 1: Akurasi tidak masuk akal (<= 1 meter di perangkat mobile consumer)
+  if (coords.accuracy > 0 && coords.accuracy <= 1) return true;
 
-  // Sinyal 2: Koordinat persis bulat (misalnya lat = -6.000000) — tanda manual input
-  const latStr = coords.latitude.toString();
-  const lngStr = coords.longitude.toString();
-  if (
-    (latStr.split('.')[1]?.length ?? 0) < 4 ||
-    (lngStr.split('.')[1]?.length ?? 0) < 4
-  ) {
+  // Sinyal 2: Koordinat terpotong persis <= 3 angka di belakang koma (tanda input koordinat manual)
+  const latDecimals = coords.latitude.toString().split('.')[1]?.length ?? 0;
+  const lngDecimals = coords.longitude.toString().split('.')[1]?.length ?? 0;
+  if (latDecimals < 4 && lngDecimals < 4) {
     return true;
   }
-
-  // Sinyal 3: Kecepatan persis 0 (emulator sering mengembalikan 0.0 exact)
-  // GPS nyata mengembalikan null jika diam, atau nilai kecil dengan noise
-  if (coords.speed !== null && coords.speed === 0) return true;
 
   return false;
 }
 
 /**
- * Dapatkan posisi GPS dengan analisis mock detection
+ * Dapatkan posisi GPS dengan validasi akurasi & deteksi mock
  */
 export function getCurrentPosition(
   options?: PositionOptions
 ): Promise<GpsPosition> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error('Browser tidak mendukung GPS. Gunakan browser yang lebih baru.'));
+      reject(new Error('Browser tidak mendukung GPS. Gunakan browser terbaru (Chrome/Safari).'));
       return;
     }
 
     navigator.geolocation.getCurrentPosition(
       (position) => {
-        // [FITUR BARU] Cek apakah aplikasi sedang dijalankan di komputer lokal (tahap pembuatan)
-        const isDevelopment = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        const isDevelopment =
+          window.location.hostname === 'localhost' ||
+          window.location.hostname === '127.0.0.1';
 
-        // Terapkan batas toleransi akurasi maksimal 65 meter
-        // Aturan ini akan DIABAIKAN jika kamu sedang testing di 'localhost'
-        if (!isDevelopment && position.coords.accuracy > 65) {
-          reject(new Error(`Akurasi GPS terlalu rendah (±${Math.round(position.coords.accuracy)}m). Harap pergi ke area terbuka agar sinyal satelit lebih kuat.`));
+        if (!isDevelopment && position.coords.accuracy > 80) {
+          reject(
+            new Error(
+              `Akurasi GPS terlalu rendah (±${Math.round(position.coords.accuracy)}m). Harap bergeser ke area terbuka agar sinyal satelit lebih kuat.`
+            )
+          );
           return;
         }
 
@@ -116,11 +132,51 @@ export function getCurrentPosition(
         reject(new Error(message));
       },
       {
-        enableHighAccuracy: true, 
-        timeout: 20000,           
-        maximumAge: 0,            
+        enableHighAccuracy: true,
+        timeout: 20000,
+        maximumAge: 0,
         ...options,
       }
+    );
+  });
+}
+
+/**
+ * Kompres foto selfie dari elemen <video> atau File menjadi JPEG ringan (~35-55 KB)
+ * Hemat kuota Supabase Storage (1 GB bertahan > 2 tahun untuk 32 guru)
+ */
+export async function compressSelfieFromVideo(
+  videoElement: HTMLVideoElement,
+  maxWidth: number = 640,
+  quality: number = 0.65
+): Promise<Blob> {
+  const canvas = document.createElement('canvas');
+  const ratio = videoElement.videoHeight / (videoElement.videoWidth || 1);
+  const width = Math.min(videoElement.videoWidth || maxWidth, maxWidth);
+  const height = Math.round(width * (ratio || 0.75));
+
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Gagal memproses gambar kamera.');
+
+  // Mirror horizontal agar hasil selfie natural seperti cermin
+  ctx.translate(width, 0);
+  ctx.scale(-1, 1);
+  ctx.drawImage(videoElement, 0, 0, width, height);
+
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Gagal mengompresi foto selfie.'));
+          return;
+        }
+        resolve(blob);
+      },
+      'image/jpeg',
+      quality
     );
   });
 }

@@ -1,4 +1,11 @@
+// src/modules/attendance/types/attendance.types.ts
 export type AttendanceStatus = 'HADIR' | 'TERLAMBAT' | 'IZIN' | 'SAKIT' | 'ALPA';
+
+export interface AttendanceSettings {
+  checkInDeadline: string; // Format 'HH:mm', default '07:30'
+  checkOutStart: string;   // Format 'HH:mm', default '14:00'
+  requireSelfie: boolean;  // Apakah guru wajib selfie saat check-in
+}
 
 export interface StudentAttendance {
   id: string;
@@ -9,16 +16,30 @@ export interface StudentAttendance {
   notes?: string | null;
   recordedBy?: string | null;
   createdAt: string;
-  time?: string;
+  time?: string | null;
   student?: {
     fullName: string;
     nisn: string;
-    nis?: string;
-    photoUrl?: string;
+    nis?: string | null;
+    photoUrl?: string | null;
+    classId?: string | null;
     classes?: {
       name: string;
     };
   };
+}
+
+export interface ClassStudentAttendanceRow {
+  studentId: string;
+  fullName: string;
+  nisn: string;
+  nis?: string | null;
+  photoUrl?: string | null;
+  attendanceId?: string;
+  status: AttendanceStatus | null;
+  checkInTime?: string | null;
+  notes: string;
+  isFromKiosk: boolean;
 }
 
 export interface TeacherAttendance {
@@ -38,30 +59,37 @@ export interface TeacherAttendance {
   createdAt: string;
   teacher?: {
     fullName: string;
-    nip?: string;
-    nuptk?: string;
-    position?: string;
-    photoUrl?: string;
+    nip?: string | null;
+    nuptk?: string | null;
+    position?: string | null;
+    photoUrl?: string | null;
   };
 }
 
 export interface SchoolCoordinates {
-  latitude: number;
-  longitude: number;
-  radiusMeters: number;
+  latitude: number | null;
+  longitude: number | null;
+  attendanceRadiusMeters: number;
+  settings: AttendanceSettings;
 }
 
 export interface AttendanceSummary {
   studentTotal: number;
+  studentRecorded: number;
   studentPresent: number;
   studentLate: number;
   studentSick: number;
   studentPermission: number;
   studentAbsent: number;
+  studentUnrecorded: number;
   studentPercentage: number;
 
   teacherTotal: number;
+  teacherRecorded: number;
   teacherPresent: number;
   teacherLate: number;
+  teacherSick: number;
+  teacherPermission: number;
+  teacherAbsent: number;
   teacherPercentage: number;
 }
