@@ -15,6 +15,8 @@ import {
     Globe,
     Building2,
     Briefcase,
+    Server,
+    Moon,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -24,6 +26,15 @@ import {
     parseHolidaySpreadsheetFile,
     type ParsedHolidayRow,
 } from '../utils/excelHolidayParser';
+import {
+    fetchHolidaysFromServer,
+    HOLIDAY_API_PROVIDER_OPTIONS,
+    type HolidayApiProviderId,
+    type CalendarReferenceMode,
+} from '../utils/holidayApiService';
+
+const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
+const INITIAL_BASE_YEARS = [2026, 2027, 2028];
 
 /**
  * Helper menghitung jam efektif setelah ditambah toleransi keterlambatan (menit)
@@ -62,10 +73,31 @@ export function AttendanceSettingsTab() {
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
     const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
 
-    // 2. State Pengaturan Hari Libur Nasional (Database + Import Excel)
+    // 2. State Tahun, Pilihan 3 Server API, Mode Muhammadiyah, & Hari Libur
     const [filterYear, setFilterYear] = useState<number>(() =>
         new Date().getFullYear()
     );
+    const [customYears, setCustomYears] = useState<number[]>(() => {
+        try {
+            const saved = localStorage.getItem(CUSTOM_YEARS_STORAGE_KEY);
+            const parsed: unknown = saved ? JSON.parse(saved) : [];
+            return Array.isArray(parsed)
+                ? parsed.filter((n): n is number => typeof n === 'number')
+                : [];
+        } catch {
+            return [];
+        }
+    });
+    const [dbRecordedYears, setDbRecordedYears] = useState<number[]>([]);
+    const [selectedApiProvider, setSelectedApiProvider] =
+        useState<HolidayApiProviderId>('AUTO');
+    const [calendarRefMode, setCalendarRefMode] =
+        useState<CalendarReferenceMode>('MUHAMMADIYAH');
+    const [includeCutiFromServer, setIncludeCutiFromServer] =
+        useState<boolean>(true);
+    const [includeAwalRamadan, setIncludeAwalRamadan] = useState<boolean>(true);
+    const [isFetchingServer, setIsFetchingServer] = useState<boolean>(false);
+
     const [holidayScope, setHolidayScope] = useState<'GLOBAL' | 'SCHOOL'>(
         isSuperAdmin ? 'GLOBAL' : 'SCHOOL'
     );
@@ -77,8 +109,9 @@ export function AttendanceSettingsTab() {
     const [newHolidayName, setNewHolidayName] = useState<string>('');
     const [isAddingHoliday, setIsAddingHoliday] = useState<boolean>(false);
 
-    // Pratinjau Import Excel / CSV
+    // Pratinjau Import Excel / Server (bisa diedit langsung sebelum disimpan)
     const [previewRows, setPreviewRows] = useState<ParsedHolidayRow[]>([]);
+    const [previewSourceLabel, setPreviewSourceLabel] = useState<string>('');
     const [isImporting, setIsImporting] = useState<boolean>(false);
 
     const [toast, setToast] = useState<{
@@ -88,7 +121,7 @@ export function AttendanceSettingsTab() {
 
     const showToast = (type: 'success' | 'error', message: string) => {
         setToast({ type, message });
-        setTimeout(() => setToast(null), 4500);
+        setTimeout(() => setToast(null), 5000);
     };
 
     useEffect(() => {
@@ -113,7 +146,7 @@ export function AttendanceSettingsTab() {
             });
     }, [isSuperAdmin, school?.id]);
 
-    // Muat pengaturan jam kerja, toleransi keterlambatan, & hari kerja dari tabel schools
+    // Muat pengaturan jam kerja, toleransi keterlambatan, & hari kerja
     const loadScheduleSettings = useCallback(async () => {
         if (!selectedSchoolId) return;
         setIsLoadingSchedule(true);
@@ -135,12 +168,12 @@ export function AttendanceSettingsTab() {
                     data.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS'
                 );
             }
-        } catch (err: any) {
-            showToast(
-                'error',
-                err.message ??
-                'Kolom pengaturan jam kerja belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
-            );
+        } catch (err: unknown) {
+            const msg =
+                err instanceof Error
+                    ? err.message
+                    : 'Kolom pengaturan jam kerja belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.';
+            showToast('error', msg);
         } finally {
             setIsLoadingSchedule(false);
         }
@@ -154,6 +187,44 @@ export function AttendanceSettingsTab() {
         () => calculateEffectiveDeadline(workStartTime, lateToleranceMinutes),
         [workStartTime, lateToleranceMinutes]
     );
+
+    // Gabungkan tahun dasar (2026-2028) + tahun dari DB + tahun tambahan user
+    const availableYears = useMemo(() => {
+        const yearsSet = new Set<number>([
+            ...INITIAL_BASE_YEARS,
+            ...dbRecordedYears,
+            ...customYears,
+            filterYear,
+        ]);
+        return Array.from(yearsSet).sort((a, b) => a - b);
+    }, [dbRecordedYears, customYears, filterYear]);
+
+    // Handler Tombol "+ Tambah Tahun"
+    const handleAddNextYear = () => {
+        const maxYear =
+            availableYears.length > 0
+                ? Math.max(...availableYears)
+                : new Date().getFullYear();
+        const nextYear = maxYear + 1;
+
+        setCustomYears((prev) => {
+            const updated = Array.from(new Set([...prev, nextYear])).sort(
+                (a, b) => a - b
+            );
+            try {
+                localStorage.setItem(CUSTOM_YEARS_STORAGE_KEY, JSON.stringify(updated));
+            } catch {
+                // abaikan jika storage penuh
+            }
+            return updated;
+        });
+
+        setFilterYear(nextYear);
+        showToast(
+            'success',
+            `Tahun ${nextYear} berhasil ditambahkan! Klik "Sync dari Server (${nextYear})" atau "Import Excel" untuk mengisi tanggal merah.`
+        );
+    };
 
     // Simpan pengaturan jam masuk, toleransi keterlambatan, jam pulang, dan hari kerja
     const handleSaveSchedule = async (e: React.FormEvent) => {
@@ -188,14 +259,17 @@ export function AttendanceSettingsTab() {
                     ? `Tersimpan! Jam masuk ${workStartTime} + toleransi ${cleanTolerance} menit (batas terlambat ${effectiveDeadlinePreview}), pulang ${workEndTime}.`
                     : `Tersimpan! Jam masuk ${workStartTime} (tanpa toleransi), pulang ${workEndTime}.`
             );
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal menyimpan pengaturan jam kerja.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                err instanceof Error ? err.message : 'Gagal menyimpan pengaturan jam kerja.'
+            );
         } finally {
             setIsSavingSchedule(false);
         }
     };
 
-    // Muat daftar hari libur dari tabel national_holidays
+    // Muat daftar hari libur untuk tahun terpilih + deteksi semua tahun yang ada di DB
     const loadHolidays = useCallback(async () => {
         setIsLoadingHolidays(true);
         try {
@@ -217,11 +291,26 @@ export function AttendanceSettingsTab() {
             const { data, error } = await query;
             if (error) throw error;
             setHolidays((data ?? []) as HolidayRecord[]);
-        } catch (err: any) {
+
+            const { data: allDates } = await supabase
+                .from('national_holidays')
+                .select('date');
+            if (allDates) {
+                const yearsInDb = Array.from(
+                    new Set(
+                        allDates
+                            .map((r: { date: string }) => Number(String(r.date).slice(0, 4)))
+                            .filter((y) => Number.isFinite(y) && y > 2000)
+                    )
+                );
+                setDbRecordedYears(yearsInDb);
+            }
+        } catch (err: unknown) {
             showToast(
                 'error',
-                err.message ??
-                'Tabel national_holidays belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
+                err instanceof Error
+                    ? err.message
+                    : 'Tabel national_holidays belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
             );
         } finally {
             setIsLoadingHolidays(false);
@@ -235,9 +324,12 @@ export function AttendanceSettingsTab() {
     const resolvedHolidaySchoolId =
         isSuperAdmin && holidayScope === 'GLOBAL' ? null : selectedSchoolId || null;
 
-    // Simpan batch hari libur (dipakai oleh tambah manual & import Excel)
+    // Simpan batch hari libur
     const upsertHolidayRows = async (rows: ParsedHolidayRow[]) => {
-        if (rows.length === 0) return;
+        const validRows = rows.filter(
+            (r) => r.date.trim().length === 10 && r.name.trim().length > 0
+        );
+        if (validRows.length === 0) return;
 
         if (!isSuperAdmin && !resolvedHolidaySchoolId) {
             throw new Error('Data sekolah tidak ditemukan.');
@@ -268,19 +360,19 @@ export function AttendanceSettingsTab() {
             createdBy: string | null;
         }> = [];
 
-        for (const row of rows) {
+        for (const row of validRows) {
             const existingId = existingMap.get(row.date);
             if (existingId) {
                 const { error: updErr } = await supabase
                     .from('national_holidays')
-                    .update({ name: row.name })
+                    .update({ name: row.name.trim() })
                     .eq('id', existingId);
                 if (updErr) throw updErr;
             } else {
                 toInsert.push({
                     schoolId: resolvedHolidaySchoolId,
                     date: row.date,
-                    name: row.name,
+                    name: row.name.trim(),
                     createdBy: user?.id ?? null,
                 });
             }
@@ -291,6 +383,35 @@ export function AttendanceSettingsTab() {
                 .from('national_holidays')
                 .insert(toInsert);
             if (insErr) throw insErr;
+        }
+    };
+
+    // Ambil Data Hari Libur Nasional & Cuti Bersama dari 3 Server API
+    const handleFetchFromServer = async () => {
+        setIsFetchingServer(true);
+        try {
+            const { rows, usedProviderLabel } = await fetchHolidaysFromServer({
+                year: filterYear,
+                includeCutiBersama: includeCutiFromServer,
+                providerId: selectedApiProvider,
+                calendarMode: calendarRefMode,
+                includeAwalRamadan:
+                    calendarRefMode === 'MUHAMMADIYAH' && includeAwalRamadan,
+            });
+
+            setPreviewRows(rows);
+            setPreviewSourceLabel(`${usedProviderLabel} — Tahun ${filterYear}`);
+            showToast(
+                'success',
+                `Berhasil menarik ${rows.length} data libur tahun ${filterYear} dari ${usedProviderLabel}! Kamu bisa edit tanggal di bawah sebelum Simpan ke Database.`
+            );
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                err instanceof Error ? err.message : 'Gagal mengambil data dari server.'
+            );
+        } finally {
+            setIsFetchingServer(false);
         }
     };
 
@@ -307,12 +428,17 @@ export function AttendanceSettingsTab() {
             await upsertHolidayRows([
                 { date: newHolidayDate, name: newHolidayName.trim() },
             ]);
+            const addedYear = Number(newHolidayDate.slice(0, 4));
+            if (Number.isFinite(addedYear)) setFilterYear(addedYear);
             setNewHolidayDate('');
             setNewHolidayName('');
             await loadHolidays();
             showToast('success', 'Hari libur berhasil ditambahkan ke database!');
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal menambahkan hari libur.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                err instanceof Error ? err.message : 'Gagal menambahkan hari libur.'
+            );
         } finally {
             setIsAddingHoliday(false);
         }
@@ -336,33 +462,42 @@ export function AttendanceSettingsTab() {
                 return;
             }
             setPreviewRows(parsed);
+            setPreviewSourceLabel(`File ${file.name}`);
             showToast(
                 'success',
                 `Berhasil membaca ${parsed.length} tanggal libur dari file. Periksa pratinjau lalu klik Simpan ke Database.`
             );
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal membaca file Excel/CSV.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                err instanceof Error ? err.message : 'Gagal membaca file Excel/CSV.'
+            );
         }
     };
 
-    // Eksekusi Import Pratinjau Excel ke Database
-    const handleConfirmExcelImport = async () => {
+    // Eksekusi Simpan Pratinjau (Server / Excel) ke Database
+    const handleConfirmBatchSave = async () => {
         if (previewRows.length === 0) return;
         setIsImporting(true);
         try {
+            const countSaved = previewRows.length;
             await upsertHolidayRows(previewRows);
             const importedYear = Number(previewRows[0].date.slice(0, 4));
             if (Number.isFinite(importedYear)) {
                 setFilterYear(importedYear);
             }
             setPreviewRows([]);
+            setPreviewSourceLabel('');
             await loadHolidays();
             showToast(
                 'success',
-                `${previewRows.length} data hari libur berhasil diimpor ke database!`
+                `${countSaved} data hari libur & cuti bersama berhasil disimpan ke database!`
             );
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal mengimpor data ke database.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                err instanceof Error ? err.message : 'Gagal menyimpan data ke database.'
+            );
         } finally {
             setIsImporting(false);
         }
@@ -390,8 +525,11 @@ export function AttendanceSettingsTab() {
             if (error) throw error;
             showToast('success', 'Hari libur berhasil dihapus.');
             await loadHolidays();
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal menghapus hari libur.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                err instanceof Error ? err.message : 'Gagal menghapus hari libur.'
+            );
         }
     };
 
@@ -403,8 +541,8 @@ export function AttendanceSettingsTab() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -428,7 +566,7 @@ export function AttendanceSettingsTab() {
                         </p>
                     </div>
                     <select
-                        className="form-input text-xs py-2 min-w-60"
+                        className="form-input w-auto! min-w-60 text-xs py-2"
                         value={selectedSchoolId}
                         onChange={(e) => setSelectedSchoolId(e.target.value)}
                     >
@@ -518,7 +656,6 @@ export function AttendanceSettingsTab() {
                     </div>
                 </div>
 
-                {/* Kotak Pratinjau Aturan Keterlambatan */}
                 <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs flex flex-wrap items-center justify-between gap-2">
                     <span className="font-medium">
                         {lateToleranceMinutes > 0 ? (
@@ -555,8 +692,8 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={() => setWorkDaysMode('FIVE_DAYS')}
                             className={`p-4 rounded-xl border text-left transition flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
-                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
+                                : 'border-border bg-muted/20 hover:bg-muted/40'
                                 }`}
                         >
                             <Briefcase
@@ -581,8 +718,8 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={() => setWorkDaysMode('SIX_DAYS')}
                             className={`p-4 rounded-xl border text-left transition flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
-                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
+                                : 'border-border bg-muted/20 hover:bg-muted/40'
                                 }`}
                         >
                             <Briefcase
@@ -598,7 +735,7 @@ export function AttendanceSettingsTab() {
                                     6 Hari Kerja (Senin – Sabtu)
                                 </div>
                                 <p className="text-[11px] text-muted-foreground mt-0.5">
-                                    Hari Sabtu tetap dihitung hari masuk; hanya <strong>Minggu & Libur Nasional</strong> yang berwarna merah.
+                                    Hari Sabtu tetap dihitung hari masuk; hanya <strong>Minggu, Libur Nasional & Cuti Bersama</strong> yang berwarna merah.
                                 </p>
                             </div>
                         </button>
@@ -618,21 +755,21 @@ export function AttendanceSettingsTab() {
             </form>
 
             {/* ====================================================================
-          BAGIAN 2: HARI LIBUR NASIONAL & KALENDER LIBUR (DATABASE + EXCEL)
+          BAGIAN 2: HARI LIBUR NASIONAL & CUTI BERSAMA (3 SERVER API + EXCEL + DB)
       ==================================================================== */}
             <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-border pb-3">
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-border pb-3">
                     <div>
                         <h2 className="text-base font-bold flex items-center gap-2">
                             <CalendarDays size={18} className="text-red-500" />
-                            Kalender Hari Libur Nasional & Sekolah (Database)
+                            Kalender Hari Libur Nasional, Cuti Bersama & Sekolah
                         </h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                            Impor data hari libur dari file Excel (.xlsx / .csv) atau tambahkan tanggal merah secara manual tanpa perlu mengubah kode program.
+                            Sinkronisasi cepat dari 3 server kalender nasional (dengan penyesuaian Muhammadiyah), impor file Excel (.xlsx / .csv), atau input manual.
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
                         <button
                             type="button"
                             onClick={() => downloadHolidayExcelTemplate(filterYear)}
@@ -642,7 +779,7 @@ export function AttendanceSettingsTab() {
                             Template Excel
                         </button>
 
-                        <label className="btn-primary text-xs py-2 px-3 cursor-pointer">
+                        <label className="btn-secondary text-xs py-2 px-3 cursor-pointer">
                             <Upload size={14} />
                             Import Excel / CSV
                             <input
@@ -655,47 +792,155 @@ export function AttendanceSettingsTab() {
                     </div>
                 </div>
 
-                {/* Pilihan Cakupan Libur Khusus SUPER_ADMIN */}
-                {isSuperAdmin && (
-                    <div className="flex flex-wrap items-center gap-3 p-3 rounded-xl bg-muted/40 border border-border text-xs">
-                        <span className="font-semibold">Cakupan Input / Import:</span>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input
-                                type="radio"
-                                name="holidayScope"
-                                checked={holidayScope === 'GLOBAL'}
-                                onChange={() => setHolidayScope('GLOBAL')}
-                            />
-                            <Globe size={13} className="text-purple-500" />
-                            <span>Nasional / Global (Semua Sekolah)</span>
-                        </label>
-                        <label className="flex items-center gap-1.5 cursor-pointer">
-                            <input
-                                type="radio"
-                                name="holidayScope"
-                                checked={holidayScope === 'SCHOOL'}
-                                onChange={() => setHolidayScope('SCHOOL')}
-                            />
-                            <Building2 size={13} className="text-blue-500" />
-                            <span>Khusus Sekolah Terpilih</span>
-                        </label>
-                    </div>
-                )}
+                {/* Panel Kontrol Sinkronisasi 3 Server API + Kalender Muhammadiyah */}
+                <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
+                    <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3">
+                        <div className="flex flex-wrap items-center gap-2.5">
+                            <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 shrink-0">
+                                <Server size={15} />
+                                Server API:
+                            </span>
+                            <select
+                                value={selectedApiProvider}
+                                onChange={(e) =>
+                                    setSelectedApiProvider(e.target.value as HolidayApiProviderId)
+                                }
+                                className="form-input w-auto! min-w-56 text-xs py-1.5 px-3 bg-card shrink-0"
+                            >
+                                {HOLIDAY_API_PROVIDER_OPTIONS.map((opt) => (
+                                    <option key={opt.id} value={opt.id}>
+                                        {opt.label}
+                                    </option>
+                                ))}
+                            </select>
 
-                {/* Kotak Pratinjau Hasil Import Excel sebelum Disimpan */}
+                            <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1 shrink-0">
+                                <Moon size={14} />
+                                Kalender:
+                            </span>
+                            <select
+                                value={calendarRefMode}
+                                onChange={(e) =>
+                                    setCalendarRefMode(e.target.value as CalendarReferenceMode)
+                                }
+                                className="form-input w-auto! min-w-52 text-xs py-1.5 px-3 bg-card shrink-0"
+                            >
+                                <option value="MUHAMMADIYAH">
+                                    Muhammadiyah (KHGT / Hisab)
+                                </option>
+                                <option value="PEMERINTAH">
+                                    Pemerintah (SKB 3 Menteri)
+                                </option>
+                            </select>
+                        </div>
+
+                        <button
+                            type="button"
+                            onClick={handleFetchFromServer}
+                            disabled={isFetchingServer}
+                            className="btn-primary text-xs py-2 px-4 bg-blue-600 hover:bg-blue-700 shrink-0 self-start xl:self-auto"
+                        >
+                            <Server size={14} className={isFetchingServer ? 'animate-pulse' : ''} />
+                            {isFetchingServer
+                                ? 'Menghubungkan Server...'
+                                : `Sync dari Server (${filterYear})`}
+                        </button>
+                    </div>
+
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-blue-500/20 text-xs">
+                        <div className="flex flex-wrap items-center gap-4">
+                            <label className="flex items-center gap-2 cursor-pointer font-medium">
+                                <input
+                                    type="checkbox"
+                                    checked={includeCutiFromServer}
+                                    onChange={(e) => setIncludeCutiFromServer(e.target.checked)}
+                                    className="rounded border-border"
+                                />
+                                <span>
+                                    Sertakan jadwal <strong>Cuti Bersama</strong>
+                                </span>
+                            </label>
+
+                            {calendarRefMode === 'MUHAMMADIYAH' && (
+                                <label className="flex items-center gap-2 cursor-pointer font-medium text-emerald-800 dark:text-emerald-200">
+                                    <input
+                                        type="checkbox"
+                                        checked={includeAwalRamadan}
+                                        onChange={(e) => setIncludeAwalRamadan(e.target.checked)}
+                                        className="rounded border-border"
+                                    />
+                                    <span>
+                                        Sertakan <strong>Awal Puasa (1 Ramadan)</strong>
+                                    </span>
+                                </label>
+                            )}
+                        </div>
+
+                        {isSuperAdmin && (
+                            <div className="flex flex-wrap items-center gap-3">
+                                <span className="font-semibold">Cakupan Simpan:</span>
+                                <label className="flex items-center gap-1.5 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="holidayScope"
+                                        checked={holidayScope === 'GLOBAL'}
+                                        onChange={() => setHolidayScope('GLOBAL')}
+                                    />
+                                    <Globe size={13} className="text-purple-500" />
+                                    <span>Nasional / Global</span>
+                                </label>
+                                <label className="flex items-center gap-1.5 cursor-pointer">
+                                    <input
+                                        type="radio"
+                                        name="holidayScope"
+                                        checked={holidayScope === 'SCHOOL'}
+                                        onChange={() => setHolidayScope('SCHOOL')}
+                                    />
+                                    <Building2 size={13} className="text-blue-500" />
+                                    <span>Khusus Sekolah Ini</span>
+                                </label>
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Kotak Pratinjau Hasil Server / Excel (Tanggal & Keterangan Bisa Diedit Langsung) */}
                 {previewRows.length > 0 && (
                     <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 space-y-3">
-                        <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                                <FileSpreadsheet size={16} />
-                                <span>
-                                    Pratinjau Import Excel ({previewRows.length} Tanggal Libur Siap Disimpan)
-                                </span>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div>
+                                <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                                    <FileSpreadsheet size={16} />
+                                    <span>
+                                        Pratinjau: {previewSourceLabel} ({previewRows.length} Tanggal)
+                                    </span>
+                                </div>
+                                <p className="text-[11px] opacity-75 mt-0.5">
+                                    Tip: Klik tanggal atau keterangan di bawah jika ingin menggeser 1 hari sebelum disimpan.
+                                </p>
                             </div>
-                            <div className="flex items-center gap-2">
+
+                            <div className="flex flex-wrap items-center gap-2">
                                 <button
                                     type="button"
-                                    onClick={() => setPreviewRows([])}
+                                    onClick={() =>
+                                        setPreviewRows((prev) => [
+                                            ...prev,
+                                            { date: `${filterYear}-01-01`, name: 'Libur Tambahan' },
+                                        ])
+                                    }
+                                    className="btn-secondary text-xs py-1.5 px-3"
+                                    disabled={isImporting}
+                                >
+                                    <Plus size={13} />
+                                    Tambah Baris
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        setPreviewRows([]);
+                                        setPreviewSourceLabel('');
+                                    }}
                                     className="btn-secondary text-xs py-1.5 px-3"
                                     disabled={isImporting}
                                 >
@@ -703,31 +948,74 @@ export function AttendanceSettingsTab() {
                                 </button>
                                 <button
                                     type="button"
-                                    onClick={handleConfirmExcelImport}
+                                    onClick={handleConfirmBatchSave}
                                     disabled={isImporting}
                                     className="btn-primary text-xs py-1.5 px-4 font-bold"
                                 >
                                     <Save size={14} />
-                                    {isImporting ? 'Mengimpor...' : 'Simpan ke Database'}
+                                    {isImporting ? 'Menyimpan...' : 'Simpan ke Database'}
                                 </button>
                             </div>
                         </div>
 
-                        <div className="max-h-48 overflow-y-auto rounded-lg border border-border bg-card">
+                        <div className="max-h-60 overflow-y-auto rounded-lg border border-border bg-card">
                             <table className="w-full text-xs">
                                 <thead className="bg-muted/60 text-left">
                                     <tr>
-                                        <th className="py-2 px-3 font-semibold w-36">Tanggal</th>
-                                        <th className="py-2 px-3 font-semibold">Keterangan Libur</th>
+                                        <th className="py-2 px-3 font-semibold w-40">Tanggal (Bisa Edit)</th>
+                                        <th className="py-2 px-3 font-semibold">Keterangan Libur / Cuti (Bisa Edit)</th>
+                                        <th className="py-2 px-3 font-semibold w-14 text-right">Hapus</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-border">
                                     {previewRows.map((row, idx) => (
-                                        <tr key={`${row.date}-${idx}`}>
-                                            <td className="py-1.5 px-3 font-mono text-red-500 font-semibold">
-                                                {row.date}
+                                        <tr key={`preview-${idx}`}>
+                                            <td className="py-1.5 px-3">
+                                                <input
+                                                    type="date"
+                                                    value={row.date}
+                                                    onChange={(e) =>
+                                                        setPreviewRows((prev) =>
+                                                            prev.map((item, i) =>
+                                                                i === idx
+                                                                    ? { ...item, date: e.target.value }
+                                                                    : item
+                                                            )
+                                                        )
+                                                    }
+                                                    className="form-input w-auto! text-xs py-1 px-2 font-mono text-red-500 font-semibold"
+                                                />
                                             </td>
-                                            <td className="py-1.5 px-3">{row.name}</td>
+                                            <td className="py-1.5 px-3">
+                                                <input
+                                                    type="text"
+                                                    value={row.name}
+                                                    onChange={(e) =>
+                                                        setPreviewRows((prev) =>
+                                                            prev.map((item, i) =>
+                                                                i === idx
+                                                                    ? { ...item, name: e.target.value }
+                                                                    : item
+                                                            )
+                                                        )
+                                                    }
+                                                    className="form-input w-full text-xs py-1 px-2"
+                                                />
+                                            </td>
+                                            <td className="py-1.5 px-3 text-right">
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        setPreviewRows((prev) =>
+                                                            prev.filter((_, i) => i !== idx)
+                                                        )
+                                                    }
+                                                    className="p-1.5 text-red-500 hover:bg-red-500/15 rounded"
+                                                    title="Kecualikan tanggal ini"
+                                                >
+                                                    <Trash2 size={13} />
+                                                </button>
+                                            </td>
                                         </tr>
                                     ))}
                                 </tbody>
@@ -743,7 +1031,7 @@ export function AttendanceSettingsTab() {
                 >
                     <div className="sm:col-span-4">
                         <label className="block text-[11px] font-semibold mb-1">
-                            Tanggal Libur *
+                            Tanggal Libur / Cuti *
                         </label>
                         <input
                             type="date"
@@ -762,7 +1050,7 @@ export function AttendanceSettingsTab() {
                             required
                             value={newHolidayName}
                             onChange={(e) => setNewHolidayName(e.target.value)}
-                            placeholder="Contoh: Hari Raya Idul Fitri 1448 H / Libur Semester"
+                            placeholder="Contoh: Awal Puasa Ramadan / Cuti Bersama Idul Fitri"
                             className="form-input w-full text-xs"
                         />
                     </div>
@@ -778,33 +1066,41 @@ export function AttendanceSettingsTab() {
                     </div>
                 </form>
 
-                {/* Daftar Hari Libur Tersimpan di Database */}
+                {/* Daftar Hari Libur Tersimpan di Database + Pilihan Tahun & Tombol "+ Tambah Tahun" SEJAJAR */}
                 <div className="space-y-2.5">
-                    <div className="flex items-center justify-between">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
                         <h3 className="text-xs font-bold">
                             Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
                         </h3>
-                        <div className="flex items-center gap-2">
+
+                        {/* Kontainer 1 Baris Sejajar untuk Dropdown Tahun + Tombol Tambah Tahun + Refresh */}
+                        <div className="flex items-center gap-2 shrink-0">
                             <select
                                 value={filterYear}
                                 onChange={(e) => setFilterYear(Number(e.target.value))}
-                                className="form-input text-xs py-1 px-2.5"
+                                className="form-input w-auto! min-w-32 text-xs py-1.5 px-3 font-semibold shrink-0"
                             >
-                                {[
-                                    new Date().getFullYear() - 1,
-                                    new Date().getFullYear(),
-                                    new Date().getFullYear() + 1,
-                                    new Date().getFullYear() + 2,
-                                ].map((yr) => (
+                                {availableYears.map((yr) => (
                                     <option key={yr} value={yr}>
                                         Tahun {yr}
                                     </option>
                                 ))}
                             </select>
+
+                            <button
+                                type="button"
+                                onClick={handleAddNextYear}
+                                className="btn-secondary text-xs py-1.5 px-3 font-semibold text-emerald-700 dark:text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/10 shrink-0 whitespace-nowrap"
+                                title="Tambahkan tahun berikutnya ke daftar pilihan"
+                            >
+                                <Plus size={14} />
+                                Tambah Tahun
+                            </button>
+
                             <button
                                 type="button"
                                 onClick={loadHolidays}
-                                className="p-1.5 rounded-lg bg-muted hover:bg-muted/80"
+                                className="p-2 rounded-lg bg-muted hover:bg-muted/80 shrink-0"
                                 title="Refresh Daftar Libur"
                             >
                                 <RefreshCw
@@ -820,14 +1116,20 @@ export function AttendanceSettingsTab() {
                             Memuat data hari libur dari database...
                         </div>
                     ) : holidays.length === 0 ? (
-                        <div className="py-8 text-center text-xs opacity-65 border border-dashed border-border rounded-xl">
-                            Belum ada data hari libur tersimpan untuk tahun {filterYear}. Gunakan tombol{' '}
-                            <strong>Template Excel</strong> dan <strong>Import Excel / CSV</strong> di atas.
+                        <div className="py-8 text-center text-xs opacity-75 border border-dashed border-border rounded-xl space-y-2 px-4">
+                            <p>
+                                Belum ada data hari libur tersimpan untuk tahun{' '}
+                                <strong>{filterYear}</strong>.
+                            </p>
+                            <p className="text-[11px] opacity-75">
+                                Klik tombol <strong>Sync dari Server ({filterYear})</strong> di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama, atau gunakan <strong>Import Excel / CSV</strong>.
+                            </p>
                         </div>
                     ) : (
                         <div className="max-h-72 overflow-y-auto rounded-xl border border-border divide-y divide-border">
                             {holidays.map((item) => {
                                 const isGlobal = item.schoolId === null;
+                                const isCuti = item.name.toLowerCase().includes('cuti bersama');
                                 const lockedForAdmin = !isSuperAdmin && isGlobal;
 
                                 return (
@@ -835,11 +1137,16 @@ export function AttendanceSettingsTab() {
                                         key={item.id}
                                         className="p-3 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
                                     >
-                                        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                                        <div className="flex flex-wrap items-center gap-2 min-w-0">
                                             <span className="font-mono font-bold text-red-500 bg-red-500/10 px-2.5 py-1 rounded-lg shrink-0">
                                                 {item.date}
                                             </span>
                                             <span className="font-medium truncate">{item.name}</span>
+                                            {isCuti && (
+                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                                    Cuti Bersama
+                                                </span>
+                                            )}
                                             {isGlobal ? (
                                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
                                                     <Globe size={10} /> Nasional
