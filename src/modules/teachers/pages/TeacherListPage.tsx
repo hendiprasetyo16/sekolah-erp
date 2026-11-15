@@ -136,9 +136,91 @@ const DIFF_FIELD_LABELS: Record<keyof TeacherBulkImportItem, string> = {
 };
 
 // ==========================================
+// ERROR HANDLING HELPER
+// ==========================================
+/**
+ * Mengubah berbagai bentuk error (API/Axios, Validasi, Jaringan, atau Runtime JS)
+ * menjadi pesan yang jelas dan ramah bagi pengguna.
+ */
+const extractFriendlyErrorMessage = (
+  error: unknown,
+  locale: string,
+  fallbackId: string,
+  fallbackEn: string
+): string => {
+  const isId = locale === 'id';
+  const fallback = isId ? fallbackId : fallbackEn;
+
+  if (!error) return fallback;
+
+  if (typeof error === 'object' && error !== null) {
+    const errObj = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+          error?: string;
+        };
+      };
+      message?: string;
+    };
+
+    // 1. Prioritaskan pesan error spesifik dari backend/API
+    const apiMessage = errObj.response?.data?.message;
+    if (Array.isArray(apiMessage) && apiMessage.length > 0) {
+      return apiMessage.join(', ');
+    }
+    if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
+      return apiMessage;
+    }
+    if (typeof errObj.response?.data?.error === 'string' && errObj.response.data.error.trim() !== '') {
+      return errObj.response.data.error;
+    }
+
+    // 2. Tangani error JavaScript / jaringan agar tidak menampilkan pesan teknis mentah
+    if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
+      const rawMsg = errObj.message;
+
+      if (
+        rawMsg.includes('Cannot read properties') ||
+        rawMsg.includes('is not a function') ||
+        rawMsg.includes('is not iterable')
+      ) {
+        return isId
+          ? 'Terjadi kesalahan saat membaca struktur file Excel. Pastikan format kolom sesuai template Verval PTK.'
+          : 'An error occurred while reading the Excel structure. Ensure columns match the Verval PTK template.';
+      }
+
+      if (
+        rawMsg.toLowerCase().includes('network error') ||
+        rawMsg.toLowerCase().includes('failed to fetch')
+      ) {
+        return isId
+          ? 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.'
+          : 'Connection to server failed. Check your internet connection and try again.';
+      }
+
+      return rawMsg;
+    }
+  }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return error;
+  }
+
+  return fallback;
+};
+
+// ==========================================
 // PURE EXCEL PARSING & SMARTDIFF HELPERS
 // ==========================================
-const normKey = (k: string): string => k.toLowerCase().replace(/\s+/g, ' ').trim();
+/**
+ * Normalisasi nama kolom/teks dengan aman (tahan terhadap nilai null/undefined).
+ */
+const normKey = (k: unknown): string =>
+  String(k ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
 
 // Penanda khusus untuk membedakan Excel Guru (PTK) vs Excel Siswa (PD)
 const TEACHER_COLUMN_MARKERS = new Set([
@@ -188,11 +270,11 @@ const detectTeacherExcelSource = (
   topRows: unknown[][],
   headerCells: string[]
 ): DetectedExcelType => {
-  const normSheets = sheetNames.map((s) => normKey(s));
-  const topText = topRows
+  const normSheets = (sheetNames || []).map((s) => normKey(s));
+  const topText = (topRows || [])
     .slice(0, 4)
     .flat()
-    .map((c) => normKey(String(c ?? '')))
+    .map((c) => normKey(c))
     .join(' | ');
 
   const hasStudentBanner =
@@ -437,7 +519,9 @@ const computeSmartDiff = (
   const byNik = new Map<string, TeacherDetail>();
   const byNameBirth = new Map<string, TeacherDetail>();
 
-  for (const t of existingList) {
+  const safeExistingList = Array.isArray(existingList) ? existingList : [];
+
+  for (const t of safeExistingList) {
     if (t.nip) byNip.set(normCompare(t.nip), t);
     if (t.nuptk) byNuptk.set(normCompare(t.nuptk), t);
     if (t.nik) byNik.set(normCompare(t.nik), t);
@@ -678,8 +762,9 @@ export function TeacherListPage() {
   const [isExporting, setIsExporting] = useState(false);
   const [deleteModal, setDeleteModal] = useState<DeleteModalState>({ isOpen: false, type: 'single' });
 
-  // SmartDiff Import Wizard State
+  // SmartDiff Import Wizard & Error State
   const [isParsingExcel, setIsParsingExcel] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   const [importModalOpen, setImportModalOpen] = useState(false);
   const [importFileName, setImportFileName] = useState('');
   const [importPreviewRows, setImportPreviewRows] = useState<TeacherBulkImportItem[]>([]);
@@ -709,7 +794,13 @@ export function TeacherListPage() {
     certifiedFilter === 'all' ? undefined : certifiedFilter === 'true';
 
   // --- QUERIES ---
-  const { data: teachersResponse, isLoading, isError } = useQuery({
+  const {
+    data: teachersResponse,
+    isLoading,
+    isError,
+    error: teachersQueryError,
+    refetch: refetchTeachers,
+  } = useQuery({
     queryKey: [
       'teachers',
       activeSchoolId,
@@ -760,7 +851,16 @@ export function TeacherListPage() {
       toast.success(tr('Data guru berhasil dihapus.', 'Teacher record deleted.'));
       closeDeleteModal();
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: (err: unknown) => {
+      toast.error(
+        extractFriendlyErrorMessage(
+          err,
+          locale,
+          'Gagal menghapus data guru.',
+          'Failed to delete teacher record.'
+        )
+      );
+    },
   });
 
   const deleteManyMutation = useMutation({
@@ -772,12 +872,25 @@ export function TeacherListPage() {
       toast.success(tr('Data guru terpilih berhasil dihapus.', 'Selected teachers deleted.'));
       closeDeleteModal();
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: (err: unknown) => {
+      toast.error(
+        extractFriendlyErrorMessage(
+          err,
+          locale,
+          'Gagal menghapus data guru terpilih.',
+          'Failed to delete selected teachers.'
+        )
+      );
+    },
   });
 
   const deleteAllMutation = useMutation({
     mutationFn: () => {
-      if (!activeSchoolId) throw new Error('Pilih sekolah aktif terlebih dahulu.');
+      if (!activeSchoolId) {
+        throw new Error(
+          tr('Pilih sekolah aktif terlebih dahulu.', 'Please select an active school first.')
+        );
+      }
       return teacherService.deleteAll(activeSchoolId);
     },
     onSuccess: () => {
@@ -787,7 +900,16 @@ export function TeacherListPage() {
       toast.success(tr('Seluruh data guru berhasil dikosongkan.', 'All teacher records cleared.'));
       closeDeleteModal();
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: (err: unknown) => {
+      toast.error(
+        extractFriendlyErrorMessage(
+          err,
+          locale,
+          'Gagal mengosongkan seluruh data guru.',
+          'Failed to clear all teacher records.'
+        )
+      );
+    },
   });
 
   const bulkImportMutation = useMutation({
@@ -796,10 +918,20 @@ export function TeacherListPage() {
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
       toast.success(res.message);
+      setImportError(null);
       setImportModalOpen(false);
       setImportPreviewRows([]);
     },
-    onError: (err: Error) => toast.error(err.message),
+    onError: (err: unknown) => {
+      const msg = extractFriendlyErrorMessage(
+        err,
+        locale,
+        'Gagal menyinkronkan data guru ke database.',
+        'Failed to sync teacher data to database.'
+      );
+      setImportError(msg);
+      toast.error(msg, { duration: 6000 });
+    },
   });
 
   const isDeleteBusy =
@@ -968,23 +1100,41 @@ export function TeacherListPage() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
+
+    // Reset pesan error lama setiap kali pengguna memilih file baru
+    setImportError(null);
+
     if (!canImportTeacher) {
-      toast.error(
-        tr(
-          'Anda tidak memiliki izin mengimpor data guru.',
-          'You do not have permission to import teacher data.'
-        )
+      const msg = tr(
+        'Anda tidak memiliki izin mengimpor data guru.',
+        'You do not have permission to import teacher data.'
       );
+      setImportError(msg);
+      toast.error(msg);
       e.target.value = '';
       return;
     }
+
     if (!activeSchoolId) {
-      toast.error(
-        tr(
-          'Pilih sekolah aktif terlebih dahulu sebelum mengimpor data PTK.',
-          'Select an active school before importing PTK data.'
-        )
+      const msg = tr(
+        'Pilih sekolah aktif terlebih dahulu sebelum mengimpor data PTK.',
+        'Select an active school before importing PTK data.'
       );
+      setImportError(msg);
+      toast.error(msg);
+      e.target.value = '';
+      return;
+    }
+
+    // Validasi ekstensi file sebelum diproses
+    const lowerFileName = file.name.toLowerCase();
+    if (!lowerFileName.endsWith('.xlsx') && !lowerFileName.endsWith('.xls')) {
+      const msg = tr(
+        'Format file tidak didukung. Harap unggah file Excel (.xlsx atau .xls).',
+        'Unsupported file format. Please upload an Excel file (.xlsx or .xls).'
+      );
+      setImportError(msg);
+      toast.error(msg);
       e.target.value = '';
       return;
     }
@@ -997,19 +1147,43 @@ export function TeacherListPage() {
     try {
       const buffer = await file.arrayBuffer();
       const workbook = XLSX.read(buffer, { raw: false });
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
 
-      const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, { header: 1, raw: false });
+      if (!workbook.SheetNames || workbook.SheetNames.length === 0) {
+        throw new Error(
+          tr(
+            'File Excel tidak memiliki lembar kerja (sheet) yang valid.',
+            'The Excel file does not contain any valid worksheet.'
+          )
+        );
+      }
+
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      if (!worksheet) {
+        throw new Error(
+          tr(
+            'Lembar kerja pertama di dalam file Excel tidak dapat dibaca.',
+            'The first worksheet in the Excel file could not be read.'
+          )
+        );
+      }
+
+      // Gunakan defval: '' agar tidak terbentuk sparse array (lubang undefined)
+      const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
+        header: 1,
+        raw: false,
+        defval: '',
+      });
+
       let headerRow = matrix.slice(0, 20).findIndex(
         (r) =>
           Array.isArray(r) &&
-          r.some((c) => ['nama', 'nama lengkap'].includes(normKey(String(c ?? ''))))
+          r.some((c) => ['nama', 'nama lengkap'].includes(normKey(c)))
       );
       if (headerRow === -1) headerRow = FALLBACK_HEADER_ROW;
 
-      const headerCells = Array.isArray(matrix[headerRow])
-        ? (matrix[headerRow] as unknown[]).map((c) => String(c ?? ''))
-        : [];
+      // Array.from memastikan tidak ada slot kosong (sparse array) saat di-loop
+      const rawHeaderRow = Array.isArray(matrix[headerRow]) ? matrix[headerRow] : [];
+      const headerCells = Array.from(rawHeaderRow, (c) => String(c ?? ''));
 
       // Validasi silang: Pastikan file yang diunggah benar-benar file Guru (PTK), bukan file Siswa
       const detectedType = detectTeacherExcelSource(
@@ -1045,8 +1219,8 @@ export function TeacherListPage() {
       if (jsonData.length === 0) {
         throw new Error(
           tr(
-            'File Excel kosong atau format header tidak dikenali.',
-            'Empty Excel file or unrecognized header format.'
+            'File Excel kosong atau tidak memiliki baris data di bawah header.',
+            'Empty Excel file or no data rows found below the header.'
           )
         );
       }
@@ -1055,8 +1229,8 @@ export function TeacherListPage() {
       if (payloads.length === 0) {
         throw new Error(
           tr(
-            'Tidak ada baris data guru yang valid (kolom Nama kosong).',
-            'No valid teacher rows found (Name column is empty).'
+            'Tidak ada baris data guru yang valid (seluruh kolom Nama kosong).',
+            'No valid teacher rows found (all Name columns are empty).'
           )
         );
       }
@@ -1064,7 +1238,7 @@ export function TeacherListPage() {
       const existingRes = await teacherService.exportAll(activeSchoolId);
       const { rows: diffedRows, duplicateCount } = computeSmartDiff(
         payloads,
-        existingRes.data || []
+        existingRes?.data || []
       );
 
       setImportFileName(file.name);
@@ -1076,7 +1250,13 @@ export function TeacherListPage() {
 
       toast.dismiss(toastId);
     } catch (error: unknown) {
-      const msg = error instanceof Error ? error.message : 'Gagal membaca file Excel';
+      const msg = extractFriendlyErrorMessage(
+        error,
+        locale,
+        'Gagal membaca file Excel Verval PTK. Periksa kembali format file Anda.',
+        'Failed to read Verval PTK Excel file. Please check your file format.'
+      );
+      setImportError(msg);
       toast.error(msg, { id: toastId, duration: 6000 });
     } finally {
       setIsParsingExcel(false);
@@ -1187,7 +1367,13 @@ export function TeacherListPage() {
       XLSX.writeFile(wb, fileName);
       toast.success(tr('Data berhasil diekspor!', 'Data successfully exported!'), { id: toastId });
     } catch (error: unknown) {
-      toast.error(error instanceof Error ? error.message : 'Export failed', { id: toastId });
+      const msg = extractFriendlyErrorMessage(
+        error,
+        locale,
+        'Gagal mengekspor data guru.',
+        'Failed to export teacher data.'
+      );
+      toast.error(msg, { id: toastId });
     } finally {
       setIsExporting(false);
     }
@@ -1310,6 +1496,29 @@ export function TeacherListPage() {
           )}
         </div>
       </div>
+
+      {/* --- BANNER ERROR IMPOR EXCEL (PERSISTEN) --- */}
+      {importError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+            <div>
+              <p className="font-semibold">
+                {tr('Gagal Memproses Impor Data Guru', 'Failed to Process Teacher Import')}
+              </p>
+              <p className="mt-0.5 leading-relaxed">{importError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setImportError(null)}
+            title={tr('Tutup pesan error', 'Dismiss error')}
+            className="p-1 rounded-lg text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
 
       {isSuperAdmin && !activeSchoolId && (
         <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
@@ -1496,9 +1705,30 @@ export function TeacherListPage() {
                 <tr>
                   <td
                     colSpan={canDeleteTeacher ? 8 : 7}
-                    className="px-6 py-12 text-center text-red-500"
+                    className="px-6 py-12 text-center"
                   >
-                    {tr('Gagal memuat data guru.', 'Failed to load teacher data.')}
+                    <div className="flex flex-col items-center justify-center gap-2 text-red-600 dark:text-red-400">
+                      <AlertCircle className="h-8 w-8" />
+                      <p className="font-semibold">
+                        {tr('Gagal memuat data guru.', 'Failed to load teacher data.')}
+                      </p>
+                      <p className="text-xs text-muted-foreground max-w-md">
+                        {extractFriendlyErrorMessage(
+                          teachersQueryError,
+                          locale,
+                          'Terjadi gangguan saat mengambil daftar guru dari server.',
+                          'An issue occurred while fetching the teacher list from the server.'
+                        )}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => refetchTeachers()}
+                        className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-border bg-background text-foreground text-xs font-medium hover:bg-muted transition-colors shadow-sm"
+                      >
+                        <RefreshCw size={14} />
+                        <span>{tr('Muat Ulang', 'Retry')}</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ) : teachers.length === 0 ? (

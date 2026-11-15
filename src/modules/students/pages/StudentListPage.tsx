@@ -13,8 +13,10 @@ import {
   Trash2,
   Loader2,
   AlertCircle,
+  AlertTriangle,
   CheckCircle2,
   XCircle,
+  X,
   FileSpreadsheet,
   ChevronLeft,
   ChevronRight,
@@ -146,6 +148,87 @@ interface SmartDiffStats {
 }
 
 // ==========================================
+// ERROR HANDLING HELPER
+// ==========================================
+/**
+ * Mengubah berbagai bentuk error (API/Axios, Supabase, Validasi, Jaringan, atau Runtime JS)
+ * menjadi pesan yang jelas dan ramah bagi pengguna.
+ */
+const extractFriendlyErrorMessage = (
+  error: unknown,
+  locale: string,
+  fallbackId: string,
+  fallbackEn: string
+): string => {
+  const isId = locale === 'id';
+  const fallback = isId ? fallbackId : fallbackEn;
+
+  if (!error) return fallback;
+
+  if (typeof error === 'object' && error !== null) {
+    const errObj = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+          error?: string;
+        };
+      };
+      message?: string;
+      details?: string;
+      hint?: string;
+    };
+
+    // 1. Prioritaskan pesan error spesifik dari backend/API
+    const apiMessage = errObj.response?.data?.message;
+    if (Array.isArray(apiMessage) && apiMessage.length > 0) {
+      return apiMessage.join(', ');
+    }
+    if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
+      return apiMessage;
+    }
+    if (typeof errObj.response?.data?.error === 'string' && errObj.response.data.error.trim() !== '') {
+      return errObj.response.data.error;
+    }
+
+    // 2. Tangani error JavaScript / Supabase / jaringan agar tidak menampilkan pesan teknis mentah
+    if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
+      const rawMsg = errObj.message;
+
+      if (
+        rawMsg.includes('Cannot read properties') ||
+        rawMsg.includes('is not a function') ||
+        rawMsg.includes('is not iterable')
+      ) {
+        return isId
+          ? 'Terjadi kesalahan saat membaca struktur file Excel. Pastikan format kolom sesuai template Verval PD.'
+          : 'An error occurred while reading the Excel structure. Ensure columns match the Verval PD template.';
+      }
+
+      if (
+        rawMsg.toLowerCase().includes('network error') ||
+        rawMsg.toLowerCase().includes('failed to fetch')
+      ) {
+        return isId
+          ? 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.'
+          : 'Connection to server failed. Check your internet connection and try again.';
+      }
+
+      if (typeof errObj.details === 'string' && errObj.details.trim() !== '') {
+        return `${rawMsg} (${errObj.details})`;
+      }
+
+      return rawMsg;
+    }
+  }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return error;
+  }
+
+  return fallback;
+};
+
+// ==========================================
 // CONSTANTS & PURE HELPERS
 // ==========================================
 const DEFAULT_PAGE_SIZE = 10;
@@ -201,16 +284,22 @@ const TEACHER_COLUMN_MARKERS = new Set([
   'sudah lisensi kepala sekolah',
 ]);
 
+const normText = (val: unknown): string =>
+  String(val ?? '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const detectStudentExcelSource = (
   sheetNames: string[],
   topRows: unknown[][],
   cleanHeaders: string[]
 ): DetectedExcelType => {
-  const normSheets = sheetNames.map((s) => s.toLowerCase().replace(/\s+/g, ' ').trim());
-  const topText = topRows
+  const normSheets = (sheetNames || []).map((s) => normText(s));
+  const topText = (topRows || [])
     .slice(0, 4)
     .flat()
-    .map((c) => String(c ?? '').toLowerCase().replace(/\s+/g, ' ').trim())
+    .map((c) => normText(c))
     .join(' | ');
 
   const hasTeacherBanner =
@@ -226,8 +315,8 @@ const detectStudentExcelSource = (
   let studentScore = 0;
   let teacherScore = 0;
 
-  for (const h of cleanHeaders) {
-    const norm = h.toLowerCase().replace(/\s+/g, ' ').trim();
+  for (const h of cleanHeaders || []) {
+    const norm = normText(h);
     if (!norm) continue;
     if (STUDENT_COLUMN_MARKERS.has(norm)) studentScore++;
     if (TEACHER_COLUMN_MARKERS.has(norm)) teacherScore++;
@@ -245,15 +334,6 @@ const isWelfareLabel = (label: string): boolean =>
 
 const getLocalTodayIso = (): string => {
   return new Date().toLocaleDateString('en-CA');
-};
-
-const getErrorMessage = (error: unknown, fallback: string): string => {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    const msg = (error as { message?: unknown }).message;
-    if (typeof msg === 'string' && msg.trim()) return msg;
-  }
-  return fallback;
 };
 
 const sanitizeExcelCell = (val: unknown): string | number => {
@@ -830,6 +910,7 @@ export function StudentListPage() {
   const [isExporting, setIsExporting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState<string | null>(null);
   const [wizardState, setWizardState] = useState<'idle' | 'parsing' | 'preview' | 'importing'>('idle');
   const [parsedImportData, setParsedImportData] = useState<StudentBulkImportItem[]>([]);
   const [existingWelfareMap, setExistingWelfareMap] = useState<
@@ -894,7 +975,13 @@ export function StudentListPage() {
     enabled: Boolean(resolvedSchoolId),
   });
 
-  const { data: studentsResponse, isLoading } = useQuery({
+  const {
+    data: studentsResponse,
+    isLoading,
+    isError,
+    error: studentsQueryError,
+    refetch: refetchStudents,
+  } = useQuery({
     queryKey: [
       'students',
       resolvedSchoolId,
@@ -941,7 +1028,14 @@ export function StudentListPage() {
       setStudentToDelete(null);
     },
     onError: (error: unknown) => {
-      toast.error(getErrorMessage(error, tr('Gagal menghapus siswa', 'Failed to delete student')));
+      toast.error(
+        extractFriendlyErrorMessage(
+          error,
+          locale,
+          'Gagal menghapus data siswa.',
+          'Failed to delete student record.'
+        )
+      );
       setStudentToDelete(null);
     },
   });
@@ -963,7 +1057,12 @@ export function StudentListPage() {
     },
     onError: (error: unknown) => {
       toast.error(
-        getErrorMessage(error, tr('Gagal menghapus data massal', 'Failed to bulk delete data'))
+        extractFriendlyErrorMessage(
+          error,
+          locale,
+          'Gagal menghapus data siswa terpilih.',
+          'Failed to delete selected students.'
+        )
       );
       setIsBulkDeleting(false);
     },
@@ -1011,7 +1110,14 @@ export function StudentListPage() {
       setIsDeletingAll(false);
     },
     onError: (error: unknown) => {
-      toast.error(getErrorMessage(error, tr('Gagal mengosongkan data', 'Failed to wipe data')));
+      toast.error(
+        extractFriendlyErrorMessage(
+          error,
+          locale,
+          'Gagal mengosongkan seluruh data siswa.',
+          'Failed to wipe all student records.'
+        )
+      );
       setIsDeletingAll(false);
     },
   });
@@ -1024,10 +1130,18 @@ export function StudentListPage() {
       queryClient.invalidateQueries({ queryKey: ['student'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
       queryClient.invalidateQueries({ queryKey: ['classes-list'] });
+      setImportError(null);
       closeImportWizard();
     },
     onError: (error: unknown) => {
-      toast.error(getErrorMessage(error, tr('Gagal melakukan import', 'Import failed')));
+      const msg = extractFriendlyErrorMessage(
+        error,
+        locale,
+        'Gagal menyinkronkan data siswa ke database.',
+        'Failed to sync student data to database.'
+      );
+      setImportError(msg);
+      toast.error(msg, { duration: 6000 });
       setWizardState('preview');
     },
   });
@@ -1058,6 +1172,11 @@ export function StudentListPage() {
     setApplySmartUpdates(true);
     setPreserveManualWelfare(false);
   };
+
+  const sortedClasses = useMemo(
+    () => [...(classesData || [])].sort((a, b) => a.name.localeCompare(b.name)),
+    [classesData]
+  );
 
   // --- DOWNLOAD TEMPLATE EXCEL (v14) ---
   const handleDownloadTemplate = () => {
@@ -1102,27 +1221,70 @@ export function StudentListPage() {
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    if (!resolvedSchoolId) {
-      toast.error(
-        isSuperAdmin
-          ? tr(
-            'Super Admin wajib memilih sekolah aktif terlebih dahulu sebelum melakukan import.',
-            'Super Admin must select an active school before importing.'
-          )
-          : tr('Data sekolah belum termuat.', 'School data is not loaded yet.')
+
+    // Reset pesan error lama setiap kali pengguna memilih file baru
+    setImportError(null);
+
+    if (!canManageData) {
+      const msg = tr(
+        'Anda tidak memiliki izin mengimpor data siswa.',
+        'You do not have permission to import student data.'
       );
+      setImportError(msg);
+      toast.error(msg);
+      e.target.value = '';
+      return;
+    }
+
+    if (!resolvedSchoolId) {
+      const msg = isSuperAdmin
+        ? tr(
+          'Super Admin wajib memilih sekolah aktif terlebih dahulu sebelum melakukan import.',
+          'Super Admin must select an active school before importing.'
+        )
+        : tr(
+          'Pilih sekolah aktif terlebih dahulu sebelum mengimpor data PD.',
+          'Select an active school before importing student data.'
+        );
+      setImportError(msg);
+      toast.error(msg);
+      e.target.value = '';
+      return;
+    }
+
+    // Validasi ekstensi file sebelum diproses
+    const lowerFileName = file.name.toLowerCase();
+    if (
+      !lowerFileName.endsWith('.xlsx') &&
+      !lowerFileName.endsWith('.xls') &&
+      !lowerFileName.endsWith('.csv')
+    ) {
+      const msg = tr(
+        'Format file tidak didukung. Harap unggah file Excel (.xlsx, .xls) atau CSV.',
+        'Unsupported file format. Please upload an Excel (.xlsx, .xls) or CSV file.'
+      );
+      setImportError(msg);
+      toast.error(msg);
       e.target.value = '';
       return;
     }
 
     setWizardState('parsing');
+    const toastId = toast.loading(
+      tr('Menganalisis file Excel Dapodik PD...', 'Analyzing Dapodik Student Excel...')
+    );
 
     const reader = new FileReader();
     reader.onload = async (evt) => {
       try {
         const workbook = XLSX.read(evt.target?.result, { type: 'array' });
-        if (!workbook.SheetNames.length) {
-          throw new Error(tr('File kosong', 'Empty file'));
+        if (!workbook.SheetNames || !workbook.SheetNames.length) {
+          throw new Error(
+            tr(
+              'File Excel tidak memiliki lembar kerja (sheet) yang valid.',
+              'The Excel file does not contain any valid worksheet.'
+            )
+          );
         }
 
         let rawData: unknown[][] = [];
@@ -1138,10 +1300,10 @@ export function StudentListPage() {
           });
 
           for (let i = 0; i < Math.min(25, sheetRows.length); i++) {
-            const rowText =
-              (sheetRows[i] as unknown[])?.map((cell) =>
-                String(cell).toLowerCase().replace(/\s+/g, '')
-              ) || [];
+            const currentRow = Array.isArray(sheetRows[i]) ? sheetRows[i] : [];
+            const rowText = currentRow.map((cell) =>
+              String(cell ?? '').toLowerCase().replace(/\s+/g, '')
+            );
             const hasNameCol = rowText.some(
               (c) =>
                 c === 'nama' ||
@@ -1167,17 +1329,20 @@ export function StudentListPage() {
         if (headerRowIndex === -1) {
           throw new Error(
             tr(
-              'Format kolom tidak dikenali (Kolom Nama / NISN / JK tidak ditemukan)',
-              'Invalid column format (Missing Name / NISN / Gender)'
+              'Format kolom tidak dikenali (Kolom Nama / NISN / JK tidak ditemukan).',
+              'Invalid column format (Missing Name / NISN / Gender).'
             )
           );
         }
 
-        const rowMain = (rawData[headerRowIndex] as string[]) || [];
-        const rowSub = (rawData[headerRowIndex + 1] as string[]) || [];
+        // Array.from memastikan tidak ada slot kosong (sparse array) saat di-loop
+        const rawMain = Array.isArray(rawData[headerRowIndex]) ? rawData[headerRowIndex] : [];
+        const rawSub = Array.isArray(rawData[headerRowIndex + 1]) ? rawData[headerRowIndex + 1] : [];
+        const rowMain = Array.from(rawMain, (c) => String(c ?? ''));
+        const rowSub = Array.from(rawSub, (c) => String(c ?? ''));
 
         const hasGroupedSubHeader = rowMain.some((cell) => {
-          const lower = String(cell || '').toLowerCase();
+          const lower = String(cell ?? '').toLowerCase();
           return (
             lower.includes('data ayah') ||
             lower.includes('data ibu') ||
@@ -1190,10 +1355,10 @@ export function StudentListPage() {
 
         if (hasGroupedSubHeader) {
           for (let c = 0; c < Math.max(rowMain.length, rowSub.length); c++) {
-            const vMain = String(rowMain[c] || '')
+            const vMain = String(rowMain[c] ?? '')
               .trim()
               .replace(/[\r\n]+/g, ' ');
-            const vSub = String(rowSub[c] || '')
+            const vSub = String(rowSub[c] ?? '')
               .trim()
               .replace(/[\r\n]+/g, ' ');
 
@@ -1218,7 +1383,7 @@ export function StudentListPage() {
           }
         } else {
           for (let c = 0; c < rowMain.length; c++) {
-            const vMain = String(rowMain[c] || '')
+            const vMain = String(rowMain[c] ?? '')
               .trim()
               .replace(/[\r\n]+/g, ' ');
             cleanHeaders.push(vMain.toLowerCase().trim());
@@ -1262,6 +1427,15 @@ export function StudentListPage() {
           });
           return rowObject;
         });
+
+        if (data.length === 0) {
+          throw new Error(
+            tr(
+              'File Excel kosong atau tidak memiliki baris data di bawah header.',
+              'Empty Excel file or no data rows found below the header.'
+            )
+          );
+        }
 
         const existingStudents = await fetchExistingStudentsSnapshot(resolvedSchoolId);
         const existingByNisn = new Map<string, ExistingStudentSnapshot>();
@@ -1622,6 +1796,15 @@ export function StudentListPage() {
           }
         }
 
+        if (validNamedRows === 0) {
+          throw new Error(
+            tr(
+              'Tidak ada baris data siswa yang valid (seluruh kolom Nama kosong).',
+              'No valid student rows found (all Name columns are empty).'
+            )
+          );
+        }
+
         setParsedImportData(parsedPayloads);
         setExistingWelfareMap(welfareSnapshot);
         setUnmatchedClasses(Array.from(unfoundClassByNorm.values()));
@@ -1636,18 +1819,28 @@ export function StudentListPage() {
           fileDuplicates: fileDuplicateCount,
         });
         setWizardState('preview');
+        toast.dismiss(toastId);
       } catch (error: unknown) {
-        toast.error(
-          getErrorMessage(error, tr('Gagal membaca file Excel', 'Failed to parse Excel file')),
-          { duration: 6000 }
+        const msg = extractFriendlyErrorMessage(
+          error,
+          locale,
+          'Gagal membaca file Excel Verval PD. Periksa kembali format file Anda.',
+          'Failed to parse Verval PD Excel file. Please check your file format.'
         );
+        setImportError(msg);
+        toast.error(msg, { id: toastId, duration: 6000 });
         setWizardState('idle');
       } finally {
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     };
     reader.onerror = () => {
-      toast.error(tr('Gagal membaca file', 'Failed to read file'));
+      const msg = tr(
+        'Gagal membaca file dari perangkat Anda. Pastikan file tidak sedang dibuka di aplikasi lain.',
+        'Failed to read file from your device. Ensure the file is not open in another program.'
+      );
+      setImportError(msg);
+      toast.error(msg, { id: toastId, duration: 6000 });
       setWizardState('idle');
       if (fileInputRef.current) fileInputRef.current.value = '';
     };
@@ -1657,14 +1850,14 @@ export function StudentListPage() {
   // --- EXECUTE SMARTDIFF IMPORT ---
   const executeImport = async () => {
     if (!resolvedSchoolId) {
-      toast.error(
-        isSuperAdmin
-          ? tr(
-            'Super Admin wajib memilih sekolah aktif terlebih dahulu.',
-            'Super Admin must select an active school first.'
-          )
-          : tr('Data sekolah belum termuat.', 'School data is not loaded yet.')
-      );
+      const msg = isSuperAdmin
+        ? tr(
+          'Super Admin wajib memilih sekolah aktif terlebih dahulu.',
+          'Super Admin must select an active school first.'
+        )
+        : tr('Data sekolah belum termuat.', 'School data is not loaded yet.');
+      setImportError(msg);
+      toast.error(msg);
       return;
     }
 
@@ -1702,12 +1895,12 @@ export function StudentListPage() {
     const neededUnmatchedClasses = Array.from(uniqueNewClassesMap.values());
 
     if (neededUnmatchedClasses.length > 0 && !activeYear?.id) {
-      toast.error(
-        tr(
-          'Tahun Ajaran Aktif tidak ditemukan! Silakan aktifkan Tahun Ajaran terlebih dahulu agar kelas dapat dibuat otomatis.',
-          'Active Academic Year not found! Please activate an academic year first.'
-        )
+      const msg = tr(
+        'Tahun Ajaran Aktif tidak ditemukan! Silakan aktifkan Tahun Ajaran terlebih dahulu agar kelas dapat dibuat otomatis.',
+        'Active Academic Year not found! Please activate an academic year first.'
       );
+      setImportError(msg);
+      toast.error(msg, { duration: 6000 });
       return;
     }
 
@@ -1800,12 +1993,14 @@ export function StudentListPage() {
 
       importMutation.mutate(finalPayload);
     } catch (error: unknown) {
-      toast.error(
-        getErrorMessage(
-          error,
-          tr('Gagal memproses data import.', 'Failed to process import data.')
-        )
+      const msg = extractFriendlyErrorMessage(
+        error,
+        locale,
+        'Gagal memproses data import siswa.',
+        'Failed to process student import data.'
       );
+      setImportError(msg);
+      toast.error(msg, { duration: 6000 });
       setWizardState('preview');
     }
   };
@@ -1940,18 +2135,17 @@ export function StudentListPage() {
       XLSX.writeFile(workbook, fileName);
       toast.success(tr('Export berhasil!', 'Export successful!'), { id: toastId });
     } catch (error: unknown) {
-      toast.error(getErrorMessage(error, tr('Gagal melakukan export data', 'Export failed')), {
-        id: toastId,
-      });
+      const msg = extractFriendlyErrorMessage(
+        error,
+        locale,
+        'Gagal mengekspor data siswa.',
+        'Failed to export student data.'
+      );
+      toast.error(msg, { id: toastId });
     } finally {
       setIsExporting(false);
     }
   };
-
-  const sortedClasses = useMemo(
-    () => [...(classesData || [])].sort((a, b) => a.name.localeCompare(b.name)),
-    [classesData]
-  );
 
   const hasWelfareDiffs = useMemo(
     () =>
@@ -2514,11 +2708,19 @@ export function StudentListPage() {
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                disabled={wizardState !== 'idle'}
+                disabled={!resolvedSchoolId || wizardState !== 'idle'}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
               >
-                <Upload size={16} />
-                <span className="hidden sm:inline">{tr('Impor Verval PD', 'Import Verval PD')}</span>
+                {wizardState === 'parsing' ? (
+                  <Loader2 size={16} className="animate-spin text-emerald-600" />
+                ) : (
+                  <Upload size={16} />
+                )}
+                <span className="hidden sm:inline">
+                  {wizardState === 'parsing'
+                    ? tr('Membaca...', 'Reading...')
+                    : tr('Impor Verval PD', 'Import Verval PD')}
+                </span>
               </button>
             </>
           )}
@@ -2542,7 +2744,7 @@ export function StudentListPage() {
             </span>
           </button>
 
-          {canManageData && (
+          {canManageData && resolvedSchoolId && (
             <Link
               to="/students/new"
               className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-all shadow-md"
@@ -2553,6 +2755,46 @@ export function StudentListPage() {
           )}
         </div>
       </div>
+
+      {/* --- BANNER ERROR IMPOR EXCEL (PERSISTEN) --- */}
+      {importError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+            <div>
+              <p className="font-semibold">
+                {tr('Gagal Memproses Impor Data Siswa', 'Failed to Process Student Import')}
+              </p>
+              <p className="mt-0.5 leading-relaxed">{importError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setImportError(null)}
+            title={tr('Tutup pesan error', 'Dismiss error')}
+            className="p-1 rounded-lg text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {isSuperAdmin && !resolvedSchoolId && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-semibold">
+              {tr('Mode Super Admin Lintas Sekolah', 'Cross-School Super Admin Mode')}
+            </p>
+            <p className="mt-0.5">
+              {tr(
+                'Pilih sekolah aktif terlebih dahulu pada switcher sekolah untuk menambah siswa baru atau mengimpor Excel Verval PD.',
+                'Select an active school from the school switcher before adding new students or importing Verval PD Excel.'
+              )}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* --- FILTERS --- */}
       <div className="bg-card border border-border/50 rounded-xl p-4 shadow-sm">
@@ -2567,8 +2809,21 @@ export function StudentListPage() {
               placeholder={t('students.search')}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
-              className="w-full pl-9 pr-4 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all"
+              className={cn(
+                'w-full pl-9 py-2 rounded-lg border border-border/50 bg-background text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all',
+                searchInput ? 'pr-8' : 'pr-4'
+              )}
             />
+            {searchInput && (
+              <button
+                type="button"
+                onClick={() => setSearchInput('')}
+                title={tr('Hapus pencarian', 'Clear search')}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+              >
+                <X size={14} />
+              </button>
+            )}
           </div>
 
           <div className="relative min-w-44">
@@ -2673,6 +2928,33 @@ export function StudentListPage() {
                   <td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center">
                     <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />
                     <p className="text-muted-foreground">{tr('Memuat...', 'Loading...')}</p>
+                  </td>
+                </tr>
+              ) : isError ? (
+                <tr>
+                  <td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center">
+                    <div className="flex flex-col items-center justify-center gap-2 text-red-600 dark:text-red-400">
+                      <AlertCircle className="h-8 w-8" />
+                      <p className="font-semibold">
+                        {tr('Gagal memuat data siswa.', 'Failed to load student data.')}
+                      </p>
+                      <p className="text-xs text-muted-foreground max-w-md">
+                        {extractFriendlyErrorMessage(
+                          studentsQueryError,
+                          locale,
+                          'Terjadi gangguan saat mengambil daftar siswa dari server.',
+                          'An issue occurred while fetching the student list from the server.'
+                        )}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => refetchStudents()}
+                        className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-border bg-background text-foreground text-xs font-medium hover:bg-muted transition-colors shadow-sm"
+                      >
+                        <RefreshCw size={14} />
+                        <span>{tr('Muat Ulang', 'Retry')}</span>
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ) : students.length === 0 ? (
