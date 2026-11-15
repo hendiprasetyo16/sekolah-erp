@@ -109,6 +109,7 @@ interface SchoolGeoAndSchedule {
   longitude: number;
   radius: number;
   workStartTime: string;
+  lateToleranceMinutes: number;
   workEndTime: string;
   workDaysMode: WorkDaysMode;
 }
@@ -158,6 +159,22 @@ function calculateDistanceMeters(
   return R * c;
 }
 
+function formatDeadlineWithTolerance(
+  startTime: string,
+  toleranceMinutes: number
+): string {
+  const [hStr, mStr] = startTime.split(':');
+  const h = Number(hStr) || 7;
+  const m = Number(mStr) || 30;
+  const totalMinutes = Math.min(
+    23 * 60 + 59,
+    h * 60 + m + Math.max(0, toleranceMinutes)
+  );
+  const finalH = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+  const finalM = String(totalMinutes % 60).padStart(2, '0');
+  return `${finalH}:${finalM}`;
+}
+
 export function TeacherAttendancePage() {
   const navigate = useNavigate();
   const { user, school } = useAuthStore();
@@ -185,7 +202,7 @@ export function TeacherAttendancePage() {
   const [activeView, setActiveView] = useState<SubView>('beranda');
   const [now, setNow] = useState<Date>(() => new Date());
 
-  // Data Guru, Pengaturan Sekolah (GPS + Jam Kerja + 5/6 Hari Kerja), & Riwayat
+  // Data Guru, Pengaturan Sekolah (GPS + Jam Kerja + Toleransi + 5/6 Hari), & Riwayat
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
   const [schoolGeo, setSchoolGeo] = useState<SchoolGeoAndSchedule | null>(null);
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
@@ -292,7 +309,6 @@ export function TeacherAttendancePage() {
       if (!error && data) {
         const mapped: Record<string, string> = {};
         for (const row of data) {
-          // Libur khusus sekolah menimpa label global jika tanggal sama
           if (!mapped[row.date] || row.schoolId !== null) {
             mapped[row.date] = row.name;
           }
@@ -374,7 +390,7 @@ export function TeacherAttendancePage() {
       });
   }, [isSuperAdmin, activeSchoolId]);
 
-  // Muat Data Sekolah (GPS, Jam Masuk/Pulang, Mode 5/6 Hari Kerja), Profil Guru, & Riwayat
+  // Muat Data Sekolah (GPS, Jam Masuk/Pulang, Toleransi, 5/6 Hari Kerja), Profil Guru, & Riwayat
   const loadTeacherAndAttendance = useCallback(async () => {
     if (!activeSchoolId || !user?.id) return;
     setIsLoadingData(true);
@@ -398,6 +414,10 @@ export function TeacherAttendancePage() {
             DEFAULT_RADIUS_METERS
           ),
           workStartTime: schData.workStartTime || FALLBACK_WORK_START_TIME,
+          lateToleranceMinutes: Math.max(
+            0,
+            Number(schData.lateToleranceMinutes) || 0
+          ),
           workEndTime: schData.workEndTime || FALLBACK_WORK_END_TIME,
           workDaysMode:
             schData.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS',
@@ -464,10 +484,19 @@ export function TeacherAttendancePage() {
 
   const effectiveWorkStartTime =
     schoolGeo?.workStartTime || FALLBACK_WORK_START_TIME;
+  const effectiveToleranceMinutes = schoolGeo?.lateToleranceMinutes ?? 0;
   const effectiveWorkEndTime =
     schoolGeo?.workEndTime || FALLBACK_WORK_END_TIME;
   const effectiveWorkDaysMode: WorkDaysMode =
     schoolGeo?.workDaysMode || 'SIX_DAYS';
+  const effectiveDeadlineStr = useMemo(
+    () =>
+      formatDeadlineWithTolerance(
+        effectiveWorkStartTime,
+        effectiveToleranceMinutes
+      ),
+    [effectiveWorkStartTime, effectiveToleranceMinutes]
+  );
 
   // Pelacakan GPS Live
   const requestGpsPosition = useCallback(() => {
@@ -675,7 +704,7 @@ export function TeacherAttendancePage() {
     );
   };
 
-  // Simpan Check-In / Check-Out ke Supabase menggunakan Jam Masuk dari Database
+  // Simpan Check-In / Check-Out ke Supabase menggunakan Jam Masuk + Toleransi Keterlambatan
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
     selfieBlob: Blob | null
@@ -697,13 +726,20 @@ export function TeacherAttendancePage() {
         }
       }
 
-      const nowIso = new Date().toISOString();
+      const nowObj = new Date();
+      const nowIso = nowObj.toISOString();
 
       if (mode === 'CHECK_IN') {
         const [startH, startM] = effectiveWorkStartTime.split(':').map(Number);
         const deadline = new Date();
-        deadline.setHours(startH || 7, startM ?? 30, 59, 999);
-        const status = new Date() > deadline ? 'TERLAMBAT' : 'HADIR';
+        // Tambahkan toleransi keterlambatan (menit) ke jam masuk sekolah
+        deadline.setHours(
+          startH || 7,
+          (startM ?? 30) + effectiveToleranceMinutes,
+          59,
+          999
+        );
+        const status = nowObj > deadline ? 'TERLAMBAT' : 'HADIR';
 
         const { error } = await supabase.from('attendances').insert({
           schoolId: activeSchoolId,
@@ -723,7 +759,9 @@ export function TeacherAttendancePage() {
         showToast(
           'success',
           status === 'TERLAMBAT'
-            ? `Check-In berhasil tercatat (Status: Terlambat — batas ${effectiveWorkStartTime}).`
+            ? effectiveToleranceMinutes > 0
+              ? `Check-In tercatat (Status: Terlambat — lewat batas toleransi ${effectiveDeadlineStr}).`
+              : `Check-In tercatat (Status: Terlambat — batas masuk ${effectiveWorkStartTime}).`
             : 'Check-In Datang berhasil tercatat!'
         );
       } else {
@@ -1266,7 +1304,7 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          {/* Dua Kartu Utama: DATANG & PULANG (Jam Dinamis dari Database) */}
+          {/* Dua Kartu Utama: DATANG & PULANG (Jam Dinamis + Info Toleransi) */}
           <div className="grid grid-cols-2 gap-3.5">
             <button
               type="button"
@@ -1286,6 +1324,9 @@ export function TeacherAttendancePage() {
                     <div className="text-sm font-bold leading-tight">Datang</div>
                     <div className="text-[11px] text-slate-200/80">
                       {effectiveWorkStartTime}
+                      {effectiveToleranceMinutes > 0
+                        ? ` (+${effectiveToleranceMinutes}m)`
+                        : ''}
                     </div>
                   </div>
                 </div>
@@ -1306,7 +1347,9 @@ export function TeacherAttendancePage() {
                     ? `Tercatat ${todayRecord?.status}`
                     : hasCheckedIn
                       ? 'Presensi datang tercatat'
-                      : 'Ketuk untuk absen datang'}
+                      : effectiveToleranceMinutes > 0
+                        ? `Batas toleransi ${effectiveDeadlineStr}`
+                        : 'Ketuk untuk absen datang'}
                 </p>
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
@@ -1481,7 +1524,9 @@ export function TeacherAttendancePage() {
                   <div className="text-sm font-extrabold text-slate-900 font-mono">
                     {hoursStr}:{minutesStr}
                   </div>
-                  <div className="text-[11px] text-slate-500">Waktu</div>
+                  <div className="text-[11px] text-slate-500">
+                    Batas {effectiveDeadlineStr}
+                  </div>
                 </div>
               </div>
 

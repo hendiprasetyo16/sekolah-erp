@@ -1,5 +1,5 @@
 // src/modules/attendance/components/AttendanceSettingsTab.tsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Clock,
     CalendarDays,
@@ -25,20 +25,38 @@ import {
     type ParsedHolidayRow,
 } from '../utils/excelHolidayParser';
 
+/**
+ * Helper menghitung jam efektif setelah ditambah toleransi keterlambatan (menit)
+ */
+function calculateEffectiveDeadline(
+    startTime: string,
+    toleranceMinutes: number
+): string {
+    const [hStr, mStr] = startTime.split(':');
+    const h = Number(hStr) || 7;
+    const m = Number(mStr) || 0;
+    const safeTolerance = Math.max(0, Math.floor(Number(toleranceMinutes) || 0));
+    const totalMinutes = Math.min(23 * 60 + 59, h * 60 + m + safeTolerance);
+    const finalH = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
+    const finalM = String(totalMinutes % 60).padStart(2, '0');
+    return `${finalH}:${finalM}`;
+}
+
 export function AttendanceSettingsTab() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
     const isAdmin = user?.role === 'ADMIN';
     const canManage = isSuperAdmin || isAdmin;
 
-    // Pilihan sekolah (untuk Super Admin yang bisa berpindah antar sekolah)
+    // Pilihan sekolah (khusus SUPER_ADMIN)
     const [schools, setSchools] = useState<Array<{ id: string; name: string }>>([]);
     const [selectedSchoolId, setSelectedSchoolId] = useState<string>(
         school?.id ?? ''
     );
 
-    // 1. State Pengaturan Jam & Hari Kerja
+    // 1. State Pengaturan Jam Kerja, Toleransi Keterlambatan, & Hari Kerja
     const [workStartTime, setWorkStartTime] = useState<string>('07:30');
+    const [lateToleranceMinutes, setLateToleranceMinutes] = useState<number>(0);
     const [workEndTime, setWorkEndTime] = useState<string>('14:30');
     const [workDaysMode, setWorkDaysMode] = useState<WorkDaysMode>('SIX_DAYS');
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
@@ -73,7 +91,6 @@ export function AttendanceSettingsTab() {
         setTimeout(() => setToast(null), 4500);
     };
 
-    // Sinkronkan sekolah aktif dari store
     useEffect(() => {
         if (school?.id) {
             setSelectedSchoolId(school.id);
@@ -96,20 +113,23 @@ export function AttendanceSettingsTab() {
             });
     }, [isSuperAdmin, school?.id]);
 
-    // Muat pengaturan jam & hari kerja dari tabel schools
+    // Muat pengaturan jam kerja, toleransi keterlambatan, & hari kerja dari tabel schools
     const loadScheduleSettings = useCallback(async () => {
         if (!selectedSchoolId) return;
         setIsLoadingSchedule(true);
         try {
             const { data, error } = await supabase
                 .from('schools')
-                .select('id, workStartTime, workEndTime, workDaysMode')
+                .select('id, workStartTime, lateToleranceMinutes, workEndTime, workDaysMode')
                 .eq('id', selectedSchoolId)
                 .maybeSingle();
 
             if (error) throw error;
             if (data) {
                 setWorkStartTime(data.workStartTime || '07:30');
+                setLateToleranceMinutes(
+                    Math.max(0, Number(data.lateToleranceMinutes) || 0)
+                );
                 setWorkEndTime(data.workEndTime || '14:30');
                 setWorkDaysMode(
                     data.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS'
@@ -130,7 +150,12 @@ export function AttendanceSettingsTab() {
         loadScheduleSettings();
     }, [loadScheduleSettings]);
 
-    // Simpan pengaturan jam masuk, jam pulang, dan hari kerja
+    const effectiveDeadlinePreview = useMemo(
+        () => calculateEffectiveDeadline(workStartTime, lateToleranceMinutes),
+        [workStartTime, lateToleranceMinutes]
+    );
+
+    // Simpan pengaturan jam masuk, toleransi keterlambatan, jam pulang, dan hari kerja
     const handleSaveSchedule = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedSchoolId) {
@@ -138,22 +163,30 @@ export function AttendanceSettingsTab() {
             return;
         }
 
+        const cleanTolerance = Math.max(
+            0,
+            Math.min(180, Math.floor(Number(lateToleranceMinutes) || 0))
+        );
+
         setIsSavingSchedule(true);
         try {
             const { error } = await supabase
                 .from('schools')
                 .update({
                     workStartTime,
+                    lateToleranceMinutes: cleanTolerance,
                     workEndTime,
                     workDaysMode,
                 })
                 .eq('id', selectedSchoolId);
 
             if (error) throw error;
+            setLateToleranceMinutes(cleanTolerance);
             showToast(
                 'success',
-                `Pengaturan jam kerja (${workStartTime} - ${workEndTime}) & ${workDaysMode === 'FIVE_DAYS' ? '5 Hari Kerja' : '6 Hari Kerja'
-                } berhasil disimpan!`
+                cleanTolerance > 0
+                    ? `Tersimpan! Jam masuk ${workStartTime} + toleransi ${cleanTolerance} menit (batas terlambat ${effectiveDeadlinePreview}), pulang ${workEndTime}.`
+                    : `Tersimpan! Jam masuk ${workStartTime} (tanpa toleransi), pulang ${workEndTime}.`
             );
         } catch (err: any) {
             showToast('error', err.message ?? 'Gagal menyimpan pengaturan jam kerja.');
@@ -210,7 +243,6 @@ export function AttendanceSettingsTab() {
             throw new Error('Data sekolah tidak ditemukan.');
         }
 
-        // Ambil data eksisting untuk cakupan target agar tidak duplikat tanggal
         let existingQuery = supabase
             .from('national_holidays')
             .select('id, date');
@@ -306,7 +338,7 @@ export function AttendanceSettingsTab() {
             setPreviewRows(parsed);
             showToast(
                 'success',
-                `Berhasil membaca ${parsed.length} tanggal libur dari file. Periksa pratinjau lalu klik Simpan Import.`
+                `Berhasil membaca ${parsed.length} tanggal libur dari file. Periksa pratinjau lalu klik Simpan ke Database.`
             );
         } catch (err: any) {
             showToast('error', err.message ?? 'Gagal membaca file Excel/CSV.');
@@ -392,7 +424,7 @@ export function AttendanceSettingsTab() {
                             Mode Pengaturan Super Admin
                         </p>
                         <p className="text-[11px] opacity-75">
-                            Pilih sekolah untuk mengatur jam kerja & hari kerja sekolah tersebut:
+                            Pilih sekolah untuk mengatur jam kerja, toleransi keterlambatan, & hari kerja:
                         </p>
                     </div>
                     <select
@@ -410,7 +442,7 @@ export function AttendanceSettingsTab() {
             )}
 
             {/* ====================================================================
-          BAGIAN 1: PENGATURAN JAM BERANGKAT, JAM PULANG, & SISTEM HARI KERJA
+          BAGIAN 1: JAM BERANGKAT, TOLERANSI KETERLAMBATAN, JAM PULANG, & HARI KERJA
       ==================================================================== */}
             <form
                 onSubmit={handleSaveSchedule}
@@ -420,7 +452,7 @@ export function AttendanceSettingsTab() {
                     <div>
                         <h2 className="text-base font-bold flex items-center gap-2">
                             <Clock size={18} className="text-emerald-600" />
-                            Jam Kerja & Sistem Hari Kerja Sekolah
+                            Jam Kerja, Toleransi Keterlambatan & Sistem Hari Kerja
                         </h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
                             Menentukan batas waktu terlambat check-in, jadwal pulang, serta hari libur akhir pekan pada kalender presensi.
@@ -429,10 +461,10 @@ export function AttendanceSettingsTab() {
                     {isLoadingSchedule && <RefreshCw size={16} className="spin opacity-60" />}
                 </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                     <div>
                         <label className="block text-xs font-semibold mb-1.5">
-                            Jam Berangkat / Batas Masuk *
+                            Jam Berangkat / Masuk *
                         </label>
                         <input
                             type="time"
@@ -442,7 +474,30 @@ export function AttendanceSettingsTab() {
                             className="form-input w-full text-sm font-mono"
                         />
                         <p className="text-[11px] text-muted-foreground mt-1">
-                            Check-in melewati jam ini otomatis tercatat berstatus <strong>TERLAMBAT</strong>.
+                            Jadwal masuk resmi sekolah.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label className="block text-xs font-semibold mb-1.5">
+                            Toleransi Keterlambatan (Menit)
+                        </label>
+                        <input
+                            type="number"
+                            min={0}
+                            max={180}
+                            step={1}
+                            value={lateToleranceMinutes}
+                            onChange={(e) =>
+                                setLateToleranceMinutes(
+                                    e.target.value === '' ? 0 : Math.max(0, Number(e.target.value))
+                                )
+                            }
+                            placeholder="0"
+                            className="form-input w-full text-sm font-mono"
+                        />
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                            Isi <strong>0</strong> jika tanpa toleransi.
                         </p>
                     </div>
 
@@ -458,9 +513,36 @@ export function AttendanceSettingsTab() {
                             className="form-input w-full text-sm font-mono"
                         />
                         <p className="text-[11px] text-muted-foreground mt-1">
-                            Ditampilkan sebagai acuan jadwal pulang pada kartu presensi guru.
+                            Acuan jadwal pulang pada kartu presensi.
                         </p>
                     </div>
+                </div>
+
+                {/* Kotak Pratinjau Aturan Keterlambatan */}
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-medium">
+                        {lateToleranceMinutes > 0 ? (
+                            <>
+                                Toleransi aktif <strong>{lateToleranceMinutes} menit</strong>: Check-in s.d. pukul{' '}
+                                <strong className="font-mono text-emerald-700 dark:text-emerald-300">
+                                    {effectiveDeadlinePreview}
+                                </strong>{' '}
+                                berstatus <strong>HADIR</strong>, lewat pukul{' '}
+                                <strong className="font-mono text-amber-700 dark:text-amber-300">
+                                    {effectiveDeadlinePreview}
+                                </strong>{' '}
+                                berstatus <strong>TERLAMBAT</strong>.
+                            </>
+                        ) : (
+                            <>
+                                Tanpa toleransi: Check-in melewati pukul{' '}
+                                <strong className="font-mono text-emerald-700 dark:text-emerald-300">
+                                    {workStartTime}
+                                </strong>{' '}
+                                langsung tercatat <strong>TERLAMBAT</strong>.
+                            </>
+                        )}
+                    </span>
                 </div>
 
                 {/* Pilihan 5 Hari Kerja vs 6 Hari Kerja */}
