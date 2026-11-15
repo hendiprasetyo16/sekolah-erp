@@ -24,6 +24,7 @@ import { getEffectiveRoles } from '@/modules/admin/types/user-management.types';
 
 // Attendance module
 import { StudentKioskPage } from '@/modules/attendance/pages/StudentKioskPage';
+import { StudentClassAttendancePage } from '@/modules/attendance/pages/StudentClassAttendancePage';
 import { TeacherAttendancePage } from '@/modules/attendance/pages/TeacherAttendancePage';
 import { AttendanceDashboardPage } from '@/modules/attendance/pages/AttendanceDashboardPage';
 import {
@@ -56,7 +57,10 @@ const USER_MANAGEMENT_ROLES = ['SUPER_ADMIN', 'ADMIN', 'OPERATOR', 'STAFF_TU'] a
 const REPORT_ROLES = [...CORE_ADMIN_ROLES, 'BENDAHARA'] as const;
 const ATTENDANCE_RECAP_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
+
+// Ditambahkan 'SUPER_ADMIN' agar dapat menguji halaman Presensi GPS
 const ATTENDANCE_GPS_ROLES = [
+  'SUPER_ADMIN',
   'KEPALA_SEKOLAH',
   'OPERATOR',
   'WALI_KELAS',
@@ -341,6 +345,14 @@ export function AppRouter() {
             element={
               <RoleRoute allowedRoles={ATTENDANCE_RECAP_ROLES}>
                 <AttendanceDashboardPage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/attendance/class"
+            element={
+              <RoleRoute allowedRoles={ATTENDANCE_RECAP_ROLES}>
+                <StudentClassAttendancePage />
               </RoleRoute>
             }
           />

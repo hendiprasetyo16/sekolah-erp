@@ -23,7 +23,9 @@ import {
   Building2,
   ShieldCheck,
   ClipboardCheck,
+  ClipboardList,
   UserCheck,
+  ScanLine,
   X,
 } from 'lucide-react';
 
@@ -58,7 +60,9 @@ const LIBRARY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_PERPUS']
 const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
 
+// Ditambahkan 'SUPER_ADMIN' agar dapat menguji halaman Presensi GPS
 const ATTENDANCE_STAFF_ROLES = [
+  'SUPER_ADMIN',
   'KEPALA_SEKOLAH',
   'OPERATOR',
   'WALI_KELAS',
@@ -199,10 +203,22 @@ export function Sidebar() {
           allowedRoles: STUDENT_ATTENDANCE_ROLES,
         },
         {
+          label: locale === 'id' ? 'Absensi Kelas' : 'Class Attendance',
+          icon: <ClipboardList size={17} />,
+          href: '/attendance/class',
+          allowedRoles: STUDENT_ATTENDANCE_ROLES,
+        },
+        {
           label: locale === 'id' ? 'Presensi GPS' : 'GPS Check-In',
           icon: <UserCheck size={17} />,
           href: '/attendance/teacher',
           allowedRoles: ATTENDANCE_STAFF_ROLES,
+        },
+        {
+          label: locale === 'id' ? 'Kiosk Siswa' : 'Student Kiosk',
+          icon: <ScanLine size={17} />,
+          href: '/kiosk',
+          allowedRoles: CORE_ADMIN_ROLES,
         },
       ],
     },
