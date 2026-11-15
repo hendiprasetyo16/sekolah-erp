@@ -22,6 +22,8 @@ import {
   Briefcase,
   ShieldAlert,
   AlertCircle,
+  AlertTriangle,
+  RefreshCw,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -54,6 +56,107 @@ import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { CreateTeacherPayload } from '../types/teacher.types';
 
 type TeacherTabValue = 'personal' | 'professional' | 'tasks' | 'family';
+
+/**
+ * Menerjemahkan error teknis (API, Supabase, Constraint Database, atau Jaringan)
+ * menjadi pesan yang jelas dan ramah bagi pengguna.
+ */
+const extractFriendlyErrorMessage = (
+  error: unknown,
+  locale: string,
+  fallbackId: string,
+  fallbackEn: string
+): string => {
+  const isId = locale === 'id';
+  const fallback = isId ? fallbackId : fallbackEn;
+
+  if (!error) return fallback;
+
+  if (typeof error === 'object' && error !== null) {
+    const errObj = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+          error?: string;
+        };
+      };
+      message?: string;
+      details?: string;
+      code?: string;
+    };
+
+    // 1. Prioritaskan pesan dari backend/API
+    const apiMessage = errObj.response?.data?.message;
+    if (Array.isArray(apiMessage) && apiMessage.length > 0) {
+      return apiMessage.join(', ');
+    }
+    if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
+      return apiMessage;
+    }
+    if (typeof errObj.response?.data?.error === 'string' && errObj.response.data.error.trim() !== '') {
+      return errObj.response.data.error;
+    }
+
+    // 2. Terjemahkan error database Supabase / PostgreSQL / Jaringan
+    if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
+      const rawMsg = errObj.message;
+      const lowerMsg = rawMsg.toLowerCase();
+
+      if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+        return isId
+          ? 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.'
+          : 'Connection to server failed. Check your internet connection and try again.';
+      }
+
+      if (lowerMsg.includes('duplicate key') || lowerMsg.includes('unique constraint') || errObj.code === '23505') {
+        if (lowerMsg.includes('nip')) {
+          return isId
+            ? 'NIP tersebut sudah terdaftar pada guru lain di sekolah ini.'
+            : 'This NIP is already registered to another teacher in this school.';
+        }
+        if (lowerMsg.includes('nuptk')) {
+          return isId
+            ? 'NUPTK tersebut sudah terdaftar pada guru lain di sekolah ini.'
+            : 'This NUPTK is already registered to another teacher in this school.';
+        }
+        if (lowerMsg.includes('nik')) {
+          return isId
+            ? 'NIK tersebut sudah terdaftar pada data guru lain.'
+            : 'This NIK is already registered to another teacher.';
+        }
+        return isId
+          ? 'Data ganda terdeteksi (NIP, NUPTK, atau NIK sudah digunakan oleh guru lain).'
+          : 'Duplicate data detected (NIP, NUPTK, or NIK is already in use).';
+      }
+
+      if (lowerMsg.includes('invalid input syntax for type uuid') || errObj.code === '22P02') {
+        return isId
+          ? 'Format tautan atau ID data guru tidak valid.'
+          : 'Invalid teacher ID format.';
+      }
+
+      if (lowerMsg.includes('invalid input syntax') || lowerMsg.includes('date/time field value out of range')) {
+        return isId
+          ? 'Format tanggal atau angka tidak valid. Periksa kembali isian formulir Anda.'
+          : 'Invalid date or number format. Please check your form inputs.';
+      }
+
+      if (lowerMsg.includes('permission denied') || lowerMsg.includes('row-level security')) {
+        return isId
+          ? 'Anda tidak memiliki izin untuk menyimpan perubahan data guru pada sekolah ini.'
+          : 'You do not have permission to save teacher changes for this school.';
+      }
+
+      return rawMsg;
+    }
+  }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return error;
+  }
+
+  return fallback;
+};
 
 const teacherSchema = z.object({
   fullName: z.string().trim().min(1, 'Nama lengkap wajib diisi'),
@@ -311,8 +414,10 @@ export function TeacherFormPage() {
   const { school, user: currentUser } = useAuthStore();
   const { hasPermission } = usePermission();
   const isEdit = Boolean(id);
+  const isId = locale === 'id';
 
   const [activeTab, setActiveTab] = useState<TeacherTabValue>('personal');
+  const [formError, setFormError] = useState<string | null>(null);
 
   const canSubmitForm = isEdit
     ? hasPermission('teachers', 'update')
@@ -326,31 +431,31 @@ export function TeacherFormPage() {
   );
 
   const dict = {
-    addTitle: locale === 'id' ? 'Tambah Guru Baru' : 'Add New Teacher',
-    editTitle: locale === 'id' ? 'Edit Data Guru' : 'Edit Teacher',
-    addDesc:
-      locale === 'id'
-        ? 'Masukkan informasi Dapodik untuk guru baru.'
-        : 'Enter Dapodik info for new teacher.',
-    editDesc:
-      locale === 'id'
-        ? 'Perbarui informasi data guru yang sudah ada.'
-        : 'Update existing teacher information.',
-    tabPersonal: locale === 'id' ? 'Data Pribadi' : 'Personal',
-    tabProf: locale === 'id' ? 'Kepegawaian' : 'Employment',
-    tabTask: locale === 'id' ? 'Tugas & Lisensi' : 'Duties & Licenses',
-    tabFamily: locale === 'id' ? 'Keluarga & Bank' : 'Family & Bank',
-    btnCancel: locale === 'id' ? 'Batal' : 'Cancel',
-    btnSave: locale === 'id' ? 'Simpan Data' : 'Save Data',
-    toastCreateSuccess:
-      locale === 'id' ? 'Data guru berhasil ditambahkan' : 'Teacher created successfully',
-    toastUpdateSuccess:
-      locale === 'id' ? 'Data guru berhasil diperbarui' : 'Teacher updated successfully',
-    toastError: locale === 'id' ? 'Gagal menyimpan data guru' : 'Failed to save teacher',
-    toastValidationError:
-      locale === 'id'
-        ? 'Mohon periksa kembali isian yang wajib diisi atau belum valid.'
-        : 'Please check required or invalid fields.',
+    addTitle: isId ? 'Tambah Guru Baru' : 'Add New Teacher',
+    editTitle: isId ? 'Edit Data Guru' : 'Edit Teacher',
+    addDesc: isId
+      ? 'Masukkan informasi Dapodik untuk guru baru.'
+      : 'Enter Dapodik info for new teacher.',
+    editDesc: isId
+      ? 'Perbarui informasi data guru yang sudah ada.'
+      : 'Update existing teacher information.',
+    tabPersonal: isId ? 'Data Pribadi' : 'Personal',
+    tabProf: isId ? 'Kepegawaian' : 'Employment',
+    tabTask: isId ? 'Tugas & Lisensi' : 'Duties & Licenses',
+    tabFamily: isId ? 'Keluarga & Bank' : 'Family & Bank',
+    btnCancel: isId ? 'Batal' : 'Cancel',
+    btnSave: isId ? 'Simpan Data' : 'Save Data',
+    retry: isId ? 'Muat Ulang' : 'Retry',
+    back: isId ? 'Kembali ke Data Guru' : 'Back to Teachers',
+    toastCreateSuccess: isId
+      ? 'Data guru berhasil ditambahkan'
+      : 'Teacher created successfully',
+    toastUpdateSuccess: isId
+      ? 'Data guru berhasil diperbarui'
+      : 'Teacher updated successfully',
+    toastValidationError: isId
+      ? 'Mohon periksa kembali isian yang wajib diisi atau belum valid.'
+      : 'Please check required or invalid fields.',
   };
 
   const form = useForm<TeacherFormValues>({
@@ -426,6 +531,7 @@ export function TeacherFormPage() {
     isLoading,
     isError,
     error: fetchError,
+    refetch,
   } = useQuery({
     queryKey: ['teacher', id, activeSchoolId],
     queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
@@ -506,12 +612,15 @@ export function TeacherFormPage() {
 
   const mutation = useMutation({
     mutationFn: (values: TeacherFormValues) => {
+      setFormError(null);
       const targetSchoolId =
         activeSchoolId ?? normalizeTeacherSchoolId(response?.data?.schoolId);
 
       if (!targetSchoolId) {
         throw new Error(
-          'Sekolah aktif belum dipilih. Pastikan institusi sudah dipilih terlebih dahulu.'
+          isId
+            ? 'Sekolah aktif belum dipilih. Silakan pilih sekolah terlebih dahulu pada switcher institusi.'
+            : 'Active school is not selected. Please select an institution first.'
         );
       }
 
@@ -537,6 +646,7 @@ export function TeacherFormPage() {
       return isEdit ? teacherService.update(id!, payload) : teacherService.create(payload);
     },
     onSuccess: () => {
+      setFormError(null);
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
       if (id) {
@@ -546,7 +656,14 @@ export function TeacherFormPage() {
       navigate('/teachers');
     },
     onError: (error: unknown) => {
-      toast.error(error instanceof Error ? error.message : dict.toastError);
+      const msg = extractFriendlyErrorMessage(
+        error,
+        locale,
+        'Gagal menyimpan data guru. Periksa kembali isian Anda.',
+        'Failed to save teacher data. Please check your inputs.'
+      );
+      setFormError(msg);
+      toast.error(msg, { duration: 6000 });
     },
   });
 
@@ -556,6 +673,7 @@ export function TeacherFormPage() {
     if (firstErrorField && FIELD_TAB_MAP[firstErrorField]) {
       setActiveTab(FIELD_TAB_MAP[firstErrorField]);
     }
+    setFormError(dict.toastValidationError);
     toast.error(dict.toastValidationError);
   };
 
@@ -566,12 +684,12 @@ export function TeacherFormPage() {
           <ShieldAlert className="h-6 w-6" />
         </div>
         <p className="font-medium text-foreground">
-          {locale === 'id'
+          {isId
             ? 'Anda tidak memiliki izin untuk mengakses formulir Guru & PTK.'
             : 'You do not have permission to access the Teacher & PTK form.'}
         </p>
         <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
-          {locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers'}
+          {dict.back}
         </Button>
       </div>
     );
@@ -586,21 +704,32 @@ export function TeacherFormPage() {
   }
 
   if (isEdit && isError) {
+    const errorDescription = extractFriendlyErrorMessage(
+      fetchError,
+      locale,
+      'Data guru tidak ditemukan atau terjadi gangguan saat mengambil data dari server.',
+      'Teacher record not found or an error occurred while fetching data from the server.'
+    );
+
     return (
-      <div className="flex h-96 flex-col items-center justify-center gap-4 p-4 text-center">
+      <div className="flex h-96 flex-col items-center justify-center gap-3 p-4 text-center">
         <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400">
           <AlertCircle className="h-6 w-6" />
         </div>
-        <p className="font-medium text-foreground">
-          {fetchError instanceof Error
-            ? fetchError.message
-            : locale === 'id'
-              ? 'Data guru tidak ditemukan.'
-              : 'Teacher data not found.'}
-        </p>
-        <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
-          {locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers'}
-        </Button>
+        <h2 className="text-base font-semibold text-foreground">
+          {isId ? 'Gagal Memuat Data Guru' : 'Failed to Load Teacher Data'}
+        </h2>
+        <p className="max-w-md text-sm text-muted-foreground">{errorDescription}</p>
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+          <Button type="button" variant="outline" onClick={() => refetch()}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {dict.retry}
+          </Button>
+          <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            {dict.back}
+          </Button>
+        </div>
       </div>
     );
   }
@@ -621,6 +750,46 @@ export function TeacherFormPage() {
           <p className="text-muted-foreground">{isEdit ? dict.editDesc : dict.addDesc}</p>
         </div>
       </div>
+
+      {/* ================= BANNER ERROR SIMPAN / VALIDASI (PERSISTEN) ================= */}
+      {formError && (
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+            <div>
+              <p className="font-semibold">
+                {isId ? 'Gagal Menyimpan Data Guru' : 'Failed to Save Teacher Data'}
+              </p>
+              <p className="mt-0.5 leading-relaxed">{formError}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setFormError(null)}
+            title={isId ? 'Tutup pesan error' : 'Dismiss error'}
+            className="p-1 rounded-lg text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
+      {/* ================= PERINGATAN JIKA SEKOLAH AKTIF BELUM DIPILIH ================= */}
+      {!isEdit && !activeSchoolId && (
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <div>
+            <p className="font-semibold">
+              {isId ? 'Sekolah Aktif Belum Dipilih' : 'No Active School Selected'}
+            </p>
+            <p className="mt-0.5">
+              {isId
+                ? 'Pilih sekolah aktif pada switcher institusi terlebih dahulu sebelum menyimpan data guru baru.'
+                : 'Select an active school from the institution switcher before saving a new teacher.'}
+            </p>
+          </div>
+        </div>
+      )}
 
       <Form {...form}>
         <form

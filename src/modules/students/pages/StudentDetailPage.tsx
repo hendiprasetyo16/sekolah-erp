@@ -1,5 +1,5 @@
 // src/modules/students/pages/StudentDetailPage.tsx
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import {
@@ -23,6 +23,7 @@ import {
   School,
   CheckCircle2,
   XCircle,
+  RefreshCw,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -49,12 +50,70 @@ type DetailTab =
   | 'perpustakaan'
   | 'absensi';
 
-const getErrorMessage = (error: unknown, fallback: string): string => {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    const msg = (error as { message?: unknown }).message;
-    if (typeof msg === 'string' && msg.trim()) return msg;
+/**
+ * Menerjemahkan error teknis (API, Supabase, PostgreSQL, atau Jaringan)
+ * menjadi pesan bahasa Indonesia yang mudah dipahami pengguna.
+ */
+const extractFriendlyErrorMessage = (error: unknown, fallback: string): string => {
+  if (!error) return fallback;
+
+  if (typeof error === 'object' && error !== null) {
+    const errObj = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+          error?: string;
+        };
+      };
+      message?: string;
+      code?: string;
+    };
+
+    const apiMessage = errObj.response?.data?.message;
+    if (Array.isArray(apiMessage) && apiMessage.length > 0) {
+      return apiMessage.join(', ');
+    }
+    if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
+      return apiMessage;
+    }
+    if (
+      typeof errObj.response?.data?.error === 'string' &&
+      errObj.response.data.error.trim() !== ''
+    ) {
+      return errObj.response.data.error;
+    }
+
+    if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
+      const rawMsg = errObj.message;
+      const lowerMsg = rawMsg.toLowerCase();
+
+      if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+        return 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.';
+      }
+
+      if (lowerMsg.includes('invalid input syntax for type uuid') || errObj.code === '22P02') {
+        return 'Format tautan atau ID data siswa tidak valid.';
+      }
+
+      if (lowerMsg.includes('permission denied') || lowerMsg.includes('row-level security')) {
+        return 'Anda tidak memiliki izin untuk melihat detail data siswa ini.';
+      }
+
+      if (
+        lowerMsg.includes('json object requested, multiple (or no) rows returned') ||
+        errObj.code === 'PGRST116'
+      ) {
+        return 'Data peserta didik tidak ditemukan atau sudah dihapus.';
+      }
+
+      return rawMsg;
+    }
   }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return error;
+  }
+
   return fallback;
 };
 
@@ -80,6 +139,11 @@ const formatCurrency = (value?: number | string | null): string => {
   }).format(num);
 };
 
+const formatStatusLabel = (status?: string | null): string => {
+  if (!status) return '-';
+  return String(status).replace(/_/g, ' ');
+};
+
 export function StudentDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -98,139 +162,136 @@ export function StudentDetailPage() {
   const [attendances, setAttendances] = useState<StudentAttendanceRecord[]>([]);
   const [linkedUsers, setLinkedUsers] = useState<UserStudentLinkRecord[]>([]);
 
-  useEffect(() => {
-    let mounted = true;
-
-    async function loadDetail() {
-      if (!id) {
-        setErrorMsg('ID siswa tidak ditemukan.');
-        setLoading(false);
-        return;
-      }
-
-      try {
-        setLoading(true);
-        setErrorMsg(null);
-
-        const {
-          data: { user },
-          error: authErr,
-        } = await supabase.auth.getUser();
-        if (authErr || !user) {
-          throw new Error('Sesi login tidak valid. Silakan masuk kembali.');
-        }
-
-        const [{ data: profile }, { data: allRoles }] = await Promise.all([
-          supabase.from('users').select('schoolId, role').eq('id', user.id).single(),
-          supabase.rpc('get_user_all_roles'),
-        ]);
-
-        const effectiveRoles: string[] = Array.from(
-          new Set([
-            ...(Array.isArray(allRoles) ? (allRoles as string[]) : []),
-            ...(profile?.role ? [profile.role] : []),
-          ])
-        );
-
-        const allowedManage = effectiveRoles.some((r) =>
-          (MANAGE_STUDENT_ROLES as readonly string[]).includes(r)
-        );
-        const superAdm = effectiveRoles.includes('SUPER_ADMIN');
-        const scopedSchoolId = superAdm
-          ? undefined
-          : school?.id || profile?.schoolId || undefined;
-
-        const res = await studentService.getById(id, scopedSchoolId);
-        const st = res.data;
-
-        // Query semua relasi v14 dengan join PostgREST standar (nama tabel langsung)
-        const [
-          historyRes,
-          billsRes,
-          scholarshipRes,
-          loansRes,
-          attendanceRes,
-          linksRes,
-        ] = await Promise.all([
-          supabase
-            .from('student_class_history')
-            .select(
-              'id, createdAt, academic_years(id, name, isActive), classes(id, name, gradeLevel, major, teachers(fullName))'
-            )
-            .eq('studentId', id)
-            .eq('schoolId', st.schoolId)
-            .order('createdAt', { ascending: false }),
-          supabase
-            .from('student_bills')
-            .select(
-              'id, title, periodMonth, periodYear, totalAmount, paidAmount, dueDate, status'
-            )
-            .eq('studentId', id)
-            .eq('schoolId', st.schoolId)
-            .order('dueDate', { ascending: false }),
-          supabase
-            .from('scholarship_records')
-            .select('id, name, type, provider, amount, startDate, endDate, status')
-            .eq('studentId', id)
-            .eq('schoolId', st.schoolId)
-            .order('startDate', { ascending: false }),
-          supabase
-            .from('library_loans')
-            .select(
-              'id, quantity, loanDate, dueDate, returnDate, status, fineAmount, library_books(code, title, author)'
-            )
-            .eq('studentId', id)
-            .eq('schoolId', st.schoolId)
-            .order('loanDate', { ascending: false }),
-          supabase
-            .from('attendances')
-            .select('id, date, status, notes, recordedBy')
-            .eq('studentId', id)
-            .eq('schoolId', st.schoolId)
-            .order('date', { ascending: false })
-            .limit(30),
-          supabase
-            .from('user_student_links')
-            .select(
-              'id, relationship, isPrimary, users(id, fullName, email, role, isActive, lastLogin)'
-            )
-            .eq('studentId', id)
-            .eq('schoolId', st.schoolId),
-        ]);
-
-        if (!mounted) return;
-        setCanManage(allowedManage);
-        setStudent(st);
-        setClassHistory(
-          (historyRes.data as unknown as StudentClassHistoryRecord[]) || []
-        );
-        setBills((billsRes.data as unknown as StudentBillRecord[]) || []);
-        setScholarships(
-          (scholarshipRes.data as unknown as ScholarshipRecord[]) || []
-        );
-        setLibraryLoans(
-          (loansRes.data as unknown as StudentLibraryLoanRecord[]) || []
-        );
-        setAttendances(
-          (attendanceRes.data as unknown as StudentAttendanceRecord[]) || []
-        );
-        setLinkedUsers(
-          (linksRes.data as unknown as UserStudentLinkRecord[]) || []
-        );
-      } catch (err: unknown) {
-        if (mounted) {
-          setErrorMsg(getErrorMessage(err, 'Gagal memuat detail peserta didik.'));
-        }
-      } finally {
-        if (mounted) setLoading(false);
-      }
+  const loadDetail = useCallback(async () => {
+    if (!id) {
+      setErrorMsg('ID siswa tidak ditemukan pada alamat halaman.');
+      setLoading(false);
+      return;
     }
 
-    loadDetail();
-    return () => {
-      mounted = false;
-    };
+    try {
+      setLoading(true);
+      setErrorMsg(null);
+
+      const {
+        data: { user },
+        error: authErr,
+      } = await supabase.auth.getUser();
+      if (authErr || !user) {
+        throw new Error('Sesi login Anda telah berakhir. Silakan masuk kembali.');
+      }
+
+      const [{ data: profile }, { data: allRoles }] = await Promise.all([
+        supabase.from('users').select('schoolId, role').eq('id', user.id).maybeSingle(),
+        supabase.rpc('get_user_all_roles'),
+      ]);
+
+      const effectiveRoles: string[] = Array.from(
+        new Set([
+          ...(Array.isArray(allRoles) ? (allRoles as string[]) : []),
+          ...(profile?.role ? [profile.role] : []),
+        ])
+      );
+
+      const allowedManage = effectiveRoles.some((r) =>
+        (MANAGE_STUDENT_ROLES as readonly string[]).includes(r)
+      );
+      const superAdm = effectiveRoles.includes('SUPER_ADMIN');
+      const scopedSchoolId = superAdm
+        ? undefined
+        : school?.id || profile?.schoolId || undefined;
+
+      const res = await studentService.getById(id, scopedSchoolId);
+      const st = res.data;
+
+      // Query semua relasi dengan join PostgREST standar
+      const [
+        historyRes,
+        billsRes,
+        scholarshipRes,
+        loansRes,
+        attendanceRes,
+        linksRes,
+      ] = await Promise.all([
+        supabase
+          .from('student_class_history')
+          .select(
+            'id, createdAt, academic_years(id, name, isActive), classes(id, name, gradeLevel, major, teachers(fullName))'
+          )
+          .eq('studentId', id)
+          .eq('schoolId', st.schoolId)
+          .order('createdAt', { ascending: false }),
+        supabase
+          .from('student_bills')
+          .select(
+            'id, title, periodMonth, periodYear, totalAmount, paidAmount, dueDate, status'
+          )
+          .eq('studentId', id)
+          .eq('schoolId', st.schoolId)
+          .order('dueDate', { ascending: false }),
+        supabase
+          .from('scholarship_records')
+          .select('id, name, type, provider, amount, startDate, endDate, status')
+          .eq('studentId', id)
+          .eq('schoolId', st.schoolId)
+          .order('startDate', { ascending: false }),
+        supabase
+          .from('library_loans')
+          .select(
+            'id, quantity, loanDate, dueDate, returnDate, status, fineAmount, library_books(code, title, author)'
+          )
+          .eq('studentId', id)
+          .eq('schoolId', st.schoolId)
+          .order('loanDate', { ascending: false }),
+        supabase
+          .from('attendances')
+          .select('id, date, status, notes, recordedBy')
+          .eq('studentId', id)
+          .eq('schoolId', st.schoolId)
+          .order('date', { ascending: false })
+          .limit(30),
+        supabase
+          .from('user_student_links')
+          .select(
+            'id, relationship, isPrimary, users(id, fullName, email, role, isActive, lastLogin)'
+          )
+          .eq('studentId', id)
+          .eq('schoolId', st.schoolId),
+      ]);
+
+      setCanManage(allowedManage);
+      setStudent(st);
+      setClassHistory(
+        (historyRes.data as unknown as StudentClassHistoryRecord[]) || []
+      );
+      setBills((billsRes.data as unknown as StudentBillRecord[]) || []);
+      setScholarships(
+        (scholarshipRes.data as unknown as ScholarshipRecord[]) || []
+      );
+      setLibraryLoans(
+        (loansRes.data as unknown as StudentLibraryLoanRecord[]) || []
+      );
+      setAttendances(
+        (attendanceRes.data as unknown as StudentAttendanceRecord[]) || []
+      );
+      setLinkedUsers(
+        (linksRes.data as unknown as UserStudentLinkRecord[]) || []
+      );
+    } catch (err: unknown) {
+      setErrorMsg(
+        extractFriendlyErrorMessage(
+          err,
+          'Gagal memuat detail peserta didik. Silakan coba beberapa saat lagi.'
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
   }, [id, school?.id]);
+
+  useEffect(() => {
+    loadDetail();
+  }, [loadDetail]);
 
   if (loading) {
     return (
@@ -248,18 +309,32 @@ export function StudentDetailPage() {
       <div className="mx-auto max-w-2xl p-6">
         <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-800">
           <div className="flex items-center gap-2 font-semibold">
-            <AlertCircle className="h-5 w-5" />
+            <AlertCircle className="h-5 w-5 shrink-0" />
             <span>Data Siswa Tidak Dapat Ditampilkan</span>
           </div>
-          <p className="mt-2 text-sm">{errorMsg || 'Data tidak ditemukan.'}</p>
-          <button
-            type="button"
-            onClick={() => navigate('/students')}
-            className="mt-4 inline-flex items-center gap-2 rounded-xl bg-rose-700 px-4 py-2 text-sm font-medium text-white hover:bg-rose-800"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Kembali ke Daftar Siswa
-          </button>
+          <p className="mt-2 text-sm leading-relaxed">
+            {errorMsg || 'Data peserta didik tidak ditemukan.'}
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            {Boolean(id) && (
+              <button
+                type="button"
+                onClick={loadDetail}
+                className="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-800 transition hover:bg-rose-100"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Muat Ulang
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => navigate('/students')}
+              className="inline-flex items-center gap-2 rounded-xl bg-rose-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Kembali ke Daftar Siswa
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -308,6 +383,9 @@ export function StudentDetailPage() {
     CUTI: 'bg-slate-100 text-slate-800 border-slate-200',
   };
 
+  const normalizedStatus = student.status || 'AKTIF';
+  const studentInitial = (student.fullName || '?').trim().charAt(0).toUpperCase() || '?';
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -348,7 +426,7 @@ export function StudentDetailPage() {
                 className="h-full w-full object-cover"
               />
             ) : (
-              student.fullName.charAt(0).toUpperCase()
+              studentInitial
             )}
           </div>
 
@@ -356,10 +434,10 @@ export function StudentDetailPage() {
             <div className="flex flex-wrap items-center gap-2.5">
               <h1 className="text-2xl font-bold text-slate-900">{student.fullName}</h1>
               <span
-                className={`rounded-full border px-3 py-0.5 text-xs font-semibold ${statusBadgeColor[student.status] || 'bg-slate-100 text-slate-700'
+                className={`rounded-full border px-3 py-0.5 text-xs font-semibold ${statusBadgeColor[normalizedStatus] || 'bg-slate-100 text-slate-700'
                   }`}
               >
-                {student.status.replace(/_/g, ' ')}
+                {formatStatusLabel(normalizedStatus)}
               </span>
               <span className="rounded-full bg-slate-100 px-3 py-0.5 text-xs font-medium text-slate-700">
                 {student.gender === 'L' ? 'Laki-laki' : 'Perempuan'}
@@ -369,16 +447,16 @@ export function StudentDetailPage() {
             <div className="flex flex-wrap gap-x-6 gap-y-1.5 text-sm text-slate-600">
               <span className="inline-flex items-center gap-1.5">
                 <School className="h-4 w-4 text-emerald-600" />
-                Kelas: <strong className="text-slate-800">{student.className}</strong>
+                Kelas: <strong className="text-slate-800">{student.className || 'Belum Ditempatkan'}</strong>
               </span>
               <span>
-                NISN: <strong className="font-mono text-slate-800">{student.nisn}</strong>
+                NISN: <strong className="font-mono text-slate-800">{student.nisn || '-'}</strong>
               </span>
               <span>
                 NIS: <strong className="font-mono text-slate-800">{student.nis || '-'}</strong>
               </span>
               <span>
-                NIK: <strong className="font-mono text-slate-800">{student.nik}</strong>
+                NIK: <strong className="font-mono text-slate-800">{student.nik || '-'}</strong>
               </span>
             </div>
 
@@ -394,7 +472,7 @@ export function StudentDetailPage() {
                 </span>
               )}
               <span>
-                TTL: {student.birthPlace}, {formatDateId(student.birthDate)}
+                TTL: {student.birthPlace || '-'}, {formatDateId(student.birthDate)}
               </span>
             </div>
           </div>
@@ -488,7 +566,7 @@ export function StudentDetailPage() {
                 <MapPin className="h-4 w-4 text-emerald-600" />
                 Alamat Domisili & Koordinat
               </h2>
-              <p className="text-sm font-medium text-slate-800">{student.address}</p>
+              <p className="text-sm font-medium text-slate-800">{student.address || '-'}</p>
               <p className="mt-1 text-sm text-slate-600">
                 {student.dusun ? `Dusun ${student.dusun}, ` : ''}
                 {student.rt || student.rw ? `RT ${student.rt || '-'} / RW ${student.rw || '-'}, ` : ''}
@@ -604,7 +682,7 @@ export function StudentDetailPage() {
           <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="mb-3 flex items-center gap-2 text-base font-semibold text-slate-900">
               <KeyRound className="h-4 w-4 text-emerald-600" />
-              Akun Portal Orang Tua / Wali Tertaut (`user_student_links`)
+              Akun Portal Orang Tua / Wali Tertaut
             </h2>
             {linkedUsers.length === 0 ? (
               <p className="text-sm text-slate-500">
@@ -621,7 +699,7 @@ export function StudentDetailPage() {
                       <div className="font-semibold text-slate-800">
                         {link.users?.fullName || 'Pengguna'}{' '}
                         <span className="ml-1 rounded bg-slate-100 px-2 py-0.5 text-xs text-slate-600">
-                          {link.relationship}
+                          {formatStatusLabel(link.relationship)}
                         </span>
                         {link.isPrimary && (
                           <span className="ml-1 rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-800">
@@ -663,7 +741,7 @@ export function StudentDetailPage() {
                   <span className="text-base font-normal text-emerald-600"> / 100</span>
                 </div>
                 <div className="mt-2 inline-block rounded-full bg-emerald-600 px-3 py-1 text-xs font-semibold text-white">
-                  {(student.economic.economicCategory || 'REGULER').replace(/_/g, ' ')}
+                  {formatStatusLabel(student.economic.economicCategory || 'REGULER')}
                 </div>
                 {student.economic.desil && (
                   <div className="mt-3 text-xs font-medium text-emerald-900">
@@ -723,14 +801,14 @@ export function StudentDetailPage() {
                   <div>
                     <dt className="text-xs text-slate-500">Status Keluarga</dt>
                     <dd className="font-medium text-slate-800">
-                      {(student.economic.orphanType || 'BUKAN').replace(/_/g, ' ')}
+                      {formatStatusLabel(student.economic.orphanType || 'BUKAN')}
                     </dd>
                   </div>
                   <div>
                     <dt className="text-xs text-slate-500">Rumah & Kondisi</dt>
                     <dd className="font-medium text-slate-800">
-                      {(student.economic.houseOwnership || '-').replace(/_/g, ' ')} •{' '}
-                      {(student.economic.houseCondition || '-').replace(/_/g, ' ')}
+                      {formatStatusLabel(student.economic.houseOwnership)} •{' '}
+                      {formatStatusLabel(student.economic.houseCondition)}
                     </dd>
                   </div>
                   <div>
@@ -824,7 +902,7 @@ export function StudentDetailPage() {
                       </td>
                       <td className="px-5 py-3.5">
                         <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
-                          {b.status}
+                          {formatStatusLabel(b.status)}
                         </span>
                       </td>
                     </tr>
@@ -858,10 +936,10 @@ export function StudentDetailPage() {
                     <tr key={s.id}>
                       <td className="px-5 py-3.5 font-medium text-slate-800">{s.name}</td>
                       <td className="px-5 py-3.5 text-slate-600">
-                        {s.type} {s.provider ? `• ${s.provider}` : ''}
+                        {formatStatusLabel(s.type)} {s.provider ? `• ${s.provider}` : ''}
                       </td>
                       <td className="px-5 py-3.5">{formatCurrency(s.amount)}</td>
-                      <td className="px-5 py-3.5">{s.status}</td>
+                      <td className="px-5 py-3.5">{formatStatusLabel(s.status)}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -903,7 +981,7 @@ export function StudentDetailPage() {
                     <td className="px-5 py-3.5 text-slate-600">{formatDateId(loan.dueDate)}</td>
                     <td className="px-5 py-3.5">
                       <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
-                        {loan.status}
+                        {formatStatusLabel(loan.status)}
                       </span>
                     </td>
                   </tr>
@@ -938,7 +1016,7 @@ export function StudentDetailPage() {
                     </td>
                     <td className="px-5 py-3.5">
                       <span className="rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-semibold text-slate-700">
-                        {att.status}
+                        {formatStatusLabel(att.status)}
                       </span>
                     </td>
                     <td className="px-5 py-3.5 text-slate-600">{att.notes || '-'}</td>

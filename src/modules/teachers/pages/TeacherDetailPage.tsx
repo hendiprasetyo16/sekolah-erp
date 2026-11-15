@@ -14,6 +14,8 @@ import {
   Building,
   UserCheck,
   UserX,
+  AlertCircle,
+  RefreshCw,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -30,6 +32,78 @@ import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatDate, formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
+
+/**
+ * Menerjemahkan error teknis (API, Supabase, Jaringan, atau UUID tidak valid)
+ * menjadi pesan yang ramah bagi pengguna.
+ */
+const extractFriendlyErrorMessage = (
+  error: unknown,
+  locale: string,
+  fallbackId: string,
+  fallbackEn: string
+): string => {
+  const isId = locale === 'id';
+  const fallback = isId ? fallbackId : fallbackEn;
+
+  if (!error) return fallback;
+
+  if (typeof error === 'object' && error !== null) {
+    const errObj = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+          error?: string;
+        };
+      };
+      message?: string;
+      details?: string;
+      code?: string;
+    };
+
+    const apiMessage = errObj.response?.data?.message;
+    if (Array.isArray(apiMessage) && apiMessage.length > 0) {
+      return apiMessage.join(', ');
+    }
+    if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
+      return apiMessage;
+    }
+    if (typeof errObj.response?.data?.error === 'string' && errObj.response.data.error.trim() !== '') {
+      return errObj.response.data.error;
+    }
+
+    if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
+      const rawMsg = errObj.message;
+      const lowerMsg = rawMsg.toLowerCase();
+
+      if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+        return isId
+          ? 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.'
+          : 'Connection to server failed. Check your internet connection and try again.';
+      }
+
+      if (lowerMsg.includes('invalid input syntax for type uuid') || errObj.code === '22P02') {
+        return isId
+          ? 'Format tautan atau ID data guru tidak valid.'
+          : 'Invalid teacher ID format in URL.';
+      }
+
+      if (lowerMsg.includes('permission denied') || lowerMsg.includes('row-level security')) {
+        return isId
+          ? 'Anda tidak memiliki izin untuk melihat detail data guru ini.'
+          : 'You do not have permission to view this teacher record.';
+      }
+
+      return rawMsg;
+    }
+  }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return error;
+  }
+
+  return fallback;
+};
 
 function InfoItem({
   label,
@@ -72,6 +146,7 @@ export function TeacherDetailPage() {
         ? 'Informasi detail kepegawaian dan biodata Dapodik PTK.'
         : 'Detailed employment and Dapodik PTK information.',
     back: locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers',
+    retry: locale === 'id' ? 'Muat Ulang' : 'Retry',
     editBtn: locale === 'id' ? 'Edit Data' : 'Edit Data',
     tabPersonal: locale === 'id' ? 'Data Pribadi' : 'Personal Info',
     tabProf: locale === 'id' ? 'Kepegawaian' : 'Employment',
@@ -83,10 +158,17 @@ export function TeacherDetailPage() {
   };
 
   // Mengambil detail data guru berdasarkan ID dari URL
-  const { data: response, isLoading, isError } = useQuery({
+  const {
+    data: response,
+    isLoading,
+    isError,
+    error: queryError,
+    refetch,
+  } = useQuery({
     queryKey: ['teacher', id, activeSchoolId],
     queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
     enabled: Boolean(id),
+    retry: false,
   });
 
   const teacher = response?.data;
@@ -101,20 +183,45 @@ export function TeacherDetailPage() {
   }
 
   // Tampilan jika data tidak ditemukan atau gagal dimuat
-  if (isError || !teacher) {
+  if (!id || isError || !teacher) {
+    const errorDescription = !id
+      ? locale === 'id'
+        ? 'ID guru tidak ditemukan pada alamat halaman.'
+        : 'Teacher ID is missing from the page URL.'
+      : extractFriendlyErrorMessage(
+        queryError,
+        locale,
+        'Data guru tidak ditemukan atau terjadi gangguan saat mengambil data dari server.',
+        'Teacher record not found or an error occurred while fetching data from the server.'
+      );
+
     return (
-      <div className="flex h-96 flex-col items-center justify-center gap-4 p-4 text-center">
-        <p className="text-muted-foreground">
-          {locale === 'id' ? 'Gagal memuat data guru.' : 'Failed to load teacher data.'}
-        </p>
-        <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
-          {dict.back}
-        </Button>
+      <div className="flex h-96 flex-col items-center justify-center gap-3 p-4 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-red-100 text-red-600 dark:bg-red-500/20 dark:text-red-400">
+          <AlertCircle className="h-6 w-6" />
+        </div>
+        <h2 className="text-base font-semibold text-foreground">
+          {locale === 'id' ? 'Gagal Memuat Profil Guru' : 'Failed to Load Teacher Profile'}
+        </h2>
+        <p className="max-w-md text-sm text-muted-foreground">{errorDescription}</p>
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+          {Boolean(id) && isError && (
+            <Button type="button" variant="outline" onClick={() => refetch()}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              {dict.retry}
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            {dict.back}
+          </Button>
+        </div>
       </div>
     );
   }
 
-  const getInitials = (name: string) => name.charAt(0).toUpperCase();
+  const getInitials = (name?: string | null) =>
+    (name || '?').trim().charAt(0).toUpperCase() || '?';
 
   // Warna lencana status kepegawaian
   const statusColorMap: Record<string, string> = {

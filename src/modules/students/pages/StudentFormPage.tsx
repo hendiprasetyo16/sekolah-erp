@@ -1,5 +1,5 @@
 // src/modules/students/pages/StudentFormPage.tsx
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
@@ -18,6 +18,8 @@ import {
   CheckCircle2,
   Loader2,
   Sparkles,
+  RefreshCw,
+  X,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -132,12 +134,97 @@ interface EconomicFormState {
 
 const getLocalTodayIso = (): string => new Date().toLocaleDateString('en-CA');
 
-const getErrorMessage = (error: unknown, fallback: string): string => {
-  if (error instanceof Error && error.message) return error.message;
-  if (typeof error === 'object' && error !== null && 'message' in error) {
-    const msg = (error as { message?: unknown }).message;
-    if (typeof msg === 'string' && msg.trim()) return msg;
+/**
+ * Menerjemahkan error teknis (API, Supabase, Constraint Database, atau Jaringan)
+ * menjadi pesan bahasa Indonesia yang jelas bagi operator sekolah.
+ */
+const extractFriendlyErrorMessage = (error: unknown, fallback: string): string => {
+  if (!error) return fallback;
+
+  if (typeof error === 'object' && error !== null) {
+    const errObj = error as {
+      response?: {
+        data?: {
+          message?: string | string[];
+          error?: string;
+        };
+      };
+      message?: string;
+      details?: string;
+      code?: string;
+    };
+
+    // 1. Prioritaskan pesan terstruktur dari backend/API
+    const apiMessage = errObj.response?.data?.message;
+    if (Array.isArray(apiMessage) && apiMessage.length > 0) {
+      return apiMessage.join(', ');
+    }
+    if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
+      return apiMessage;
+    }
+    if (
+      typeof errObj.response?.data?.error === 'string' &&
+      errObj.response.data.error.trim() !== ''
+    ) {
+      return errObj.response.data.error;
+    }
+
+    // 2. Terjemahkan error database Supabase / PostgreSQL / Jaringan
+    if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
+      const rawMsg = errObj.message;
+      const lowerMsg = rawMsg.toLowerCase();
+
+      if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+        return 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.';
+      }
+
+      if (
+        lowerMsg.includes('duplicate key') ||
+        lowerMsg.includes('unique constraint') ||
+        errObj.code === '23505'
+      ) {
+        if (lowerMsg.includes('nisn')) {
+          return 'NISN tersebut sudah terdaftar pada siswa lain di sekolah ini.';
+        }
+        if (lowerMsg.includes('nik')) {
+          return 'NIK tersebut sudah terdaftar pada data siswa lain.';
+        }
+        if (lowerMsg.includes('nis')) {
+          return 'NIS tersebut sudah digunakan oleh siswa lain di sekolah ini.';
+        }
+        return 'Data ganda terdeteksi (NISN, NIK, atau NIS sudah terdaftar pada siswa lain).';
+      }
+
+      if (lowerMsg.includes('invalid input syntax for type uuid') || errObj.code === '22P02') {
+        return 'Format tautan atau ID data siswa tidak valid.';
+      }
+
+      if (
+        lowerMsg.includes('invalid input syntax') ||
+        lowerMsg.includes('date/time field value out of range')
+      ) {
+        return 'Format tanggal atau angka tidak valid. Periksa kembali isian formulir Anda.';
+      }
+
+      if (lowerMsg.includes('permission denied') || lowerMsg.includes('row-level security')) {
+        return 'Anda tidak memiliki izin untuk menyimpan data siswa pada sekolah ini.';
+      }
+
+      if (
+        lowerMsg.includes('json object requested, multiple (or no) rows returned') ||
+        errObj.code === 'PGRST116'
+      ) {
+        return 'Data peserta didik tidak ditemukan atau sudah dihapus.';
+      }
+
+      return rawMsg;
+    }
   }
+
+  if (typeof error === 'string' && error.trim() !== '') {
+    return error;
+  }
+
   return fallback;
 };
 
@@ -253,6 +340,7 @@ export function StudentFormPage() {
 
   const [activeTab, setActiveTab] = useState<TabKey>('biodata');
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [saving, setSaving] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -275,187 +363,186 @@ export function StudentFormPage() {
     [economic, ayah, ibu]
   );
 
-  // 1. Cek Otorisasi v14 & Muat Data Siswa (jika mode Edit)
-  useEffect(() => {
-    let mounted = true;
+  // 1. Cek Otorisasi & Muat Data Siswa (jika mode Edit)
+  const initForm = useCallback(async () => {
+    try {
+      setLoading(true);
+      setLoadError(null);
+      setErrorMsg(null);
 
-    async function init() {
-      try {
-        setLoading(true);
-        setErrorMsg(null);
-
-        const {
-          data: { user },
-          error: authErr,
-        } = await supabase.auth.getUser();
-        if (authErr || !user) {
-          throw new Error('Sesi login tidak valid. Silakan masuk kembali.');
-        }
-
-        const [{ data: profile }, { data: allRoles }] = await Promise.all([
-          supabase.from('users').select('schoolId, role, isActive').eq('id', user.id).single(),
-          supabase.rpc('get_user_all_roles'),
-        ]);
-
-        const effectiveRoles: string[] = Array.from(
-          new Set([
-            ...(Array.isArray(allRoles) ? (allRoles as string[]) : []),
-            ...(profile?.role ? [profile.role] : []),
-          ])
-        );
-
-        const allowed = effectiveRoles.some((r) =>
-          (MANAGE_STUDENT_ROLES as readonly string[]).includes(r)
-        );
-        const superAdm = effectiveRoles.includes('SUPER_ADMIN');
-
-        if (!mounted) return;
-        setCanManage(allowed);
-        setIsSuperAdmin(superAdm);
-
-        if (!allowed) {
-          setErrorMsg('Role Anda tidak memiliki izin untuk menambah atau mengubah data siswa.');
-          setLoading(false);
-          return;
-        }
-
-        let resolvedSchoolId = school?.id || profile?.schoolId || '';
-
-        if (superAdm) {
-          const { data: schoolList } = await supabase
-            .from('schools')
-            .select('id, name, npsn')
-            .order('name');
-          if (mounted && schoolList) {
-            setSchools(schoolList as SchoolOption[]);
-            if (!resolvedSchoolId && schoolList.length > 0) {
-              resolvedSchoolId = schoolList[0].id;
-            }
-          }
-        }
-
-        if (isEdit && id) {
-          const res = await studentService.getById(
-            id,
-            superAdm ? undefined : resolvedSchoolId || undefined
-          );
-          const stData = res.data;
-
-          if (!mounted) return;
-          setStudent({
-            schoolId: stData.schoolId || '',
-            nis: stData.nis || '',
-            nisn: stData.nisn || '',
-            nik: stData.nik || '',
-            noKk: stData.noKk || '',
-            fullName: stData.fullName || '',
-            nickname: stData.nickname || '',
-            gender: stData.gender === 'P' ? 'P' : 'L',
-            birthDate: stData.birthDate ? String(stData.birthDate).slice(0, 10) : '',
-            birthPlace: stData.birthPlace || '',
-            religion: stData.religion || 'ISLAM',
-            phone: stData.phone || '',
-            telepon: stData.telepon || '',
-            email: stData.email || '',
-            photoUrl: stData.photoUrl || '',
-            status: stData.status || 'AKTIF',
-            entryDate: stData.entryDate ? String(stData.entryDate).slice(0, 10) : '',
-            classId: stData.classId || '',
-            address: stData.address || '',
-            rt: stData.rt || '',
-            rw: stData.rw || '',
-            dusun: stData.dusun || '',
-            kelurahan: stData.kelurahan || '',
-            kecamatan: stData.kecamatan || '',
-            city: stData.city || '',
-            province: stData.province || '',
-            postalCode: stData.postalCode || '',
-            lintang: stData.lintang || '',
-            bujur: stData.bujur || '',
-            skhun: stData.skhun || '',
-            noPesertaUn: stData.noPesertaUn || '',
-            noIjazah: stData.noIjazah || '',
-            noAktaLahir: stData.noAktaLahir || '',
-            anakKe: stData.anakKe != null ? String(stData.anakKe) : '',
-            jmlSaudara: stData.jmlSaudara != null ? String(stData.jmlSaudara) : '',
-            beratBadan: stData.beratBadan != null ? String(stData.beratBadan) : '',
-            tinggiBadan: stData.tinggiBadan != null ? String(stData.tinggiBadan) : '',
-            lingkarKepala: stData.lingkarKepala != null ? String(stData.lingkarKepala) : '',
-            jarakSekolah: stData.jarakSekolah != null ? String(stData.jarakSekolah) : '',
-            jenisTinggal: stData.jenisTinggal || '',
-            alatTransportasi: stData.alatTransportasi || '',
-            kebutuhanKhusus: stData.kebutuhanKhusus || '',
-            sekolahAsal: stData.sekolahAsal || '',
-            bank: stData.bank || '',
-            noRekening: stData.noRekening || '',
-            namaRekening: stData.namaRekening || '',
-          });
-
-          if (Array.isArray(stData.parents)) {
-            for (const p of stData.parents) {
-              const mapped: ParentFormState = {
-                fullName: p.fullName || '',
-                nik: p.nik || '',
-                birthYear: p.birthYear || '',
-                phone: p.phone || '',
-                email: p.email || '',
-                education: p.education || '',
-                occupation: p.occupation || '',
-                monthlyIncome: p.monthlyIncome || '',
-                isAlive: p.isAlive ?? true,
-                address: p.address || '',
-              };
-              if (p.relation === 'AYAH') setAyah(mapped);
-              else if (p.relation === 'IBU') setIbu(mapped);
-              else if (p.relation === 'WALI') setWali(mapped);
-            }
-          }
-
-          if (stData.economic) {
-            const ecoRow = stData.economic;
-            setEconomic({
-              hasKip: Boolean(ecoRow.hasKip),
-              kipNumber: ecoRow.kipNumber || '',
-              namaKip: ecoRow.namaKip || '',
-              layakPip: Boolean(ecoRow.layakPip),
-              alasanLayakPip: ecoRow.alasanLayakPip || '',
-              hasKks: Boolean(ecoRow.hasKks),
-              kksNumber: ecoRow.kksNumber || '',
-              hasPkh: Boolean(ecoRow.hasPkh),
-              isDtks: Boolean(ecoRow.isDtks),
-              houseOwnership: ecoRow.houseOwnership || 'MILIK_SENDIRI',
-              houseCondition: ecoRow.houseCondition || 'LAYAK',
-              dependentsCount:
-                ecoRow.dependentsCount != null ? String(ecoRow.dependentsCount) : '',
-              orphanType:
-                ecoRow.orphanType === 'YATIM' ||
-                  ecoRow.orphanType === 'PIATU' ||
-                  ecoRow.orphanType === 'YATIM_PIATU'
-                  ? ecoRow.orphanType
-                  : 'BUKAN',
-              desil: ecoRow.desil != null ? String(ecoRow.desil) : '',
-            });
-          }
-        } else if (mounted && resolvedSchoolId) {
-          setStudent((prev) => ({
-            ...prev,
-            schoolId: resolvedSchoolId,
-            city: school?.city || prev.city,
-            province: school?.province || prev.province,
-          }));
-        }
-      } catch (err: unknown) {
-        if (mounted) setErrorMsg(getErrorMessage(err, 'Gagal memuat form siswa.'));
-      } finally {
-        if (mounted) setLoading(false);
+      const {
+        data: { user },
+        error: authErr,
+      } = await supabase.auth.getUser();
+      if (authErr || !user) {
+        throw new Error('Sesi login Anda telah berakhir. Silakan masuk kembali.');
       }
-    }
 
-    init();
-    return () => {
-      mounted = false;
-    };
+      const [{ data: profile }, { data: allRoles }] = await Promise.all([
+        supabase.from('users').select('schoolId, role, isActive').eq('id', user.id).maybeSingle(),
+        supabase.rpc('get_user_all_roles'),
+      ]);
+
+      const effectiveRoles: string[] = Array.from(
+        new Set([
+          ...(Array.isArray(allRoles) ? (allRoles as string[]) : []),
+          ...(profile?.role ? [profile.role] : []),
+        ])
+      );
+
+      const allowed = effectiveRoles.some((r) =>
+        (MANAGE_STUDENT_ROLES as readonly string[]).includes(r)
+      );
+      const superAdm = effectiveRoles.includes('SUPER_ADMIN');
+
+      setCanManage(allowed);
+      setIsSuperAdmin(superAdm);
+
+      if (!allowed) {
+        setLoadError('Role Anda tidak memiliki izin untuk menambah atau mengubah data siswa.');
+        setLoading(false);
+        return;
+      }
+
+      let resolvedSchoolId = school?.id || profile?.schoolId || '';
+
+      if (superAdm) {
+        const { data: schoolList } = await supabase
+          .from('schools')
+          .select('id, name, npsn')
+          .order('name');
+        if (schoolList) {
+          setSchools(schoolList as SchoolOption[]);
+          if (!resolvedSchoolId && schoolList.length > 0) {
+            resolvedSchoolId = schoolList[0].id;
+          }
+        }
+      }
+
+      if (isEdit && id) {
+        const res = await studentService.getById(
+          id,
+          superAdm ? undefined : resolvedSchoolId || undefined
+        );
+        const stData = res.data;
+
+        setStudent({
+          schoolId: stData.schoolId || '',
+          nis: stData.nis || '',
+          nisn: stData.nisn || '',
+          nik: stData.nik || '',
+          noKk: stData.noKk || '',
+          fullName: stData.fullName || '',
+          nickname: stData.nickname || '',
+          gender: stData.gender === 'P' ? 'P' : 'L',
+          birthDate: stData.birthDate ? String(stData.birthDate).slice(0, 10) : '',
+          birthPlace: stData.birthPlace || '',
+          religion: stData.religion || 'ISLAM',
+          phone: stData.phone || '',
+          telepon: stData.telepon || '',
+          email: stData.email || '',
+          photoUrl: stData.photoUrl || '',
+          status: stData.status || 'AKTIF',
+          entryDate: stData.entryDate ? String(stData.entryDate).slice(0, 10) : '',
+          classId: stData.classId || '',
+          address: stData.address || '',
+          rt: stData.rt || '',
+          rw: stData.rw || '',
+          dusun: stData.dusun || '',
+          kelurahan: stData.kelurahan || '',
+          kecamatan: stData.kecamatan || '',
+          city: stData.city || '',
+          province: stData.province || '',
+          postalCode: stData.postalCode || '',
+          lintang: stData.lintang || '',
+          bujur: stData.bujur || '',
+          skhun: stData.skhun || '',
+          noPesertaUn: stData.noPesertaUn || '',
+          noIjazah: stData.noIjazah || '',
+          noAktaLahir: stData.noAktaLahir || '',
+          anakKe: stData.anakKe != null ? String(stData.anakKe) : '',
+          jmlSaudara: stData.jmlSaudara != null ? String(stData.jmlSaudara) : '',
+          beratBadan: stData.beratBadan != null ? String(stData.beratBadan) : '',
+          tinggiBadan: stData.tinggiBadan != null ? String(stData.tinggiBadan) : '',
+          lingkarKepala: stData.lingkarKepala != null ? String(stData.lingkarKepala) : '',
+          jarakSekolah: stData.jarakSekolah != null ? String(stData.jarakSekolah) : '',
+          jenisTinggal: stData.jenisTinggal || '',
+          alatTransportasi: stData.alatTransportasi || '',
+          kebutuhanKhusus: stData.kebutuhanKhusus || '',
+          sekolahAsal: stData.sekolahAsal || '',
+          bank: stData.bank || '',
+          noRekening: stData.noRekening || '',
+          namaRekening: stData.namaRekening || '',
+        });
+
+        if (Array.isArray(stData.parents)) {
+          for (const p of stData.parents) {
+            const mapped: ParentFormState = {
+              fullName: p.fullName || '',
+              nik: p.nik || '',
+              birthYear: p.birthYear || '',
+              phone: p.phone || '',
+              email: p.email || '',
+              education: p.education || '',
+              occupation: p.occupation || '',
+              monthlyIncome: p.monthlyIncome || '',
+              isAlive: p.isAlive ?? true,
+              address: p.address || '',
+            };
+            if (p.relation === 'AYAH') setAyah(mapped);
+            else if (p.relation === 'IBU') setIbu(mapped);
+            else if (p.relation === 'WALI') setWali(mapped);
+          }
+        }
+
+        if (stData.economic) {
+          const ecoRow = stData.economic;
+          setEconomic({
+            hasKip: Boolean(ecoRow.hasKip),
+            kipNumber: ecoRow.kipNumber || '',
+            namaKip: ecoRow.namaKip || '',
+            layakPip: Boolean(ecoRow.layakPip),
+            alasanLayakPip: ecoRow.alasanLayakPip || '',
+            hasKks: Boolean(ecoRow.hasKks),
+            kksNumber: ecoRow.kksNumber || '',
+            hasPkh: Boolean(ecoRow.hasPkh),
+            isDtks: Boolean(ecoRow.isDtks),
+            houseOwnership: ecoRow.houseOwnership || 'MILIK_SENDIRI',
+            houseCondition: ecoRow.houseCondition || 'LAYAK',
+            dependentsCount:
+              ecoRow.dependentsCount != null ? String(ecoRow.dependentsCount) : '',
+            orphanType:
+              ecoRow.orphanType === 'YATIM' ||
+                ecoRow.orphanType === 'PIATU' ||
+                ecoRow.orphanType === 'YATIM_PIATU'
+                ? ecoRow.orphanType
+                : 'BUKAN',
+            desil: ecoRow.desil != null ? String(ecoRow.desil) : '',
+          });
+        }
+      } else if (resolvedSchoolId) {
+        setStudent((prev) => ({
+          ...prev,
+          schoolId: resolvedSchoolId,
+          city: school?.city || prev.city,
+          province: school?.province || prev.province,
+        }));
+      }
+    } catch (err: unknown) {
+      setLoadError(
+        extractFriendlyErrorMessage(
+          err,
+          'Gagal memuat formulir peserta didik. Silakan periksa koneksi Anda lalu coba lagi.'
+        )
+      );
+    } finally {
+      setLoading(false);
+    }
   }, [id, isEdit, school?.city, school?.id, school?.province]);
+
+  useEffect(() => {
+    initForm();
+  }, [initForm]);
 
   // 2. Muat Daftar Kelas setiap kali schoolId berubah
   useEffect(() => {
@@ -535,61 +622,81 @@ export function StudentFormPage() {
     setSuccessMsg(null);
 
     if (!student.schoolId) {
-      setErrorMsg('Sekolah wajib dipilih.');
+      const msg = 'Sekolah aktif wajib dipilih terlebih dahulu.';
+      setErrorMsg(msg);
       setActiveTab('biodata');
+      toast.error(msg);
       return;
     }
     if (!student.fullName.trim()) {
-      setErrorMsg('Nama lengkap siswa wajib diisi.');
+      const msg = 'Nama lengkap siswa wajib diisi.';
+      setErrorMsg(msg);
       setActiveTab('biodata');
+      toast.error(msg);
       return;
     }
     if (!student.nisn.trim()) {
-      setErrorMsg('NISN wajib diisi (kolom NOT NULL di database v14).');
+      const msg = 'NISN siswa wajib diisi.';
+      setErrorMsg(msg);
       setActiveTab('biodata');
+      toast.error(msg);
       return;
     }
     if (!student.nik.trim()) {
-      setErrorMsg('NIK siswa wajib diisi (kolom NOT NULL di database v14).');
+      const msg = 'NIK siswa wajib diisi.';
+      setErrorMsg(msg);
       setActiveTab('biodata');
+      toast.error(msg);
       return;
     }
     if (!student.birthPlace.trim() || !student.birthDate) {
-      setErrorMsg('Tempat dan tanggal lahir siswa wajib diisi.');
+      const msg = 'Tempat dan tanggal lahir siswa wajib diisi.';
+      setErrorMsg(msg);
       setActiveTab('biodata');
+      toast.error(msg);
       return;
     }
     if (!student.address.trim() || !student.city.trim() || !student.province.trim()) {
-      setErrorMsg('Alamat jalan, Kabupaten/Kota, dan Provinsi wajib diisi.');
+      const msg = 'Alamat jalan, Kabupaten/Kota, dan Provinsi wajib diisi.';
+      setErrorMsg(msg);
       setActiveTab('alamat');
+      toast.error(msg);
       return;
     }
 
     const anakKeNum = toNullableInt(student.anakKe);
     if (anakKeNum !== null && anakKeNum <= 0) {
-      setErrorMsg('Anak ke- harus bernilai minimal 1 (atau kosongkan).');
+      const msg = 'Anak ke- harus bernilai minimal 1 (atau kosongkan).';
+      setErrorMsg(msg);
       setActiveTab('dapodik');
+      toast.error(msg);
       return;
     }
 
     const jmlSaudaraNum = toNullableInt(student.jmlSaudara);
     if (jmlSaudaraNum !== null && jmlSaudaraNum < 0) {
-      setErrorMsg('Jumlah saudara tidak boleh negatif.');
+      const msg = 'Jumlah saudara tidak boleh negatif.';
+      setErrorMsg(msg);
       setActiveTab('dapodik');
+      toast.error(msg);
       return;
     }
 
     const desilNum = toNullableInt(economic.desil);
     if (desilNum !== null && (desilNum < 1 || desilNum > 10)) {
-      setErrorMsg('Desil kesejahteraan harus berada di antara 1 sampai 10.');
+      const msg = 'Desil kesejahteraan harus berada di antara 1 sampai 10.';
+      setErrorMsg(msg);
       setActiveTab('ekonomi');
+      toast.error(msg);
       return;
     }
 
     const dependentsNum = toNullableInt(economic.dependentsCount);
     if (dependentsNum !== null && dependentsNum < 0) {
-      setErrorMsg('Jumlah tanggungan keluarga tidak boleh negatif.');
+      const msg = 'Jumlah tanggungan keluarga tidak boleh negatif.';
+      setErrorMsg(msg);
       setActiveTab('ekonomi');
+      toast.error(msg);
       return;
     }
 
@@ -714,9 +821,12 @@ export function StudentFormPage() {
       toast.success(msg);
       navigate(`/students/${savedStudentId}`);
     } catch (err: unknown) {
-      const msg = getErrorMessage(err, 'Terjadi kesalahan saat menyimpan data siswa.');
+      const msg = extractFriendlyErrorMessage(
+        err,
+        'Terjadi kesalahan saat menyimpan data siswa. Periksa kembali isian Anda.'
+      );
       setErrorMsg(msg);
-      toast.error(msg);
+      toast.error(msg, { duration: 6000 });
     } finally {
       setSaving(false);
     }
@@ -733,23 +843,39 @@ export function StudentFormPage() {
     );
   }
 
-  if (!canManage) {
+  if (!canManage || loadError) {
     return (
       <div className="mx-auto max-w-2xl p-6">
-        <div className="rounded-xl border border-rose-200 bg-rose-50 p-5 text-rose-800">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-rose-800">
           <div className="flex items-center gap-2 font-semibold">
-            <AlertCircle className="h-5 w-5" />
-            <span>Akses Dibatasi</span>
+            <AlertCircle className="h-5 w-5 shrink-0" />
+            <span>
+              {!canManage ? 'Akses Dibatasi' : 'Gagal Memuat Formulir Siswa'}
+            </span>
           </div>
-          <p className="mt-2 text-sm">{errorMsg}</p>
-          <button
-            type="button"
-            onClick={() => navigate('/students')}
-            className="mt-4 inline-flex items-center gap-2 rounded-lg bg-rose-700 px-4 py-2 text-sm font-medium text-white hover:bg-rose-800"
-          >
-            <ArrowLeft className="h-4 w-4" />
-            Kembali ke Daftar Siswa
-          </button>
+          <p className="mt-2 text-sm leading-relaxed">
+            {loadError || 'Anda tidak memiliki izin untuk mengakses halaman ini.'}
+          </p>
+          <div className="mt-4 flex flex-wrap items-center gap-2.5">
+            {canManage && (
+              <button
+                type="button"
+                onClick={initForm}
+                className="inline-flex items-center gap-2 rounded-xl border border-rose-300 bg-white px-4 py-2 text-sm font-medium text-rose-800 transition hover:bg-rose-100"
+              >
+                <RefreshCw className="h-4 w-4" />
+                Muat Ulang
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => navigate('/students')}
+              className="inline-flex items-center gap-2 rounded-xl bg-rose-700 px-4 py-2 text-sm font-medium text-white transition hover:bg-rose-800"
+            >
+              <ArrowLeft className="h-4 w-4" />
+              Kembali ke Daftar Siswa
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -784,7 +910,7 @@ export function StudentFormPage() {
               {isEdit ? 'Edit Data Peserta Didik' : 'Tambah Peserta Didik Baru'}
             </h1>
             <p className="text-sm text-slate-500">
-              Terintegrasi skema Dapodik PD, Riwayat Rombel, Orang Tua & Skoring PIP (v14)
+              Terintegrasi data Dapodik PD, Riwayat Rombel, Orang Tua & Skoring PIP
             </p>
           </div>
         </div>
@@ -802,9 +928,22 @@ export function StudentFormPage() {
 
       {/* Alert Banners */}
       {errorMsg && (
-        <div className="flex items-start gap-3 rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-800">
-          <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
-          <div>{errorMsg}</div>
+        <div className="flex items-start justify-between gap-3 rounded-xl border border-rose-300 bg-rose-50 p-4 text-sm text-rose-900 shadow-sm">
+          <div className="flex items-start gap-2.5">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-600" />
+            <div>
+              <p className="font-semibold">Gagal Menyimpan Data Siswa</p>
+              <p className="mt-0.5 leading-relaxed">{errorMsg}</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setErrorMsg(null)}
+            title="Tutup pesan error"
+            className="rounded-lg p-1 text-rose-600 transition hover:bg-rose-100"
+          >
+            <X className="h-4 w-4" />
+          </button>
         </div>
       )}
       {successMsg && (
@@ -824,8 +963,8 @@ export function StudentFormPage() {
               type="button"
               onClick={() => setActiveTab(tab.key)}
               className={`inline-flex shrink-0 items-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium transition ${active
-                ? 'bg-emerald-600 text-white shadow-sm'
-                : 'text-slate-600 hover:bg-slate-100'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:bg-slate-100'
                 }`}
             >
               {tab.icon}
