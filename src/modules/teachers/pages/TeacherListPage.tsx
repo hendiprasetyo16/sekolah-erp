@@ -563,11 +563,18 @@ export function TeacherListPage() {
 
   const tr = (id: string, en: string) => (locale === 'id' ? id : en);
 
+  const schoolInfo = school as {
+    id?: string;
+    name?: string;
+    city?: string;
+    province?: string;
+  } | null;
+
   // Multi-role permission checks (mengevaluasi role utama + additionalRoles + tugasTambahan Dapodik)
   const isSuperAdmin = hasRole('SUPER_ADMIN');
   const activeSchoolId = useMemo(
-    () => normalizeTeacherSchoolId(school?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
-    [school?.id, currentUser?.schoolId]
+    () => normalizeTeacherSchoolId(schoolInfo?.id) ?? normalizeTeacherSchoolId(currentUser?.schoolId),
+    [schoolInfo?.id, currentUser?.schoolId]
   );
 
   const canCreateTeacher = hasPermission('teachers', 'create');
@@ -652,6 +659,10 @@ export function TeacherListPage() {
   const meta = teachersResponse?.data?.meta;
   const totalPages = meta?.totalPages || 1;
   const totalData = meta?.total || 0;
+
+  const showClearAllButton = canClearAllTeachers && totalData > 0;
+  const isExportDisabled =
+    isExporting || isLoading || totalData === 0 || teachers.length === 0;
 
   useEffect(() => {
     if (currentPage > totalPages && totalPages > 0) setCurrentPage(totalPages);
@@ -747,7 +758,7 @@ export function TeacherListPage() {
 
   const confirmDelete = () => {
     if (deleteModal.type === 'all') {
-      if (!canClearAllTeachers) {
+      if (!showClearAllButton) {
         toast.error(
           tr(
             'Hanya Super Admin dengan sekolah aktif yang dapat mengosongkan data.',
@@ -777,6 +788,101 @@ export function TeacherListPage() {
     } else if (deleteModal.type === 'bulk') {
       deleteManyMutation.mutate(selectedRows);
     }
+  };
+
+  // --- DOWNLOAD TEMPLATE EXCEL PTK ---
+  const handleDownloadTemplate = () => {
+    const sampleRows = [
+      {
+        Nama: 'Ahmad Fauzi, S.Pd.',
+        JK: 'L',
+        NIP: '198808172015031002',
+        NUPTK: '1234567890123456',
+        NIK: '3404071708880001',
+        'No KK': '3404070101150001',
+        'Tempat Lahir': 'Sleman',
+        'Tanggal Lahir': '1988-08-17',
+        Agama: 'ISLAM',
+        'Alamat Jalan': 'Jl. Kaliurang Km 10',
+        RT: '001',
+        RW: '002',
+        'Nama Dusun': 'Sribit',
+        'Desa/Kelurahan': 'Sendangtirto',
+        Kecamatan: 'Berbah',
+        'Kabupaten/Kota': schoolInfo?.city || 'Kabupaten Sleman',
+        Provinsi: schoolInfo?.province || 'DI Yogyakarta',
+        'Kode Pos': '55573',
+        HP: '081234567890',
+        Email: 'ahmad.fauzi@sekolah.sch.id',
+        'Status Kepegawaian': 'GTY',
+        'Jenis PTK': 'Guru Mapel',
+        'Tugas Tambahan': 'Wali Kelas',
+        'TMT Pengangkatan': '2018-07-01',
+        'Lembaga Pengangkatan': 'Yayasan',
+        'Pangkat/Golongan': 'III/a',
+        'Sumber Gaji': 'Yayasan',
+        'Nama Ibu Kandung': 'Siti Rahmah',
+        'Status Perkawinan': 'Kawin',
+        Bank: 'BPD DIY',
+        'Nomor Rekening Bank': '001234567890',
+        'Rekening Atas Nama': 'Ahmad Fauzi',
+        Kewarganegaraan: 'Indonesia',
+      },
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(sampleRows);
+    const wb = XLSX.utils.book_new();
+
+    // Kunci kolom identitas/angka panjang sebagai teks agar tidak berubah menjadi notasi ilmiah di Excel
+    const textColIndices = new Set([2, 3, 4, 5, 17, 18, 30]);
+    for (const c of textColIndices) {
+      const cellRef = XLSX.utils.encode_cell({ r: 1, c });
+      const cell = ws[cellRef];
+      if (cell) {
+        cell.t = 's';
+        cell.z = '@';
+      }
+    }
+
+    ws['!cols'] = [
+      { wch: 26 }, // Nama
+      { wch: 6 },  // JK
+      { wch: 22 }, // NIP
+      { wch: 20 }, // NUPTK
+      { wch: 20 }, // NIK
+      { wch: 20 }, // No KK
+      { wch: 16 }, // Tempat Lahir
+      { wch: 15 }, // Tanggal Lahir
+      { wch: 12 }, // Agama
+      { wch: 28 }, // Alamat Jalan
+      { wch: 6 },  // RT
+      { wch: 6 },  // RW
+      { wch: 16 }, // Nama Dusun
+      { wch: 18 }, // Desa/Kelurahan
+      { wch: 16 }, // Kecamatan
+      { wch: 20 }, // Kabupaten/Kota
+      { wch: 18 }, // Provinsi
+      { wch: 10 }, // Kode Pos
+      { wch: 16 }, // HP
+      { wch: 26 }, // Email
+      { wch: 20 }, // Status Kepegawaian
+      { wch: 16 }, // Jenis PTK
+      { wch: 18 }, // Tugas Tambahan
+      { wch: 18 }, // TMT Pengangkatan
+      { wch: 22 }, // Lembaga Pengangkatan
+      { wch: 16 }, // Pangkat/Golongan
+      { wch: 14 }, // Sumber Gaji
+      { wch: 22 }, // Nama Ibu Kandung
+      { wch: 18 }, // Status Perkawinan
+      { wch: 14 }, // Bank
+      { wch: 20 }, // Nomor Rekening Bank
+      { wch: 22 }, // Rekening Atas Nama
+      { wch: 16 }, // Kewarganegaraan
+    ];
+
+    XLSX.utils.book_append_sheet(wb, ws, 'Template_Guru_PTK');
+    XLSX.writeFile(wb, 'Template_Import_Guru_PTK_Dapodik.xlsx');
+    toast.success(tr('Template Excel berhasil diunduh', 'Excel template downloaded'));
   };
 
   // --- SMARTDIFF EXCEL PARSER & WIZARD ---
@@ -901,7 +1007,7 @@ export function TeacherListPage() {
 
   // --- EXPORT EXCEL ---
   const handleExport = async () => {
-    if (!canExportTeacher) return;
+    if (!canExportTeacher || isExportDisabled) return;
     if (!isSuperAdmin && !activeSchoolId) return;
     setIsExporting(true);
     const toastId = toast.loading(tr('Menyiapkan file Excel...', 'Preparing Excel file...'));
@@ -1017,8 +1123,9 @@ export function TeacherListPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {canClearAllTeachers && (
+          {showClearAllButton && (
             <button
+              type="button"
               onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
               className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
             >
@@ -1029,6 +1136,15 @@ export function TeacherListPage() {
 
           {canImportTeacher && (
             <>
+              <button
+                type="button"
+                onClick={handleDownloadTemplate}
+                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors shadow-sm"
+              >
+                <FileSpreadsheet size={16} className="text-emerald-600" />
+                <span className="hidden sm:inline">{tr('Template', 'Template')}</span>
+              </button>
+
               <input
                 type="file"
                 accept=".xlsx, .xls"
@@ -1037,6 +1153,7 @@ export function TeacherListPage() {
                 onChange={handleFileUpload}
               />
               <button
+                type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={!activeSchoolId || isParsingExcel || bulkImportMutation.isPending}
                 className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
@@ -1055,12 +1172,22 @@ export function TeacherListPage() {
 
           {canExportTeacher && (
             <button
+              type="button"
               onClick={handleExport}
-              disabled={isExporting || totalData === 0}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
+              disabled={isExportDisabled}
+              title={
+                totalData === 0 || teachers.length === 0
+                  ? tr('Tidak ada data guru untuk diekspor', 'No teacher data to export')
+                  : undefined
+              }
+              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground disabled:hover:bg-muted/50"
             >
               {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-              <span className="hidden sm:inline">{tr('Ekspor Data', 'Export Data')}</span>
+              <span className="hidden sm:inline">
+                {canDeleteTeacher && selectedRows.length > 0
+                  ? tr(`Ekspor (${selectedRows.length})`, `Export (${selectedRows.length})`)
+                  : tr('Ekspor Data', 'Export Data')}
+              </span>
             </button>
           )}
 
@@ -1379,6 +1506,7 @@ export function TeacherListPage() {
                           )}
                           {canDeleteTeacher && (
                             <button
+                              type="button"
                               onClick={() =>
                                 setDeleteModal({ isOpen: true, type: 'single', id: teacher.id })
                               }
@@ -1430,6 +1558,7 @@ export function TeacherListPage() {
 
               <div className="flex items-center gap-1 shrink-0">
                 <button
+                  type="button"
                   title={tr('Pertama', 'First')}
                   onClick={() => setCurrentPage(1)}
                   disabled={currentPage === 1 || isLoading}
@@ -1438,6 +1567,7 @@ export function TeacherListPage() {
                   <ChevronsLeft size={16} />
                 </button>
                 <button
+                  type="button"
                   title={tr('Sebelumnya', 'Previous')}
                   onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                   disabled={currentPage === 1 || isLoading}
@@ -1448,6 +1578,7 @@ export function TeacherListPage() {
 
                 {generatePagination(currentPage, totalPages).map((p, i) => (
                   <button
+                    type="button"
                     key={i}
                     disabled={p === '...' || isLoading}
                     onClick={() => typeof p === 'number' && setCurrentPage(p)}
@@ -1465,6 +1596,7 @@ export function TeacherListPage() {
                 ))}
 
                 <button
+                  type="button"
                   title={tr('Selanjutnya', 'Next')}
                   onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
                   disabled={currentPage === totalPages || isLoading}
@@ -1473,6 +1605,7 @@ export function TeacherListPage() {
                   <ChevronRight size={16} />
                 </button>
                 <button
+                  type="button"
                   title={tr('Terakhir', 'Last')}
                   onClick={() => setCurrentPage(totalPages)}
                   disabled={currentPage === totalPages || isLoading}
@@ -1517,6 +1650,7 @@ export function TeacherListPage() {
                   </div>
                 </div>
                 <button
+                  type="button"
                   onClick={() => setImportModalOpen(false)}
                   disabled={bulkImportMutation.isPending}
                   className="p-2 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
@@ -1726,7 +1860,7 @@ export function TeacherListPage() {
       {/* --- DELETE CONFIRMATION MODAL --- */}
       <AnimatePresence>
         {deleteModal.isOpen &&
-          ((deleteModal.type === 'all' && canClearAllTeachers) ||
+          ((deleteModal.type === 'all' && showClearAllButton) ||
             (deleteModal.type !== 'all' && canDeleteTeacher)) && (
             <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
               <div
@@ -1748,6 +1882,7 @@ export function TeacherListPage() {
                 </div>
                 <div className="flex gap-3 mt-8">
                   <button
+                    type="button"
                     onClick={closeDeleteModal}
                     disabled={isDeleteBusy}
                     className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
@@ -1755,6 +1890,7 @@ export function TeacherListPage() {
                     {tr('Batal', 'Cancel')}
                   </button>
                   <button
+                    type="button"
                     onClick={confirmDelete}
                     disabled={isDeleteBusy}
                     className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"

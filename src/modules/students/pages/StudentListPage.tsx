@@ -839,7 +839,10 @@ export function StudentListPage() {
 
   const students = studentsResponse?.data?.data || [];
   const meta = studentsResponse?.data?.meta;
-  const totalPages = meta?.totalPages || Math.ceil((meta?.total || 0) / pageSize) || 1;
+  const total = meta?.total || 0;
+  const totalPages = meta?.totalPages || Math.ceil(total / pageSize) || 1;
+  const isExportDisabled =
+    isExporting || isLoading || total === 0 || students.length === 0;
 
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
@@ -1699,6 +1702,8 @@ export function StudentListPage() {
 
   // --- EXPORT ---
   const handleExport = async () => {
+    if (isExportDisabled) return;
+
     setIsExporting(true);
     const toastId = toast.loading(tr('Menyiapkan file Excel...', 'Preparing Excel file...'));
     try {
@@ -1874,7 +1879,6 @@ export function StudentListPage() {
     if (actionableItems.length > 0) return actionableItems.slice(0, 8);
     return protectedWelfareItems.slice(0, 8);
   }, [actionableItems, protectedWelfareItems]);
-  const total = meta?.total || 0;
 
   return (
     <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
@@ -2412,8 +2416,13 @@ export function StudentListPage() {
           <button
             type="button"
             onClick={handleExport}
-            disabled={isExporting}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50"
+            disabled={isExportDisabled}
+            title={
+              total === 0 || students.length === 0
+                ? tr('Tidak ada data siswa untuk diekspor', 'No student data to export')
+                : undefined
+            }
+            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground disabled:hover:bg-muted/50"
           >
             {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
             <span className="hidden sm:inline">
