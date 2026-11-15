@@ -1,5 +1,6 @@
 // src/modules/attendance/pages/TeacherAttendancePage.tsx
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
@@ -30,27 +31,64 @@ import {
   Briefcase,
   Building2,
   TrendingUp,
+  ChevronLeft,
+  ChevronRight,
+  CalendarDays,
+  Settings2,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useUIStore } from '@/stores/ui.store';
+import {
+  checkRedDateStatus,
+  type WorkDaysMode,
+} from '../utils/indonesianHolidays';
 
 // ============================================================================
-// PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
+// PARAMETER CADANGAN & PENGATURAN KAMERA / FORMULIR
 // ============================================================================
-const WORK_START_TIME = '07:30'; // Batas jam masuk (lewat jam ini otomatis TERLAMBAT)
-const WORK_END_TIME = '14:30'; // Jam pulang standar
-const DEFAULT_RADIUS_METERS = 100; // Radius default jika di data sekolah belum diatur
-const REQUIRE_SELFIE_ON_CHECKIN = true; // Wajib foto selfie saat Datang
-const REQUIRE_SELFIE_ON_CHECKOUT = true; // Ubah ke false jika Pulang cukup GPS saja
-const MIN_REASON_LENGTH = 15; // Minimal karakter alasan izin/dinas/sakit
+const FALLBACK_WORK_START_TIME = '07:30';
+const FALLBACK_WORK_END_TIME = '14:30';
+const DEFAULT_RADIUS_METERS = 100;
+const REQUIRE_SELFIE_ON_CHECKIN = true;
+const REQUIRE_SELFIE_ON_CHECKOUT = true;
+const MIN_REASON_LENGTH = 15;
 
-const DAILY_QUOTES = [
-  'Persiapan dan perbaikan diri akan menjadi peluang kesuksesan saat bertemu dengan kesempatan.',
-  'Disiplin adalah jembatan antara cita-cita dan pencapaian nyata di ruang kelas.',
-  'Keteladanan guru hari ini adalah inspirasi masa depan bagi setiap peserta didik.',
-  'Langkah kecil yang konsisten setiap pagi membangun perubahan besar bagi pendidikan.',
+const DEFAULT_DAILY_QUOTES: Array<{ quote: string; author?: string }> = [
+  {
+    quote:
+      'Persiapan dan perbaikan diri akan menjadi peluang kesuksesan saat bertemu dengan kesempatan.',
+  },
+  {
+    quote:
+      'Disiplin adalah jembatan antara cita-cita dan pencapaian nyata di ruang kelas.',
+  },
+  {
+    quote:
+      'Keteladanan guru hari ini adalah inspirasi masa depan bagi setiap peserta didik.',
+  },
+  {
+    quote:
+      'Langkah kecil yang konsisten setiap pagi membangun perubahan besar bagi pendidikan.',
+  },
 ];
+
+const NAMA_BULAN_ID = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
+const NAMA_HARI_SINGKAT = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
 type SubView = 'beranda' | 'laporan' | 'peta' | 'izin' | 'log';
 type LeaveCategory = 'DINAS_LUAR' | 'IZIN' | 'SAKIT';
@@ -64,12 +102,15 @@ interface TeacherProfile {
   photoUrl?: string | null;
 }
 
-interface SchoolGeo {
+interface SchoolGeoAndSchedule {
   id: string;
   name: string;
   latitude: number;
   longitude: number;
   radius: number;
+  workStartTime: string;
+  workEndTime: string;
+  workDaysMode: WorkDaysMode;
 }
 
 interface AttendanceRecord {
@@ -89,7 +130,6 @@ interface AttendanceRecord {
   attachmentUrl?: string | null;
 }
 
-// Helper tanggal lokal YYYY-MM-DD (Anti bug geser tanggal UTC pagi hari)
 function getTodayLocal(): string {
   const now = new Date();
   const y = now.getFullYear();
@@ -98,7 +138,6 @@ function getTodayLocal(): string {
   return `${y}-${m}-${d}`;
 }
 
-// Rumus Haversine menghitung jarak meter antara 2 titik koordinat GPS
 function calculateDistanceMeters(
   lat1: number,
   lon1: number,
@@ -120,6 +159,7 @@ function calculateDistanceMeters(
 }
 
 export function TeacherAttendancePage() {
+  const navigate = useNavigate();
   const { user, school } = useAuthStore();
   const {
     sidebarCollapsed,
@@ -129,6 +169,8 @@ export function TeacherAttendancePage() {
   } = useUIStore();
 
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  const isAdminOrSuperAdmin =
+    user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
   // State Simulasi Super Admin
   const [simSchools, setSimSchools] = useState<Array<{ id: string; name: string }>>([]);
@@ -140,18 +182,32 @@ export function TeacherAttendancePage() {
     ? simSchoolId || school?.id || ''
     : school?.id || '';
 
-  // Navigasi Tampilan ala Mobile App (5 Tab Seimbang)
   const [activeView, setActiveView] = useState<SubView>('beranda');
-
-  // Jam Digital Real-Time (Jam : Menit : Detik)
   const [now, setNow] = useState<Date>(() => new Date());
 
-  // Data Guru, Sekolah & Riwayat Absensi
+  // Data Guru, Pengaturan Sekolah (GPS + Jam Kerja + 5/6 Hari Kerja), & Riwayat
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
-  const [schoolGeo, setSchoolGeo] = useState<SchoolGeo | null>(null);
+  const [schoolGeo, setSchoolGeo] = useState<SchoolGeoAndSchedule | null>(null);
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
+
+  // State Kata Hari Ini (Quotes) dari Database
+  const [activeQuotes, setActiveQuotes] =
+    useState<Array<{ quote: string; author?: string }>>(DEFAULT_DAILY_QUOTES);
+  const [quoteOffset, setQuoteOffset] = useState<number>(0);
+
+  // State Kalender Laporan & Hari Libur dari Database
+  const [calendarYear, setCalendarYear] = useState<number>(() =>
+    new Date().getFullYear()
+  );
+  const [calendarMonth, setCalendarMonth] = useState<number>(() =>
+    new Date().getMonth()
+  );
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() =>
+    getTodayLocal()
+  );
+  const [dbHolidaysMap, setDbHolidaysMap] = useState<Record<string, string>>({});
 
   // State GPS & Peta Leaflet
   const [userCoords, setUserCoords] = useState<{
@@ -176,7 +232,7 @@ export function TeacherAttendancePage() {
   const [capturedPreview, setCapturedPreview] = useState<string | null>(null);
   const [isSubmittingAttendance, setIsSubmittingAttendance] = useState<boolean>(false);
 
-  // State Formulir Ketat Izin / Dinas Luar / Sakit
+  // State Formulir Izin / Dinas Luar / Sakit
   const [leaveCategory, setLeaveCategory] = useState<LeaveCategory>('DINAS_LUAR');
   const [leaveStartDate, setLeaveStartDate] = useState<string>(getTodayLocal());
   const [leaveEndDate, setLeaveEndDate] = useState<string>(getTodayLocal());
@@ -185,10 +241,9 @@ export function TeacherAttendancePage() {
   const [leaveFile, setLeaveFile] = useState<File | null>(null);
   const [isSubmittingLeave, setIsSubmittingLeave] = useState<boolean>(false);
 
-  // State Filter Laporan (Bulanan vs Tahunan)
+  // Filter Laporan
   const [reportScope, setReportScope] = useState<'monthly' | 'yearly'>('monthly');
 
-  // Toast Notifikasi
   const [toast, setToast] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -199,14 +254,12 @@ export function TeacherAttendancePage() {
     setTimeout(() => setToast(null), 4500);
   };
 
-  // Otomatis sembunyikan sidebar saat halaman presensi dibuka di layar HP (< 1024px)
   useEffect(() => {
     if (window.innerWidth < 1024) {
       setSidebarOpen(false);
     }
   }, [setSidebarOpen]);
 
-  // Tombol Toggle Sidebar (HP: Buka/Tutup Drawer | Komputer: Lebar/Perkecil)
   const handleToggleSidebar = () => {
     if (window.innerWidth < 1024) {
       setSidebarOpen(!sidebarOpen);
@@ -215,13 +268,82 @@ export function TeacherAttendancePage() {
     }
   };
 
-  // 1. Timer Jam Digital per Detik
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  // 2. Mode Simulasi Super Admin: Muat Sekolah & Daftar Guru
+  // Muat Hari Libur Nasional & Sekolah dari Tabel national_holidays di Supabase
+  const loadDatabaseHolidays = useCallback(async () => {
+    try {
+      let query = supabase
+        .from('national_holidays')
+        .select('date, name, schoolId')
+        .gte('date', `${calendarYear}-01-01`)
+        .lte('date', `${calendarYear}-12-31`);
+
+      if (activeSchoolId) {
+        query = query.or(`schoolId.eq.${activeSchoolId},schoolId.is.null`);
+      } else {
+        query = query.is('schoolId', null);
+      }
+
+      const { data, error } = await query;
+      if (!error && data) {
+        const mapped: Record<string, string> = {};
+        for (const row of data) {
+          // Libur khusus sekolah menimpa label global jika tanggal sama
+          if (!mapped[row.date] || row.schoolId !== null) {
+            mapped[row.date] = row.name;
+          }
+        }
+        setDbHolidaysMap(mapped);
+      }
+    } catch {
+      setDbHolidaysMap({});
+    }
+  }, [calendarYear, activeSchoolId]);
+
+  useEffect(() => {
+    loadDatabaseHolidays();
+  }, [loadDatabaseHolidays]);
+
+  // Muat Kata Hari Ini (Quotes) Aktif dari Supabase
+  const loadActiveQuotes = useCallback(async () => {
+    try {
+      let query = supabase
+        .from('daily_quotes')
+        .select('quote, author')
+        .eq('isActive', true)
+        .order('createdAt', { ascending: false });
+
+      if (activeSchoolId) {
+        query = query.or(`schoolId.eq.${activeSchoolId},schoolId.is.null`);
+      } else {
+        query = query.is('schoolId', null);
+      }
+
+      const { data, error } = await query;
+      if (!error && data && data.length > 0) {
+        setActiveQuotes(
+          data.map((d: any) => ({
+            quote: d.quote,
+            author: d.author ?? undefined,
+          }))
+        );
+      } else {
+        setActiveQuotes(DEFAULT_DAILY_QUOTES);
+      }
+    } catch {
+      setActiveQuotes(DEFAULT_DAILY_QUOTES);
+    }
+  }, [activeSchoolId]);
+
+  useEffect(() => {
+    loadActiveQuotes();
+  }, [loadActiveQuotes]);
+
+  // Mode Simulasi Super Admin
   useEffect(() => {
     if (!isSuperAdmin) return;
     supabase
@@ -252,7 +374,7 @@ export function TeacherAttendancePage() {
       });
   }, [isSuperAdmin, activeSchoolId]);
 
-  // 3. Muat Data Sekolah (Koordinat & Radius), Profil Guru, & Riwayat Presensi
+  // Muat Data Sekolah (GPS, Jam Masuk/Pulang, Mode 5/6 Hari Kerja), Profil Guru, & Riwayat
   const loadTeacherAndAttendance = useCallback(async () => {
     if (!activeSchoolId || !user?.id) return;
     setIsLoadingData(true);
@@ -275,6 +397,10 @@ export function TeacherAttendancePage() {
             schData.radius ??
             DEFAULT_RADIUS_METERS
           ),
+          workStartTime: schData.workStartTime || FALLBACK_WORK_START_TIME,
+          workEndTime: schData.workEndTime || FALLBACK_WORK_END_TIME,
+          workDaysMode:
+            schData.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS',
         });
       }
 
@@ -301,14 +427,14 @@ export function TeacherAttendancePage() {
         return;
       }
 
-      const currentYear = new Date().getFullYear();
+      const targetYear = Math.min(new Date().getFullYear(), calendarYear);
       const { data: attList } = await supabase
         .from('attendances')
         .select('*')
         .eq('schoolId', activeSchoolId)
         .eq('teacherId', activeTeacher.id)
         .eq('type', 'GURU')
-        .gte('date', `${currentYear}-01-01`)
+        .gte('date', `${targetYear}-01-01`)
         .order('date', { ascending: false });
 
       const records = (attList ?? []) as AttendanceRecord[];
@@ -322,13 +448,28 @@ export function TeacherAttendancePage() {
     } finally {
       setIsLoadingData(false);
     }
-  }, [activeSchoolId, user?.id, user?.email, isSuperAdmin, simTeacherId, simTeachers]);
+  }, [
+    activeSchoolId,
+    user?.id,
+    user?.email,
+    isSuperAdmin,
+    simTeacherId,
+    simTeachers,
+    calendarYear,
+  ]);
 
   useEffect(() => {
     loadTeacherAndAttendance();
   }, [loadTeacherAndAttendance]);
 
-  // 4. Pelacakan GPS Live (Aktif saat membuka tab Peta)
+  const effectiveWorkStartTime =
+    schoolGeo?.workStartTime || FALLBACK_WORK_START_TIME;
+  const effectiveWorkEndTime =
+    schoolGeo?.workEndTime || FALLBACK_WORK_END_TIME;
+  const effectiveWorkDaysMode: WorkDaysMode =
+    schoolGeo?.workDaysMode || 'SIX_DAYS';
+
+  // Pelacakan GPS Live
   const requestGpsPosition = useCallback(() => {
     if (!navigator.geolocation) {
       setGpsError('Perangkat/browser ini tidak mendukung GPS.');
@@ -364,7 +505,7 @@ export function TeacherAttendancePage() {
     }
   }, [activeView, requestGpsPosition]);
 
-  // 5. Inisialisasi & Pembaruan Peta Interaktif Leaflet (Aktif untuk CHECK-IN & CHECK-OUT)
+  // Inisialisasi Peta Leaflet
   useEffect(() => {
     if (activeView !== 'peta' || !mapContainerRef.current || !schoolGeo) return;
 
@@ -410,7 +551,6 @@ export function TeacherAttendancePage() {
     };
   }, [activeView, schoolGeo]);
 
-  // Update Pin Posisi Guru di Peta setiap koordinat berubah
   useEffect(() => {
     const map = mapInstanceRef.current;
     if (!map || !userCoords || !schoolGeo) return;
@@ -438,7 +578,6 @@ export function TeacherAttendancePage() {
     map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
   }, [userCoords, schoolGeo]);
 
-  // Hitung Jarak & Status Radius
   const distanceMeters = useMemo(() => {
     if (!userCoords || !schoolGeo) return null;
     return calculateDistanceMeters(
@@ -460,14 +599,12 @@ export function TeacherAttendancePage() {
     return `${Math.round(meters)} m`;
   };
 
-  // Status Kunci Tombol Check-In & Check-Out
   const hasCheckedIn = Boolean(todayRecord?.checkInTime);
   const hasCheckedOut = Boolean(todayRecord?.checkOutTime);
   const isOnLeaveToday = Boolean(
     todayRecord && ['IZIN', 'SAKIT'].includes(todayRecord.status)
   );
 
-  // Tombol Check-Out HANYA aktif jika sudah absen masuk dan belum absen pulang
   const canCheckOut = hasCheckedIn && !hasCheckedOut && !isOnLeaveToday;
 
   const attendancePhase: 'CHECK_IN' | 'CHECK_OUT' | 'COMPLETED' | 'ON_LEAVE' =
@@ -478,7 +615,6 @@ export function TeacherAttendancePage() {
       return 'COMPLETED';
     }, [isOnLeaveToday, hasCheckedIn, hasCheckedOut]);
 
-  // 6. Kontrol Kamera Selfie
   const openCameraModal = async (mode: 'CHECK_IN' | 'CHECK_OUT') => {
     const needSelfie =
       mode === 'CHECK_IN' ? REQUIRE_SELFIE_ON_CHECKIN : REQUIRE_SELFIE_ON_CHECKOUT;
@@ -539,7 +675,7 @@ export function TeacherAttendancePage() {
     );
   };
 
-  // 7. Simpan Check-In / Check-Out ke Supabase
+  // Simpan Check-In / Check-Out ke Supabase menggunakan Jam Masuk dari Database
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
     selfieBlob: Blob | null
@@ -564,9 +700,9 @@ export function TeacherAttendancePage() {
       const nowIso = new Date().toISOString();
 
       if (mode === 'CHECK_IN') {
-        const [startH, startM] = WORK_START_TIME.split(':').map(Number);
+        const [startH, startM] = effectiveWorkStartTime.split(':').map(Number);
         const deadline = new Date();
-        deadline.setHours(startH, startM, 59, 999);
+        deadline.setHours(startH || 7, startM ?? 30, 59, 999);
         const status = new Date() > deadline ? 'TERLAMBAT' : 'HADIR';
 
         const { error } = await supabase.from('attendances').insert({
@@ -587,7 +723,7 @@ export function TeacherAttendancePage() {
         showToast(
           'success',
           status === 'TERLAMBAT'
-            ? 'Check-In berhasil tercatat (Status: Terlambat).'
+            ? `Check-In berhasil tercatat (Status: Terlambat — batas ${effectiveWorkStartTime}).`
             : 'Check-In Datang berhasil tercatat!'
         );
       } else {
@@ -619,7 +755,7 @@ export function TeacherAttendancePage() {
     }
   };
 
-  // 8. Simpan Pengajuan Ketat Izin / Dinas Luar / Sakit (Wajib Bukti Dokumen)
+  // Simpan Pengajuan Ketat Izin / Dinas Luar / Sakit
   const handleSubmitStrictLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!teacher || !activeSchoolId) return;
@@ -719,13 +855,17 @@ export function TeacherAttendancePage() {
     }
   };
 
-  // 9. Perhitungan Statistik Laporan (Bulanan & Tahunan)
+  // Perhitungan Statistik Laporan
+  const selectedMonthPrefix = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
+  const selectedMonthLabel = `${NAMA_BULAN_ID[calendarMonth]} ${calendarYear}`;
+
   const reportStats = useMemo(() => {
-    const currentMonthPrefix = getTodayLocal().slice(0, 7);
     const filtered =
       reportScope === 'monthly'
-        ? historyRecords.filter((r) => r.date.startsWith(currentMonthPrefix))
-        : historyRecords;
+        ? historyRecords.filter((r) => r.date.startsWith(selectedMonthPrefix))
+        : historyRecords.filter((r) =>
+          r.date.startsWith(String(calendarYear))
+        );
 
     const hadir = filtered.filter((r) => r.status === 'HADIR').length;
     const terlambat = filtered.filter((r) => r.status === 'TERLAMBAT').length;
@@ -745,9 +885,109 @@ export function TeacherAttendancePage() {
       totalRecorded: filtered.length,
       percentage: filtered.length === 0 ? 0 : pct,
     };
-  }, [historyRecords, reportScope]);
+  }, [historyRecords, reportScope, selectedMonthPrefix, calendarYear]);
 
-  // Format Waktu & Tanggal Indonesia
+  // Generator Grid Kalender Bulanan (Memakai Mode 5/6 Hari Kerja & Libur dari Database)
+  const recordsByDate = useMemo(() => {
+    const map = new Map<string, AttendanceRecord>();
+    for (const rec of historyRecords) {
+      map.set(rec.date, rec);
+    }
+    return map;
+  }, [historyRecords]);
+
+  const calendarDaysGrid = useMemo(() => {
+    const firstDayOfMonth = new Date(calendarYear, calendarMonth, 1).getDay();
+    const daysInMonth = new Date(calendarYear, calendarMonth + 1, 0).getDate();
+
+    const cells: Array<{
+      dateStr: string | null;
+      dayNum: number | null;
+      isRedDate: boolean;
+      holidayName: string | null;
+      record?: AttendanceRecord;
+    }> = [];
+
+    for (let i = 0; i < firstDayOfMonth; i++) {
+      cells.push({
+        dateStr: null,
+        dayNum: null,
+        isRedDate: false,
+        holidayName: null,
+      });
+    }
+
+    for (let d = 1; d <= daysInMonth; d++) {
+      const dateStr = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      const redStatus = checkRedDateStatus(
+        dateStr,
+        dbHolidaysMap,
+        effectiveWorkDaysMode
+      );
+      cells.push({
+        dateStr,
+        dayNum: d,
+        isRedDate: redStatus.isRedDate,
+        holidayName: redStatus.holidayName,
+        record: recordsByDate.get(dateStr),
+      });
+    }
+
+    return cells;
+  }, [
+    calendarYear,
+    calendarMonth,
+    dbHolidaysMap,
+    effectiveWorkDaysMode,
+    recordsByDate,
+  ]);
+
+  const handlePrevMonth = () => {
+    if (calendarMonth === 0) {
+      setCalendarYear((y) => y - 1);
+      setCalendarMonth(11);
+    } else {
+      setCalendarMonth((m) => m - 1);
+    }
+  };
+
+  const handleNextMonth = () => {
+    if (calendarMonth === 11) {
+      setCalendarYear((y) => y + 1);
+      setCalendarMonth(0);
+    } else {
+      setCalendarMonth((m) => m + 1);
+    }
+  };
+
+  const selectedDateInfo = useMemo(() => {
+    if (!selectedCalendarDate) return null;
+    const redStatus = checkRedDateStatus(
+      selectedCalendarDate,
+      dbHolidaysMap,
+      effectiveWorkDaysMode
+    );
+    const record = recordsByDate.get(selectedCalendarDate);
+    const dateObj = new Date(`${selectedCalendarDate}T00:00:00`);
+    const label = dateObj.toLocaleDateString('id-ID', {
+      weekday: 'long',
+      day: 'numeric',
+      month: 'long',
+      year: 'numeric',
+    });
+    return {
+      dateStr: selectedCalendarDate,
+      label,
+      ...redStatus,
+      record,
+    };
+  }, [
+    selectedCalendarDate,
+    dbHolidaysMap,
+    effectiveWorkDaysMode,
+    recordsByDate,
+  ]);
+
   const formattedDateFull = now.toLocaleDateString('id-ID', {
     weekday: 'long',
     day: 'numeric',
@@ -770,20 +1010,46 @@ export function TeacherAttendancePage() {
     });
   };
 
-  const dailyQuote = DAILY_QUOTES[now.getDate() % DAILY_QUOTES.length];
+  const activeQuoteItem =
+    activeQuotes[(now.getDate() + quoteOffset) % activeQuotes.length] ??
+    DEFAULT_DAILY_QUOTES[0];
+
+  const todayStr = getTodayLocal();
 
   return (
     <div className="min-h-[calc(100vh-4rem)] pb-28 max-w-xl mx-auto px-1">
       {/* Banner Simulasi Khusus SUPER_ADMIN */}
       {isSuperAdmin && (
-        <div className="mb-4 p-3 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex flex-col sm:flex-row gap-2.5 items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-300">
-            <FlaskConical size={16} />
-            <span>Simulasi Super Admin:</span>
+        <div className="mb-4 p-3 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex flex-col gap-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-300">
+              <FlaskConical size={16} />
+              <span>Simulasi Super Admin:</span>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() =>
+                  navigate('/academic/master-data', { state: { tab: 'presensi' } })
+                }
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
+              >
+                <Settings2 size={12} />
+                Jam & Libur
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate('/attendance/quotes')}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-purple-600 text-white hover:bg-purple-700 transition"
+              >
+                <Sparkles size={12} />
+                Quotes
+              </button>
+            </div>
           </div>
-          <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+          <div className="flex flex-wrap gap-2 w-full">
             <select
-              className="form-input text-xs py-1.5 flex-1 sm:w-44"
+              className="form-input text-xs py-1.5 flex-1 min-w-40"
               value={simSchoolId}
               onChange={(e) => setSimSchoolId(e.target.value)}
             >
@@ -794,7 +1060,7 @@ export function TeacherAttendancePage() {
               ))}
             </select>
             <select
-              className="form-input text-xs py-1.5 flex-1 sm:w-48"
+              className="form-input text-xs py-1.5 flex-1 min-w-44"
               value={simTeacherId}
               onChange={(e) => setSimTeacherId(e.target.value)}
             >
@@ -820,8 +1086,8 @@ export function TeacherAttendancePage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -16 }}
             className={`mb-4 p-3.5 rounded-2xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-              ? 'bg-emerald-600 text-white border-emerald-500'
-              : 'bg-red-600 text-white border-red-500'
+                ? 'bg-emerald-600 text-white border-emerald-500'
+                : 'bg-red-600 text-white border-red-500'
               }`}
           >
             {toast.type === 'success' ? (
@@ -835,7 +1101,7 @@ export function TeacherAttendancePage() {
       </AnimatePresence>
 
       {/* ====================================================================
-          TAMPILAN 1: BERANDA (Desain Identik dengan Referensi Mobile App)
+          TAMPILAN 1: BERANDA
       ==================================================================== */}
       {activeView === 'beranda' && (
         <motion.div
@@ -843,13 +1109,10 @@ export function TeacherAttendancePage() {
           animate={{ opacity: 1, y: 0 }}
           className="space-y-4"
         >
-          {/* Header Biru Royal + Kartu Profil & Kapsul Jam Digital Vertikal */}
           <div className="relative rounded-[28px] overflow-hidden shadow-xl bg-linear-to-br from-[#1C3D6E] via-[#26508E] to-[#3468AE] p-5 text-white">
-            {/* Aksen lingkaran dekoratif halus */}
             <div className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 rounded-full bg-white/5" />
             <div className="pointer-events-none absolute right-12 top-24 w-28 h-28 rounded-full bg-amber-300/10" />
 
-            {/* Bar Atas: Tombol Sidebar Toggle + Salam + Tombol Refresh */}
             <div className="relative flex items-center justify-between gap-3 mb-4">
               <div className="flex items-center gap-3">
                 <button
@@ -881,12 +1144,9 @@ export function TeacherAttendancePage() {
               </button>
             </div>
 
-            {/* Kartu Frosted Cream-White Profil + Kapsul Jam Live */}
             <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80 grid grid-cols-12 gap-3 items-stretch">
-              {/* Kiri (8 Kolom): Identitas PTK & Tingkat Kehadiran */}
               <div className="col-span-8 flex flex-col justify-between gap-3">
                 <div className="flex items-center gap-3">
-                  {/* Foto / Inisial dengan Bingkai Emas & Navy */}
                   <div className="relative shrink-0">
                     <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
                       {teacher?.photoUrl ? (
@@ -906,28 +1166,36 @@ export function TeacherAttendancePage() {
                     </span>
                   </div>
 
-                  {/* Detail Guru */}
                   <div className="min-w-0">
                     <h2 className="font-bold text-sm text-slate-900 truncate">
-                      {teacher?.fullName ?? user?.fullName ?? 'Profil Guru Belum Tertaut'}
+                      {teacher?.fullName ??
+                        user?.fullName ??
+                        'Profil Guru Belum Tertaut'}
                     </h2>
                     <p className="text-[11px] font-mono text-slate-500 truncate mt-0.5">
                       {teacher?.nip || teacher?.nuptk || 'PTK Terdaftar'}
                     </p>
                     <p className="text-[11px] text-slate-600 flex items-center gap-1 truncate mt-0.5">
-                      <Briefcase size={11} className="text-[#1C3D6E] shrink-0" />
+                      <Briefcase
+                        size={11}
+                        className="text-[#1C3D6E] shrink-0"
+                      />
                       <span className="truncate">
                         {teacher?.position || 'Guru / Tenaga Pendidik'}
                       </span>
                     </p>
                     <p className="text-[11px] text-slate-600 flex items-center gap-1 truncate">
-                      <Building2 size={11} className="text-amber-600 shrink-0" />
-                      <span className="truncate">{schoolGeo?.name ?? 'Unit Sekolah'}</span>
+                      <Building2
+                        size={11}
+                        className="text-amber-600 shrink-0"
+                      />
+                      <span className="truncate">
+                        {schoolGeo?.name ?? 'Unit Sekolah'}
+                      </span>
                     </p>
                   </div>
                 </div>
 
-                {/* Inner Glass Card: Tingkat Kehadiran Bulan Ini */}
                 <div className="rounded-2xl bg-white/80 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="w-6 h-6 rounded-lg bg-[#254E89] text-white flex items-center justify-center shrink-0">
@@ -961,7 +1229,6 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              {/* Kanan (4 Kolom): Kapsul Jam Digital Vertikal Beraksen Emas */}
               <div className="col-span-4 rounded-3xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-3 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
                 <div className="pointer-events-none absolute -bottom-4 -right-4 w-20 h-20 rounded-full bg-amber-300/20" />
 
@@ -999,16 +1266,15 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          {/* Dua Kartu Utama: DATANG (Navy) & PULANG (Gold — Terkunci sebelum Datang) */}
+          {/* Dua Kartu Utama: DATANG & PULANG (Jam Dinamis dari Database) */}
           <div className="grid grid-cols-2 gap-3.5">
-            {/* KARTU 1: DATANG (CHECK-IN) */}
             <button
               type="button"
               disabled={isOnLeaveToday}
               onClick={() => setActiveView('peta')}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isOnLeaveToday
-                ? 'opacity-75 cursor-not-allowed'
-                : 'hover:scale-[1.01] active:scale-[0.99]'
+                  ? 'opacity-75 cursor-not-allowed'
+                  : 'hover:scale-[1.01] active:scale-[0.99]'
                 }`}
             >
               <div className="flex items-center justify-between">
@@ -1019,7 +1285,7 @@ export function TeacherAttendancePage() {
                   <div>
                     <div className="text-sm font-bold leading-tight">Datang</div>
                     <div className="text-[11px] text-slate-200/80">
-                      {WORK_START_TIME}
+                      {effectiveWorkStartTime}
                     </div>
                   </div>
                 </div>
@@ -1044,7 +1310,9 @@ export function TeacherAttendancePage() {
                 </p>
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn ? 'bg-emerald-400' : 'bg-amber-300 animate-pulse'
+                    className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
+                        ? 'bg-emerald-400'
+                        : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
@@ -1056,7 +1324,6 @@ export function TeacherAttendancePage() {
               </div>
             </button>
 
-            {/* KARTU 2: PULANG (CHECK-OUT) — TERKUNCI JIKA BELUM ABSEN MASUK */}
             <button
               type="button"
               disabled={!canCheckOut}
@@ -1072,8 +1339,8 @@ export function TeacherAttendancePage() {
                     : 'Ketuk untuk melakukan presensi pulang di peta'
               }
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-amber-300/60'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-amber-300/60'
                 }`}
             >
               <div className="flex items-center justify-between">
@@ -1084,7 +1351,7 @@ export function TeacherAttendancePage() {
                   <div>
                     <div className="text-sm font-bold leading-tight">Pulang</div>
                     <div className="text-[11px] text-amber-50/90">
-                      {WORK_END_TIME}
+                      {effectiveWorkEndTime}
                     </div>
                   </div>
                 </div>
@@ -1114,10 +1381,10 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                      ? 'bg-emerald-300'
-                      : canCheckOut
-                        ? 'bg-white animate-ping'
-                        : 'bg-amber-100/60'
+                        ? 'bg-emerald-300'
+                        : canCheckOut
+                          ? 'bg-white animate-ping'
+                          : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
@@ -1135,7 +1402,7 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          TAMPILAN 2: PRESENSI PETA GPS (Aktif untuk CHECK-IN maupun CHECK-OUT!)
+          TAMPILAN 2: PRESENSI PETA GPS + KATA HARI INI
       ==================================================================== */}
       {activeView === 'peta' && (
         <motion.div
@@ -1143,7 +1410,6 @@ export function TeacherAttendancePage() {
           animate={{ opacity: 1, scale: 1 }}
           className="space-y-3"
         >
-          {/* Header Mengambang Peta */}
           <div className="rounded-2xl bg-linear-to-r from-[#1D3554] to-[#525B44] p-4 text-white flex items-center justify-between shadow-lg">
             <div className="flex items-center gap-3">
               <button
@@ -1176,7 +1442,6 @@ export function TeacherAttendancePage() {
             </button>
           </div>
 
-          {/* Area Peta Interaktif Leaflet */}
           <div className="relative rounded-3xl overflow-hidden border border-slate-200 dark:border-white/15 shadow-xl bg-slate-900">
             <div ref={mapContainerRef} className="w-full h-77.5 z-10" />
 
@@ -1187,7 +1452,6 @@ export function TeacherAttendancePage() {
               </div>
             )}
 
-            {/* Kartu Statistik Melayang: Jarak | Radius Sekolah | Waktu */}
             <div className="p-4 bg-white/95 text-slate-800 backdrop-blur-md">
               <div className="grid grid-cols-3 gap-2 text-center pb-3 border-b border-slate-200">
                 <div>
@@ -1221,19 +1485,44 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              {/* Kotak Kata Hari Ini */}
-              <div className="mt-3 rounded-2xl bg-linear-to-r from-[#1D4E7A] to-[#2B8A78] p-3.5 text-center text-white">
-                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-[10px] font-semibold mb-1.5">
-                  <Sparkles size={11} /> Kata Hari Ini
-                </span>
+              <div className="mt-3 rounded-2xl bg-linear-to-r from-[#1D4E7A] to-[#2B8A78] p-3.5 text-center text-white relative">
+                <div className="flex items-center justify-center gap-2 mb-1.5">
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-[10px] font-semibold">
+                    <Sparkles size={11} /> Kata Hari Ini
+                  </span>
+                  {activeQuotes.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => setQuoteOffset((prev) => prev + 1)}
+                      className="p-1 rounded-full bg-white/15 hover:bg-white/25 transition"
+                      title="Ganti kutipan berikutnya"
+                    >
+                      <RefreshCw size={10} />
+                    </button>
+                  )}
+                  {isAdminOrSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => navigate('/attendance/quotes')}
+                      className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-bold hover:bg-amber-300 transition"
+                      title="Buka Menu Kata Hari Ini"
+                    >
+                      Kelola
+                    </button>
+                  )}
+                </div>
                 <p className="text-xs italic leading-relaxed text-white/95">
-                  "{dailyQuote}"
+                  "{activeQuoteItem.quote}"
                 </p>
+                {activeQuoteItem.author && (
+                  <p className="text-[10px] text-amber-200 font-semibold mt-1">
+                    — {activeQuoteItem.author}
+                  </p>
+                )}
               </div>
             </div>
           </div>
 
-          {/* Tombol Aksi Bawah Dinamis */}
           {!teacher ? (
             <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
               Akun Anda belum terhubung dengan data Master Guru/PTK.
@@ -1267,8 +1556,8 @@ export function TeacherAttendancePage() {
               type="button"
               onClick={() => openCameraModal(attendancePhase)}
               className={`w-full py-4 px-5 rounded-2xl font-bold text-sm text-white shadow-lg flex items-center justify-center gap-2 transition ${attendancePhase === 'CHECK_OUT'
-                ? 'bg-linear-to-r from-amber-500 to-orange-600 hover:opacity-95'
-                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                  ? 'bg-linear-to-r from-amber-500 to-orange-600 hover:opacity-95'
+                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <Camera size={18} />
@@ -1329,8 +1618,8 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setLeaveCategory(item.value)}
                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                      ? 'bg-emerald-600 border-emerald-500 text-white'
-                      : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                        ? 'bg-emerald-600 border-emerald-500 text-white'
+                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                       }`}
                   >
                     {item.label}
@@ -1460,7 +1749,7 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          TAMPILAN 4: LAPORAN & REKAP
+          TAMPILAN 4: LAPORAN & KALENDER TANGGAL MERAH (5/6 HARI KERJA + DB LIBUR)
       ==================================================================== */}
       {activeView === 'laporan' && (
         <motion.div
@@ -1484,8 +1773,8 @@ export function TeacherAttendancePage() {
                 </h2>
                 <p className="text-xs text-blue-100/80">
                   {reportScope === 'monthly'
-                    ? monthYearLabel
-                    : `Tahun ${now.getFullYear()}`}
+                    ? selectedMonthLabel
+                    : `Tahun ${calendarYear}`}
                 </p>
               </div>
             </div>
@@ -1493,7 +1782,9 @@ export function TeacherAttendancePage() {
               <button
                 type="button"
                 onClick={() => setReportScope('monthly')}
-                className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly' ? 'bg-white text-slate-900' : 'text-white'
+                className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Bulan Ini
@@ -1501,7 +1792,9 @@ export function TeacherAttendancePage() {
               <button
                 type="button"
                 onClick={() => setReportScope('yearly')}
-                className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly' ? 'bg-white text-slate-900' : 'text-white'
+                className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Tahunan
@@ -1524,31 +1817,208 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <div className="data-card p-3.5 text-center">
-              <div className="text-2xl font-extrabold text-emerald-500">
+          <div className="grid grid-cols-4 gap-2.5">
+            <div className="data-card p-3 text-center">
+              <div className="text-xl sm:text-2xl font-extrabold text-emerald-500">
                 {reportStats.hadir}
               </div>
-              <div className="text-xs opacity-75 mt-1">Hari Hadir</div>
+              <div className="text-[11px] opacity-75 mt-1">Hari Hadir</div>
             </div>
-            <div className="data-card p-3.5 text-center">
-              <div className="text-2xl font-extrabold text-amber-500">
+            <div className="data-card p-3 text-center">
+              <div className="text-xl sm:text-2xl font-extrabold text-amber-500">
                 {reportStats.terlambat}
               </div>
-              <div className="text-xs opacity-75 mt-1">Terlambat</div>
+              <div className="text-[11px] opacity-75 mt-1">Terlambat</div>
             </div>
-            <div className="data-card p-3.5 text-center">
-              <div className="text-2xl font-extrabold text-blue-500">
+            <div className="data-card p-3 text-center">
+              <div className="text-xl sm:text-2xl font-extrabold text-blue-500">
                 {reportStats.izinSakit}
               </div>
-              <div className="text-xs opacity-75 mt-1">Izin / Sakit</div>
+              <div className="text-[11px] opacity-75 mt-1">Izin / Sakit</div>
             </div>
-            <div className="data-card p-3.5 text-center">
-              <div className="text-2xl font-extrabold text-red-500">
+            <div className="data-card p-3 text-center">
+              <div className="text-xl sm:text-2xl font-extrabold text-red-500">
                 {reportStats.alpa}
               </div>
-              <div className="text-xs opacity-75 mt-1">Tanpa Ket.</div>
+              <div className="text-[11px] opacity-75 mt-1">Tanpa Ket.</div>
             </div>
+          </div>
+
+          {/* KALENDER / TANGGALAN PRESENSI */}
+          <div className="data-card p-4 space-y-3.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CalendarDays size={18} className="text-primary" />
+                <div>
+                  <h3 className="font-bold text-sm">{selectedMonthLabel}</h3>
+                  <p className="text-[10px] opacity-65">
+                    Mode:{' '}
+                    {effectiveWorkDaysMode === 'FIVE_DAYS'
+                      ? '5 Hari Kerja (Sabtu & Minggu Libur)'
+                      : '6 Hari Kerja (Minggu Libur)'}
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const d = new Date();
+                    setCalendarYear(d.getFullYear());
+                    setCalendarMonth(d.getMonth());
+                    setSelectedCalendarDate(getTodayLocal());
+                  }}
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-muted hover:bg-muted/80 transition"
+                >
+                  Hari Ini
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePrevMonth}
+                  className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 transition"
+                  title="Bulan Sebelumnya"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={handleNextMonth}
+                  className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 transition"
+                  title="Bulan Berikutnya"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-7 gap-1 text-center">
+              {NAMA_HARI_SINGKAT.map((hari, idx) => (
+                <div
+                  key={hari}
+                  className={`text-[11px] font-bold py-1 ${idx === 0
+                      ? 'text-red-500'
+                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                        ? 'text-red-500'
+                        : 'opacity-65'
+                    }`}
+                >
+                  {hari}
+                </div>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-7 gap-1.5">
+              {calendarDaysGrid.map((cell, idx) => {
+                if (!cell.dateStr || !cell.dayNum) {
+                  return <div key={`empty-${idx}`} className="h-11" />;
+                }
+
+                const isToday = cell.dateStr === todayStr;
+                const isSelected = cell.dateStr === selectedCalendarDate;
+                const status = cell.record?.status;
+
+                const statusDotColor =
+                  status === 'HADIR'
+                    ? 'bg-emerald-500'
+                    : status === 'TERLAMBAT'
+                      ? 'bg-amber-500'
+                      : status === 'IZIN' || status === 'SAKIT'
+                        ? 'bg-blue-500'
+                        : status === 'ALPA'
+                          ? 'bg-red-500'
+                          : null;
+
+                return (
+                  <button
+                    key={cell.dateStr}
+                    type="button"
+                    onClick={() => setSelectedCalendarDate(cell.dateStr!)}
+                    title={cell.holidayName ?? cell.dateStr}
+                    className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
+                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                        : isToday
+                          ? 'border-amber-400 font-bold'
+                          : 'border-transparent'
+                      } ${cell.isRedDate
+                        ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
+                        : 'bg-muted/35 hover:bg-muted/70'
+                      }`}
+                  >
+                    <span className="text-xs leading-none">{cell.dayNum}</span>
+
+                    <div className="mt-1.5 h-1.5 flex items-center justify-center gap-0.5">
+                      {statusDotColor ? (
+                        <span
+                          className={`w-1.5 h-1.5 rounded-full ${statusDotColor}`}
+                        />
+                      ) : cell.isRedDate ? (
+                        <span className="w-1 h-1 rounded-full bg-red-400/70" />
+                      ) : null}
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border text-[10px] opacity-80">
+              <span className="flex items-center gap-1 text-red-500 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-red-500" /> Tanggal Merah
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-emerald-500" /> Hadir
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-amber-500" /> Terlambat
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-blue-500" /> Izin/Sakit
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-red-600" /> Alpa
+              </span>
+            </div>
+
+            {selectedDateInfo && (
+              <div
+                className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-muted/40 border-border'
+                  }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold">{selectedDateInfo.label}</span>
+                  {selectedDateInfo.isRedDate && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white">
+                      Tanggal Merah
+                    </span>
+                  )}
+                </div>
+
+                {selectedDateInfo.holidayName && (
+                  <p className="text-[11px] font-semibold text-red-600 dark:text-red-300">
+                    Keterangan Libur: {selectedDateInfo.holidayName}
+                  </p>
+                )}
+
+                {selectedDateInfo.record ? (
+                  <p className="text-[11px] opacity-85">
+                    Status: <strong>{selectedDateInfo.record.status}</strong>
+                    {selectedDateInfo.record.checkInTime
+                      ? ` • Masuk ${formatShortTime(selectedDateInfo.record.checkInTime)} • Pulang ${formatShortTime(selectedDateInfo.record.checkOutTime)}`
+                      : selectedDateInfo.record.notes
+                        ? ` • ${selectedDateInfo.record.notes}`
+                        : ''}
+                  </p>
+                ) : (
+                  <p className="text-[11px] opacity-65">
+                    {selectedDateInfo.isRedDate
+                      ? 'Tidak ada jadwal presensi pada hari libur.'
+                      : 'Belum ada catatan presensi pada tanggal ini.'}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         </motion.div>
       )}
@@ -1604,12 +2074,12 @@ export function TeacherAttendancePage() {
                   </div>
                   <span
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                      : item.status === 'TERLAMBAT'
-                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                        : item.status === 'ALPA'
-                          ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                          : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                        : item.status === 'TERLAMBAT'
+                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                          : item.status === 'ALPA'
+                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                       }`}
                   >
                     {item.status}
@@ -1622,48 +2092,44 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          FLOATING BOTTOM NAVIGATION BAR (5 KOLOM SEIMBANG & PRESISI DI TENGAH)
-          Memperhitungkan lebar Sidebar (lg:pl-60 / lg:pl-16) agar selalu di tengah!
+          FLOATING BOTTOM NAVIGATION BAR
       ==================================================================== */}
       <div
         className={`fixed bottom-4 inset-x-0 z-40 px-4 pointer-events-none transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'
           }`}
       >
         <div className="max-w-md mx-auto pointer-events-auto rounded-3xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/90 dark:border-white/15 shadow-2xl px-2 py-2 grid grid-cols-5 items-center">
-          {/* Slot 1: Beranda */}
           <button
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
             <span>Beranda</span>
           </button>
 
-          {/* Slot 2: Laporan */}
           <button
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
             <span>Laporan</span>
           </button>
 
-          {/* Slot 3 (Tepat di Tengah): Tombol Sidik Jari Peta Presensi */}
           <div className="flex justify-center">
             <button
               type="button"
               onClick={() => setActiveView('peta')}
               className={`-mt-7 w-14 h-14 rounded-full flex items-center justify-center shadow-xl border-4 border-white dark:border-slate-900 transition ${activeView === 'peta'
-                ? 'bg-emerald-500 text-white scale-105'
-                : 'bg-linear-to-br from-amber-300 via-amber-500 to-amber-600 text-slate-950 hover:scale-105'
+                  ? 'bg-emerald-500 text-white scale-105'
+                  : 'bg-linear-to-br from-amber-300 via-amber-500 to-amber-600 text-slate-950 hover:scale-105'
                 }`}
               title="Buka Peta Presensi"
             >
@@ -1671,26 +2137,24 @@ export function TeacherAttendancePage() {
             </button>
           </div>
 
-          {/* Slot 4: Izin / Dinas */}
           <button
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
             <span>Izin / Dinas</span>
           </button>
 
-          {/* Slot 5: Data Log */}
           <button
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />

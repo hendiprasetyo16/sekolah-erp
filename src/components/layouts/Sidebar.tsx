@@ -26,6 +26,7 @@ import {
   ClipboardList,
   UserCheck,
   ScanLine,
+  Sparkles,
   X,
 } from 'lucide-react';
 
@@ -52,6 +53,7 @@ interface NavGroup {
 }
 
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
+const DAILY_QUOTES_ROLES = ['SUPER_ADMIN', 'ADMIN'] as const;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
 const STUDENT_ATTENDANCE_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
@@ -213,6 +215,12 @@ export function Sidebar() {
           icon: <UserCheck size={17} />,
           href: '/attendance/teacher',
           allowedRoles: ATTENDANCE_STAFF_ROLES,
+        },
+        {
+          label: locale === 'id' ? 'Kata Hari Ini' : 'Daily Quotes',
+          icon: <Sparkles size={17} />,
+          href: '/attendance/quotes',
+          allowedRoles: DAILY_QUOTES_ROLES,
         },
         {
           label: locale === 'id' ? 'Kiosk Siswa' : 'Student Kiosk',

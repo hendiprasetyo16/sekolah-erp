@@ -1,3 +1,4 @@
+//src/modules/academic/pages/MasterSettingsPage.tsx
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useLocation } from 'react-router-dom';
@@ -11,6 +12,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { SchoolProfileSection } from './SchoolProfilePage';
 import { AcademicYearPage } from './AcademicYearPage';
 import { ClassListPage } from './ClassListPage';
+import { AttendanceSettingsTab } from '@/modules/attendance/components/AttendanceSettingsTab';
 
 const TAB_TRIGGER_CLASS =
     'flex-1 whitespace-nowrap rounded-md px-5 py-2.5 text-muted-foreground transition-all hover:text-foreground ' +
@@ -25,7 +27,7 @@ export function MasterSettingsPage() {
 
     const role = user?.role;
 
-    // SUPER_ADMIN & ADMIN melihat 3 tab (termasuk Profil Sekolah).
+    // SUPER_ADMIN & ADMIN melihat 4 tab (termasuk Profil Sekolah & Pengaturan Presensi).
     // Role lain (KEPALA_SEKOLAH / OPERATOR) hanya melihat 2 tab (Tahun Ajaran & Kelas).
     const canAccessSchoolProfile = role === 'SUPER_ADMIN' || role === 'ADMIN';
 
@@ -33,9 +35,12 @@ export function MasterSettingsPage() {
 
     const requestedTab = location.state?.tab as string | undefined;
     const defaultTab = (() => {
-        if (!hasSchool && canAccessSchoolProfile) return 'sekolah';
+        if (!hasSchool && canAccessSchoolProfile) {
+            return requestedTab === 'presensi' ? 'presensi' : 'sekolah';
+        }
         if (requestedTab === 'kelas') return 'kelas';
         if (requestedTab === 'tahun-ajaran') return 'tahun-ajaran';
+        if (requestedTab === 'presensi' && canAccessSchoolProfile) return 'presensi';
         if (requestedTab === 'sekolah' && canAccessSchoolProfile) return 'sekolah';
         return canAccessSchoolProfile ? 'sekolah' : 'tahun-ajaran';
     })();
@@ -44,8 +49,12 @@ export function MasterSettingsPage() {
 
     // Pengaman: pastikan tab aktif tidak pernah mengarah ke tab yang terkunci/tersembunyi
     const resolvedActiveTab = (() => {
-        if (!hasSchool && canAccessSchoolProfile) return 'sekolah';
-        if (!canAccessSchoolProfile && activeTab === 'sekolah') return 'tahun-ajaran';
+        if (!hasSchool && canAccessSchoolProfile) {
+            return activeTab === 'presensi' ? 'presensi' : 'sekolah';
+        }
+        if (!canAccessSchoolProfile && (activeTab === 'sekolah' || activeTab === 'presensi')) {
+            return 'tahun-ajaran';
+        }
         return activeTab;
     })();
 
@@ -53,12 +62,13 @@ export function MasterSettingsPage() {
         title: isId ? 'Master Akademik' : 'Master Academic',
         desc: canAccessSchoolProfile
             ? isId
-                ? 'Pengaturan Profil Sekolah, Lokasi GPS Absensi, Tahun Ajaran, dan Data Kelas.'
-                : 'Configure School Profile, Attendance GPS, Academic Years, and Classes.'
+                ? 'Pengaturan Profil Sekolah, Lokasi GPS, Jam & Hari Kerja Presensi, Tahun Ajaran, dan Data Kelas.'
+                : 'Configure School Profile, Attendance GPS & Schedule, Academic Years, and Classes.'
             : isId
                 ? 'Pengaturan Tahun Ajaran, Periode Semester, dan Rombongan Belajar (Kelas).'
                 : 'Configure Academic Years, Semester Periods, and Classes.',
         tabSchool: isId ? 'Profil Sekolah' : 'School Profile',
+        tabAttendance: isId ? 'Pengaturan Presensi' : 'Attendance Settings',
         tabAy: isId ? 'Tahun Ajaran & Semester' : 'Academic Year & Semester',
         tabClass: isId ? 'Data Kelas' : 'Class Data',
         noSchoolNonAdmin: isId
@@ -92,6 +102,11 @@ export function MasterSettingsPage() {
                                 {t.tabSchool}
                             </TabsTrigger>
                         )}
+                        {canAccessSchoolProfile && (
+                            <TabsTrigger value="presensi" className={TAB_TRIGGER_CLASS}>
+                                {t.tabAttendance}
+                            </TabsTrigger>
+                        )}
                         <TabsTrigger
                             value="tahun-ajaran"
                             disabled={!hasSchool}
@@ -110,9 +125,15 @@ export function MasterSettingsPage() {
                 </div>
 
                 {canAccessSchoolProfile && (
-                    <TabsContent value="sekolah" className="mt-6">
-                        <SchoolProfileSection />
-                    </TabsContent>
+                    <>
+                        <TabsContent value="sekolah" className="mt-6">
+                            <SchoolProfileSection />
+                        </TabsContent>
+
+                        <TabsContent value="presensi" className="mt-6">
+                            <AttendanceSettingsTab />
+                        </TabsContent>
+                    </>
                 )}
 
                 {hasSchool && (

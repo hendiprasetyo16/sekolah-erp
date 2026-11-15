@@ -35,6 +35,7 @@ import {
   SettingsPlaceholder,
 } from './placeholder-pages';
 
+import { DailyQuotesManagePage } from '@/modules/attendance/pages/DailyQuotesManagePage';
 // Academic module
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
@@ -361,6 +362,15 @@ export function AppRouter() {
             element={
               <RoleRoute allowedRoles={ATTENDANCE_GPS_ROLES}>
                 <TeacherAttendancePage />
+              </RoleRoute>
+            }
+          />
+
+          <Route
+            path="/attendance/quotes"
+            element={
+              <RoleRoute allowedRoles={['SUPER_ADMIN', 'ADMIN']}>
+                <DailyQuotesManagePage />
               </RoleRoute>
             }
           />
