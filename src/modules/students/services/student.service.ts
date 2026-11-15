@@ -17,6 +17,7 @@ import type {
   StudentBulkImportItem,
   StudentBulkImportResult,
   StudentStatus,
+  StudentSortField,
   StudentParent,
   StudentEconomic,
   ParentRelation,
@@ -48,12 +49,12 @@ export interface StudentListParams extends PaginatedParams {
   schoolId?: string;
   classId?: string;
   status?: string;
-  sortBy?: string;
+  sortBy?: StudentSortField | string;
   sortOrder?: 'asc' | 'desc';
 }
 
 /**
- * Selaras dengan fungsi RLS v14 `public.current_user_can_manage_students()`
+ * Selaras dengan role pengelola data siswa pada kebijakan akses database.
  */
 export const MANAGE_STUDENT_ROLES = [
   'SUPER_ADMIN',
@@ -83,9 +84,28 @@ const VALID_ORPHAN_TYPES = new Set<OrphanType>([
 
 const BULK_IMPORT_CHUNK_SIZE = 250;
 const BULK_DELETE_CHUNK_SIZE = 200;
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Memvalidasi dan membersihkan string UUID sekolah agar aman dikirim ke query PostgreSQL.
+ */
+export const normalizeStudentSchoolId = (value?: string | null): string | null => {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return UUID_REGEX.test(trimmed) ? trimmed : null;
+};
+
+const assertValidUuid = (id: string, label = 'ID siswa'): string => {
+  const trimmed = typeof id === 'string' ? id.trim() : '';
+  if (!UUID_REGEX.test(trimmed)) {
+    throw new Error(`${label} tidak valid.`);
+  }
+  return trimmed;
+};
 
 // ============================================================================
-// HELPER SKORING PRIORITAS PIP (STANDAR DAPODIK & DTKS V14)
+// HELPER SKORING PRIORITAS PIP (STANDAR DAPODIK & DTKS)
 // ============================================================================
 export function calculatePipPriorityScore(
   eco: {
@@ -184,10 +204,17 @@ export function calculatePipPriorityScore(
 // ============================================================================
 // HELPER NORMALISASI & SANITASI DATA
 // ============================================================================
-const cleanNullableText = (value?: string | null): string | null => {
+const cleanNullableText = (value?: unknown): string | null => {
   if (value === undefined || value === null) return null;
-  const trimmed = String(value).trim();
-  return trimmed.length > 0 ? trimmed : null;
+  // Hapus tanda petik tunggal di awal (sering muncul pada ekspor Excel Dapodik untuk NISN/NIK/No. KK)
+  const trimmed = String(value)
+    .replace(/^'+/, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!trimmed || trimmed === '(tidak diisi)' || trimmed.toLowerCase() === 'null') {
+    return null;
+  }
+  return trimmed;
 };
 
 const normalizeDateOnly = (value?: string | null): string | null => {
@@ -238,14 +265,18 @@ const normalizeStudentFields = <T extends Record<string, unknown>>(
   delete data.student_parents;
   delete data.student_economics;
 
-  if ('nis' in data) data.nis = cleanNullableText(data.nis as string | null);
-  if ('nisn' in data && typeof data.nisn === 'string') data.nisn = data.nisn.trim();
-  if ('nik' in data && typeof data.nik === 'string') data.nik = data.nik.trim();
-  if ('noKk' in data) data.noKk = cleanNullableText(data.noKk as string | null);
-  if ('fullName' in data && typeof data.fullName === 'string') {
-    data.fullName = data.fullName.trim();
+  if ('nis' in data) data.nis = cleanNullableText(data.nis);
+  if ('nisn' in data && typeof data.nisn === 'string') {
+    data.nisn = data.nisn.replace(/^'+/, '').trim();
   }
-  if ('nickname' in data) data.nickname = cleanNullableText(data.nickname as string | null);
+  if ('nik' in data && typeof data.nik === 'string') {
+    data.nik = data.nik.replace(/^'+/, '').trim();
+  }
+  if ('noKk' in data) data.noKk = cleanNullableText(data.noKk);
+  if ('fullName' in data && typeof data.fullName === 'string') {
+    data.fullName = data.fullName.replace(/\s+/g, ' ').trim();
+  }
+  if ('nickname' in data) data.nickname = cleanNullableText(data.nickname);
   if ('religion' in data) data.religion = normalizeReligion(data.religion as string | null);
   if ('gender' in data && typeof data.gender === 'string') {
     data.gender = data.gender.trim().toUpperCase() === 'P' ? 'P' : 'L';
@@ -287,7 +318,7 @@ const normalizeStudentFields = <T extends Record<string, unknown>>(
 
   for (const field of nullableStringFields) {
     if (field in data) {
-      data[field] = cleanNullableText(data[field] as string | null);
+      data[field] = cleanNullableText(data[field]);
     }
   }
 
@@ -319,7 +350,7 @@ const normalizeParentPayload = (
 
   return {
     relation,
-    fullName: String(parent.fullName || '').trim(),
+    fullName: String(parent.fullName || '').replace(/\s+/g, ' ').trim(),
     birthYear: cleanNullableText(parent.birthYear),
     nik: cleanNullableText(parent.nik),
     phone: cleanNullableText(parent.phone),
@@ -401,41 +432,46 @@ const normalizeEconomicPayload = (
 };
 
 // ============================================================================
-// ERROR HANDLER POSTGRESQL V14
+// ERROR HANDLER POSTGRESQL & JARINGAN
 // ============================================================================
 export const handleStudentDbError = (error: unknown): Error => {
   const pgError = error as PostgrestError;
-  let message = pgError?.message || 'Terjadi kesalahan pada database';
+  let message = pgError?.message || 'Terjadi kesalahan saat memproses data siswa.';
+  const lowerMsg = message.toLowerCase();
 
   const rowPrefixMatch = message.match(/(Impor gagal pada baris ke-\d+:)/i);
   const rowPrefix = rowPrefixMatch ? `${rowPrefixMatch[1]} ` : '';
 
-  if (pgError?.code === '23505' || message.includes('unique constraint')) {
-    if (message.includes('nisn_key')) {
-      message = `${rowPrefix}NISN tersebut sudah terdaftar di sekolah ini. Silakan gunakan NISN lain.`;
-    } else if (message.includes('nis_key')) {
-      message = `${rowPrefix}NIS/NIPD tersebut sudah digunakan oleh siswa lain di sekolah ini.`;
-    } else if (message.includes('nik_key')) {
+  if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+    message = 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.';
+  } else if (pgError?.code === '23505' || lowerMsg.includes('unique constraint')) {
+    // Cek 'nisn' terlebih dahulu karena string 'nisn' mengandung 'nis'
+    if (lowerMsg.includes('nisn')) {
+      message = `${rowPrefix}NISN tersebut sudah terdaftar pada siswa lain di sekolah ini.`;
+    } else if (lowerMsg.includes('nik')) {
       message = `${rowPrefix}NIK tersebut sudah digunakan oleh siswa lain di sekolah ini.`;
+    } else if (lowerMsg.includes('nis')) {
+      message = `${rowPrefix}NIS/NIPD tersebut sudah digunakan oleh siswa lain di sekolah ini.`;
     } else {
-      message = `${rowPrefix}Data tersebut sudah terdaftar (Duplikat).`;
+      message = `${rowPrefix}Data siswa tersebut sudah terdaftar (Duplikat).`;
     }
   } else if (pgError?.code === '23502') {
-    message = `${rowPrefix}Terdapat kolom wajib yang bernilai kosong (NOT NULL constraint).`;
+    message = `${rowPrefix}Terdapat kolom wajib yang masih kosong. Pastikan semua data wajib sudah terisi.`;
   } else if (pgError?.code === '23503') {
     message =
-      'Operasi gagal karena relasi data tidak valid atau masih terhubung dengan modul lain (kelas/tagihan/absensi).';
+      'Operasi gagal karena relasi data tidak valid atau masih terhubung dengan modul lain (kelas, tagihan, atau presensi).';
   } else if (pgError?.code === '23514') {
-    message = `${rowPrefix}Nilai input tidak memenuhi aturan validasi database (cek Desil 1-10, Anak Ke > 0, Status, atau Jenis Kelamin).`;
+    message = `${rowPrefix}Nilai input tidak memenuhi aturan validasi data (cek Desil 1-10, Anak Ke > 0, Status, atau Jenis Kelamin).`;
   } else if (pgError?.code === '22007' || pgError?.code === '22008') {
     message = `${rowPrefix}Format tanggal tidak valid. Gunakan format YYYY-MM-DD.`;
   } else if (pgError?.code === '22P02') {
-    message = `${rowPrefix}Format input angka atau ID tidak valid.`;
+    message = `${rowPrefix}Format input angka atau ID data tidak valid.`;
   } else if (pgError?.code === '42P10') {
-    message =
-      'Skema indeks unik database belum lengkap. Jalankan Patch SQL v14 pada Supabase SQL Editor.';
+    message = 'Konfigurasi indeks unik database belum lengkap. Silakan hubungi administrator sistem.';
   } else if (pgError?.code === '42501') {
-    message = 'Anda tidak memiliki hak akses (RLS v14) untuk melakukan operasi ini.';
+    message = 'Anda tidak memiliki hak akses untuk melakukan operasi ini.';
+  } else if (pgError?.code === 'PGRST116') {
+    message = 'Data peserta didik tidak ditemukan atau Anda tidak memiliki akses ke data ini.';
   }
 
   return new Error(message);
@@ -489,7 +525,7 @@ const syncActiveClassHistory = async (
 };
 
 // ============================================================================
-// SERVICE UTAMA MODUL SISWA (V14)
+// SERVICE UTAMA MODUL SISWA
 // ============================================================================
 export const studentService = {
   async list(params: StudentListParams): Promise<ApiResponsePaginated<StudentListItem>> {
@@ -504,14 +540,24 @@ export const studentService = {
       sortOrder = 'asc',
     } = params;
 
+    const validSchoolId = normalizeStudentSchoolId(schoolId);
+    const validClassId = classId && classId !== 'all' ? normalizeStudentSchoolId(classId) : null;
+    const safePage = Math.max(1, Math.trunc(page));
+    const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
+
     let query = supabase
       .from('students')
       .select('*, classes(name, gradeLevel)', { count: 'exact' });
 
-    if (schoolId) query = query.eq('schoolId', schoolId);
+    if (validSchoolId) {
+      query = query.eq('schoolId', validSchoolId);
+    }
 
     if (search && search.trim()) {
-      const safeSearch = search.trim().replace(/[,()\\]/g, '');
+      const safeSearch = search
+        .trim()
+        .replace(/[,()\\]/g, '')
+        .replace(/[%_]/g, '\\$&');
       if (safeSearch) {
         query = query.or(
           `fullName.ilike.%${safeSearch}%,nisn.ilike.%${safeSearch}%,nis.ilike.%${safeSearch}%,nik.ilike.%${safeSearch}%`
@@ -519,7 +565,7 @@ export const studentService = {
       }
     }
 
-    if (classId && classId !== 'all') query = query.eq('classId', classId);
+    if (validClassId) query = query.eq('classId', validClassId);
     if (status && status !== 'all') query = query.eq('status', status);
 
     const safeSortBy = ALLOWED_SORT_COLUMNS.has(sortBy) ? sortBy : 'fullName';
@@ -533,8 +579,8 @@ export const studentService = {
       query = query.order(safeSortBy, { ascending: isAsc, nullsFirst: false });
     }
 
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
+    const from = (safePage - 1) * safeLimit;
+    const to = from + safeLimit - 1;
 
     const { data, count, error } = await query.range(from, to);
     if (error) throw handleStudentDbError(error);
@@ -563,7 +609,7 @@ export const studentService = {
     }));
 
     const total = count || 0;
-    const totalPages = Math.ceil(total / limit);
+    const totalPages = Math.ceil(total / safeLimit);
 
     return {
       success: true,
@@ -571,11 +617,11 @@ export const studentService = {
         data: mappedData,
         meta: {
           total,
-          page,
-          limit,
+          page: safePage,
+          limit: safeLimit,
           totalPages,
-          hasNext: page < totalPages,
-          hasPrev: page > 1,
+          hasNext: safePage < totalPages,
+          hasPrev: safePage > 1,
         },
       },
       message: 'Berhasil mengambil data siswa',
@@ -583,13 +629,16 @@ export const studentService = {
   },
 
   async getById(id: string, schoolId?: string): Promise<ApiResponse<StudentDetail>> {
+    const validId = assertValidUuid(id);
+    const validSchoolId = normalizeStudentSchoolId(schoolId);
+
     let studentQuery = supabase
       .from('students')
       .select('*, classes(name, gradeLevel)')
-      .eq('id', id);
+      .eq('id', validId);
 
-    if (schoolId) {
-      studentQuery = studentQuery.eq('schoolId', schoolId);
+    if (validSchoolId) {
+      studentQuery = studentQuery.eq('schoolId', validSchoolId);
     }
 
     const { data: studentData, error: studentError } = await studentQuery.single();
@@ -604,19 +653,19 @@ export const studentService = {
       supabase
         .from('student_parents')
         .select('*')
-        .eq('studentId', id)
+        .eq('studentId', validId)
         .eq('schoolId', rawStudent.schoolId)
         .order('relation', { ascending: true }),
       supabase
         .from('student_economics')
         .select('*')
-        .eq('studentId', id)
+        .eq('studentId', validId)
         .eq('schoolId', rawStudent.schoolId)
         .maybeSingle(),
     ]);
 
     if (parentsError) throw handleStudentDbError(parentsError);
-    // Sesuai RLS v14, ORANG_TUA & SISWA diblokir dari student_economics (42501)
+    // Role ORANG_TUA & SISWA dibatasi dari tabel student_economics (42501)
     if (economicError && economicError.code !== '42501') {
       throw handleStudentDbError(economicError);
     }
@@ -640,8 +689,14 @@ export const studentService = {
   },
 
   async create(payload: CreateStudentPayload): Promise<ApiResponse<StudentDetail>> {
+    const validSchoolId = normalizeStudentSchoolId(payload.schoolId);
+    if (!validSchoolId) {
+      throw new Error('Identitas sekolah tujuan tidak valid.');
+    }
+
     const { parents, economic, ...rawStudentData } = payload;
     const studentData = normalizeStudentFields(rawStudentData);
+    studentData.schoolId = validSchoolId;
 
     if (!studentData.entryDate) {
       delete studentData.entryDate;
@@ -701,6 +756,8 @@ export const studentService = {
     payload: UpdateStudentPayload,
     schoolId?: string
   ): Promise<ApiResponse<StudentDetail>> {
+    const validId = assertValidUuid(id);
+    const validSchoolId = normalizeStudentSchoolId(schoolId);
     const { parents, economic, ...rawStudentData } = payload;
 
     const studentData = normalizeStudentFields(rawStudentData);
@@ -713,10 +770,10 @@ export const studentService = {
     let existingQuery = supabase
       .from('students')
       .select('id, schoolId, classId')
-      .eq('id', id);
+      .eq('id', validId);
 
-    if (schoolId) {
-      existingQuery = existingQuery.eq('schoolId', schoolId);
+    if (validSchoolId) {
+      existingQuery = existingQuery.eq('schoolId', validSchoolId);
     }
 
     const { data: existingStudent, error: fetchError } = await existingQuery.single();
@@ -728,7 +785,7 @@ export const studentService = {
       const { error: updateError } = await supabase
         .from('students')
         .update(studentData)
-        .eq('id', id)
+        .eq('id', validId)
         .eq('schoolId', trustedSchoolId);
 
       if (updateError) throw handleStudentDbError(updateError);
@@ -746,7 +803,7 @@ export const studentService = {
         const { error: deleteAllParentsError } = await supabase
           .from('student_parents')
           .delete()
-          .eq('studentId', id)
+          .eq('studentId', validId)
           .eq('schoolId', trustedSchoolId);
 
         if (deleteAllParentsError) throw handleStudentDbError(deleteAllParentsError);
@@ -755,7 +812,7 @@ export const studentService = {
         const { error: deleteRemovedError } = await supabase
           .from('student_parents')
           .delete()
-          .eq('studentId', id)
+          .eq('studentId', validId)
           .eq('schoolId', trustedSchoolId)
           .not('relation', 'in', `(${activeRelations.join(',')})`);
 
@@ -763,7 +820,7 @@ export const studentService = {
 
         const parentsData = normalizedParents.map((p) => ({
           ...p,
-          studentId: id,
+          studentId: validId,
           schoolId: trustedSchoolId,
         }));
 
@@ -784,7 +841,7 @@ export const studentService = {
         .upsert(
           {
             ...normalizedEco,
-            studentId: id,
+            studentId: validId,
             schoolId: trustedSchoolId,
           },
           { onConflict: 'studentId' }
@@ -797,62 +854,90 @@ export const studentService = {
       'classId' in studentData
         ? (studentData.classId as string | null)
         : existingStudent.classId;
-    await syncActiveClassHistory(trustedSchoolId, id, nextClassId);
+    await syncActiveClassHistory(trustedSchoolId, validId, nextClassId);
 
-    return this.getById(id, trustedSchoolId);
+    return this.getById(validId, trustedSchoolId);
   },
 
   async delete(id: string, schoolId?: string): Promise<ApiResponse<void>> {
-    let query = supabase.from('students').delete().eq('id', id);
-    if (schoolId) {
-      query = query.eq('schoolId', schoolId);
+    const validId = assertValidUuid(id);
+    const validSchoolId = normalizeStudentSchoolId(schoolId);
+
+    let query = supabase.from('students').delete().eq('id', validId);
+    if (validSchoolId) {
+      query = query.eq('schoolId', validSchoolId);
     }
 
-    const { error } = await query;
+    // Gunakan .select('id') untuk memastikan baris benar-benar terhapus & tidak ditolak RLS
+    const { data, error } = await query.select('id');
     if (error) {
       if (error.message.includes('student_bills') || error.code === '23503') {
         throw new Error(
-          'Siswa tidak dapat dihapus karena masih memiliki riwayat tagihan/akademik.'
+          'Siswa tidak dapat dihapus karena masih memiliki riwayat tagihan atau akademik.'
         );
       }
       throw handleStudentDbError(error);
+    }
+
+    if (!data || data.length === 0) {
+      throw new Error(
+        'Data siswa gagal dihapus. Pastikan data masih ada atau Anda memiliki peran Admin / Kepala Sekolah.'
+      );
     }
 
     return { success: true, data: undefined, message: 'Siswa berhasil dihapus' };
   },
 
   async deleteMany(ids: string[], schoolId?: string): Promise<ApiResponse<{ deleted: number }>> {
-    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    const validSchoolId = normalizeStudentSchoolId(schoolId);
+    const uniqueIds = Array.from(
+      new Set(
+        ids
+          .map((item) => (typeof item === 'string' ? item.trim() : ''))
+          .filter((item) => UUID_REGEX.test(item))
+      )
+    );
+
     if (uniqueIds.length === 0) {
-      return { success: true, data: { deleted: 0 }, message: 'Tidak ada siswa yang dipilih' };
+      return { success: true, data: { deleted: 0 }, message: 'Tidak ada siswa valid yang dipilih' };
     }
+
+    let totalDeleted = 0;
 
     for (let i = 0; i < uniqueIds.length; i += BULK_DELETE_CHUNK_SIZE) {
       const chunk = uniqueIds.slice(i, i + BULK_DELETE_CHUNK_SIZE);
       let query = supabase.from('students').delete().in('id', chunk);
-      if (schoolId) {
-        query = query.eq('schoolId', schoolId);
+      if (validSchoolId) {
+        query = query.eq('schoolId', validSchoolId);
       }
 
-      const { error } = await query;
+      const { data, error } = await query.select('id');
       if (error) {
         if (error.message.includes('student_bills') || error.code === '23503') {
           throw new Error(
-            'Sebagian/seluruh siswa terpilih tidak dapat dihapus karena masih memiliki riwayat tagihan atau akademik.'
+            'Sebagian atau seluruh siswa terpilih tidak dapat dihapus karena masih memiliki riwayat tagihan atau akademik.'
           );
         }
         throw handleStudentDbError(error);
       }
+      totalDeleted += data?.length ?? 0;
+    }
+
+    if (totalDeleted === 0) {
+      throw new Error(
+        'Tidak ada data siswa yang berhasil dihapus. Periksa hak akses Anda (khusus Admin / Kepala Sekolah).'
+      );
     }
 
     return {
       success: true,
-      data: { deleted: uniqueIds.length },
-      message: `${uniqueIds.length} data siswa berhasil dihapus`,
+      data: { deleted: totalDeleted },
+      message: `${totalDeleted} data siswa berhasil dihapus`,
     };
   },
 
   async exportAll(schoolId?: string): Promise<ApiResponse<StudentDetail[]>> {
+    const validSchoolId = normalizeStudentSchoolId(schoolId);
     const allRows: RawStudentRow[] = [];
     const batchSize = 1000;
 
@@ -863,7 +948,7 @@ export const studentService = {
         .order('fullName', { ascending: true })
         .range(from, from + batchSize - 1);
 
-      if (schoolId) query = query.eq('schoolId', schoolId);
+      if (validSchoolId) query = query.eq('schoolId', validSchoolId);
 
       const { data, error } = await query;
       if (error) throw handleStudentDbError(error);
@@ -899,13 +984,13 @@ export const studentService = {
   },
 
   async deleteAll(schoolId: string): Promise<ApiResponse<void>> {
-    if (!schoolId) throw new Error('School ID tidak valid');
+    const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
 
-    const { error } = await supabase.from('students').delete().eq('schoolId', schoolId);
+    const { error } = await supabase.from('students').delete().eq('schoolId', validSchoolId);
     if (error) {
       if (error.message.includes('student_bills') || error.code === '23503') {
         throw new Error(
-          'Tidak bisa dikosongkan karena masih ada riwayat Tagihan/Pembayaran siswa.'
+          'Data siswa tidak dapat dikosongkan karena masih ada riwayat tagihan atau pembayaran siswa.'
         );
       }
       throw handleStudentDbError(error);
@@ -918,12 +1003,13 @@ export const studentService = {
     payload: StudentBulkImportItem[]
   ): Promise<ApiResponse<StudentBulkImportResult>> {
     if (!payload || payload.length === 0) {
-      throw new Error('Payload import kosong.');
+      throw new Error('Data impor siswa kosong.');
     }
 
     const sanitizedBatch = payload.map((item, idx) => {
-      if (!item.schoolId) {
-        throw new Error(`Impor gagal pada baris ke-${idx + 1}: School ID tidak valid.`);
+      const validItemSchoolId = normalizeStudentSchoolId(item.schoolId);
+      if (!validItemSchoolId) {
+        throw new Error(`Impor gagal pada baris ke-${idx + 1}: Identitas sekolah tidak valid.`);
       }
 
       const { parents, economic, ...rest } = item;
@@ -931,6 +1017,7 @@ export const studentService = {
 
       return {
         ...normalizedCore,
+        schoolId: validItemSchoolId,
         parents: parents
           ? parents
               .filter((p) => Boolean(p.fullName?.trim()))

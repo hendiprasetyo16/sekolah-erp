@@ -263,17 +263,19 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
 };
 
 // ============================================================================
-// ERROR HANDLER POSTGRESQL
+// ERROR HANDLER POSTGRESQL & JARINGAN
 // ============================================================================
 const handleDbError = (error: unknown): Error => {
   const pgError = error as PostgrestError;
-  let message = pgError?.message || 'Terjadi kesalahan pada database';
+  let message = pgError?.message || 'Terjadi kesalahan saat memproses data guru.';
+  const lowerMsg = message.toLowerCase();
 
   const rowPrefixMatch = message.match(/(Impor gagal pada baris ke-\d+:)/i);
   const rowPrefix = rowPrefixMatch ? `${rowPrefixMatch[1]} ` : '';
 
-  if (pgError?.code === '23505' || message.includes('unique constraint')) {
-    const lowerMsg = message.toLowerCase();
+  if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+    message = 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.';
+  } else if (pgError?.code === '23505' || lowerMsg.includes('unique constraint')) {
     if (lowerMsg.includes('nuptk')) {
       message = `${rowPrefix}NUPTK tersebut sudah terdaftar pada guru lain di sekolah ini.`;
     } else if (lowerMsg.includes('nik')) {
@@ -284,16 +286,16 @@ const handleDbError = (error: unknown): Error => {
       message = `${rowPrefix}Data guru tersebut sudah terdaftar (Duplikat).`;
     }
   } else if (pgError?.code === '23502') {
-    message = `${rowPrefix}Terdapat kolom wajib yang bernilai kosong (NOT NULL constraint).`;
+    message = `${rowPrefix}Terdapat kolom wajib yang masih kosong. Pastikan semua data wajib sudah terisi.`;
   } else if (pgError?.code === '23503') {
     message =
       'Operasi gagal karena data guru masih terhubung dengan modul lain (wali kelas, jadwal pelajaran, atau presensi).';
   } else if (pgError?.code === '23514') {
-    message = `${rowPrefix}Nilai input tidak memenuhi aturan validasi database (cek Gaji Pokok >= 0 atau Jam Mengajar > 0).`;
+    message = `${rowPrefix}Nilai input tidak memenuhi aturan validasi data (cek Gaji Pokok >= 0 atau Jam Mengajar > 0).`;
   } else if (pgError?.code === '22007' || pgError?.code === '22008') {
     message = `${rowPrefix}Format tanggal tidak valid. Gunakan format YYYY-MM-DD.`;
   } else if (pgError?.code === '22P02') {
-    message = `${rowPrefix}Format input angka, boolean, atau ID tidak valid.`;
+    message = `${rowPrefix}Format input angka, status, atau ID tidak valid.`;
   } else if (pgError?.code === '42501') {
     message = 'Anda tidak memiliki hak akses untuk melakukan operasi ini.';
   } else if (pgError?.code === 'PGRST116') {
@@ -437,7 +439,7 @@ export const teacherService = {
   async create(payload: CreateTeacherPayload): Promise<ApiResponse<TeacherDetail>> {
     const validSchoolId = normalizeTeacherSchoolId(payload.schoolId);
     if (!validSchoolId) {
-      throw new Error('Identitas sekolah (schoolId) tidak valid.');
+      throw new Error('Identitas sekolah tujuan tidak valid.');
     }
 
     const normalized = normalizeTeacherFields(
@@ -606,8 +608,7 @@ export const teacherService = {
   },
 
   async deleteAll(schoolId: string): Promise<ApiResponse<void>> {
-    const validSchoolId = normalizeTeacherSchoolId(schoolId);
-    if (!validSchoolId) throw new Error('School ID tidak valid');
+    const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
 
     const { error } = await supabase
       .from('teachers')
@@ -659,7 +660,7 @@ export const teacherService = {
     payload: TeacherBulkImportItem[]
   ): Promise<ApiResponse<TeacherBulkImportResult>> {
     if (!payload || payload.length === 0) {
-      throw new Error('Payload import kosong.');
+      throw new Error('Data impor guru kosong.');
     }
 
     const sanitizedBatch = payload.map((item) => {
