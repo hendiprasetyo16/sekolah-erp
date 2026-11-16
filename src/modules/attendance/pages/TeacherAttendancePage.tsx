@@ -33,6 +33,8 @@ import {
   TrendingUp,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   CalendarDays,
   Settings2,
 } from 'lucide-react';
@@ -45,7 +47,7 @@ import {
 } from '../utils/indonesianHolidays';
 
 // ============================================================================
-// PARAMETER CADANGAN & PENGATURAN KAMERA / FORMULIR
+// PARAMETER CADANGAN & PENGATURAN KAMERA / FORMULIR / AUTO-HIDE HEADER
 // ============================================================================
 const FALLBACK_WORK_START_TIME = '07:30';
 const FALLBACK_WORK_END_TIME = '14:30';
@@ -54,6 +56,8 @@ const REQUIRE_SELFIE_ON_CHECKIN = true;
 const REQUIRE_SELFIE_ON_CHECKOUT = true;
 const MIN_REASON_LENGTH = 15;
 const FINGERPRINT_GLOW_DURATION_MS = 550; // Durasi efek cahaya menyala saat tombol sidik jari disentuh (milidetik)
+const TOP_REVEAL_SWIPE_THRESHOLD = 45; // Jarak usapan ke bawah (px) di posisi mentok atas untuk memunculkan header
+const HIDE_HEADER_SCROLL_THRESHOLD = 25; // Jarak scroll ke bawah (px) untuk menyembunyikan header kembali
 
 const DEFAULT_DAILY_QUOTES: Array<{ quote: string; author?: string }> = [
   {
@@ -220,6 +224,10 @@ export function TeacherAttendancePage() {
   const isAdminOrSuperAdmin =
     user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
+  // State Sembunyikan / Tampilkan Header Utama Aplikasi (Default: tersembunyi agar tampilan presensi penuh)
+  const [isTopHeaderVisible, setIsTopHeaderVisible] = useState<boolean>(false);
+  const touchStartYRef = useRef<number | null>(null);
+
   // State Simulasi Super Admin
   const [simSchools, setSimSchools] = useState<Array<{ id: string; name: string }>>([]);
   const [simSchoolId, setSimSchoolId] = useState<string>('');
@@ -305,6 +313,78 @@ export function TeacherAttendancePage() {
     setToast({ type, message });
     setTimeout(() => setToast(null), 4500);
   };
+
+  // ============================================================================
+  // LOGIKA SEMBUNYIKAN / MUNCULKAN HEADER ATAS APLIKASI
+  // ============================================================================
+  useEffect(() => {
+    if (!isTopHeaderVisible) {
+      document.body.classList.add('attendance-hide-header');
+    } else {
+      document.body.classList.remove('attendance-hide-header');
+    }
+
+    // Pastikan header kembali normal saat keluar dari halaman presensi
+    return () => {
+      document.body.classList.remove('attendance-hide-header');
+    };
+  }, [isTopHeaderVisible]);
+
+  useEffect(() => {
+    // 1. Deteksi scroll roda mouse ke atas saat sudah mentok di paling atas (Komputer)
+    const handleWheel = (e: WheelEvent) => {
+      if (window.scrollY <= 2 && e.deltaY < -15) {
+        setIsTopHeaderVisible(true);
+      } else if (e.deltaY > 15 && window.scrollY > HIDE_HEADER_SCROLL_THRESHOLD) {
+        setIsTopHeaderVisible(false);
+      }
+    };
+
+    // 2. Deteksi usapan jari ke bawah saat sudah mentok di paling atas (HP / Layar Sentuh)
+    const handleTouchStart = (e: TouchEvent) => {
+      if (window.scrollY <= 2 && e.touches.length === 1) {
+        touchStartYRef.current = e.touches[0].clientY;
+      } else {
+        touchStartYRef.current = null;
+      }
+    };
+
+    const handleTouchMove = (e: TouchEvent) => {
+      if (touchStartYRef.current === null || e.touches.length !== 1) return;
+      const currentY = e.touches[0].clientY;
+      const deltaY = currentY - touchStartYRef.current;
+
+      if (window.scrollY <= 2 && deltaY > TOP_REVEAL_SWIPE_THRESHOLD) {
+        setIsTopHeaderVisible(true);
+        touchStartYRef.current = null;
+      }
+    };
+
+    const handleTouchEnd = () => {
+      touchStartYRef.current = null;
+    };
+
+    // 3. Sembunyikan header kembali ketika halaman di-scroll ke bawah
+    const handleScroll = () => {
+      if (window.scrollY > HIDE_HEADER_SCROLL_THRESHOLD) {
+        setIsTopHeaderVisible(false);
+      }
+    };
+
+    window.addEventListener('wheel', handleWheel, { passive: true });
+    window.addEventListener('touchstart', handleTouchStart, { passive: true });
+    window.addEventListener('touchmove', handleTouchMove, { passive: true });
+    window.addEventListener('touchend', handleTouchEnd, { passive: true });
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
+    return () => {
+      window.removeEventListener('wheel', handleWheel);
+      window.removeEventListener('touchstart', handleTouchStart);
+      window.removeEventListener('touchmove', handleTouchMove);
+      window.removeEventListener('touchend', handleTouchEnd);
+      window.removeEventListener('scroll', handleScroll);
+    };
+  }, []);
 
   // Fungsi memicu cahaya menyala pada tombol sidik jari saat disentuh
   const triggerFingerprintGlow = () => {
@@ -1236,10 +1316,61 @@ export function TeacherAttendancePage() {
       : 'bg-emerald-400';
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] pb-32 max-w-xl md:max-w-2xl mx-auto px-1">
+    <div
+      className={`min-h-[calc(100vh-1rem)] pb-28 max-w-xl md:max-w-2xl mx-auto px-1 transition-all duration-300 ${!isTopHeaderVisible ? '-mt-2 sm:-mt-3' : 'mt-0'
+        }`}
+    >
+      {/* Aturan CSS untuk menyembunyikan header utama aplikasi secara mulus */}
+      <style>{`
+        body.attendance-hide-header header {
+          max-height: 0px !important;
+          min-height: 0px !important;
+          height: 0px !important;
+          padding-top: 0px !important;
+          padding-bottom: 0px !important;
+          margin: 0px !important;
+          border-width: 0px !important;
+          opacity: 0 !important;
+          overflow: hidden !important;
+          pointer-events: none !important;
+          transform: translateY(-100%);
+          transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        body:not(.attendance-hide-header) header {
+          transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+      `}</style>
+
+      {/* Pegangan Kecil (Pull Handle) di Bagian Paling Atas untuk Memunculkan / Menyembunyikan Header */}
+      <div className="flex justify-center mb-1.5">
+        <button
+          type="button"
+          onClick={() => setIsTopHeaderVisible((prev) => !prev)}
+          className="group inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-slate-200/75 dark:bg-white/10 hover:bg-slate-300/90 dark:hover:bg-white/20 text-[10px] font-medium text-slate-600 dark:text-slate-300 transition shadow-2xs"
+          title={
+            isTopHeaderVisible
+              ? 'Sembunyikan header atas'
+              : 'Tampilkan header atas (atau usap ke bawah / scroll ke atas di posisi paling atas)'
+          }
+        >
+          <span className="w-5 h-1 rounded-full bg-slate-400/80 dark:bg-slate-400/60 group-hover:bg-amber-500 transition" />
+          {isTopHeaderVisible ? (
+            <>
+              <ChevronUp size={11} />
+              <span>Sembunyikan Header</span>
+            </>
+          ) : (
+            <>
+              <ChevronDown size={11} />
+              <span>Menu Atas</span>
+            </>
+          )}
+        </button>
+      </div>
+
       {/* Banner Simulasi Khusus SUPER_ADMIN */}
       {isSuperAdmin && (
-        <div className="mb-4 p-3 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex flex-col gap-2.5">
+        <div className="mb-3 p-3 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex flex-col gap-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-300">
               <FlaskConical size={16} />
@@ -1304,7 +1435,7 @@ export function TeacherAttendancePage() {
             initial={{ opacity: 0, y: -16 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -16 }}
-            className={`mb-4 p-3.5 rounded-2xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
+            className={`mb-3 p-3.5 rounded-2xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
               ? 'bg-emerald-600 text-white border-emerald-500'
               : 'bg-red-600 text-white border-red-500'
               }`}
@@ -1363,9 +1494,7 @@ export function TeacherAttendancePage() {
               </button>
             </div>
 
-            {/* KARTU PROFIL & JAM:
-                - Di HP (< 640px): Profil melebar penuh di atas, Tingkat Kehadiran & Jam berdampingan di bawah.
-                - Di Komputer (>= 640px): Profil + Tingkat Kehadiran di kiri (col-span-8), Jam vertikal tinggi di kanan (col-span-4) seperti desain awal. */}
+            {/* KARTU PROFIL & JAM */}
             <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80">
               <div className="grid grid-cols-12 gap-3 items-stretch">
                 {/* Sisi Kiri (Di HP: penuh 12 kolom; Di Komputer: 8 kolom) */}
@@ -1435,7 +1564,6 @@ export function TeacherAttendancePage() {
                           </div>
                         </div>
 
-                        {/* Angka persentase di sebelah kanan saat mode Komputer */}
                         <span className="hidden sm:inline-block text-xl font-extrabold text-slate-900">
                           {reportStats.percentage}%
                         </span>
@@ -1498,7 +1626,7 @@ export function TeacherAttendancePage() {
                   </div>
                 </div>
 
-                {/* JAM DIGITAL KHUSUS LAYAR KOMPUTER (>= 640px) — Posisi kanan penuh seperti di awal */}
+                {/* JAM DIGITAL KHUSUS LAYAR KOMPUTER (>= 640px) */}
                 <div className="hidden sm:flex sm:col-span-4 rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-3 px-2.5 flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
                   <div className="pointer-events-none absolute -bottom-4 -right-4 w-20 h-20 rounded-full bg-amber-300/20" />
 
