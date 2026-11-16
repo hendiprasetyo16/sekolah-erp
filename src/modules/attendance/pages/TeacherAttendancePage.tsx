@@ -51,10 +51,11 @@ import {
 // ============================================================================
 const FALLBACK_WORK_START_TIME = '07:30'; // Jam masuk cadangan jika belum diatur di profil sekolah
 const FALLBACK_WORK_END_TIME = '14:30';   // Jam pulang cadangan jika belum diatur di profil sekolah
+const CHECKOUT_TOLERANCE_MINUTES = 30;    // Toleransi waktu pulang (menit). Lewat batas ini -> "Melewati jadwal pulang"
 const DEFAULT_RADIUS_METERS = 100;        // Radius GPS cadangan (dalam meter)
 const REQUIRE_SELFIE_ON_CHECKIN = true;   // Wajib selfie saat datang (true / false)
 const REQUIRE_SELFIE_ON_CHECKOUT = true;  // Wajib selfie saat pulang (true / false)
-const RECORD_EARLY_CHECKOUT_NOTE = true;  // Catat otomatis keterangan "Pulang Lebih Awal" ke log
+const RECORD_CHECKOUT_STATUS_NOTE = true; // Catat otomatis keterangan pulang lebih awal / melewati jadwal ke log
 const MIN_REASON_LENGTH = 15;             // Minimal karakter alasan izin/sakit
 const FINGERPRINT_GLOW_DURATION_MS = 550; // Durasi efek cahaya tombol sidik jari (ms)
 const TOP_REVEAL_SWIPE_THRESHOLD = 45;    // Jarak usap ke bawah (px) untuk memunculkan header
@@ -98,6 +99,7 @@ const NAMA_HARI_SINGKAT = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
 type SubView = 'beranda' | 'laporan' | 'peta' | 'izin' | 'log';
 type LeaveCategory = 'DINAS_LUAR' | 'IZIN' | 'SAKIT';
+type CheckOutTimingStatus = 'EARLY' | 'ON_TIME' | 'OVERTIME';
 
 interface TeacherProfile {
   id: string;
@@ -130,9 +132,11 @@ interface AttendanceRecord {
   checkInLat?: number | null;
   checkInLng?: number | null;
   checkInDistance?: number | null;
+  checkInSelfieUrl?: string | null;
   checkOutLat?: number | null;
   checkOutLng?: number | null;
   checkOutDistance?: number | null;
+  checkOutSelfieUrl?: string | null;
   notes?: string | null;
   leaveType?: string | null;
   attachmentUrl?: string | null;
@@ -211,11 +215,27 @@ function formatDeadlineWithTolerance(
   return `${finalH}:${finalM}`;
 }
 
-// Mengecek apakah waktu pulang lebih awal dari jadwal jam pulang sekolah
+function formatDurationMinutes(totalMinutes: number): string {
+  const hours = Math.floor(totalMinutes / 60);
+  const mins = totalMinutes % 60;
+  if (hours > 0) {
+    return mins > 0 ? `${hours} jam ${mins} menit` : `${hours} jam`;
+  }
+  return `${mins} menit`;
+}
+
+// Mengevaluasi ketepatan waktu pulang: Lebih Awal, Tepat Waktu, atau Melewati Jadwal
 function evaluateCheckOutTiming(
   checkOutDate: Date,
-  workEndTime: string
-): { isEarly: boolean; diffMinutes: number; formattedDiff: string } {
+  workEndTime: string,
+  toleranceMinutes: number = CHECKOUT_TOLERANCE_MINUTES
+): {
+  status: CheckOutTimingStatus;
+  isEarly: boolean;
+  isOvertime: boolean;
+  diffMinutes: number;
+  formattedDiff: string;
+} {
   const [endHStr, endMStr] = workEndTime.split(':');
   const endH = Number(endHStr) || 14;
   const endM = Number(endMStr) ?? 30;
@@ -223,22 +243,44 @@ function evaluateCheckOutTiming(
   const scheduledEnd = new Date(checkOutDate);
   scheduledEnd.setHours(endH, endM, 0, 0);
 
+  const latestOnTime = new Date(scheduledEnd);
+  latestOnTime.setMinutes(
+    latestOnTime.getMinutes() + Math.max(0, toleranceMinutes),
+    59,
+    999
+  );
+
   if (checkOutDate < scheduledEnd) {
     const diffMs = scheduledEnd.getTime() - checkOutDate.getTime();
     const diffMinutes = Math.max(1, Math.ceil(diffMs / 60000));
-    const hours = Math.floor(diffMinutes / 60);
-    const mins = diffMinutes % 60;
-    const formattedDiff =
-      hours > 0
-        ? mins > 0
-          ? `${hours} jam ${mins} menit`
-          : `${hours} jam`
-        : `${mins} menit`;
-
-    return { isEarly: true, diffMinutes, formattedDiff };
+    return {
+      status: 'EARLY',
+      isEarly: true,
+      isOvertime: false,
+      diffMinutes,
+      formattedDiff: formatDurationMinutes(diffMinutes),
+    };
   }
 
-  return { isEarly: false, diffMinutes: 0, formattedDiff: '' };
+  if (checkOutDate > latestOnTime) {
+    const diffMs = checkOutDate.getTime() - scheduledEnd.getTime();
+    const diffMinutes = Math.max(1, Math.floor(diffMs / 60000));
+    return {
+      status: 'OVERTIME',
+      isEarly: false,
+      isOvertime: true,
+      diffMinutes,
+      formattedDiff: formatDurationMinutes(diffMinutes),
+    };
+  }
+
+  return {
+    status: 'ON_TIME',
+    isEarly: false,
+    isOvertime: false,
+    diffMinutes: 0,
+    formattedDiff: '',
+  };
 }
 
 function isMissingColumnSchemaError(err: any): boolean {
@@ -576,7 +618,6 @@ export function TeacherAttendancePage() {
   }, [isSuperAdmin, activeSchoolId]);
 
   // Muat Data Sekolah, Profil Guru, & Riwayat Presensi
-  // Menggunakan dependency `todayStr` agar saat hari berganti keesokan harinya, data otomatis di-reset
   const loadTeacherAndAttendance = useCallback(async () => {
     if (!activeSchoolId || !user?.id) return;
     setIsLoadingData(true);
@@ -834,14 +875,21 @@ export function TeacherAttendancePage() {
     todayRecord && ['IZIN', 'SAKIT'].includes(todayRecord.status)
   );
 
-  // Mengecek apakah waktu check-out yang tercatat hari ini lebih awal dari jam pulang
-  const todayCheckOutEarlyInfo = useMemo(() => {
+  // Mengecek status waktu check-out hari ini (Lebih Awal, Tepat Waktu, atau Melewati Jadwal)
+  const todayCheckOutTimingInfo = useMemo(() => {
     if (!todayRecord?.checkOutTime) {
-      return { isEarly: false, diffMinutes: 0, formattedDiff: '' };
+      return {
+        status: 'ON_TIME' as CheckOutTimingStatus,
+        isEarly: false,
+        isOvertime: false,
+        diffMinutes: 0,
+        formattedDiff: '',
+      };
     }
     return evaluateCheckOutTiming(
       new Date(todayRecord.checkOutTime),
-      effectiveWorkEndTime
+      effectiveWorkEndTime,
+      CHECKOUT_TOLERANCE_MINUTES
     );
   }, [todayRecord?.checkOutTime, effectiveWorkEndTime]);
 
@@ -977,7 +1025,7 @@ export function TeacherAttendancePage() {
   };
 
   // ============================================================================
-  // SIMPAN CHECK-IN / CHECK-OUT KE SUPABASE (DENGAN DETEKSI PULANG LEBIH AWAL)
+  // SIMPAN CHECK-IN / CHECK-OUT KE SUPABASE (DENGAN DETEKSI KETEPATAN PULANG)
   // ============================================================================
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
@@ -1061,6 +1109,7 @@ export function TeacherAttendancePage() {
             checkInTime: nowIso,
             checkInLat: userCoords.lat,
             checkInLng: userCoords.lng,
+            checkInSelfieUrl: finalUploadedPath,
           };
           const retry = await supabase.from('attendances').insert(fallbackPayload);
           error = retry.error;
@@ -1080,19 +1129,30 @@ export function TeacherAttendancePage() {
           throw new Error('Anda belum melakukan Check-In masuk hari ini.');
         }
 
-        // Cek apakah guru pulang lebih awal dari jadwal pulang sekolah
-        const earlyInfo = evaluateCheckOutTiming(nowObj, effectiveWorkEndTime);
+        // Evaluasi apakah pulang lebih awal, tepat waktu, atau melewati jadwal
+        const checkOutTiming = evaluateCheckOutTiming(
+          nowObj,
+          effectiveWorkEndTime,
+          CHECKOUT_TOLERANCE_MINUTES
+        );
         const currentTimeFormatted = nowObj.toLocaleTimeString('id-ID', {
           hour: '2-digit',
           minute: '2-digit',
         });
 
         let updatedNotes = todayRecord.notes ?? null;
-        if (earlyInfo.isEarly && RECORD_EARLY_CHECKOUT_NOTE) {
-          const earlyNote = `Pulang lebih awal pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, kurang ${earlyInfo.formattedDiff})`;
-          updatedNotes = updatedNotes
-            ? `${updatedNotes} | ${earlyNote}`
-            : earlyNote;
+        if (RECORD_CHECKOUT_STATUS_NOTE) {
+          if (checkOutTiming.isEarly) {
+            const earlyNote = `Pulang lebih awal pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, kurang ${checkOutTiming.formattedDiff})`;
+            updatedNotes = updatedNotes
+              ? `${updatedNotes} | ${earlyNote}`
+              : earlyNote;
+          } else if (checkOutTiming.isOvertime) {
+            const overtimeNote = `Pulang melewati jadwal pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, lewat ${checkOutTiming.formattedDiff})`;
+            updatedNotes = updatedNotes
+              ? `${updatedNotes} | ${overtimeNote}`
+              : overtimeNote;
+          }
         }
 
         const fullUpdatePayload: Record<string, any> = {
@@ -1109,10 +1169,11 @@ export function TeacherAttendancePage() {
           .update(fullUpdatePayload)
           .eq('id', todayRecord.id);
 
-        // Fallback aman: hanya update kolom inti (checkOutTime & notes) jika kolom GPS pulang belum ada di schema cache
+        // Fallback aman: tetap sertakan checkOutSelfieUrl agar foto pulang tidak hilang dari database
         if (error && isMissingColumnSchemaError(error)) {
           const safeCorePayload: Record<string, any> = {
             checkOutTime: nowIso,
+            ...(finalUploadedPath ? { checkOutSelfieUrl: finalUploadedPath } : {}),
             ...(updatedNotes ? { notes: updatedNotes } : {}),
           };
           const retry = await supabase
@@ -1124,15 +1185,20 @@ export function TeacherAttendancePage() {
 
         if (error) throw error;
 
-        if (earlyInfo.isEarly) {
+        if (checkOutTiming.isEarly) {
           showToast(
             'success',
-            `Check-Out tercatat (Status: Pulang Lebih Awal ${earlyInfo.formattedDiff} — jadwal pulang ${effectiveWorkEndTime}).`
+            `Check-Out tercatat (Status: Pulang Lebih Awal ${checkOutTiming.formattedDiff} — jadwal pulang ${effectiveWorkEndTime}).`
+          );
+        } else if (checkOutTiming.isOvertime) {
+          showToast(
+            'success',
+            `Check-Out tercatat (Melewati jadwal pulang ${checkOutTiming.formattedDiff} — jadwal pulang ${effectiveWorkEndTime}).`
           );
         } else {
           showToast(
             'success',
-            'Check-Out Pulang berhasil tercatat! Hati-hati di jalan.'
+            'Check-Out Pulang berhasil tercatat tepat waktu! Hati-hati di jalan.'
           );
         }
       }
@@ -1473,7 +1539,7 @@ export function TeacherAttendancePage() {
         }
       `}</style>
 
-      {/* Notifikasi Melayang di Lapisan Paling Depan (z-[60]) agar selalu terlihat di atas Modal */}
+      {/* Notifikasi Melayang di Lapisan Paling Depan (z-60) agar selalu terlihat di atas Modal */}
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -1962,7 +2028,8 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                      ? todayCheckOutEarlyInfo.isEarly
+                      ? todayCheckOutTimingInfo.isEarly ||
+                        todayCheckOutTimingInfo.isOvertime
                         ? 'bg-amber-200'
                         : 'bg-emerald-300'
                       : canCheckOut
@@ -1974,9 +2041,11 @@ export function TeacherAttendancePage() {
                     {!hasCheckedIn
                       ? 'Aktif setelah absen masuk'
                       : hasCheckedOut
-                        ? todayCheckOutEarlyInfo.isEarly
+                        ? todayCheckOutTimingInfo.isEarly
                           ? 'Status: Pulang Lebih Awal'
-                          : 'Selesai tepat waktu'
+                          : todayCheckOutTimingInfo.isOvertime
+                            ? 'Melewati jadwal pulang'
+                            : 'Selesai tepat waktu'
                         : 'Ketuk untuk absen pulang'}
                   </span>
                 </div>
@@ -2143,7 +2212,12 @@ export function TeacherAttendancePage() {
               <span>
                 Presensi Lengkap (Masuk {formatShortTime(todayRecord?.checkInTime)} •
                 Pulang {formatShortTime(todayRecord?.checkOutTime)}
-                {todayCheckOutEarlyInfo.isEarly ? ' — Pulang Lebih Awal' : ''})
+                {todayCheckOutTimingInfo.isEarly
+                  ? ' — Pulang Lebih Awal'
+                  : todayCheckOutTimingInfo.isOvertime
+                    ? ' — Melewati Jadwal Pulang'
+                    : ''}
+                )
               </span>
             </div>
           ) : attendancePhase === 'ON_LEAVE' ? (

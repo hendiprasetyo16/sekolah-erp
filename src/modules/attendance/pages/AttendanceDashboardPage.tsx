@@ -56,7 +56,7 @@ type TeacherSortKey =
 
 type StudentSortKey = 'fullName' | 'className' | 'nisn' | 'status' | 'time';
 
-// Memperluas tipe TeacherAttendance agar mendukung kolom Check-Out GPS & Selfie
+// Memperluas tipe TeacherAttendance agar mencakup kolom Check-Out GPS & Selfie
 type TeacherAttendanceWithCheckOut = TeacherAttendance & {
   checkOutSelfieUrl?: string | null;
   checkOutDistance?: number | null;
@@ -83,7 +83,6 @@ const STATUS_LABELS: Record<string, string> = {
   BELUM_ABSEN: 'Belum Absen',
 };
 
-// Menghitung tanggal batas retensi (misal: 2 tahun lalu dari hari ini, format YYYY-MM-DD)
 function getRetentionCutoffDate(years: number): string {
   const d = new Date();
   d.setFullYear(d.getFullYear() - years);
@@ -93,7 +92,7 @@ function getRetentionCutoffDate(years: number): string {
   return `${y}-${m}-${day}`;
 }
 
-// Fungsi bantuan untuk menghapus file di Supabase Storage secara bertahap (aman untuk banyak file)
+// Menghapus file di Supabase Storage secara bertahap (aman untuk banyak file)
 async function removeFilesFromStorage(paths: Array<string | null | undefined>) {
   const validPaths = Array.from(
     new Set(paths.filter((p): p is string => Boolean(p && p.trim())))
@@ -112,11 +111,6 @@ async function removeFilesFromStorage(paths: Array<string | null | undefined>) {
   }
 }
 
-/**
- * Dashboard Rekap Absensi Admin & Pimpinan
- * Fitur: Ringkasan Populasi Aktif, Pratinjau Foto Datang & Pulang, Sorting Kolom,
- * Hapus Satuan & Pembersihan Arsip > 2 Tahun beserta Galeri Foto (Super Admin)
- */
 export function AttendanceDashboardPage() {
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -230,7 +224,7 @@ export function AttendanceDashboardPage() {
       });
   }, [activeSchoolId]);
 
-  // 3. Muat Ringkasan & Data Absensi Siswa + Guru
+  // 3. Muat Ringkasan & Data Absensi Siswa + Guru (Termasuk kolom Check-Out GPS & Selfie)
   const loadData = useCallback(async () => {
     if (!activeSchoolId) return;
     setIsLoading(true);
@@ -248,9 +242,31 @@ export function AttendanceDashboardPage() {
           limit: 200,
         }),
       ]);
+
+      let enrichedTeachers = teachers.data as TeacherAttendanceWithCheckOut[];
+
+      // Pastikan kolom Check-Out GPS & Foto Pulang selalu ikut terbaca meskipun service belum diperbarui
+      if (enrichedTeachers.length > 0) {
+        const ids = enrichedTeachers.map((t) => t.id);
+        const { data: extraCols, error: extraErr } = await supabase
+          .from('attendances')
+          .select(
+            'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
+          )
+          .in('id', ids);
+
+        if (!extraErr && extraCols) {
+          const extraMap = new Map(extraCols.map((row: any) => [row.id, row]));
+          enrichedTeachers = enrichedTeachers.map((item) => {
+            const extra = extraMap.get(item.id);
+            return extra ? { ...item, ...extra } : item;
+          });
+        }
+      }
+
       setSummary(sum);
       setStudentRecords(students.data);
-      setTeacherRecords(teachers.data as TeacherAttendanceWithCheckOut[]);
+      setTeacherRecords(enrichedTeachers);
     } catch (err) {
       console.error('[AttendanceDashboard] Load error:', err);
     } finally {
@@ -304,7 +320,7 @@ export function AttendanceDashboardPage() {
     );
   };
 
-  // Fungsi Toggle Sorting Header Kolom (Klik 1: ASC ▲ -> Klik 2: DESC ▼ -> Klik 3: Reset)
+  // Fungsi Toggle Sorting Header Kolom
   const handleSortTeacher = (key: TeacherSortKey) => {
     setTeacherSort((prev) => {
       if (!prev || prev.key !== key) return { key, direction: 'asc' };
@@ -448,7 +464,6 @@ export function AttendanceDashboardPage() {
     if (!deleteTarget || !isSuperAdmin) return;
     setIsDeletingRow(true);
     try {
-      // Ambil ulang alamat file langsung dari database agar foto datang, foto pulang, & lampiran pasti terhapus
       const { data: latestRow } = await supabase
         .from('attendances')
         .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
@@ -581,7 +596,6 @@ export function AttendanceDashboardPage() {
     if (!isSuperAdmin) return;
     setIsPurgingOldRecords(true);
     try {
-      // 1. Ambil daftar seluruh foto selfie datang, pulang, dan lampiran izin yang akan dihapus
       let fetchFilesQuery = supabase
         .from('attendances')
         .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
@@ -600,7 +614,6 @@ export function AttendanceDashboardPage() {
 
       await removeFilesFromStorage(pathsToRemove);
 
-      // 2. Hapus baris database yang lebih tua dari cutoffDate
       let deleteQuery = supabase
         .from('attendances')
         .delete()
@@ -1120,7 +1133,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortStudent('fullName')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Nama Siswa"
                       >
                         Nama Siswa
                         {renderSortIcon(
@@ -1131,7 +1143,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortStudent('className')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Kelas"
                       >
                         Kelas
                         {renderSortIcon(
@@ -1142,7 +1153,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortStudent('nisn')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan NISN"
                       >
                         NISN
                         {renderSortIcon(
@@ -1153,7 +1163,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortStudent('status')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Status"
                       >
                         Status
                         {renderSortIcon(
@@ -1164,7 +1173,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortStudent('time')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Waktu"
                       >
                         Waktu
                         {renderSortIcon(
@@ -1240,7 +1248,7 @@ export function AttendanceDashboardPage() {
           </div>
         )}
 
-        {/* Teachers Tab (Dengan Pratinjau Foto Datang & Pulang) */}
+        {/* Teachers Tab (1 Kolom Foto Selfie dengan Tombol Bertumpuk: Datang di atas, Pulang di bawah) */}
         {activeTab === 'teachers' && (
           <div className="data-card">
             {isLoading ? (
@@ -1261,7 +1269,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortTeacher('fullName')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Nama Guru / PTK"
                       >
                         Nama Guru / PTK
                         {renderSortIcon(
@@ -1272,7 +1279,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortTeacher('nip')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan NIP / NUPTK"
                       >
                         NIP / NUPTK
                         {renderSortIcon(
@@ -1283,7 +1289,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortTeacher('status')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Status"
                       >
                         Status
                         {renderSortIcon(
@@ -1294,7 +1299,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortTeacher('checkInTime')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan jam Check-In"
                       >
                         Check-In
                         {renderSortIcon(
@@ -1305,7 +1309,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortTeacher('checkOutTime')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan jam Check-Out"
                       >
                         Check-Out
                         {renderSortIcon(
@@ -1316,7 +1319,6 @@ export function AttendanceDashboardPage() {
                       <th
                         onClick={() => handleSortTeacher('checkInDistance')}
                         className="cursor-pointer select-none hover:text-primary transition"
-                        title="Klik untuk mengurutkan Jarak"
                       >
                         Lokasi & Jarak
                         {renderSortIcon(
@@ -1424,27 +1426,39 @@ export function AttendanceDashboardPage() {
                               '-'
                             )}
                           </td>
+
+                          {/* 1 Kolom Foto Selfie: Tombol Datang di atas & Tombol Pulang di bawah */}
                           <td>
                             {hasAnyPhoto ? (
-                              <button
-                                type="button"
-                                onClick={() => handlePreviewSelfie(record)}
-                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-primary/15 text-primary hover:bg-primary/25 transition"
-                                title="Lihat foto selfie datang & pulang"
-                              >
-                                <Camera size={13} />
-                                <span>
-                                  {hasInPhoto && hasOutPhoto
-                                    ? 'Datang & Pulang'
-                                    : hasInPhoto
-                                      ? 'Foto Datang'
-                                      : 'Foto Pulang'}
-                                </span>
-                              </button>
+                              <div className="flex flex-col gap-1.5 items-start min-w-28">
+                                {hasInPhoto && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePreviewSelfie(record)}
+                                    className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-primary/15 text-primary hover:bg-primary/25 transition"
+                                    title="Lihat foto selfie datang"
+                                  >
+                                    <Camera size={12} />
+                                    <span>Foto Datang</span>
+                                  </button>
+                                )}
+                                {hasOutPhoto && (
+                                  <button
+                                    type="button"
+                                    onClick={() => handlePreviewSelfie(record)}
+                                    className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 transition"
+                                    title="Lihat foto selfie pulang"
+                                  >
+                                    <Camera size={12} />
+                                    <span>Foto Pulang</span>
+                                  </button>
+                                )}
+                              </div>
                             ) : (
                               <span className="text-xs opacity-40">-</span>
                             )}
                           </td>
+
                           <td className="text-xs opacity-75">
                             {record.notes ?? '-'}
                           </td>
@@ -1587,7 +1601,6 @@ export function AttendanceDashboardPage() {
                   menjaga performa database dan kapasitas galeri tetap ringan.
                 </p>
 
-                {/* Pilihan Cakupan Pembersihan */}
                 <div>
                   <label className="block font-semibold mb-1.5">
                     Cakupan Data yang Dibersihkan:
@@ -1616,7 +1629,6 @@ export function AttendanceDashboardPage() {
                   </div>
                 </div>
 
-                {/* Status Jumlah Arsip Ditemukan */}
                 <div className="p-3.5 rounded-xl bg-muted/50 border border-border flex items-center justify-between">
                   <span>Arsip lama ditemukan:</span>
                   {isCheckingOldRecords ? (
@@ -1631,7 +1643,6 @@ export function AttendanceDashboardPage() {
                 </div>
               </div>
 
-              {/* Tombol Backup CSV & Hapus */}
               <div className="flex flex-col sm:flex-row justify-between gap-2 pt-2 border-t border-border">
                 <button
                   type="button"

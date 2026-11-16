@@ -55,6 +55,10 @@ export interface TeacherAttendance {
   checkInDistance?: number | null;
   isCheckInMock?: boolean;
   checkInSelfieUrl?: string | null;
+  checkOutLat?: number | null;
+  checkOutLng?: number | null;
+  checkOutDistance?: number | null;
+  checkOutSelfieUrl?: string | null;
   notes?: string | null;
   createdAt: string;
   teacher?: {

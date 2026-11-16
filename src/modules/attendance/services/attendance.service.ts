@@ -157,11 +157,17 @@ export const attendanceService = {
     teacherId: string;
     date: string;
     selfiePath?: string | null;
+    selfiePaths?: Array<string | null | undefined>;
   }) {
-    if (params.selfiePath && !params.selfiePath.startsWith('http')) {
+    const pathsToDelete = [
+      params.selfiePath,
+      ...(params.selfiePaths ?? []),
+    ].filter((p): p is string => Boolean(p && !p.startsWith('http')));
+
+    if (pathsToDelete.length > 0) {
       await supabase.storage
         .from('attendance-selfies')
-        .remove([params.selfiePath]);
+        .remove(Array.from(new Set(pathsToDelete)));
     }
 
     const { error } = await supabase
@@ -175,7 +181,7 @@ export const attendanceService = {
     if (error) throw error;
     return { success: true };
   },
-  
+
   // ---- STUDENT ATTENDANCE ----
 
   async studentCheckIn(payload: {
@@ -546,6 +552,11 @@ export const attendanceService = {
     teacherId: string;
     date: string;
     isMockGps: boolean;
+    checkOutLat?: number;
+    checkOutLng?: number;
+    checkOutDistance?: number;
+    checkOutSelfieUrl?: string;
+    notes?: string;
   }) {
     if (payload.isMockGps) {
       return {
@@ -554,9 +565,18 @@ export const attendanceService = {
       };
     }
 
+    const updateFields: Record<string, any> = {
+      checkOutTime: new Date().toISOString(),
+      ...(payload.checkOutLat !== undefined ? { checkOutLat: payload.checkOutLat } : {}),
+      ...(payload.checkOutLng !== undefined ? { checkOutLng: payload.checkOutLng } : {}),
+      ...(payload.checkOutDistance !== undefined ? { checkOutDistance: payload.checkOutDistance } : {}),
+      ...(payload.checkOutSelfieUrl ? { checkOutSelfieUrl: payload.checkOutSelfieUrl } : {}),
+      ...(payload.notes ? { notes: payload.notes } : {}),
+    };
+
     const { data, error } = await supabase
       .from('attendances')
-      .update({ checkOutTime: new Date().toISOString() })
+      .update(updateFields)
       .eq('schoolId', payload.schoolId)
       .eq('teacherId', payload.teacherId)
       .eq('date', payload.date)
@@ -584,7 +604,9 @@ export const attendanceService = {
       .select(
         `
         id, schoolId, teacherId, date, status, checkInTime, checkOutTime,
-        checkInLat, checkInLng, checkInDistance, isCheckInMock, checkInSelfieUrl, notes, createdAt,
+        checkInLat, checkInLng, checkInDistance, isCheckInMock, checkInSelfieUrl,
+        checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl,
+        notes, createdAt,
         teachers!inner(fullName, nip, nuptk, position, photoUrl)
       `,
         { count: 'exact' }
@@ -613,6 +635,10 @@ export const attendanceService = {
       checkInDistance: row.checkInDistance,
       isCheckInMock: row.isCheckInMock,
       checkInSelfieUrl: row.checkInSelfieUrl,
+      checkOutLat: row.checkOutLat,
+      checkOutLng: row.checkOutLng,
+      checkOutDistance: row.checkOutDistance,
+      checkOutSelfieUrl: row.checkOutSelfieUrl,
       notes: row.notes,
       createdAt: row.createdAt,
       teacher: row.teachers
@@ -632,7 +658,9 @@ export const attendanceService = {
   async getTeacherTodayStatus(schoolId: string, teacherId: string, date: string) {
     const { data, error } = await supabase
       .from('attendances')
-      .select('id, status, checkInTime, checkOutTime, checkInSelfieUrl, notes')
+      .select(
+        'id, status, checkInTime, checkOutTime, checkInSelfieUrl, checkOutSelfieUrl, checkOutDistance, notes'
+      )
       .eq('schoolId', schoolId)
       .eq('teacherId', teacherId)
       .eq('date', date)
