@@ -97,6 +97,7 @@ type LeaveCategory = 'DINAS_LUAR' | 'IZIN' | 'SAKIT';
 interface TeacherProfile {
   id: string;
   fullName: string;
+  nik?: string | null;
   nip?: string | null;
   nuptk?: string | null;
   position?: string | null;
@@ -138,6 +139,35 @@ function getTodayLocal(): string {
   const m = String(now.getMonth() + 1).padStart(2, '0');
   const d = String(now.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
+}
+
+function getTimeStampTagLocal(dateObj: Date = new Date()): string {
+  const hh = String(dateObj.getHours()).padStart(2, '0');
+  const mm = String(dateObj.getMinutes()).padStart(2, '0');
+  const ss = String(dateObj.getSeconds()).padStart(2, '0');
+  return `${hh}${mm}${ss}`;
+}
+
+// Membersihkan teks agar aman dijadikan nama folder di Supabase Storage
+function sanitizeStorageSegment(rawText: string): string {
+  return rawText
+    .trim()
+    .replace(/[^a-zA-Z0-9\s_-]/g, '')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_');
+}
+
+// Membentuk nama folder guru: Nama_Lengkap_NIK (contoh: Hendi_Budi_Prasetyo_340407xxxxxxxxxx)
+function buildTeacherFolderName(teacher: TeacherProfile): string {
+  const cleanName = sanitizeStorageSegment(teacher.fullName || 'Guru');
+  const rawIdentityNumber =
+    teacher.nik || teacher.nip || teacher.nuptk || '';
+  const cleanDigits = rawIdentityNumber.replace(/\D/g, '');
+
+  if (cleanDigits.length > 0) {
+    return `${cleanName}_${cleanDigits}`;
+  }
+  return cleanName;
 }
 
 function calculateDistanceMeters(
@@ -402,12 +432,20 @@ export function TeacherAttendancePage() {
     if (!isSuperAdmin || !activeSchoolId) return;
     supabase
       .from('teachers')
-      .select('id, fullName, nip, nuptk, position, photoUrl')
+      .select('*')
       .eq('schoolId', activeSchoolId)
       .eq('isActive', true)
       .order('fullName')
       .then(({ data }) => {
-        const list = data ?? [];
+        const list = (data ?? []).map((t: any) => ({
+          id: t.id,
+          fullName: t.fullName,
+          nik: t.nik ?? null,
+          nip: t.nip ?? null,
+          nuptk: t.nuptk ?? null,
+          position: t.position ?? null,
+          photoUrl: t.photoUrl ?? null,
+        }));
         setSimTeachers(list);
         if (list.length > 0) setSimTeacherId(list[0].id);
         else setSimTeacherId('');
@@ -455,12 +493,23 @@ export function TeacherAttendancePage() {
       } else {
         const { data: tByUser } = await supabase
           .from('teachers')
-          .select('id, fullName, nip, nuptk, position, photoUrl')
+          .select('*')
           .eq('schoolId', activeSchoolId)
           .or(`userId.eq.${user.id},email.eq.${user.email ?? ''}`)
           .limit(1)
           .maybeSingle();
-        activeTeacher = tByUser;
+
+        if (tByUser) {
+          activeTeacher = {
+            id: tByUser.id,
+            fullName: tByUser.fullName,
+            nik: tByUser.nik ?? null,
+            nip: tByUser.nip ?? null,
+            nuptk: tByUser.nuptk ?? null,
+            position: tByUser.position ?? null,
+            photoUrl: tByUser.photoUrl ?? null,
+          };
+        }
       }
 
       setTeacher(activeTeacher);
@@ -788,7 +837,7 @@ export function TeacherAttendancePage() {
     openCameraModal(attendancePhase);
   };
 
-  // Simpan Check-In / Check-Out ke Supabase menggunakan Jam Masuk + Toleransi Keterlambatan
+  // Simpan Check-In / Check-Out ke Supabase dengan Nama Folder Sekolah & Nama_NIK Guru
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
     selfieBlob: Blob | null
@@ -797,10 +846,17 @@ export function TeacherAttendancePage() {
     setIsSubmittingAttendance(true);
     try {
       let uploadedPath: string | null = null;
+      const nowObj = new Date();
       const todayStr = getTodayLocal();
+      const timeTag = getTimeStampTagLocal(nowObj);
 
       if (selfieBlob) {
-        const fileName = `${activeSchoolId}/${teacher.id}/${todayStr}_${mode}_${Date.now()}.jpg`;
+        const schoolFolder = schoolGeo?.name
+          ? sanitizeStorageSegment(schoolGeo.name)
+          : activeSchoolId;
+        const teacherFolder = buildTeacherFolderName(teacher);
+        const fileName = `${schoolFolder}/${teacherFolder}/${todayStr}_${mode}_${timeTag}.jpg`;
+
         const { error: uploadErr } = await supabase.storage
           .from('attendance-selfies')
           .upload(fileName, selfieBlob, { contentType: 'image/jpeg', upsert: true });
@@ -810,7 +866,6 @@ export function TeacherAttendancePage() {
         }
       }
 
-      const nowObj = new Date();
       const nowIso = nowObj.toISOString();
 
       if (mode === 'CHECK_IN') {
@@ -876,7 +931,7 @@ export function TeacherAttendancePage() {
     }
   };
 
-  // Simpan Pengajuan Ketat Izin / Dinas Luar / Sakit
+  // Simpan Pengajuan Ketat Izin / Dinas Luar / Sakit (dengan folder Nama_Sekolah & Nama_NIK)
   const handleSubmitStrictLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!teacher || !activeSchoolId) return;
@@ -905,7 +960,13 @@ export function TeacherAttendancePage() {
     setIsSubmittingLeave(true);
     try {
       const ext = leaveFile.name.split('.').pop() || 'pdf';
-      const storagePath = `${activeSchoolId}/leave-docs/${teacher.id}_${Date.now()}.${ext}`;
+      const schoolFolder = schoolGeo?.name
+        ? sanitizeStorageSegment(schoolGeo.name)
+        : activeSchoolId;
+      const teacherFolder = buildTeacherFolderName(teacher);
+      const timeTag = getTimeStampTagLocal();
+      const storagePath = `${schoolFolder}/Surat_Izin_Dinas/${teacherFolder}_${leaveStartDate}_${timeTag}.${ext}`;
+
       const { error: upErr } = await supabase.storage
         .from('attendance-selfies')
         .upload(storagePath, leaveFile, { upsert: true });
@@ -1175,7 +1236,7 @@ export function TeacherAttendancePage() {
       : 'bg-emerald-400';
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] pb-28 max-w-xl mx-auto px-1">
+    <div className="min-h-[calc(100vh-4rem)] pb-32 max-w-xl md:max-w-2xl mx-auto px-1">
       {/* Banner Simulasi Khusus SUPER_ADMIN */}
       {isSuperAdmin && (
         <div className="mb-4 p-3 rounded-2xl bg-purple-500/15 border border-purple-500/30 flex flex-col gap-2.5">
@@ -1302,121 +1363,172 @@ export function TeacherAttendancePage() {
               </button>
             </div>
 
-            {/* KARTU PROFIL & JAM */}
-            <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80 space-y-3">
-              {/* Baris Atas: Profil Guru Melebar Penuh */}
-              <div className="flex items-start gap-3">
-                <div className="relative shrink-0 mt-0.5">
-                  <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
-                    {teacher?.photoUrl ? (
-                      <img
-                        src={teacher.photoUrl}
-                        alt={teacher.fullName}
-                        className="w-14 h-14 rounded-[14px] object-cover bg-white"
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
-                        {(teacher?.fullName ?? user?.fullName ?? 'G').charAt(0)}
+            {/* KARTU PROFIL & JAM:
+                - Di HP (< 640px): Profil melebar penuh di atas, Tingkat Kehadiran & Jam berdampingan di bawah.
+                - Di Komputer (>= 640px): Profil + Tingkat Kehadiran di kiri (col-span-8), Jam vertikal tinggi di kanan (col-span-4) seperti desain awal. */}
+            <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80">
+              <div className="grid grid-cols-12 gap-3 items-stretch">
+                {/* Sisi Kiri (Di HP: penuh 12 kolom; Di Komputer: 8 kolom) */}
+                <div className="col-span-12 sm:col-span-8 flex flex-col justify-between gap-3">
+                  {/* Info Profil Guru */}
+                  <div className="flex items-start gap-3">
+                    <div className="relative shrink-0 mt-0.5">
+                      <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
+                        {teacher?.photoUrl ? (
+                          <img
+                            src={teacher.photoUrl}
+                            alt={teacher.fullName}
+                            className="w-14 h-14 rounded-[14px] object-cover bg-white"
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
+                            {(teacher?.fullName ?? user?.fullName ?? 'G').charAt(0)}
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
-                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow border border-white">
-                    <ShieldCheck size={12} />
-                  </span>
-                </div>
+                      <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow border border-white">
+                        <ShieldCheck size={12} />
+                      </span>
+                    </div>
 
-                <div className="flex-1 min-w-0">
-                  <h2 className="font-bold text-[15px] sm:text-base text-slate-900 leading-snug wrap-break-word">
-                    {teacher?.fullName ??
-                      user?.fullName ??
-                      'Profil Guru Belum Tertaut'}
-                  </h2>
-                  <p className="text-[11px] font-mono text-slate-500 mt-0.5">
-                    {teacher?.nip || teacher?.nuptk || 'PTK Terdaftar'}
-                  </p>
-                  <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-1 leading-snug">
-                    <Briefcase
-                      size={12}
-                      className="text-[#1C3D6E] shrink-0 mt-0.5"
-                    />
-                    <span>{teacher?.position || 'Guru / Tenaga Pendidik'}</span>
-                  </p>
-                  <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-0.5 leading-snug">
-                    <Building2
-                      size={12}
-                      className="text-amber-600 shrink-0 mt-0.5"
-                    />
-                    <span>{schoolGeo?.name ?? 'Unit Sekolah'}</span>
-                  </p>
-                </div>
-              </div>
-
-              {/* Baris Bawah: Tingkat Kehadiran & Jam Digital */}
-              <div className="grid grid-cols-12 gap-2.5 items-stretch">
-                <div className="col-span-7 rounded-2xl bg-white/85 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs flex flex-col justify-between">
-                  <div className="flex items-start gap-2">
-                    <span className="w-6 h-6 rounded-lg bg-[#254E89] text-white flex items-center justify-center shrink-0 mt-0.5">
-                      <TrendingUp size={13} />
-                    </span>
-                    <div className="min-w-0">
-                      <p className="text-[10px] font-medium text-slate-500 leading-tight">
-                        Tingkat Kehadiran
+                    <div className="flex-1 min-w-0">
+                      <h2 className="font-bold text-[15px] sm:text-base text-slate-900 leading-snug wrap-break-word">
+                        {teacher?.fullName ??
+                          user?.fullName ??
+                          'Profil Guru Belum Tertaut'}
+                      </h2>
+                      <p className="text-[11px] font-mono text-slate-500 mt-0.5">
+                        {teacher?.nip || teacher?.nuptk || 'PTK Terdaftar'}
                       </p>
-                      <p className="text-[11px] font-semibold text-slate-700 leading-snug mt-0.5">
-                        {monthYearLabel}
+                      <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-1 leading-snug">
+                        <Briefcase
+                          size={12}
+                          className="text-[#1C3D6E] shrink-0 mt-0.5"
+                        />
+                        <span>{teacher?.position || 'Guru / Tenaga Pendidik'}</span>
+                      </p>
+                      <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-0.5 leading-snug">
+                        <Building2
+                          size={12}
+                          className="text-amber-600 shrink-0 mt-0.5"
+                        />
+                        <span>{schoolGeo?.name ?? 'Unit Sekolah'}</span>
                       </p>
                     </div>
                   </div>
 
-                  <div className="mt-2">
-                    <div className="flex items-baseline justify-between">
-                      <span className="text-2xl font-extrabold text-slate-900">
-                        {reportStats.percentage}%
-                      </span>
-                      <span className="text-[10px] text-slate-500">
-                        {reportStats.hadir + reportStats.terlambat} hari hadir
-                      </span>
+                  {/* Baris Tingkat Kehadiran (+ Jam khusus layar HP) */}
+                  <div className="grid grid-cols-12 sm:grid-cols-1 gap-2.5 items-stretch">
+                    <div className="col-span-7 sm:col-span-1 rounded-2xl bg-white/85 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs flex flex-col justify-between">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-6 h-6 rounded-lg bg-[#254E89] text-white flex items-center justify-center shrink-0">
+                            <TrendingUp size={13} />
+                          </span>
+                          <div className="min-w-0">
+                            <p className="text-[10px] font-medium text-slate-500 leading-tight">
+                              Tingkat Kehadiran
+                            </p>
+                            <p className="text-[11px] font-semibold text-slate-700 leading-snug">
+                              {monthYearLabel}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Angka persentase di sebelah kanan saat mode Komputer */}
+                        <span className="hidden sm:inline-block text-xl font-extrabold text-slate-900">
+                          {reportStats.percentage}%
+                        </span>
+                      </div>
+
+                      <div className="mt-2">
+                        <div className="flex sm:hidden items-baseline justify-between">
+                          <span className="text-2xl font-extrabold text-slate-900">
+                            {reportStats.percentage}%
+                          </span>
+                          <span className="text-[10px] text-slate-500">
+                            {reportStats.hadir + reportStats.terlambat} hari hadir
+                          </span>
+                        </div>
+
+                        <div className="w-full h-1.5 rounded-full bg-slate-200 mt-1.5 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-linear-to-r from-amber-400 to-emerald-500 transition-all duration-500"
+                            style={{ width: `${reportStats.percentage}%` }}
+                          />
+                        </div>
+                      </div>
                     </div>
 
-                    <div className="w-full h-1.5 rounded-full bg-slate-200 mt-1.5 overflow-hidden">
-                      <div
-                        className="h-full rounded-full bg-linear-to-r from-amber-400 to-emerald-500 transition-all duration-500"
-                        style={{ width: `${reportStats.percentage}%` }}
-                      />
+                    {/* JAM DIGITAL KHUSUS LAYAR HP (< 640px) */}
+                    <div className="col-span-5 sm:hidden rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-2.5 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
+                      <div className="pointer-events-none absolute -bottom-4 -right-4 w-16 h-16 rounded-full bg-amber-300/20" />
+
+                      <div className="flex items-center justify-center gap-1.5 w-full">
+                        <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
+                          {hoursStr}
+                        </span>
+                        <span className="text-[9px] font-bold tracking-wider text-slate-400">
+                          JAM
+                        </span>
+                      </div>
+
+                      <div className="w-full h-px bg-amber-300/60 my-1" />
+
+                      <div className="flex items-center justify-center gap-1.5 w-full">
+                        <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
+                          {minutesStr}
+                        </span>
+                        <span className="text-[9px] font-bold tracking-wider text-slate-400">
+                          MNT
+                        </span>
+                      </div>
+
+                      <div className="w-full h-px bg-amber-300/60 my-1" />
+
+                      <div className="flex items-center justify-center gap-1.5 w-full">
+                        <span className="text-xl font-extrabold text-rose-500 leading-none font-mono">
+                          {secondsStr}
+                        </span>
+                        <span className="text-[9px] font-bold tracking-wider text-rose-400">
+                          DTK
+                        </span>
+                      </div>
                     </div>
                   </div>
                 </div>
 
-                <div className="col-span-5 rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-2.5 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
-                  <div className="pointer-events-none absolute -bottom-4 -right-4 w-16 h-16 rounded-full bg-amber-300/20" />
+                {/* JAM DIGITAL KHUSUS LAYAR KOMPUTER (>= 640px) — Posisi kanan penuh seperti di awal */}
+                <div className="hidden sm:flex sm:col-span-4 rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-3 px-2.5 flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
+                  <div className="pointer-events-none absolute -bottom-4 -right-4 w-20 h-20 rounded-full bg-amber-300/20" />
 
-                  <div className="flex items-center justify-center gap-1.5 w-full">
-                    <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
+                  <div className="flex items-center justify-center gap-2 w-full">
+                    <span className="text-2xl font-extrabold text-[#1E3F73] leading-none font-mono">
                       {hoursStr}
                     </span>
-                    <span className="text-[9px] font-bold tracking-wider text-slate-400">
+                    <span className="text-[10px] font-bold tracking-wider text-slate-400">
                       JAM
                     </span>
                   </div>
 
                   <div className="w-full h-px bg-amber-300/60 my-1" />
 
-                  <div className="flex items-center justify-center gap-1.5 w-full">
-                    <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
+                  <div className="flex items-center justify-center gap-2 w-full">
+                    <span className="text-2xl font-extrabold text-[#1E3F73] leading-none font-mono">
                       {minutesStr}
                     </span>
-                    <span className="text-[9px] font-bold tracking-wider text-slate-400">
+                    <span className="text-[10px] font-bold tracking-wider text-slate-400">
                       MNT
                     </span>
                   </div>
 
                   <div className="w-full h-px bg-amber-300/60 my-1" />
 
-                  <div className="flex items-center justify-center gap-1.5 w-full">
-                    <span className="text-xl font-extrabold text-rose-500 leading-none font-mono">
+                  <div className="flex items-center justify-center gap-2 w-full">
+                    <span className="text-2xl font-extrabold text-rose-500 leading-none font-mono">
                       {secondsStr}
                     </span>
-                    <span className="text-[9px] font-bold tracking-wider text-rose-400">
+                    <span className="text-[10px] font-bold tracking-wider text-rose-400">
                       DTK
                     </span>
                   </div>
