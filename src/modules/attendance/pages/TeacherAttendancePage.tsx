@@ -53,6 +53,7 @@ const DEFAULT_RADIUS_METERS = 100;
 const REQUIRE_SELFIE_ON_CHECKIN = true;
 const REQUIRE_SELFIE_ON_CHECKOUT = true;
 const MIN_REASON_LENGTH = 15;
+const FINGERPRINT_GLOW_DURATION_MS = 550; // Durasi efek cahaya menyala saat tombol sidik jari disentuh (milidetik)
 
 const DEFAULT_DAILY_QUOTES: Array<{ quote: string; author?: string }> = [
   {
@@ -202,6 +203,10 @@ export function TeacherAttendancePage() {
   const [activeView, setActiveView] = useState<SubView>('beranda');
   const [now, setNow] = useState<Date>(() => new Date());
 
+  // State Efek Menyala Tombol Sidik Jari
+  const [isFingerprintGlowing, setIsFingerprintGlowing] = useState<boolean>(false);
+  const glowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Data Guru, Pengaturan Sekolah (GPS + Jam Kerja + Toleransi + 5/6 Hari), & Riwayat
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
   const [schoolGeo, setSchoolGeo] = useState<SchoolGeoAndSchedule | null>(null);
@@ -270,6 +275,25 @@ export function TeacherAttendancePage() {
     setToast({ type, message });
     setTimeout(() => setToast(null), 4500);
   };
+
+  // Fungsi memicu cahaya menyala pada tombol sidik jari saat disentuh
+  const triggerFingerprintGlow = () => {
+    setIsFingerprintGlowing(true);
+    if (glowTimeoutRef.current) {
+      clearTimeout(glowTimeoutRef.current);
+    }
+    glowTimeoutRef.current = setTimeout(() => {
+      setIsFingerprintGlowing(false);
+    }, FINGERPRINT_GLOW_DURATION_MS);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (glowTimeoutRef.current) {
+        clearTimeout(glowTimeoutRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (window.innerWidth < 1024) {
@@ -604,7 +628,7 @@ export function TeacherAttendancePage() {
       [schoolGeo.latitude, schoolGeo.longitude],
       [userCoords.lat, userCoords.lng],
     ]);
-    map.fitBounds(bounds, { padding: [60, 60], maxZoom: 17 });
+    map.fitBounds(bounds, { padding: [50, 50], maxZoom: 17 });
   }, [userCoords, schoolGeo]);
 
   const distanceMeters = useMemo(() => {
@@ -628,12 +652,16 @@ export function TeacherAttendancePage() {
     return `${Math.round(meters)} m`;
   };
 
+  // Status Kehadiran Hari Ini & Aturan Kunci Kartu Datang / Pulang
   const hasCheckedIn = Boolean(todayRecord?.checkInTime);
   const hasCheckedOut = Boolean(todayRecord?.checkOutTime);
   const isOnLeaveToday = Boolean(
     todayRecord && ['IZIN', 'SAKIT'].includes(todayRecord.status)
   );
 
+  // Kartu Datang terkunci jika sudah absen datang ATAU sedang izin/sakit
+  const isCheckInLocked = hasCheckedIn || isOnLeaveToday;
+  // Kartu Pulang aktif hanya jika sudah absen datang dan belum absen pulang
   const canCheckOut = hasCheckedIn && !hasCheckedOut && !isOnLeaveToday;
 
   const attendancePhase: 'CHECK_IN' | 'CHECK_OUT' | 'COMPLETED' | 'ON_LEAVE' =
@@ -704,6 +732,62 @@ export function TeacherAttendancePage() {
     );
   };
 
+  // Aksi utama ketika tombol Sidik Jari ditekan
+  const handleFingerprintAction = () => {
+    triggerFingerprintGlow();
+
+    // 1. Jika sedang di luar halaman Peta -> buka halaman Peta & muat GPS
+    if (activeView !== 'peta') {
+      setActiveView('peta');
+      requestGpsPosition();
+      return;
+    }
+
+    // 2. Jika sudah berada di dalam halaman Peta -> jalankan proses presensi
+    if (!teacher) {
+      showToast('error', 'Akun Anda belum terhubung dengan data Master Guru/PTK.');
+      return;
+    }
+
+    if (attendancePhase === 'COMPLETED') {
+      showToast(
+        'success',
+        `Presensi hari ini sudah lengkap (Masuk ${formatShortTime(
+          todayRecord?.checkInTime
+        )} • Pulang ${formatShortTime(todayRecord?.checkOutTime)}).`
+      );
+      return;
+    }
+
+    if (attendancePhase === 'ON_LEAVE') {
+      showToast('success', `Hari ini Anda tercatat ${todayRecord?.status}.`);
+      return;
+    }
+
+    if (isLocating || !userCoords || distanceMeters === null) {
+      requestGpsPosition();
+      showToast(
+        'error',
+        'Sedang mendeteksi titik GPS Anda. Tunggu sebentar lalu ketuk sidik jari kembali.'
+      );
+      return;
+    }
+
+    if (!isWithinRadius) {
+      requestGpsPosition();
+      showToast(
+        'error',
+        `Anda masih di luar radius sekolah (${formatDistanceLabel(
+          distanceMeters
+        )}). Lokasi GPS diperbarui.`
+      );
+      return;
+    }
+
+    // Berada di dalam radius -> buka kamera verifikasi Check-In atau Check-Out
+    openCameraModal(attendancePhase);
+  };
+
   // Simpan Check-In / Check-Out ke Supabase menggunakan Jam Masuk + Toleransi Keterlambatan
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
@@ -732,7 +816,6 @@ export function TeacherAttendancePage() {
       if (mode === 'CHECK_IN') {
         const [startH, startM] = effectiveWorkStartTime.split(':').map(Number);
         const deadline = new Date();
-        // Tambahkan toleransi keterlambatan (menit) ke jam masuk sekolah
         deadline.setHours(
           startH || 7,
           (startM ?? 30) + effectiveToleranceMinutes,
@@ -925,7 +1008,7 @@ export function TeacherAttendancePage() {
     };
   }, [historyRecords, reportScope, selectedMonthPrefix, calendarYear]);
 
-  // Generator Grid Kalender Bulanan (Memakai Mode 5/6 Hari Kerja & Libur dari Database)
+  // Generator Grid Kalender Bulanan
   const recordsByDate = useMemo(() => {
     const map = new Map<string, AttendanceRecord>();
     for (const rec of historyRecords) {
@@ -1053,6 +1136,43 @@ export function TeacherAttendancePage() {
     DEFAULT_DAILY_QUOTES[0];
 
   const todayStr = getTodayLocal();
+  const isOnMapView = activeView === 'peta';
+  const isCheckOutPhase = attendancePhase === 'CHECK_OUT';
+
+  // Penentuan warna & aura cahaya tombol Sidik Jari:
+  // - Di luar Peta -> Oranye (untuk masuk ke menu Peta Presensi)
+  // - Di dalam Peta saat Absen Masuk -> Hijau
+  // - Di dalam Peta saat Absen Pulang -> Merah
+  const fingerprintButtonStyle = useMemo(() => {
+    if (!isOnMapView) {
+      return isFingerprintGlowing
+        ? 'bg-linear-to-br from-amber-300 via-orange-400 to-orange-600 text-slate-950 scale-110 ring-4 ring-orange-300/90 shadow-[0_0_30px_rgba(249,115,22,0.95)]'
+        : 'bg-linear-to-br from-amber-300 via-amber-500 to-orange-500 text-slate-950 shadow-xl hover:scale-105';
+    }
+
+    if (attendancePhase === 'CHECK_OUT') {
+      return isFingerprintGlowing
+        ? 'bg-linear-to-br from-rose-400 via-red-500 to-red-700 text-white scale-110 ring-4 ring-red-400/90 shadow-[0_0_32px_rgba(239,68,68,0.95)]'
+        : 'bg-linear-to-br from-rose-500 via-red-600 to-red-700 text-white shadow-[0_6px_22px_rgba(220,38,38,0.65)] hover:scale-105';
+    }
+
+    if (attendancePhase === 'COMPLETED' || attendancePhase === 'ON_LEAVE') {
+      return isFingerprintGlowing
+        ? 'bg-slate-600 text-white scale-105 ring-4 ring-slate-400/70 shadow-[0_0_24px_rgba(148,163,184,0.85)]'
+        : 'bg-linear-to-br from-slate-500 to-slate-700 text-white/90 shadow-lg';
+    }
+
+    // Default di dalam Peta untuk Absen Masuk (CHECK_IN) -> Hijau
+    return isFingerprintGlowing
+      ? 'bg-linear-to-br from-emerald-300 via-emerald-400 to-teal-500 text-white scale-110 ring-4 ring-emerald-300/90 shadow-[0_0_32px_rgba(16,185,129,0.95)]'
+      : 'bg-linear-to-br from-emerald-400 via-emerald-500 to-teal-600 text-white shadow-[0_6px_22px_rgba(16,185,129,0.65)] hover:scale-105';
+  }, [isOnMapView, attendancePhase, isFingerprintGlowing]);
+
+  const fingerprintAuraColor = !isOnMapView
+    ? 'bg-orange-400'
+    : attendancePhase === 'CHECK_OUT'
+      ? 'bg-red-500'
+      : 'bg-emerald-400';
 
   return (
     <div className="min-h-[calc(100vh-4rem)] pb-28 max-w-xl mx-auto px-1">
@@ -1124,8 +1244,8 @@ export function TeacherAttendancePage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -16 }}
             className={`mb-4 p-3.5 rounded-2xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-500'
-                : 'bg-red-600 text-white border-red-500'
+              ? 'bg-emerald-600 text-white border-emerald-500'
+              : 'bg-red-600 text-white border-red-500'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1178,160 +1298,179 @@ export function TeacherAttendancePage() {
                 className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
                 title="Segarkan Data"
               >
-                <RefreshCw size={17} className={isLoadingData ? 'spin' : ''} />
+                <RefreshCw size={17} className={isLoadingData ? 'animate-spin' : ''} />
               </button>
             </div>
 
-            <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80 grid grid-cols-12 gap-3 items-stretch">
-              <div className="col-span-8 flex flex-col justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <div className="relative shrink-0">
-                    <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
-                      {teacher?.photoUrl ? (
-                        <img
-                          src={teacher.photoUrl}
-                          alt={teacher.fullName}
-                          className="w-14 h-14 rounded-[14px] object-cover bg-white"
-                        />
-                      ) : (
-                        <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
-                          {(teacher?.fullName ?? user?.fullName ?? 'G').charAt(0)}
-                        </div>
-                      )}
-                    </div>
-                    <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow border border-white">
-                      <ShieldCheck size={12} />
-                    </span>
-                  </div>
-
-                  <div className="min-w-0">
-                    <h2 className="font-bold text-sm text-slate-900 truncate">
-                      {teacher?.fullName ??
-                        user?.fullName ??
-                        'Profil Guru Belum Tertaut'}
-                    </h2>
-                    <p className="text-[11px] font-mono text-slate-500 truncate mt-0.5">
-                      {teacher?.nip || teacher?.nuptk || 'PTK Terdaftar'}
-                    </p>
-                    <p className="text-[11px] text-slate-600 flex items-center gap-1 truncate mt-0.5">
-                      <Briefcase
-                        size={11}
-                        className="text-[#1C3D6E] shrink-0"
+            {/* KARTU PROFIL & JAM */}
+            <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80 space-y-3">
+              {/* Baris Atas: Profil Guru Melebar Penuh */}
+              <div className="flex items-start gap-3">
+                <div className="relative shrink-0 mt-0.5">
+                  <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
+                    {teacher?.photoUrl ? (
+                      <img
+                        src={teacher.photoUrl}
+                        alt={teacher.fullName}
+                        className="w-14 h-14 rounded-[14px] object-cover bg-white"
                       />
-                      <span className="truncate">
-                        {teacher?.position || 'Guru / Tenaga Pendidik'}
-                      </span>
-                    </p>
-                    <p className="text-[11px] text-slate-600 flex items-center gap-1 truncate">
-                      <Building2
-                        size={11}
-                        className="text-amber-600 shrink-0"
-                      />
-                      <span className="truncate">
-                        {schoolGeo?.name ?? 'Unit Sekolah'}
-                      </span>
-                    </p>
+                    ) : (
+                      <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
+                        {(teacher?.fullName ?? user?.fullName ?? 'G').charAt(0)}
+                      </div>
+                    )}
                   </div>
+                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow border border-white">
+                    <ShieldCheck size={12} />
+                  </span>
                 </div>
 
-                <div className="rounded-2xl bg-white/80 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="w-6 h-6 rounded-lg bg-[#254E89] text-white flex items-center justify-center shrink-0">
+                <div className="flex-1 min-w-0">
+                  <h2 className="font-bold text-[15px] sm:text-base text-slate-900 leading-snug wrap-break-word">
+                    {teacher?.fullName ??
+                      user?.fullName ??
+                      'Profil Guru Belum Tertaut'}
+                  </h2>
+                  <p className="text-[11px] font-mono text-slate-500 mt-0.5">
+                    {teacher?.nip || teacher?.nuptk || 'PTK Terdaftar'}
+                  </p>
+                  <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-1 leading-snug">
+                    <Briefcase
+                      size={12}
+                      className="text-[#1C3D6E] shrink-0 mt-0.5"
+                    />
+                    <span>{teacher?.position || 'Guru / Tenaga Pendidik'}</span>
+                  </p>
+                  <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-0.5 leading-snug">
+                    <Building2
+                      size={12}
+                      className="text-amber-600 shrink-0 mt-0.5"
+                    />
+                    <span>{schoolGeo?.name ?? 'Unit Sekolah'}</span>
+                  </p>
+                </div>
+              </div>
+
+              {/* Baris Bawah: Tingkat Kehadiran & Jam Digital */}
+              <div className="grid grid-cols-12 gap-2.5 items-stretch">
+                <div className="col-span-7 rounded-2xl bg-white/85 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs flex flex-col justify-between">
+                  <div className="flex items-start gap-2">
+                    <span className="w-6 h-6 rounded-lg bg-[#254E89] text-white flex items-center justify-center shrink-0 mt-0.5">
                       <TrendingUp size={13} />
                     </span>
                     <div className="min-w-0">
                       <p className="text-[10px] font-medium text-slate-500 leading-tight">
                         Tingkat Kehadiran
                       </p>
-                      <p className="text-[11px] font-semibold text-slate-700 truncate">
-                        Bulan {monthYearLabel}
+                      <p className="text-[11px] font-semibold text-slate-700 leading-snug mt-0.5">
+                        {monthYearLabel}
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex items-baseline justify-between mt-1">
-                    <span className="text-2xl font-extrabold text-slate-900">
-                      {reportStats.percentage}%
+                  <div className="mt-2">
+                    <div className="flex items-baseline justify-between">
+                      <span className="text-2xl font-extrabold text-slate-900">
+                        {reportStats.percentage}%
+                      </span>
+                      <span className="text-[10px] text-slate-500">
+                        {reportStats.hadir + reportStats.terlambat} hari hadir
+                      </span>
+                    </div>
+
+                    <div className="w-full h-1.5 rounded-full bg-slate-200 mt-1.5 overflow-hidden">
+                      <div
+                        className="h-full rounded-full bg-linear-to-r from-amber-400 to-emerald-500 transition-all duration-500"
+                        style={{ width: `${reportStats.percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="col-span-5 rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-2.5 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
+                  <div className="pointer-events-none absolute -bottom-4 -right-4 w-16 h-16 rounded-full bg-amber-300/20" />
+
+                  <div className="flex items-center justify-center gap-1.5 w-full">
+                    <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
+                      {hoursStr}
                     </span>
-                    <span className="text-[10px] text-slate-500">
-                      {reportStats.hadir + reportStats.terlambat} hari hadir
+                    <span className="text-[9px] font-bold tracking-wider text-slate-400">
+                      JAM
                     </span>
                   </div>
 
-                  <div className="w-full h-1.5 rounded-full bg-slate-200 mt-1.5 overflow-hidden">
-                    <div
-                      className="h-full rounded-full bg-linear-to-r from-amber-400 to-emerald-500 transition-all duration-500"
-                      style={{ width: `${reportStats.percentage}%` }}
-                    />
-                  </div>
-                </div>
-              </div>
+                  <div className="w-full h-px bg-amber-300/60 my-1" />
 
-              <div className="col-span-4 rounded-3xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-3 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
-                <div className="pointer-events-none absolute -bottom-4 -right-4 w-20 h-20 rounded-full bg-amber-300/20" />
-
-                <div>
-                  <div className="text-2xl sm:text-[26px] font-extrabold text-[#1E3F73] leading-none font-mono">
-                    {hoursStr}
+                  <div className="flex items-center justify-center gap-1.5 w-full">
+                    <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
+                      {minutesStr}
+                    </span>
+                    <span className="text-[9px] font-bold tracking-wider text-slate-400">
+                      MNT
+                    </span>
                   </div>
-                  <div className="text-[9px] font-bold tracking-widest text-slate-400 mt-1">
-                    JAM
-                  </div>
-                </div>
 
-                <div className="w-9 h-px bg-amber-300/60 my-1" />
+                  <div className="w-full h-px bg-amber-300/60 my-1" />
 
-                <div>
-                  <div className="text-2xl sm:text-[26px] font-extrabold text-[#1E3F73] leading-none font-mono">
-                    {minutesStr}
-                  </div>
-                  <div className="text-[9px] font-bold tracking-widest text-slate-400 mt-1">
-                    MENIT
-                  </div>
-                </div>
-
-                <div className="w-9 h-px bg-amber-300/60 my-1" />
-
-                <div>
-                  <div className="text-2xl sm:text-[26px] font-extrabold text-rose-500 leading-none font-mono">
-                    {secondsStr}
-                  </div>
-                  <div className="text-[9px] font-bold tracking-widest text-rose-400 mt-1">
-                    DETIK
+                  <div className="flex items-center justify-center gap-1.5 w-full">
+                    <span className="text-xl font-extrabold text-rose-500 leading-none font-mono">
+                      {secondsStr}
+                    </span>
+                    <span className="text-[9px] font-bold tracking-wider text-rose-400">
+                      DTK
+                    </span>
                   </div>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Dua Kartu Utama: DATANG & PULANG (Jam Dinamis + Info Toleransi) */}
+          {/* Dua Kartu Utama: DATANG (Terkunci jika sudah absen masuk) & PULANG */}
           <div className="grid grid-cols-2 gap-3.5">
+            {/* KARTU DATANG */}
             <button
               type="button"
-              disabled={isOnLeaveToday}
-              onClick={() => setActiveView('peta')}
-              className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isOnLeaveToday
-                  ? 'opacity-75 cursor-not-allowed'
-                  : 'hover:scale-[1.01] active:scale-[0.99]'
+              disabled={isCheckInLocked}
+              onClick={() => {
+                if (isCheckInLocked) return;
+                setActiveView('peta');
+              }}
+              title={
+                hasCheckedIn
+                  ? 'Presensi datang sudah tercatat dan terkunci.'
+                  : isOnLeaveToday
+                    ? `Hari ini tercatat ${todayRecord?.status}.`
+                    : 'Ketuk untuk melakukan presensi datang di peta'
+              }
+              className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
+                ? 'opacity-65 cursor-not-allowed saturate-75'
+                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-2">
                   <span className="p-2 rounded-xl bg-white/10">
                     <LogIn size={16} />
                   </span>
                   <div>
                     <div className="text-sm font-bold leading-tight">Datang</div>
-                    <div className="text-[11px] text-slate-200/80">
-                      {effectiveWorkStartTime}
-                      {effectiveToleranceMinutes > 0
-                        ? ` (+${effectiveToleranceMinutes}m)`
-                        : ''}
+                    <div className="text-[10px] font-semibold text-emerald-300">
+                      Check-In
                     </div>
                   </div>
                 </div>
-                {hasCheckedIn && (
-                  <CheckCircle2 size={17} className="text-emerald-300 shrink-0" />
+                {isCheckInLocked && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    {hasCheckedIn && (
+                      <CheckCircle2 size={15} className="text-emerald-300" />
+                    )}
+                    <span
+                      className="p-1.5 rounded-lg bg-black/25 text-slate-200"
+                      title="Terkunci"
+                    >
+                      <Lock size={13} />
+                    </span>
+                  </div>
                 )}
               </div>
 
@@ -1339,14 +1478,20 @@ export function TeacherAttendancePage() {
                 <div className="text-3xl sm:text-4xl font-extrabold font-mono tracking-tight">
                   {formatShortTime(todayRecord?.checkInTime)}
                 </div>
+                <div className="text-[10px] text-slate-200/80 mt-1">
+                  Jadwal {effectiveWorkStartTime}
+                  {effectiveToleranceMinutes > 0
+                    ? ` (+${effectiveToleranceMinutes}m)`
+                    : ''}
+                </div>
               </div>
 
               <div className="space-y-1">
                 <p className="text-[11px] text-slate-200/85 truncate">
                   {isOnLeaveToday
-                    ? `Tercatat ${todayRecord?.status}`
+                    ? `Terkunci • ${todayRecord?.status}`
                     : hasCheckedIn
-                      ? 'Presensi datang tercatat'
+                      ? 'Terkunci • Sudah absen datang'
                       : effectiveToleranceMinutes > 0
                         ? `Batas toleransi ${effectiveDeadlineStr}`
                         : 'Ketuk untuk absen datang'}
@@ -1354,8 +1499,8 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
-                        ? 'bg-emerald-400'
-                        : 'bg-amber-300 animate-pulse'
+                      ? 'bg-emerald-400'
+                      : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
@@ -1367,6 +1512,7 @@ export function TeacherAttendancePage() {
               </div>
             </button>
 
+            {/* KARTU PULANG */}
             <button
               type="button"
               disabled={!canCheckOut}
@@ -1382,34 +1528,43 @@ export function TeacherAttendancePage() {
                     : 'Ketuk untuk melakukan presensi pulang di peta'
               }
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                  ? 'opacity-65 cursor-not-allowed saturate-75'
-                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-amber-300/60'
+                ? 'opacity-65 cursor-not-allowed saturate-75'
+                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
-              <div className="flex items-center justify-between">
+              <div className="flex items-center justify-between gap-1">
                 <div className="flex items-center gap-2">
                   <span className="p-2 rounded-xl bg-white/15">
                     <LogOut size={16} />
                   </span>
                   <div>
                     <div className="text-sm font-bold leading-tight">Pulang</div>
-                    <div className="text-[11px] text-amber-50/90">
-                      {effectiveWorkEndTime}
+                    <div className="text-[10px] font-semibold text-red-100">
+                      Check-Out
                     </div>
                   </div>
                 </div>
-                {!hasCheckedIn ? (
-                  <span className="p-1.5 rounded-lg bg-black/20 text-amber-100">
-                    <Lock size={14} />
-                  </span>
-                ) : hasCheckedOut ? (
-                  <CheckCircle2 size={17} className="text-emerald-200 shrink-0" />
-                ) : null}
+                {!canCheckOut && (
+                  <div className="flex items-center gap-1 shrink-0">
+                    {hasCheckedOut && (
+                      <CheckCircle2 size={15} className="text-emerald-200" />
+                    )}
+                    <span
+                      className="p-1.5 rounded-lg bg-black/25 text-amber-100"
+                      title="Terkunci"
+                    >
+                      <Lock size={13} />
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="my-3 text-center">
                 <div className="text-3xl sm:text-4xl font-extrabold font-mono tracking-tight">
                   {formatShortTime(todayRecord?.checkOutTime)}
+                </div>
+                <div className="text-[10px] text-amber-50/90 mt-1">
+                  Jadwal {effectiveWorkEndTime}
                 </div>
               </div>
 
@@ -1418,16 +1573,16 @@ export function TeacherAttendancePage() {
                   {!hasCheckedIn
                     ? 'Terkunci • Absen datang dulu'
                     : hasCheckedOut
-                      ? 'Presensi pulang tercatat'
+                      ? 'Terkunci • Sudah absen pulang'
                       : 'Presensi pulang belum tercatat'}
                 </p>
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                        ? 'bg-emerald-300'
-                        : canCheckOut
-                          ? 'bg-white animate-ping'
-                          : 'bg-amber-100/60'
+                      ? 'bg-emerald-300'
+                      : canCheckOut
+                        ? 'bg-red-400 animate-ping'
+                        : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
@@ -1453,32 +1608,53 @@ export function TeacherAttendancePage() {
           animate={{ opacity: 1, scale: 1 }}
           className="space-y-3"
         >
+          {/* Header Peta dengan tulisan Check-In / Check-Out di bawah */}
           <div className="rounded-2xl bg-linear-to-r from-[#1D3554] to-[#525B44] p-4 text-white flex items-center justify-between shadow-lg">
             <div className="flex items-center gap-3">
               <button
                 type="button"
                 onClick={handleToggleSidebar}
-                className="p-2 rounded-xl bg-white/15 hover:bg-white/25 transition"
+                className="p-2 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
                 title="Toggle Sidebar"
               >
                 <Menu size={17} />
               </button>
               <div>
-                <h2 className="font-bold text-base">
+                <h2 className="font-bold text-base leading-tight">
                   {attendancePhase === 'CHECK_OUT'
-                    ? 'Presensi Pulang (Check-Out)'
+                    ? 'Presensi Pulang'
                     : attendancePhase === 'COMPLETED'
                       ? 'Presensi Hari Ini Selesai'
-                      : 'Presensi Datang (Check-In)'}
+                      : attendancePhase === 'ON_LEAVE'
+                        ? `Status ${todayRecord?.status}`
+                        : 'Presensi Datang'}
                 </h2>
-                <p className="text-xs text-white/80">{formattedDateFull}</p>
+                <div className="flex flex-wrap items-center gap-1.5 mt-1">
+                  <span
+                    className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
+                      ? 'bg-red-500/85 text-white'
+                      : 'bg-emerald-500/85 text-white'
+                      }`}
+                  >
+                    {attendancePhase === 'CHECK_OUT'
+                      ? 'Check-Out'
+                      : attendancePhase === 'COMPLETED'
+                        ? 'Selesai'
+                        : attendancePhase === 'ON_LEAVE'
+                          ? 'Izin / Sakit'
+                          : 'Check-In'}
+                  </span>
+                  <span className="text-[11px] text-white/80">
+                    • {formattedDateFull}
+                  </span>
+                </div>
               </div>
             </div>
             <button
               type="button"
               onClick={requestGpsPosition}
               disabled={isLocating}
-              className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition"
+              className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
               title="Perbarui Titik GPS"
             >
               <LocateFixed size={19} className={isLocating ? 'animate-spin' : ''} />
@@ -1486,7 +1662,7 @@ export function TeacherAttendancePage() {
           </div>
 
           <div className="relative rounded-3xl overflow-hidden border border-slate-200 dark:border-white/15 shadow-xl bg-slate-900">
-            <div ref={mapContainerRef} className="w-full h-77.5 z-10" />
+            <div ref={mapContainerRef} className="w-full h-56 sm:h-72 z-10" />
 
             {gpsError && (
               <div className="absolute inset-x-3 top-3 z-20 p-3 rounded-xl bg-red-950/90 border border-red-500/50 text-xs text-red-200 flex items-center gap-2">
@@ -1495,7 +1671,7 @@ export function TeacherAttendancePage() {
               </div>
             )}
 
-            <div className="p-4 bg-white/95 text-slate-800 backdrop-blur-md">
+            <div className="p-3.5 sm:p-4 bg-white/95 text-slate-800 backdrop-blur-md">
               <div className="grid grid-cols-3 gap-2 text-center pb-3 border-b border-slate-200">
                 <div>
                   <div className="w-8 h-8 mx-auto mb-1 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -1530,8 +1706,8 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              <div className="mt-3 rounded-2xl bg-linear-to-r from-[#1D4E7A] to-[#2B8A78] p-3.5 text-center text-white relative">
-                <div className="flex items-center justify-center gap-2 mb-1.5">
+              <div className="mt-3 rounded-2xl bg-linear-to-r from-[#1D4E7A] to-[#2B8A78] p-3 text-center text-white relative">
+                <div className="flex items-center justify-center gap-2 mb-1">
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-[10px] font-semibold">
                     <Sparkles size={11} /> Kata Hari Ini
                   </span>
@@ -1568,48 +1744,55 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
+          {/* Kartu Petunjuk Status & Instruksi Ketuk Tombol Sidik Jari */}
           {!teacher ? (
-            <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
+            <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
               Akun Anda belum terhubung dengan data Master Guru/PTK.
             </div>
           ) : attendancePhase === 'COMPLETED' ? (
-            <div className="w-full py-3.5 px-5 rounded-2xl bg-emerald-600/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold text-sm flex items-center justify-center gap-2">
-              <CheckCircle2 size={18} />
+            <div className="w-full py-3 px-4 rounded-2xl bg-emerald-600/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs flex items-center justify-center gap-2 text-center">
+              <CheckCircle2 size={17} className="shrink-0" />
               <span>
                 Presensi Lengkap (Masuk {formatShortTime(todayRecord?.checkInTime)} •
                 Pulang {formatShortTime(todayRecord?.checkOutTime)})
               </span>
             </div>
           ) : attendancePhase === 'ON_LEAVE' ? (
-            <div className="w-full py-3.5 px-5 rounded-2xl bg-blue-600/15 border border-blue-500/40 text-blue-700 dark:text-blue-300 font-semibold text-sm flex items-center justify-center gap-2">
-              <FileCheck2 size={18} />
+            <div className="w-full py-3 px-4 rounded-2xl bg-blue-600/15 border border-blue-500/40 text-blue-700 dark:text-blue-300 font-semibold text-xs flex items-center justify-center gap-2">
+              <FileCheck2 size={17} className="shrink-0" />
               <span>Hari Ini Tercatat {todayRecord?.status}</span>
             </div>
           ) : !isWithinRadius ? (
             <button
               type="button"
               onClick={requestGpsPosition}
-              className="w-full py-4 px-5 rounded-2xl bg-[#F06464] hover:bg-[#e25555] text-white font-bold text-sm shadow-lg flex items-center justify-center gap-2 transition"
+              className="w-full py-3 px-4 rounded-2xl bg-[#F06464] hover:bg-[#e25555] text-white font-bold text-xs shadow-lg flex flex-col items-center justify-center gap-0.5 transition"
             >
-              <XCircle size={18} />
-              <span>
-                Di Luar Radius ({formatDistanceLabel(distanceMeters)}) — Ketuk Refresh GPS
+              <div className="flex items-center gap-1.5">
+                <XCircle size={16} />
+                <span>Di Luar Radius ({formatDistanceLabel(distanceMeters)})</span>
+              </div>
+              <span className="text-[10px] font-normal text-red-100">
+                Ketuk di sini untuk memperbarui lokasi GPS
               </span>
             </button>
           ) : (
             <button
               type="button"
-              onClick={() => openCameraModal(attendancePhase)}
-              className={`w-full py-4 px-5 rounded-2xl font-bold text-sm text-white shadow-lg flex items-center justify-center gap-2 transition ${attendancePhase === 'CHECK_OUT'
-                  ? 'bg-linear-to-r from-amber-500 to-orange-600 hover:opacity-95'
-                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+              onClick={handleFingerprintAction}
+              className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
+                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
-              <Camera size={18} />
-              <span>
-                {attendancePhase === 'CHECK_OUT'
-                  ? 'Check-Out Pulang Sekarang'
-                  : 'Check-In Datang Sekarang'}
+              <span className="text-sm flex items-center gap-1.5">
+                <Fingerprint size={17} />
+                {isCheckOutPhase ? 'Presensi Pulang' : 'Presensi Datang'}
+              </span>
+              <span className="text-[11px] font-medium text-white/90 mt-0.5">
+                {isCheckOutPhase
+                  ? 'Check-Out • Ketuk tombol sidik jari merah di bawah'
+                  : 'Check-In • Ketuk tombol sidik jari hijau di bawah'}
               </span>
             </button>
           )}
@@ -1663,8 +1846,8 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setLeaveCategory(item.value)}
                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                        ? 'bg-emerald-600 border-emerald-500 text-white'
-                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                      ? 'bg-emerald-600 border-emerald-500 text-white'
+                      : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                       }`}
                   >
                     {item.label}
@@ -1794,7 +1977,7 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          TAMPILAN 4: LAPORAN & KALENDER TANGGAL MERAH (5/6 HARI KERJA + DB LIBUR)
+          TAMPILAN 4: LAPORAN & KALENDER TANGGAL MERAH
       ==================================================================== */}
       {activeView === 'laporan' && (
         <motion.div
@@ -1828,8 +2011,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                    ? 'bg-white text-slate-900'
-                    : 'text-white'
+                  ? 'bg-white text-slate-900'
+                  : 'text-white'
                   }`}
               >
                 Bulan Ini
@@ -1838,8 +2021,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                    ? 'bg-white text-slate-900'
-                    : 'text-white'
+                  ? 'bg-white text-slate-900'
+                  : 'text-white'
                   }`}
               >
                 Tahunan
@@ -1942,10 +2125,10 @@ export function TeacherAttendancePage() {
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
+                    ? 'text-red-500'
+                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
-                        ? 'text-red-500'
-                        : 'opacity-65'
+                      : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -1981,10 +2164,10 @@ export function TeacherAttendancePage() {
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                     title={cell.holidayName ?? cell.dateStr}
                     className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                        : isToday
-                          ? 'border-amber-400 font-bold'
-                          : 'border-transparent'
+                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                      : isToday
+                        ? 'border-amber-400 font-bold'
+                        : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
@@ -2027,8 +2210,8 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                    ? 'bg-red-500/10 border-red-500/30'
-                    : 'bg-muted/40 border-border'
+                  ? 'bg-red-500/10 border-red-500/30'
+                  : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -2119,12 +2302,12 @@ export function TeacherAttendancePage() {
                   </div>
                   <span
                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                        : item.status === 'TERLAMBAT'
-                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                          : item.status === 'ALPA'
-                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                      : item.status === 'TERLAMBAT'
+                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                        : item.status === 'ALPA'
+                          ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                          : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                       }`}
                   >
                     {item.status}
@@ -2137,7 +2320,7 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          FLOATING BOTTOM NAVIGATION BAR
+          FLOATING BOTTOM NAVIGATION BAR (TOMBOL SIDIK JARI ADAPTIF)
       ==================================================================== */}
       <div
         className={`fixed bottom-4 inset-x-0 z-40 px-4 pointer-events-none transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'
@@ -2148,8 +2331,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
@@ -2160,34 +2343,63 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
             <span>Laporan</span>
           </button>
 
-          <div className="flex justify-center">
-            <button
+          {/* TOMBOL PRESENSI SIDIK JARI:
+              - Oranye saat di halaman Beranda / lainnya
+              - Hijau saat di halaman Peta untuk Absen Masuk
+              - Merah saat di halaman Peta untuk Absen Pulang */}
+          <div className="flex flex-col items-center justify-center relative">
+            {/* Aura Cahaya Menyala saat Disentuh */}
+            {isFingerprintGlowing && (
+              <span
+                className={`pointer-events-none absolute -top-7 w-16 h-16 rounded-full animate-ping opacity-75 ${fingerprintAuraColor}`}
+              />
+            )}
+
+            <motion.button
               type="button"
-              onClick={() => setActiveView('peta')}
-              className={`-mt-7 w-14 h-14 rounded-full flex items-center justify-center shadow-xl border-4 border-white dark:border-slate-900 transition ${activeView === 'peta'
-                  ? 'bg-emerald-500 text-white scale-105'
-                  : 'bg-linear-to-br from-amber-300 via-amber-500 to-amber-600 text-slate-950 hover:scale-105'
-                }`}
-              title="Buka Peta Presensi"
+              whileTap={{ scale: 0.88 }}
+              onPointerDown={triggerFingerprintGlow}
+              onClick={handleFingerprintAction}
+              className={`-mt-7 w-15 h-15 rounded-full flex items-center justify-center border-4 border-white dark:border-slate-900 transition-all duration-200 select-none ${fingerprintButtonStyle}`}
+              title={
+                !isOnMapView
+                  ? 'Buka Peta Presensi'
+                  : isCheckOutPhase
+                    ? 'Presensi Pulang (Check-Out)'
+                    : 'Presensi Datang (Check-In)'
+              }
+              aria-label={
+                !isOnMapView
+                  ? 'Buka Peta Presensi'
+                  : isCheckOutPhase
+                    ? 'Tombol Sidik Jari Presensi Pulang'
+                    : 'Tombol Sidik Jari Presensi Datang'
+              }
             >
-              <Fingerprint size={26} />
-            </button>
+              <Fingerprint
+                size={28}
+                className={`transition-transform duration-150 ${isFingerprintGlowing
+                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                  : ''
+                  }`}
+              />
+            </motion.button>
           </div>
 
           <button
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
@@ -2198,8 +2410,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
@@ -2221,11 +2433,16 @@ export function TeacherAttendancePage() {
           >
             <div className="data-card max-w-sm w-full p-4 space-y-3">
               <div className="flex items-center justify-between">
-                <h3 className="font-bold text-sm">
-                  {cameraModal.mode === 'CHECK_OUT'
-                    ? 'Selfie Verifikasi Check-Out'
-                    : 'Selfie Verifikasi Check-In'}
-                </h3>
+                <div>
+                  <h3 className="font-bold text-sm">
+                    {cameraModal.mode === 'CHECK_OUT'
+                      ? 'Selfie Verifikasi Pulang'
+                      : 'Selfie Verifikasi Datang'}
+                  </h3>
+                  <p className="text-[11px] opacity-70">
+                    {cameraModal.mode === 'CHECK_OUT' ? 'Check-Out' : 'Check-In'}
+                  </p>
+                </div>
                 <button
                   type="button"
                   onClick={closeCameraModal}
