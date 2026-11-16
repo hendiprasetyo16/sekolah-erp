@@ -23,6 +23,8 @@ import {
   ArchiveX,
   AlertTriangle,
   CheckCircle2,
+  LogIn,
+  LogOut,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
@@ -38,6 +40,8 @@ import type {
 // PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
 // ============================================================================
 const ARCHIVE_RETENTION_YEARS = 2; // Batas umur arsip absensi dalam tahun (default: 2 tahun)
+const STORAGE_BUCKET_NAME = 'attendance-selfies'; // Nama bucket penyimpanan foto selfie
+const STORAGE_DELETE_BATCH_SIZE = 100; // Jumlah maksimal file yang dihapus per gelombang
 
 type ActiveTab = 'overview' | 'students' | 'teachers';
 type SortDirection = 'asc' | 'desc';
@@ -51,6 +55,15 @@ type TeacherSortKey =
   | 'checkInDistance';
 
 type StudentSortKey = 'fullName' | 'className' | 'nisn' | 'status' | 'time';
+
+// Memperluas tipe TeacherAttendance agar mendukung kolom Check-Out GPS & Selfie
+type TeacherAttendanceWithCheckOut = TeacherAttendance & {
+  checkOutSelfieUrl?: string | null;
+  checkOutDistance?: number | null;
+  checkOutLat?: number | null;
+  checkOutLng?: number | null;
+  attachmentUrl?: string | null;
+};
 
 const STATUS_COLORS: Record<string, string> = {
   HADIR: '#10B981',
@@ -80,9 +93,29 @@ function getRetentionCutoffDate(years: number): string {
   return `${y}-${m}-${day}`;
 }
 
+// Fungsi bantuan untuk menghapus file di Supabase Storage secara bertahap (aman untuk banyak file)
+async function removeFilesFromStorage(paths: Array<string | null | undefined>) {
+  const validPaths = Array.from(
+    new Set(paths.filter((p): p is string => Boolean(p && p.trim())))
+  );
+  if (validPaths.length === 0) return;
+
+  for (let i = 0; i < validPaths.length; i += STORAGE_DELETE_BATCH_SIZE) {
+    const chunk = validPaths.slice(i, i + STORAGE_DELETE_BATCH_SIZE);
+    const { error } = await supabase.storage
+      .from(STORAGE_BUCKET_NAME)
+      .remove(chunk);
+
+    if (error) {
+      console.warn('[StorageCleanup] Sebagian file gagal dihapus:', error.message);
+    }
+  }
+}
+
 /**
  * Dashboard Rekap Absensi Admin & Pimpinan
- * Fitur: Ringkasan Populasi Aktif, Kolom Nomor, Sorting Kolom, Hapus & Pembersihan Arsip > 2 Tahun (Super Admin)
+ * Fitur: Ringkasan Populasi Aktif, Pratinjau Foto Datang & Pulang, Sorting Kolom,
+ * Hapus Satuan & Pembersihan Arsip > 2 Tahun beserta Galeri Foto (Super Admin)
  */
 export function AttendanceDashboardPage() {
   const { user, school } = useAuthStore();
@@ -101,7 +134,9 @@ export function AttendanceDashboardPage() {
   const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
   const [summary, setSummary] = useState<AttendanceSummary | null>(null);
   const [studentRecords, setStudentRecords] = useState<StudentAttendance[]>([]);
-  const [teacherRecords, setTeacherRecords] = useState<TeacherAttendance[]>([]);
+  const [teacherRecords, setTeacherRecords] = useState<
+    TeacherAttendanceWithCheckOut[]
+  >([]);
   const [classes, setClasses] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -129,14 +164,19 @@ export function AttendanceDashboardPage() {
     setTimeout(() => setToast(null), 4500);
   };
 
-  // State Modal Pratinjau Foto Selfie Guru
+  // State Modal Pratinjau Foto Selfie Guru (Datang & Pulang)
   const [selfieModal, setSelfieModal] = useState<{
     teacherName: string;
     status: string;
     checkInTime?: string | null;
-    distance?: number | null;
+    checkOutTime?: string | null;
+    checkInDistance?: number | null;
+    checkOutDistance?: number | null;
     notes?: string | null;
-    imageUrl: string | null;
+    hasCheckInPhoto: boolean;
+    hasCheckOutPhoto: boolean;
+    checkInImageUrl: string | null;
+    checkOutImageUrl: string | null;
     isLoading: boolean;
   } | null>(null);
 
@@ -145,7 +185,7 @@ export function AttendanceDashboardPage() {
     id: string;
     name: string;
     date: string;
-    selfieUrl?: string | null;
+    storagePaths: string[];
   } | null>(null);
   const [isDeletingRow, setIsDeletingRow] = useState<boolean>(false);
 
@@ -210,7 +250,7 @@ export function AttendanceDashboardPage() {
       ]);
       setSummary(sum);
       setStudentRecords(students.data);
-      setTeacherRecords(teachers.data);
+      setTeacherRecords(teachers.data as TeacherAttendanceWithCheckOut[]);
     } catch (err) {
       console.error('[AttendanceDashboard] Load error:', err);
     } finally {
@@ -222,24 +262,45 @@ export function AttendanceDashboardPage() {
     loadData();
   }, [loadData]);
 
-  // Buka Modal Pratinjau Foto Selfie Guru (Signed URL Private Bucket)
-  const handlePreviewSelfie = async (record: TeacherAttendance) => {
-    if (!record.checkInSelfieUrl) return;
+  // Buka Modal Pratinjau Foto Selfie Guru (Datang & Pulang sekaligus)
+  const handlePreviewSelfie = async (record: TeacherAttendanceWithCheckOut) => {
+    const hasCheckInPhoto = Boolean(record.checkInSelfieUrl);
+    const hasCheckOutPhoto = Boolean(record.checkOutSelfieUrl);
+    if (!hasCheckInPhoto && !hasCheckOutPhoto) return;
+
     setSelfieModal({
       teacherName: record.teacher?.fullName ?? 'Guru / PTK',
       status: record.status,
       checkInTime: record.checkInTime,
-      distance: record.checkInDistance,
+      checkOutTime: record.checkOutTime,
+      checkInDistance: record.checkInDistance,
+      checkOutDistance: record.checkOutDistance,
       notes: record.notes,
-      imageUrl: null,
+      hasCheckInPhoto,
+      hasCheckOutPhoto,
+      checkInImageUrl: null,
+      checkOutImageUrl: null,
       isLoading: true,
     });
 
-    const signedUrl = await attendanceService.getSignedSelfieUrl(
+    const [signedInUrl, signedOutUrl] = await Promise.all([
       record.checkInSelfieUrl
-    );
+        ? attendanceService.getSignedSelfieUrl(record.checkInSelfieUrl)
+        : Promise.resolve(null),
+      record.checkOutSelfieUrl
+        ? attendanceService.getSignedSelfieUrl(record.checkOutSelfieUrl)
+        : Promise.resolve(null),
+    ]);
+
     setSelfieModal((prev) =>
-      prev ? { ...prev, imageUrl: signedUrl, isLoading: false } : null
+      prev
+        ? {
+          ...prev,
+          checkInImageUrl: signedInUrl,
+          checkOutImageUrl: signedOutUrl,
+          isLoading: false,
+        }
+        : null
     );
   };
 
@@ -382,17 +443,26 @@ export function AttendanceDashboardPage() {
     });
   }, [teacherRecords, searchQuery, teacherSort]);
 
-  // 4. Hapus 1 Baris Data Absensi (Khusus SUPER_ADMIN)
+  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto (Datang & Pulang) di Storage
   const handleConfirmDeleteSingle = async () => {
     if (!deleteTarget || !isSuperAdmin) return;
     setIsDeletingRow(true);
     try {
-      // Hapus file selfie dari storage jika ada
-      if (deleteTarget.selfieUrl) {
-        await supabase.storage
-          .from('attendance-selfies')
-          .remove([deleteTarget.selfieUrl]);
-      }
+      // Ambil ulang alamat file langsung dari database agar foto datang, foto pulang, & lampiran pasti terhapus
+      const { data: latestRow } = await supabase
+        .from('attendances')
+        .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
+        .eq('id', deleteTarget.id)
+        .maybeSingle();
+
+      const allPathsToDelete = [
+        ...deleteTarget.storagePaths,
+        latestRow?.checkInSelfieUrl,
+        latestRow?.checkOutSelfieUrl,
+        latestRow?.attachmentUrl,
+      ];
+
+      await removeFilesFromStorage(allPathsToDelete);
 
       const { error } = await supabase
         .from('attendances')
@@ -403,7 +473,7 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        `Data absensi ${deleteTarget.name} (${deleteTarget.date}) berhasil dihapus.`
+        `Data absensi ${deleteTarget.name} (${deleteTarget.date}) beserta galeri fotonya berhasil dihapus.`
       );
       setDeleteTarget(null);
       await loadData();
@@ -506,15 +576,15 @@ export function AttendanceDashboardPage() {
     }
   };
 
-  // Eksekusi Hapus Permanen Arsip > 2 Tahun
+  // Eksekusi Hapus Permanen Arsip > 2 Tahun (Termasuk Foto Datang, Pulang, & Lampiran)
   const handlePurgeOldRecords = async () => {
     if (!isSuperAdmin) return;
     setIsPurgingOldRecords(true);
     try {
-      // 1. Ambil daftar file foto selfie / lampiran yang akan ikut dibersihkan
+      // 1. Ambil daftar seluruh foto selfie datang, pulang, dan lampiran izin yang akan dihapus
       let fetchFilesQuery = supabase
         .from('attendances')
-        .select('checkInSelfieUrl, attachmentUrl')
+        .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
         .lt('date', cutoffDate);
 
       if (purgeScope === 'CURRENT_SCHOOL' && activeSchoolId) {
@@ -522,15 +592,13 @@ export function AttendanceDashboardPage() {
       }
 
       const { data: oldFiles } = await fetchFilesQuery;
-      const pathsToRemove = (oldFiles ?? [])
-        .flatMap((row: any) => [row.checkInSelfieUrl, row.attachmentUrl])
-        .filter((p): p is string => Boolean(p));
+      const pathsToRemove = (oldFiles ?? []).flatMap((row: any) => [
+        row.checkInSelfieUrl,
+        row.checkOutSelfieUrl,
+        row.attachmentUrl,
+      ]);
 
-      if (pathsToRemove.length > 0) {
-        await supabase.storage
-          .from('attendance-selfies')
-          .remove(pathsToRemove);
-      }
+      await removeFilesFromStorage(pathsToRemove);
 
       // 2. Hapus baris database yang lebih tua dari cutoffDate
       let deleteQuery = supabase
@@ -547,7 +615,7 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        `Pembersihan selesai! ${oldRecordsCount ?? 0} arsip absensi sebelum ${cutoffDate} telah dihapus.`
+        `Pembersihan selesai! ${oldRecordsCount ?? 0} arsip absensi sebelum ${cutoffDate} beserta foto datang & pulangnya telah dihapus.`
       );
       setPurgeModalOpen(false);
       await loadData();
@@ -590,7 +658,8 @@ export function AttendanceDashboardPage() {
           'Status',
           'Check-In',
           'Check-Out',
-          'Jarak (m)',
+          'Jarak Datang (m)',
+          'Jarak Pulang (m)',
           'Status GPS',
           'Keterangan',
         ]
@@ -610,6 +679,7 @@ export function AttendanceDashboardPage() {
             formatTime(r.checkInTime),
             formatTime(r.checkOutTime),
             r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
+            r.checkOutDistance != null ? Math.round(r.checkOutDistance) : '-',
             r.checkInTime ? (r.isCheckInMock ? 'Palsu' : 'Valid') : '-',
             r.notes ?? '-',
           ]
@@ -1029,7 +1099,7 @@ export function AttendanceDashboardPage() {
           </div>
         )}
 
-        {/* Students Tab (Dengan Kolom No, Sorting Kolom, & Hapus Super Admin) */}
+        {/* Students Tab */}
         {activeTab === 'students' && (
           <div className="data-card">
             {isLoading ? (
@@ -1151,6 +1221,7 @@ export function AttendanceDashboardPage() {
                                   id: record.id,
                                   name: record.student?.fullName ?? 'Siswa',
                                   date: record.date,
+                                  storagePaths: [],
                                 })
                               }
                               className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
@@ -1169,7 +1240,7 @@ export function AttendanceDashboardPage() {
           </div>
         )}
 
-        {/* Teachers Tab (Dengan Kolom No, Sorting Kolom, & Hapus Super Admin) */}
+        {/* Teachers Tab (Dengan Pratinjau Foto Datang & Pulang) */}
         {activeTab === 'teachers' && (
           <div className="data-card">
             {isLoading ? (
@@ -1260,115 +1331,150 @@ export function AttendanceDashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredTeachers.map((record, index) => (
-                      <tr key={record.id}>
-                        <td className="td-mono text-xs text-center opacity-70">
-                          {index + 1}
-                        </td>
-                        <td className="td-name">
-                          <div>{record.teacher?.fullName ?? '-'}</div>
-                          {record.teacher?.position && (
-                            <div className="text-xs opacity-60">
-                              {record.teacher.position}
-                            </div>
-                          )}
-                        </td>
-                        <td className="td-mono text-xs">
-                          {record.teacher?.nip ||
-                            record.teacher?.nuptk ||
-                            '-'}
-                        </td>
-                        <td>
-                          <span
-                            className="status-badge"
-                            style={{
-                              background:
-                                (STATUS_COLORS[record.status] ?? '#6B7280') +
-                                '20',
-                              color: STATUS_COLORS[record.status] ?? '#6B7280',
-                            }}
-                          >
-                            {STATUS_LABELS[record.status] ?? record.status}
-                          </span>
-                        </td>
-                        <td className="td-mono">
-                          {formatTime(record.checkInTime)}
-                        </td>
-                        <td className="td-mono">
-                          {formatTime(record.checkOutTime)}
-                        </td>
-                        <td className="td-mono text-xs">
-                          {record.checkInLat != null &&
-                            record.checkInLng != null ? (
-                            <a
-                              href={`https://maps.google.com/?q=${record.checkInLat},${record.checkInLng}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="gps-link"
-                            >
-                              <MapPin size={12} />
-                              {record.checkInDistance != null
-                                ? `${Math.round(record.checkInDistance)}m`
-                                : 'Peta'}
-                            </a>
-                          ) : (
-                            '-'
-                          )}
-                        </td>
-                        <td>
-                          {record.checkInTime ? (
-                            record.isCheckInMock ? (
-                              <span className="gps-invalid">
-                                <XCircle size={14} /> Palsu
-                              </span>
-                            ) : (
-                              <span className="gps-valid">
-                                <Shield size={14} /> Valid
-                              </span>
-                            )
-                          ) : (
-                            '-'
-                          )}
-                        </td>
-                        <td>
-                          {record.checkInSelfieUrl ? (
-                            <button
-                              type="button"
-                              onClick={() => handlePreviewSelfie(record)}
-                              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-primary/15 text-primary hover:bg-primary/25 transition"
-                            >
-                              <Camera size={13} />
-                              Lihat Foto
-                            </button>
-                          ) : (
-                            <span className="text-xs opacity-40">-</span>
-                          )}
-                        </td>
-                        <td className="text-xs opacity-75">
-                          {record.notes ?? '-'}
-                        </td>
-                        {isSuperAdmin && (
-                          <td className="text-center">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setDeleteTarget({
-                                  id: record.id,
-                                  name:
-                                    record.teacher?.fullName ?? 'Guru / PTK',
-                                  date: record.date,
-                                  selfieUrl: record.checkInSelfieUrl,
-                                })
-                              }
-                              className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                              title="Hapus data absensi ini (Super Admin)"
-                            >
-                              <Trash2 size={15} />
-                            </button>
+                    {filteredTeachers.map((record, index) => {
+                      const hasInPhoto = Boolean(record.checkInSelfieUrl);
+                      const hasOutPhoto = Boolean(record.checkOutSelfieUrl);
+                      const hasAnyPhoto = hasInPhoto || hasOutPhoto;
+
+                      return (
+                        <tr key={record.id}>
+                          <td className="td-mono text-xs text-center opacity-70">
+                            {index + 1}
                           </td>
-                        )}
-                      </tr>
-                    ))}
+                          <td className="td-name">
+                            <div>{record.teacher?.fullName ?? '-'}</div>
+                            {record.teacher?.position && (
+                              <div className="text-xs opacity-60">
+                                {record.teacher.position}
+                              </div>
+                            )}
+                          </td>
+                          <td className="td-mono text-xs">
+                            {record.teacher?.nip ||
+                              record.teacher?.nuptk ||
+                              '-'}
+                          </td>
+                          <td>
+                            <span
+                              className="status-badge"
+                              style={{
+                                background:
+                                  (STATUS_COLORS[record.status] ?? '#6B7280') +
+                                  '20',
+                                color: STATUS_COLORS[record.status] ?? '#6B7280',
+                              }}
+                            >
+                              {STATUS_LABELS[record.status] ?? record.status}
+                            </span>
+                          </td>
+                          <td className="td-mono">
+                            {formatTime(record.checkInTime)}
+                          </td>
+                          <td className="td-mono">
+                            {formatTime(record.checkOutTime)}
+                          </td>
+                          <td className="td-mono text-xs">
+                            <div className="flex flex-col gap-1">
+                              {record.checkInLat != null &&
+                                record.checkInLng != null ? (
+                                <a
+                                  href={`https://maps.google.com/?q=${record.checkInLat},${record.checkInLng}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="gps-link"
+                                  title="Titik GPS Datang"
+                                >
+                                  <MapPin size={12} />
+                                  {record.checkInDistance != null
+                                    ? `${Math.round(record.checkInDistance)}m`
+                                    : 'Datang'}
+                                </a>
+                              ) : (
+                                '-'
+                              )}
+                              {record.checkOutLat != null &&
+                                record.checkOutLng != null && (
+                                  <a
+                                    href={`https://maps.google.com/?q=${record.checkOutLat},${record.checkOutLng}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="gps-link text-amber-600 dark:text-amber-400"
+                                    title="Titik GPS Pulang"
+                                  >
+                                    <MapPin size={12} />
+                                    {record.checkOutDistance != null
+                                      ? `Pulang ${Math.round(record.checkOutDistance)}m`
+                                      : 'Pulang'}
+                                  </a>
+                                )}
+                            </div>
+                          </td>
+                          <td>
+                            {record.checkInTime ? (
+                              record.isCheckInMock ? (
+                                <span className="gps-invalid">
+                                  <XCircle size={14} /> Palsu
+                                </span>
+                              ) : (
+                                <span className="gps-valid">
+                                  <Shield size={14} /> Valid
+                                </span>
+                              )
+                            ) : (
+                              '-'
+                            )}
+                          </td>
+                          <td>
+                            {hasAnyPhoto ? (
+                              <button
+                                type="button"
+                                onClick={() => handlePreviewSelfie(record)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-primary/15 text-primary hover:bg-primary/25 transition"
+                                title="Lihat foto selfie datang & pulang"
+                              >
+                                <Camera size={13} />
+                                <span>
+                                  {hasInPhoto && hasOutPhoto
+                                    ? 'Datang & Pulang'
+                                    : hasInPhoto
+                                      ? 'Foto Datang'
+                                      : 'Foto Pulang'}
+                                </span>
+                              </button>
+                            ) : (
+                              <span className="text-xs opacity-40">-</span>
+                            )}
+                          </td>
+                          <td className="text-xs opacity-75">
+                            {record.notes ?? '-'}
+                          </td>
+                          {isSuperAdmin && (
+                            <td className="text-center">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    id: record.id,
+                                    name:
+                                      record.teacher?.fullName ?? 'Guru / PTK',
+                                    date: record.date,
+                                    storagePaths: [
+                                      record.checkInSelfieUrl,
+                                      record.checkOutSelfieUrl,
+                                      record.attachmentUrl,
+                                    ].filter((p): p is string => Boolean(p)),
+                                  })
+                                }
+                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
+                                title="Hapus data absensi beserta foto datang & pulang (Super Admin)"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1405,8 +1511,9 @@ export function AttendanceDashboardPage() {
                   <p className="text-xs opacity-75 mt-1 leading-relaxed">
                     Anda akan menghapus catatan absensi milik{' '}
                     <strong>{deleteTarget.name}</strong> pada tanggal{' '}
-                    <strong>{deleteTarget.date}</strong>. Tindakan ini tidak
-                    dapat dibatalkan.
+                    <strong>{deleteTarget.date}</strong> beserta seluruh foto
+                    selfie (Datang &amp; Pulang) dari penyimpanan. Tindakan ini
+                    tidak dapat dibatalkan.
                   </p>
                 </div>
               </div>
@@ -1472,11 +1579,12 @@ export function AttendanceDashboardPage() {
 
               <div className="space-y-3 text-xs">
                 <p className="opacity-80 leading-relaxed">
-                  Fitur ini menghapus catatan absensi lama beserta lampiran foto
-                  selfie yang tercatat sebelum tanggal{' '}
+                  Fitur ini menghapus catatan absensi lama beserta seluruh foto
+                  selfie datang, foto selfie pulang, dan lampiran surat yang
+                  tercatat sebelum tanggal{' '}
                   <strong className="text-amber-500">{cutoffDate}</strong>{' '}
                   (lebih dari {ARCHIVE_RETENTION_YEARS} tahun yang lalu) untuk
-                  menjaga performa database tetap ringan.
+                  menjaga performa database dan kapasitas galeri tetap ringan.
                 </p>
 
                 {/* Pilihan Cakupan Pembersihan */}
@@ -1560,7 +1668,9 @@ export function AttendanceDashboardPage() {
         )}
       </AnimatePresence>
 
-      {/* Modal Pratinjau Foto Selfie Guru */}
+      {/* ====================================================================
+          MODAL PRATINJAU FOTO SELFIE GURU (DATANG & PULANG)
+      ==================================================================== */}
       <AnimatePresence>
         {selfieModal && (
           <motion.div
@@ -1574,7 +1684,10 @@ export function AttendanceDashboardPage() {
               initial={{ scale: 0.92, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
-              className="data-card max-w-md w-full p-5 relative"
+              className={`data-card w-full p-5 relative ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
+                  ? 'max-w-2xl'
+                  : 'max-w-md'
+                }`}
               onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-3">
@@ -1583,10 +1696,7 @@ export function AttendanceDashboardPage() {
                     {selfieModal.teacherName}
                   </h3>
                   <p className="text-xs opacity-70">
-                    Check-In: {formatTime(selfieModal.checkInTime)}
-                    {selfieModal.distance != null
-                      ? ` • Jarak: ${Math.round(selfieModal.distance)} m`
-                      : ''}
+                    Dokumentasi Selfie Presensi Harian
                   </p>
                 </div>
                 <button
@@ -1598,28 +1708,84 @@ export function AttendanceDashboardPage() {
                 </button>
               </div>
 
-              <div className="rounded-xl overflow-hidden bg-black/40 border border-white/10 min-h-65 flex items-center justify-center">
-                {selfieModal.isLoading ? (
-                  <div className="flex flex-col items-center gap-2 text-xs opacity-75">
-                    <RefreshCw size={24} className="spin" />
-                    <span>Memuat foto dari penyimpanan aman...</span>
-                  </div>
-                ) : selfieModal.imageUrl ? (
-                  <img
-                    src={selfieModal.imageUrl}
-                    alt={`Selfie ${selfieModal.teacherName}`}
-                    className="w-full max-h-95 object-contain"
-                  />
-                ) : (
-                  <p className="text-xs text-red-400 p-4 text-center">
-                    Foto tidak dapat dimuat atau Anda tidak memiliki hak akses
-                    melihat berkas ini.
-                  </p>
-                )}
-              </div>
+              {selfieModal.isLoading ? (
+                <div className="rounded-xl bg-black/40 border border-white/10 min-h-65 flex flex-col items-center justify-center gap-2 text-xs opacity-75">
+                  <RefreshCw size={24} className="spin" />
+                  <span>Memuat foto dari penyimpanan aman...</span>
+                </div>
+              ) : (
+                <div
+                  className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1'
+                    }`}
+                >
+                  {/* KARTU FOTO DATANG (CHECK-IN) */}
+                  {selfieModal.hasCheckInPhoto && (
+                    <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="inline-flex items-center gap-1.5 font-bold text-emerald-600 dark:text-emerald-300">
+                          <LogIn size={14} /> Foto Datang
+                        </span>
+                        <span className="font-mono opacity-80">
+                          {formatTime(selfieModal.checkInTime)}
+                          {selfieModal.checkInDistance != null
+                            ? ` • ${Math.round(selfieModal.checkInDistance)}m`
+                            : ''}
+                        </span>
+                      </div>
+
+                      <div className="rounded-xl overflow-hidden bg-black/40 border border-white/10 min-h-56 flex items-center justify-center">
+                        {selfieModal.checkInImageUrl ? (
+                          <img
+                            src={selfieModal.checkInImageUrl}
+                            alt={`Selfie Datang ${selfieModal.teacherName}`}
+                            className="w-full max-h-80 object-contain"
+                          />
+                        ) : (
+                          <p className="text-xs text-red-400 p-4 text-center">
+                            Foto datang tidak dapat dimuat.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* KARTU FOTO PULANG (CHECK-OUT) */}
+                  {selfieModal.hasCheckOutPhoto && (
+                    <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="inline-flex items-center gap-1.5 font-bold text-amber-600 dark:text-amber-300">
+                          <LogOut size={14} /> Foto Pulang
+                        </span>
+                        <span className="font-mono opacity-80">
+                          {formatTime(selfieModal.checkOutTime)}
+                          {selfieModal.checkOutDistance != null
+                            ? ` • ${Math.round(selfieModal.checkOutDistance)}m`
+                            : ''}
+                        </span>
+                      </div>
+
+                      <div className="rounded-xl overflow-hidden bg-black/40 border border-white/10 min-h-56 flex items-center justify-center">
+                        {selfieModal.checkOutImageUrl ? (
+                          <img
+                            src={selfieModal.checkOutImageUrl}
+                            alt={`Selfie Pulang ${selfieModal.teacherName}`}
+                            className="w-full max-h-80 object-contain"
+                          />
+                        ) : (
+                          <p className="text-xs text-red-400 p-4 text-center">
+                            Foto pulang tidak dapat dimuat.
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {selfieModal.notes && (
-                <div className="mt-3 p-2.5 rounded-lg bg-white/5 text-xs flex items-start gap-2">
+                <div className="mt-3 p-2.5 rounded-lg bg-muted/50 border border-border text-xs flex items-start gap-2">
                   <FileText size={14} className="mt-0.5 opacity-70 shrink-0" />
                   <span>{selfieModal.notes}</span>
                 </div>
