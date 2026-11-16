@@ -210,6 +210,16 @@ function formatDeadlineWithTolerance(
   return `${finalH}:${finalM}`;
 }
 
+// Mengecek apakah galat berasal dari kolom yang belum tersedia di schema cache Supabase
+function isMissingColumnSchemaError(err: any): boolean {
+  const msg = String(err?.message ?? '').toLowerCase();
+  return (
+    err?.code === 'PGRST204' ||
+    msg.includes('schema cache') ||
+    (msg.includes('column') && msg.includes('does not exist'))
+  );
+}
+
 export function TeacherAttendancePage() {
   const navigate = useNavigate();
   const { user, school } = useAuthStore();
@@ -281,7 +291,7 @@ export function TeacherAttendancePage() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
 
-  // State Kamera Selfie Modal
+  // State Kamera Selfie Modal & Penjaga Anti-Duplikat Upload
   const [cameraModal, setCameraModal] = useState<{
     open: boolean;
     mode: 'CHECK_IN' | 'CHECK_OUT';
@@ -290,6 +300,7 @@ export function TeacherAttendancePage() {
   const streamRef = useRef<MediaStream | null>(null);
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [capturedPreview, setCapturedPreview] = useState<string | null>(null);
+  const [uploadedSelfiePath, setUploadedSelfiePath] = useState<string | null>(null);
   const [isSubmittingAttendance, setIsSubmittingAttendance] = useState<boolean>(false);
 
   // State Formulir Izin / Dinas Luar / Sakit
@@ -812,6 +823,7 @@ export function TeacherAttendancePage() {
 
     setCapturedBlob(null);
     setCapturedPreview(null);
+    setUploadedSelfiePath(null);
     setCameraModal({ open: true, mode });
 
     try {
@@ -836,6 +848,7 @@ export function TeacherAttendancePage() {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
+    setUploadedSelfiePath(null);
     setCameraModal((prev) => ({ ...prev, open: false }));
   };
 
@@ -854,6 +867,7 @@ export function TeacherAttendancePage() {
         if (blob) {
           setCapturedBlob(blob);
           setCapturedPreview(URL.createObjectURL(blob));
+          setUploadedSelfiePath(null); // Reset path hanya saat mengambil foto baru
         }
       },
       'image/jpeg',
@@ -917,20 +931,30 @@ export function TeacherAttendancePage() {
     openCameraModal(attendancePhase);
   };
 
-  // Simpan Check-In / Check-Out ke Supabase dengan Nama Folder Sekolah & Nama_NIK Guru
+  // Simpan Check-In / Check-Out ke Supabase (Anti-Duplikat Foto + Schema Cache Fallback)
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
     selfieBlob: Blob | null
   ) => {
-    if (!teacher || !activeSchoolId || !userCoords || distanceMeters === null) return;
+    if (
+      isSubmittingAttendance ||
+      !teacher ||
+      !activeSchoolId ||
+      !userCoords ||
+      distanceMeters === null
+    ) {
+      return;
+    }
+
     setIsSubmittingAttendance(true);
     try {
-      let uploadedPath: string | null = null;
+      let finalUploadedPath: string | null = uploadedSelfiePath;
       const nowObj = new Date();
       const todayStr = getTodayLocal();
       const timeTag = getTimeStampTagLocal(nowObj);
 
-      if (selfieBlob) {
+      // Unggah foto hanya jika belum pernah diunggah untuk jepretan kamera saat ini
+      if (selfieBlob && !finalUploadedPath) {
         const schoolFolder = schoolGeo?.name
           ? sanitizeStorageSegment(schoolGeo.name)
           : activeSchoolId;
@@ -941,9 +965,12 @@ export function TeacherAttendancePage() {
           .from('attendance-selfies')
           .upload(fileName, selfieBlob, { contentType: 'image/jpeg', upsert: true });
 
-        if (!uploadErr) {
-          uploadedPath = fileName;
+        if (uploadErr) {
+          throw new Error(`Gagal mengunggah foto selfie: ${uploadErr.message}`);
         }
+
+        finalUploadedPath = fileName;
+        setUploadedSelfiePath(fileName);
       }
 
       const nowIso = nowObj.toISOString();
@@ -959,7 +986,7 @@ export function TeacherAttendancePage() {
         );
         const status = nowObj > deadline ? 'TERLAMBAT' : 'HADIR';
 
-        const { error } = await supabase.from('attendances').insert({
+        const fullPayload: Record<string, any> = {
           schoolId: activeSchoolId,
           teacherId: teacher.id,
           type: 'GURU',
@@ -970,8 +997,26 @@ export function TeacherAttendancePage() {
           checkInLng: userCoords.lng,
           checkInDistance: Math.round(distanceMeters),
           isCheckInMock: false,
-          checkInSelfieUrl: uploadedPath,
-        });
+          checkInSelfieUrl: finalUploadedPath,
+        };
+
+        let { error } = await supabase.from('attendances').insert(fullPayload);
+
+        // Fallback otomatis jika ada kolom tambahan yang belum tersedia di schema cache
+        if (error && isMissingColumnSchemaError(error)) {
+          const fallbackPayload = {
+            schoolId: activeSchoolId,
+            teacherId: teacher.id,
+            type: 'GURU',
+            date: todayStr,
+            status,
+            checkInTime: nowIso,
+            checkInLat: userCoords.lat,
+            checkInLng: userCoords.lng,
+          };
+          const retry = await supabase.from('attendances').insert(fallbackPayload);
+          error = retry.error;
+        }
 
         if (error) throw error;
         showToast(
@@ -987,15 +1032,32 @@ export function TeacherAttendancePage() {
           throw new Error('Anda belum melakukan Check-In masuk hari ini.');
         }
 
-        const { error } = await supabase
+        const fullUpdatePayload: Record<string, any> = {
+          checkOutTime: nowIso,
+          checkOutLat: userCoords.lat,
+          checkOutLng: userCoords.lng,
+          checkOutDistance: Math.round(distanceMeters),
+          ...(finalUploadedPath ? { checkOutSelfieUrl: finalUploadedPath } : {}),
+        };
+
+        let { error } = await supabase
           .from('attendances')
-          .update({
+          .update(fullUpdatePayload)
+          .eq('id', todayRecord.id);
+
+        // Fallback otomatis jika kolom checkOutDistance / checkOutSelfieUrl belum ada di schema cache
+        if (error && isMissingColumnSchemaError(error)) {
+          const coreUpdatePayload = {
             checkOutTime: nowIso,
             checkOutLat: userCoords.lat,
             checkOutLng: userCoords.lng,
-            checkOutDistance: Math.round(distanceMeters),
-          })
-          .eq('id', todayRecord.id);
+          };
+          const retry = await supabase
+            .from('attendances')
+            .update(coreUpdatePayload)
+            .eq('id', todayRecord.id);
+          error = retry.error;
+        }
 
         if (error) throw error;
         showToast('success', 'Check-Out Pulang berhasil tercatat! Hati-hati di jalan.');
@@ -2726,6 +2788,7 @@ export function TeacherAttendancePage() {
                     onClick={() => {
                       setCapturedBlob(null);
                       setCapturedPreview(null);
+                      setUploadedSelfiePath(null);
                     }}
                     className="btn-secondary justify-center"
                     disabled={isSubmittingAttendance}
