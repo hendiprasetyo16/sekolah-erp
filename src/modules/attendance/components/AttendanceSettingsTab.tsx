@@ -45,6 +45,24 @@ import { HolidayCalendarView } from './HolidayCalendarView';
 const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
 const INITIAL_BASE_YEARS = [2026, 2027, 2028];
 
+// ============================================================================
+// TEMA TOMBOL MODERN TERPUSAT (MUDAH DISESUAIKAN)
+// ============================================================================
+const BTN_STYLE = {
+    primaryEmerald:
+        'inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm shadow-emerald-600/20 hover:shadow-md hover:shadow-emerald-600/25 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+    primaryBlue:
+        'inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-sm shadow-blue-600/20 hover:shadow-md hover:shadow-blue-600/25 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+    secondary:
+        'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs hover:shadow-xs active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+    secondaryCompact:
+        'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+    danger:
+        'inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm shadow-red-600/20 hover:shadow-md active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+    dangerOutline:
+        'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-red-500/35 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-[0.98] transition-all duration-200 cursor-pointer',
+} as const;
+
 /**
  * Helper menghitung jam efektif setelah ditambah toleransi keterlambatan (menit)
  */
@@ -316,7 +334,6 @@ export function AttendanceSettingsTab() {
                 .eq('id', selectedSchoolId);
 
             if (error) {
-                // Fallback jika kolom requireSelfieCheckIn/Out belum dibuat di Supabase
                 if (isMissingColumnError(error)) {
                     const retry = await supabase
                         .from('schools')
@@ -732,8 +749,8 @@ export function AttendanceSettingsTab() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -897,16 +914,16 @@ export function AttendanceSettingsTab() {
                                     setRequireSelfieCheckIn((prev) => !prev);
                                 }
                             }}
-                            className={`p-4 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${requireSelfieCheckIn
-                                    ? 'border-emerald-600/70 bg-emerald-500/10'
-                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                            className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckIn
+                                ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                : 'border-border bg-muted/25 hover:bg-muted/40'
                                 }`}
                         >
                             <div className="flex items-start gap-3">
                                 <div
                                     className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckIn
-                                            ? 'bg-emerald-600 text-white'
-                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                                         }`}
                                 >
                                     {requireSelfieCheckIn ? <Camera size={16} /> : <MapPin size={16} />}
@@ -946,16 +963,16 @@ export function AttendanceSettingsTab() {
                                     setRequireSelfieCheckOut((prev) => !prev);
                                 }
                             }}
-                            className={`p-4 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${requireSelfieCheckOut
-                                    ? 'border-emerald-600/70 bg-emerald-500/10'
-                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                            className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckOut
+                                ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                : 'border-border bg-muted/25 hover:bg-muted/40'
                                 }`}
                         >
                             <div className="flex items-start gap-3">
                                 <div
                                     className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckOut
-                                            ? 'bg-emerald-600 text-white'
-                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                                         }`}
                                 >
                                     {requireSelfieCheckOut ? <Camera size={16} /> : <MapPin size={16} />}
@@ -994,9 +1011,9 @@ export function AttendanceSettingsTab() {
                         <button
                             type="button"
                             onClick={() => setWorkDaysMode('FIVE_DAYS')}
-                            className={`p-4 rounded-xl border text-left transition flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
-                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                            className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
+                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                : 'border-border bg-muted/20 hover:bg-muted/40'
                                 }`}
                         >
                             <Briefcase
@@ -1020,9 +1037,9 @@ export function AttendanceSettingsTab() {
                         <button
                             type="button"
                             onClick={() => setWorkDaysMode('SIX_DAYS')}
-                            className={`p-4 rounded-xl border text-left transition flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
-                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                            className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
+                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                : 'border-border bg-muted/20 hover:bg-muted/40'
                                 }`}
                         >
                             <Briefcase
@@ -1045,13 +1062,17 @@ export function AttendanceSettingsTab() {
                     </div>
                 </div>
 
-                <div className="flex justify-end pt-1">
+                <div className="flex justify-end pt-2 border-t border-border/60">
                     <button
                         type="submit"
                         disabled={isSavingSchedule || !selectedSchoolId}
-                        className="btn-primary px-5 py-2.5 text-xs font-bold rounded-xl"
+                        className={BTN_STYLE.primaryEmerald}
                     >
-                        <Save size={15} />
+                        {isSavingSchedule ? (
+                            <Loader2 size={15} className="animate-spin" />
+                        ) : (
+                            <Save size={15} />
+                        )}
                         {isSavingSchedule
                             ? 'Menyimpan...'
                             : 'Simpan Pengaturan Jam, Selfie & Hari Kerja'}
@@ -1078,14 +1099,14 @@ export function AttendanceSettingsTab() {
                         <button
                             type="button"
                             onClick={() => downloadHolidayExcelTemplate(filterYear)}
-                            className="btn-secondary text-xs py-2 px-3"
+                            className={BTN_STYLE.secondary}
                         >
-                            <Download size={14} />
+                            <Download size={14} className="text-emerald-600" />
                             Template Excel
                         </button>
 
-                        <label className="btn-secondary text-xs py-2 px-3 cursor-pointer">
-                            <Upload size={14} />
+                        <label className={BTN_STYLE.secondary}>
+                            <Upload size={14} className="text-blue-600" />
                             Import Excel / CSV
                             <input
                                 type="file"
@@ -1098,7 +1119,7 @@ export function AttendanceSettingsTab() {
                 </div>
 
                 {/* Panel Kontrol Sinkronisasi Server API + Kalender Muhammadiyah */}
-                <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
+                <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                         <div className="flex flex-col gap-2.5 flex-1">
                             <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
@@ -1147,12 +1168,12 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={handleFetchFromServer}
                             disabled={isFetchingServer}
-                            className="btn-primary text-xs py-2.5 px-4 bg-blue-600 hover:bg-blue-700 shrink-0 self-start md:self-center"
+                            className={`${BTN_STYLE.primaryBlue} shrink-0 self-start md:self-center`}
                         >
                             {isFetchingServer ? (
-                                <Loader2 size={14} className="animate-spin" />
+                                <Loader2 size={15} className="animate-spin" />
                             ) : (
-                                <Server size={14} />
+                                <Server size={15} />
                             )}
                             {isFetchingServer
                                 ? 'Menarik Data...'
@@ -1160,7 +1181,7 @@ export function AttendanceSettingsTab() {
                         </button>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-blue-500/20 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-blue-500/20 text-xs">
                         <div className="flex flex-wrap items-center gap-4">
                             <label className="flex items-center gap-2 cursor-pointer font-medium">
                                 <input
@@ -1219,10 +1240,10 @@ export function AttendanceSettingsTab() {
                     {syncFeedback && (
                         <div
                             className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
-                                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
-                                    : syncFeedback.status === 'success'
-                                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                                ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
+                                : syncFeedback.status === 'success'
+                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                                    : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                                 }`}
                         >
                             {syncFeedback.status === 'loading' ? (
@@ -1262,7 +1283,7 @@ export function AttendanceSettingsTab() {
                                             { date: `${filterYear}-01-01`, name: 'Libur Tambahan' },
                                         ])
                                     }
-                                    className="btn-secondary text-xs py-1.5 px-3"
+                                    className={BTN_STYLE.secondaryCompact}
                                     disabled={isImporting}
                                 >
                                     <Plus size={13} />
@@ -1274,7 +1295,7 @@ export function AttendanceSettingsTab() {
                                         setPreviewRows([]);
                                         setPreviewSourceLabel('');
                                     }}
-                                    className="btn-secondary text-xs py-1.5 px-3"
+                                    className={BTN_STYLE.secondaryCompact}
                                     disabled={isImporting}
                                 >
                                     Batal
@@ -1283,7 +1304,7 @@ export function AttendanceSettingsTab() {
                                     type="button"
                                     onClick={handleConfirmBatchSave}
                                     disabled={isImporting}
-                                    className="btn-primary text-xs py-1.5 px-4 font-bold"
+                                    className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
                                 >
                                     <Save size={14} />
                                     {isImporting ? 'Menyimpan...' : 'Simpan ke Database'}
@@ -1356,10 +1377,10 @@ export function AttendanceSettingsTab() {
                                                                 prev.filter((_, i) => i !== idx)
                                                             )
                                                         }
-                                                        className="p-1.5 text-red-500 hover:bg-red-500/15 rounded"
+                                                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 active:scale-95 transition"
                                                         title="Kecualikan tanggal ini"
                                                     >
-                                                        <Trash2 size={13} />
+                                                        <Trash2 size={14} />
                                                     </button>
                                                 </td>
                                             </tr>
@@ -1374,7 +1395,7 @@ export function AttendanceSettingsTab() {
                 {/* Form Tambah 1 Tanggal Libur Manual */}
                 <form
                     onSubmit={handleAddSingleHoliday}
-                    className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end bg-muted/25 p-3.5 rounded-xl border border-border"
+                    className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end bg-muted/25 p-3.5 rounded-xl border border-border"
                 >
                     <div className="sm:col-span-4">
                         <label className="block text-[11px] font-semibold mb-1">
@@ -1405,9 +1426,9 @@ export function AttendanceSettingsTab() {
                         <button
                             type="submit"
                             disabled={isAddingHoliday}
-                            className="btn-primary w-full justify-center py-2 text-xs font-bold"
+                            className={`${BTN_STYLE.primaryEmerald} w-full py-2!`}
                         >
-                            <Plus size={14} />
+                            <Plus size={15} />
                             {isAddingHoliday ? 'Menyimpan...' : 'Tambah Libur'}
                         </button>
                     </div>
@@ -1421,13 +1442,14 @@ export function AttendanceSettingsTab() {
                                 Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
                             </h3>
 
-                            <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
+                            {/* Switcher Mode Kalender vs Daftar */}
+                            <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
                                 <button
                                     type="button"
                                     onClick={() => setHolidayViewMode('CALENDAR')}
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'CALENDAR'
-                                            ? 'bg-card text-foreground shadow-sm'
-                                            : 'text-muted-foreground hover:text-foreground'
+                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'CALENDAR'
+                                        ? 'bg-card text-foreground shadow-xs'
+                                        : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                 >
                                     <Calendar size={13} />
@@ -1436,9 +1458,9 @@ export function AttendanceSettingsTab() {
                                 <button
                                     type="button"
                                     onClick={() => setHolidayViewMode('LIST')}
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'LIST'
-                                            ? 'bg-card text-foreground shadow-sm'
-                                            : 'text-muted-foreground hover:text-foreground'
+                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'LIST'
+                                        ? 'bg-card text-foreground shadow-xs'
+                                        : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                 >
                                     <List size={13} />
@@ -1463,7 +1485,7 @@ export function AttendanceSettingsTab() {
                             <button
                                 type="button"
                                 onClick={handleAddNextYear}
-                                className="btn-secondary text-xs py-1.5 px-3 font-semibold text-emerald-700 dark:text-emerald-300 border-emerald-500/40 hover:bg-emerald-500/10 shrink-0 whitespace-nowrap"
+                                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 shadow-2xs active:scale-[0.98] transition-all duration-200 shrink-0 whitespace-nowrap cursor-pointer"
                                 title="Tambahkan tahun berikutnya ke daftar pilihan"
                             >
                                 <Plus size={14} />
@@ -1473,7 +1495,7 @@ export function AttendanceSettingsTab() {
                             <button
                                 type="button"
                                 onClick={loadHolidays}
-                                className="p-2 rounded-lg bg-muted hover:bg-muted/80 shrink-0"
+                                className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all duration-200 shrink-0 cursor-pointer"
                                 title="Refresh Daftar Libur"
                             >
                                 <RefreshCw
@@ -1485,7 +1507,7 @@ export function AttendanceSettingsTab() {
                     </div>
 
                     {!isLoadingHolidays && deletableHolidays.length > 0 && (
-                        <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-muted/35 border border-border text-xs">
+                        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-muted/35 border border-border text-xs">
                             {holidayViewMode === 'LIST' ? (
                                 <label className="flex items-center gap-2 cursor-pointer font-semibold select-none">
                                     <input
@@ -1516,7 +1538,7 @@ export function AttendanceSettingsTab() {
                                                 targetIds: selectedHolidayIds,
                                             })
                                         }
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-red-600 text-white hover:bg-red-700 transition"
+                                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm active:scale-[0.98] transition-all duration-200 cursor-pointer"
                                     >
                                         <Trash2 size={13} />
                                         Hapus Terpilih ({selectedHolidayIds.length})
@@ -1532,7 +1554,7 @@ export function AttendanceSettingsTab() {
                                             targetIds: deletableHolidays.map((h) => h.id),
                                         })
                                     }
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 transition"
+                                    className={BTN_STYLE.dangerOutline}
                                 >
                                     <Trash2 size={13} />
                                     Hapus Semua ({deletableHolidays.length})
@@ -1629,14 +1651,14 @@ export function AttendanceSettingsTab() {
                                         </div>
 
                                         {canManageItem && (
-                                            <div className="flex items-center gap-1 shrink-0">
+                                            <div className="flex items-center gap-1.5 shrink-0">
                                                 <button
                                                     type="button"
                                                     onClick={() => handleOpenEditModal(item)}
-                                                    className="p-1.5 rounded-lg text-blue-600 hover:bg-blue-500/15 transition"
+                                                    className="p-2 rounded-xl border border-blue-500/25 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500/20 active:scale-95 transition-all cursor-pointer"
                                                     title="Edit tanggal atau keterangan"
                                                 >
-                                                    <Pencil size={14} />
+                                                    <Pencil size={13} />
                                                 </button>
                                                 <button
                                                     type="button"
@@ -1647,10 +1669,10 @@ export function AttendanceSettingsTab() {
                                                             targetIds: [item.id],
                                                         })
                                                     }
-                                                    className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
+                                                    className="p-2 rounded-xl border border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-95 transition-all cursor-pointer"
                                                     title="Hapus hari libur"
                                                 >
-                                                    <Trash2 size={14} />
+                                                    <Trash2 size={13} />
                                                 </button>
                                             </div>
                                         )}
@@ -1671,7 +1693,7 @@ export function AttendanceSettingsTab() {
                     >
                         <div className="flex items-center justify-between border-b border-border pb-3">
                             <div className="flex items-center gap-2">
-                                <div className="p-2 rounded-lg bg-blue-500/15 text-blue-600">
+                                <div className="p-2 rounded-xl bg-blue-500/15 text-blue-600">
                                     <Pencil size={16} />
                                 </div>
                                 <div>
@@ -1684,7 +1706,7 @@ export function AttendanceSettingsTab() {
                             <button
                                 type="button"
                                 onClick={() => setEditingHoliday(null)}
-                                className="p-1.5 rounded-lg hover:bg-muted text-muted-foreground"
+                                className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground active:scale-95 transition cursor-pointer"
                             >
                                 <X size={16} />
                             </button>
@@ -1729,14 +1751,14 @@ export function AttendanceSettingsTab() {
                                 type="button"
                                 onClick={() => setEditingHoliday(null)}
                                 disabled={isSavingEdit}
-                                className="btn-secondary text-xs py-2 px-4"
+                                className={BTN_STYLE.secondary}
                             >
                                 Batal
                             </button>
                             <button
                                 type="submit"
                                 disabled={isSavingEdit}
-                                className="btn-primary text-xs py-2 px-4 font-bold"
+                                className={BTN_STYLE.primaryEmerald}
                             >
                                 <Save size={14} />
                                 {isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}
@@ -1769,7 +1791,7 @@ export function AttendanceSettingsTab() {
                                 type="button"
                                 onClick={() => setDeleteConfirmModal(null)}
                                 disabled={isDeletingHolidays}
-                                className="btn-secondary text-xs py-2 px-4"
+                                className={BTN_STYLE.secondary}
                             >
                                 Batal
                             </button>
@@ -1777,7 +1799,7 @@ export function AttendanceSettingsTab() {
                                 type="button"
                                 onClick={handleConfirmDeleteExecution}
                                 disabled={isDeletingHolidays}
-                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-red-600 text-white hover:bg-red-700 transition disabled:opacity-50"
+                                className={BTN_STYLE.danger}
                             >
                                 <Trash2 size={14} />
                                 {isDeletingHolidays ? 'Menghapus...' : 'Ya, Hapus Sekarang'}

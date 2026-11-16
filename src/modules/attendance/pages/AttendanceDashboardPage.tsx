@@ -111,6 +111,13 @@ async function removeFilesFromStorage(paths: Array<string | null | undefined>) {
   }
 }
 
+// Helper mendeteksi apakah catatan berisi alasan Pulang Awal
+function isEarlyCheckoutNote(notes?: string | null): boolean {
+  if (!notes) return false;
+  const lower = notes.toLowerCase();
+  return lower.includes('pulang awal') || lower.includes('pulang lebih awal');
+}
+
 export function AttendanceDashboardPage() {
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -404,7 +411,7 @@ export function AttendanceDashboardPage() {
     });
   }, [studentRecords, selectedClassId, searchQuery, studentSort]);
 
-  // Filter & Urutkan Data Guru
+  // Filter & Urutkan Data Guru (termasuk pencarian berdasarkan isi Keterangan/Catatan)
   const filteredTeachers = useMemo(() => {
     const filtered = teacherRecords.filter((r) => {
       if (!searchQuery.trim()) return true;
@@ -412,7 +419,8 @@ export function AttendanceDashboardPage() {
       return (
         r.teacher?.fullName?.toLowerCase().includes(q) ||
         r.teacher?.nip?.includes(searchQuery.trim()) ||
-        r.teacher?.nuptk?.includes(searchQuery.trim())
+        r.teacher?.nuptk?.includes(searchQuery.trim()) ||
+        r.notes?.toLowerCase().includes(q)
       );
     });
 
@@ -651,6 +659,33 @@ export function AttendanceDashboardPage() {
     });
   };
 
+  // Render Kolom Keterangan Guru dengan Penanda Khusus "Pulang Awal"
+  const renderTeacherNotes = (notes?: string | null) => {
+    if (!notes || !notes.trim()) {
+      return <span className="text-xs opacity-40">-</span>;
+    }
+
+    if (isEarlyCheckoutNote(notes)) {
+      return (
+        <div className="flex flex-col items-start gap-1 max-w-60">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/35">
+            <AlertTriangle size={11} />
+            Pulang Awal
+          </span>
+          <span className="text-xs text-foreground/90 leading-snug">
+            {notes}
+          </span>
+        </div>
+      );
+    }
+
+    return (
+      <span className="text-xs text-foreground/80 leading-snug block max-w-60">
+        {notes}
+      </span>
+    );
+  };
+
   // Ekspor Laporan CSV (Kompatibel dengan Microsoft Excel)
   const handleExportCsv = () => {
     const escapeCsv = (val: unknown) => {
@@ -760,8 +795,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -993,7 +1028,7 @@ export function AttendanceDashboardPage() {
             placeholder={
               activeTab === 'students'
                 ? 'Cari nama siswa, NISN, atau NIS...'
-                : 'Cari nama guru, NIP, atau NUPTK...'
+                : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
             }
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -1248,7 +1283,7 @@ export function AttendanceDashboardPage() {
           </div>
         )}
 
-        {/* Teachers Tab (1 Kolom Foto Selfie dengan Tombol Bertumpuk: Datang di atas, Pulang di bawah) */}
+        {/* Teachers Tab */}
         {activeTab === 'teachers' && (
           <div className="data-card">
             {isLoading ? (
@@ -1328,7 +1363,7 @@ export function AttendanceDashboardPage() {
                       </th>
                       <th>GPS Valid</th>
                       <th>Foto Selfie</th>
-                      <th>Keterangan</th>
+                      <th>Keterangan & Log</th>
                       {isSuperAdmin && <th className="text-center">Aksi</th>}
                     </tr>
                   </thead>
@@ -1427,7 +1462,7 @@ export function AttendanceDashboardPage() {
                             )}
                           </td>
 
-                          {/* 1 Kolom Foto Selfie: Tombol Datang di atas & Tombol Pulang di bawah */}
+                          {/* 1 Kolom Foto Selfie */}
                           <td>
                             {hasAnyPhoto ? (
                               <div className="flex flex-col gap-1.5 items-start min-w-28">
@@ -1459,9 +1494,8 @@ export function AttendanceDashboardPage() {
                             )}
                           </td>
 
-                          <td className="text-xs opacity-75">
-                            {record.notes ?? '-'}
-                          </td>
+                          <td>{renderTeacherNotes(record.notes)}</td>
+
                           {isSuperAdmin && (
                             <td className="text-center">
                               <button
@@ -1610,8 +1644,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Sekolah Terpilih Saja
@@ -1620,8 +1654,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Semua Sekolah
@@ -1696,8 +1730,8 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                  ? 'max-w-2xl'
-                  : 'max-w-md'
+                ? 'max-w-2xl'
+                : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -1727,8 +1761,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                      ? 'grid-cols-1 sm:grid-cols-2'
-                      : 'grid-cols-1'
+                    ? 'grid-cols-1 sm:grid-cols-2'
+                    : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -1796,8 +1830,13 @@ export function AttendanceDashboardPage() {
               )}
 
               {selfieModal.notes && (
-                <div className="mt-3 p-2.5 rounded-lg bg-muted/50 border border-border text-xs flex items-start gap-2">
-                  <FileText size={14} className="mt-0.5 opacity-70 shrink-0" />
+                <div
+                  className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
+                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                    : 'bg-muted/50 border-border'
+                    }`}
+                >
+                  <FileText size={14} className="mt-0.5 shrink-0" />
                   <span>{selfieModal.notes}</span>
                 </div>
               )}
