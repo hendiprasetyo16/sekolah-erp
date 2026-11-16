@@ -22,6 +22,8 @@ import {
     List,
     Calendar,
     X,
+    Camera,
+    MapPin,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -60,6 +62,17 @@ function calculateEffectiveDeadline(
     return `${finalH}:${finalM}`;
 }
 
+function isMissingColumnError(err: unknown): boolean {
+    const msg = String((err as { message?: string })?.message ?? '').toLowerCase();
+    const code = String((err as { code?: string })?.code ?? '');
+    return (
+        code === 'PGRST204' ||
+        code === '42703' ||
+        msg.includes('schema cache') ||
+        (msg.includes('column') && msg.includes('does not exist'))
+    );
+}
+
 export function AttendanceSettingsTab() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -72,11 +85,13 @@ export function AttendanceSettingsTab() {
         school?.id ?? ''
     );
 
-    // 1. State Pengaturan Jam Kerja, Toleransi Keterlambatan, & Hari Kerja
+    // 1. State Pengaturan Jam Kerja, Toleransi, Kamera Selfie, & Hari Kerja
     const [workStartTime, setWorkStartTime] = useState<string>('07:30');
     const [lateToleranceMinutes, setLateToleranceMinutes] = useState<number>(0);
     const [workEndTime, setWorkEndTime] = useState<string>('14:30');
     const [workDaysMode, setWorkDaysMode] = useState<WorkDaysMode>('SIX_DAYS');
+    const [requireSelfieCheckIn, setRequireSelfieCheckIn] = useState<boolean>(true);
+    const [requireSelfieCheckOut, setRequireSelfieCheckOut] = useState<boolean>(true);
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
     const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
 
@@ -133,7 +148,7 @@ export function AttendanceSettingsTab() {
     const [editNameInput, setEditNameInput] = useState<string>('');
     const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
 
-    // Modal Konfirmasi Hapus Modern (menggantikan window.confirm)
+    // Modal Konfirmasi Hapus Modern
     const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
         title: string;
         description: string;
@@ -146,7 +161,7 @@ export function AttendanceSettingsTab() {
     const [newHolidayName, setNewHolidayName] = useState<string>('');
     const [isAddingHoliday, setIsAddingHoliday] = useState<boolean>(false);
 
-    // Pratinjau Import Excel / Server (bisa diedit langsung sebelum disimpan)
+    // Pratinjau Import Excel / Server
     const [previewRows, setPreviewRows] = useState<ParsedHolidayRow[]>([]);
     const [previewSourceLabel, setPreviewSourceLabel] = useState<string>('');
     const [isImporting, setIsImporting] = useState<boolean>(false);
@@ -158,7 +173,7 @@ export function AttendanceSettingsTab() {
 
     const showToast = (type: 'success' | 'error', message: string) => {
         setToast({ type, message });
-        setTimeout(() => setToast(null), 5000);
+        setTimeout(() => setToast(null), 5500);
     };
 
     useEffect(() => {
@@ -183,14 +198,14 @@ export function AttendanceSettingsTab() {
             });
     }, [isSuperAdmin, school?.id]);
 
-    // Muat pengaturan jam kerja, toleransi keterlambatan, & hari kerja
+    // Muat pengaturan jam kerja, toleransi keterlambatan, kamera selfie, & hari kerja
     const loadScheduleSettings = useCallback(async () => {
         if (!selectedSchoolId) return;
         setIsLoadingSchedule(true);
         try {
             const { data, error } = await supabase
                 .from('schools')
-                .select('id, workStartTime, lateToleranceMinutes, workEndTime, workDaysMode')
+                .select('*')
                 .eq('id', selectedSchoolId)
                 .maybeSingle();
 
@@ -204,12 +219,22 @@ export function AttendanceSettingsTab() {
                 setWorkDaysMode(
                     data.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS'
                 );
+                setRequireSelfieCheckIn(
+                    typeof data.requireSelfieCheckIn === 'boolean'
+                        ? data.requireSelfieCheckIn
+                        : true
+                );
+                setRequireSelfieCheckOut(
+                    typeof data.requireSelfieCheckOut === 'boolean'
+                        ? data.requireSelfieCheckOut
+                        : true
+                );
             }
         } catch (err: unknown) {
             const msg =
                 err instanceof Error
                     ? err.message
-                    : 'Kolom pengaturan jam kerja belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.';
+                    : 'Gagal memuat pengaturan presensi sekolah.';
             showToast('error', msg);
         } finally {
             setIsLoadingSchedule(false);
@@ -263,7 +288,7 @@ export function AttendanceSettingsTab() {
         });
     };
 
-    // Simpan pengaturan jam masuk, toleransi keterlambatan, jam pulang, dan hari kerja
+    // Simpan pengaturan jam masuk, toleransi, kamera selfie, dan hari kerja
     const handleSaveSchedule = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedSchoolId) {
@@ -285,21 +310,51 @@ export function AttendanceSettingsTab() {
                     lateToleranceMinutes: cleanTolerance,
                     workEndTime,
                     workDaysMode,
+                    requireSelfieCheckIn,
+                    requireSelfieCheckOut,
                 })
                 .eq('id', selectedSchoolId);
 
-            if (error) throw error;
+            if (error) {
+                // Fallback jika kolom requireSelfieCheckIn/Out belum dibuat di Supabase
+                if (isMissingColumnError(error)) {
+                    const retry = await supabase
+                        .from('schools')
+                        .update({
+                            workStartTime,
+                            lateToleranceMinutes: cleanTolerance,
+                            workEndTime,
+                            workDaysMode,
+                        })
+                        .eq('id', selectedSchoolId);
+
+                    if (retry.error) throw retry.error;
+                    showToast(
+                        'error',
+                        'Jam & hari kerja tersimpan, tetapi kolom requireSelfieCheckIn/Out belum ada di tabel schools Supabase. Jalankan perintah SQL ALTER TABLE terlebih dahulu.'
+                    );
+                    return;
+                }
+                throw error;
+            }
+
             setLateToleranceMinutes(cleanTolerance);
+            const selfieSummary = `Selfie Masuk: ${requireSelfieCheckIn ? 'Aktif' : 'Nonaktif (GPS Saja)'
+                }, Selfie Pulang: ${requireSelfieCheckOut ? 'Aktif' : 'Nonaktif (GPS Saja)'
+                }`;
+
             showToast(
                 'success',
                 cleanTolerance > 0
-                    ? `Tersimpan! Jam masuk ${workStartTime} + toleransi ${cleanTolerance} menit (batas terlambat ${effectiveDeadlinePreview}), pulang ${workEndTime}.`
-                    : `Tersimpan! Jam masuk ${workStartTime} (tanpa toleransi), pulang ${workEndTime}.`
+                    ? `Tersimpan! Masuk ${workStartTime} (+${cleanTolerance}m), pulang ${workEndTime} • ${selfieSummary}.`
+                    : `Tersimpan! Masuk ${workStartTime}, pulang ${workEndTime} • ${selfieSummary}.`
             );
         } catch (err: unknown) {
             showToast(
                 'error',
-                err instanceof Error ? err.message : 'Gagal menyimpan pengaturan jam kerja.'
+                err instanceof Error
+                    ? err.message
+                    : 'Gagal menyimpan pengaturan presensi.'
             );
         } finally {
             setIsSavingSchedule(false);
@@ -677,8 +732,8 @@ export function AttendanceSettingsTab() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -698,7 +753,7 @@ export function AttendanceSettingsTab() {
                             Mode Pengaturan Super Admin
                         </p>
                         <p className="text-[11px] opacity-75">
-                            Pilih sekolah untuk mengatur jam kerja, toleransi keterlambatan, & hari kerja:
+                            Pilih sekolah untuk mengatur jam kerja, verifikasi selfie, & hari kerja:
                         </p>
                     </div>
                     <select
@@ -716,7 +771,7 @@ export function AttendanceSettingsTab() {
             )}
 
             {/* ====================================================================
-          BAGIAN 1: JAM BERANGKAT, TOLERANSI KETERLAMBATAN, JAM PULANG, & HARI KERJA
+          BAGIAN 1: JAM KERJA, VERIFIKASI SELFIE, & SISTEM HARI KERJA
       ==================================================================== */}
             <form
                 onSubmit={handleSaveSchedule}
@@ -726,10 +781,10 @@ export function AttendanceSettingsTab() {
                     <div>
                         <h2 className="text-base font-bold flex items-center gap-2">
                             <Clock size={18} className="text-emerald-600" />
-                            Jam Kerja, Toleransi Keterlambatan & Sistem Hari Kerja
+                            Jam Kerja, Verifikasi Kamera Selfie & Sistem Hari Kerja
                         </h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                            Menentukan batas waktu terlambat check-in, jadwal pulang, serta hari libur akhir pekan pada kalender presensi.
+                            Mengatur batas keterlambatan check-in, jadwal pulang, kewajiban foto selfie, serta hari libur akhir pekan.
                         </p>
                     </div>
                     {isLoadingSchedule && <RefreshCw size={16} className="spin opacity-60" />}
@@ -818,6 +873,118 @@ export function AttendanceSettingsTab() {
                     </span>
                 </div>
 
+                {/* Pengaturan Verifikasi Kamera Selfie (Absen Masuk & Absen Pulang) */}
+                <div className="space-y-2.5 pt-1">
+                    <div>
+                        <label className="block text-xs font-semibold">
+                            Verifikasi Kamera Selfie Presensi (GPS + Foto Selfie vs GPS Saja)
+                        </label>
+                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                            Matikan jika sekolah hanya mewajibkan validasi titik koordinat GPS tanpa mengambil foto wajah.
+                        </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {/* Sakelar 1: Selfie Absen Masuk */}
+                        <div
+                            onClick={() => setRequireSelfieCheckIn((prev) => !prev)}
+                            role="switch"
+                            aria-checked={requireSelfieCheckIn}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setRequireSelfieCheckIn((prev) => !prev);
+                                }
+                            }}
+                            className={`p-4 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${requireSelfieCheckIn
+                                    ? 'border-emerald-600/70 bg-emerald-500/10'
+                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                                }`}
+                        >
+                            <div className="flex items-start gap-3">
+                                <div
+                                    className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckIn
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                        }`}
+                                >
+                                    {requireSelfieCheckIn ? <Camera size={16} /> : <MapPin size={16} />}
+                                </div>
+                                <div>
+                                    <div className="text-xs font-bold">
+                                        Selfie Presensi Datang (Check-In)
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                        {requireSelfieCheckIn
+                                            ? 'Aktif: Guru wajib mengambil foto selfie saat absen masuk.'
+                                            : 'Nonaktif: Absen masuk langsung tercatat dengan GPS saja.'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <span
+                                className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${requireSelfieCheckIn ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
+                                    }`}
+                            >
+                                <span
+                                    className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${requireSelfieCheckIn ? 'translate-x-5' : 'translate-x-0'
+                                        }`}
+                                />
+                            </span>
+                        </div>
+
+                        {/* Sakelar 2: Selfie Absen Pulang */}
+                        <div
+                            onClick={() => setRequireSelfieCheckOut((prev) => !prev)}
+                            role="switch"
+                            aria-checked={requireSelfieCheckOut}
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                    e.preventDefault();
+                                    setRequireSelfieCheckOut((prev) => !prev);
+                                }
+                            }}
+                            className={`p-4 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${requireSelfieCheckOut
+                                    ? 'border-emerald-600/70 bg-emerald-500/10'
+                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                                }`}
+                        >
+                            <div className="flex items-start gap-3">
+                                <div
+                                    className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckOut
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                        }`}
+                                >
+                                    {requireSelfieCheckOut ? <Camera size={16} /> : <MapPin size={16} />}
+                                </div>
+                                <div>
+                                    <div className="text-xs font-bold">
+                                        Selfie Presensi Pulang (Check-Out)
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                        {requireSelfieCheckOut
+                                            ? 'Aktif: Guru wajib mengambil foto selfie saat absen pulang.'
+                                            : 'Nonaktif: Absen pulang langsung tercatat dengan GPS saja.'}
+                                    </p>
+                                </div>
+                            </div>
+
+                            <span
+                                className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${requireSelfieCheckOut ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
+                                    }`}
+                            >
+                                <span
+                                    className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${requireSelfieCheckOut ? 'translate-x-5' : 'translate-x-0'
+                                        }`}
+                                />
+                            </span>
+                        </div>
+                    </div>
+                </div>
+
                 {/* Pilihan 5 Hari Kerja vs 6 Hari Kerja */}
                 <div>
                     <label className="block text-xs font-semibold mb-2">
@@ -828,8 +995,8 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={() => setWorkDaysMode('FIVE_DAYS')}
                             className={`p-4 rounded-xl border text-left transition flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
-                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                                : 'border-border bg-muted/20 hover:bg-muted/40'
+                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
+                                    : 'border-border bg-muted/20 hover:bg-muted/40'
                                 }`}
                         >
                             <Briefcase
@@ -854,8 +1021,8 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={() => setWorkDaysMode('SIX_DAYS')}
                             className={`p-4 rounded-xl border text-left transition flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
-                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
-                                : 'border-border bg-muted/20 hover:bg-muted/40'
+                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20'
+                                    : 'border-border bg-muted/20 hover:bg-muted/40'
                                 }`}
                         >
                             <Briefcase
@@ -882,10 +1049,12 @@ export function AttendanceSettingsTab() {
                     <button
                         type="submit"
                         disabled={isSavingSchedule || !selectedSchoolId}
-                        className="btn-primary px-5 py-2.5 text-xs font-bold"
+                        className="btn-primary px-5 py-2.5 text-xs font-bold rounded-xl"
                     >
                         <Save size={15} />
-                        {isSavingSchedule ? 'Menyimpan...' : 'Simpan Pengaturan Jam & Hari Kerja'}
+                        {isSavingSchedule
+                            ? 'Menyimpan...'
+                            : 'Simpan Pengaturan Jam, Selfie & Hari Kerja'}
                     </button>
                 </div>
             </form>
@@ -931,7 +1100,6 @@ export function AttendanceSettingsTab() {
                 {/* Panel Kontrol Sinkronisasi Server API + Kalender Muhammadiyah */}
                 <div className="p-3.5 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                        {/* Baris 1: Server API, Baris 2: Kalender (Sejajar Rapi di Bawah Server API) */}
                         <div className="flex flex-col gap-2.5 flex-1">
                             <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
                                 <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 sm:w-24 shrink-0">
@@ -1048,14 +1216,13 @@ export function AttendanceSettingsTab() {
                         )}
                     </div>
 
-                    {/* Indikator Status Langsung */}
                     {syncFeedback && (
                         <div
                             className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
-                                ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
-                                : syncFeedback.status === 'success'
-                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                                    : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
+                                    : syncFeedback.status === 'success'
+                                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                                 }`}
                         >
                             {syncFeedback.status === 'loading' ? (
@@ -1070,7 +1237,7 @@ export function AttendanceSettingsTab() {
                     )}
                 </div>
 
-                {/* Kotak Pratinjau Hasil Server / Excel (Tanggal & Keterangan Bisa Diedit Langsung) */}
+                {/* Kotak Pratinjau Hasil Server / Excel */}
                 {previewRows.length > 0 && (
                     <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 space-y-3">
                         <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1246,25 +1413,21 @@ export function AttendanceSettingsTab() {
                     </div>
                 </form>
 
-                {/* ====================================================================
-            DAFTAR TANGGAL MERAH (DEFAULT KALENDER + OPSI DAFTAR + BULK DELETE)
-        ==================================================================== */}
+                {/* DAFTAR TANGGAL MERAH (KALENDER RESPONSIF + OPSI DAFTAR) */}
                 <div className="space-y-3">
-                    {/* Baris Judul, Switcher Kalender/Daftar, Dropdown Tahun, & + Tambah Tahun SEJAJAR */}
                     <div className="flex flex-wrap items-center justify-between gap-2.5">
                         <div className="flex flex-wrap items-center gap-2.5">
                             <h3 className="text-xs font-bold">
                                 Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
                             </h3>
 
-                            {/* Switcher Tampilan: Kalender (Default) vs Daftar */}
                             <div className="inline-flex rounded-lg border border-border bg-muted/50 p-0.5">
                                 <button
                                     type="button"
                                     onClick={() => setHolidayViewMode('CALENDAR')}
                                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'CALENDAR'
-                                        ? 'bg-card text-foreground shadow-sm'
-                                        : 'text-muted-foreground hover:text-foreground'
+                                            ? 'bg-card text-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                 >
                                     <Calendar size={13} />
@@ -1274,8 +1437,8 @@ export function AttendanceSettingsTab() {
                                     type="button"
                                     onClick={() => setHolidayViewMode('LIST')}
                                     className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-semibold transition ${holidayViewMode === 'LIST'
-                                        ? 'bg-card text-foreground shadow-sm'
-                                        : 'text-muted-foreground hover:text-foreground'
+                                            ? 'bg-card text-foreground shadow-sm'
+                                            : 'text-muted-foreground hover:text-foreground'
                                         }`}
                                 >
                                     <List size={13} />
@@ -1284,7 +1447,6 @@ export function AttendanceSettingsTab() {
                             </div>
                         </div>
 
-                        {/* Kontainer 1 Baris Sejajar untuk Dropdown Tahun + Tombol Tambah Tahun + Refresh */}
                         <div className="flex items-center gap-2 shrink-0">
                             <select
                                 value={filterYear}
@@ -1322,7 +1484,6 @@ export function AttendanceSettingsTab() {
                         </div>
                     </div>
 
-                    {/* Toolbar Pilih Semua & Hapus Terpilih / Hapus Semua */}
                     {!isLoadingHolidays && deletableHolidays.length > 0 && (
                         <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-muted/35 border border-border text-xs">
                             {holidayViewMode === 'LIST' ? (
@@ -1340,7 +1501,7 @@ export function AttendanceSettingsTab() {
                                 </label>
                             ) : (
                                 <span className="text-[11px] text-muted-foreground">
-                                    Tampilan Kalender ({filterYear}) dengan Pasaran Jawa
+                                    Ketuk tanggal mana pun untuk melihat detail & Pasaran Jawa
                                 </span>
                             )}
 
@@ -1380,7 +1541,6 @@ export function AttendanceSettingsTab() {
                         </div>
                     )}
 
-                    {/* Konten Utama: Loading / Kosong / Mode Kalender / Mode Daftar */}
                     {isLoadingHolidays ? (
                         <div className="py-8 text-center text-xs opacity-70">
                             Memuat data hari libur dari database...
@@ -1426,7 +1586,6 @@ export function AttendanceSettingsTab() {
                                             }`}
                                     >
                                         <div className="flex flex-wrap items-center gap-2.5 min-w-0">
-                                            {/* Checkbox Pilih */}
                                             {canManageItem ? (
                                                 <input
                                                     type="checkbox"
@@ -1438,22 +1597,18 @@ export function AttendanceSettingsTab() {
                                                 <span className="w-4 shrink-0" />
                                             )}
 
-                                            {/* Nomor Urut */}
                                             <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
                                                 {index + 1}.
                                             </span>
 
-                                            {/* Tanggal ISO */}
                                             <span className="font-mono font-bold text-red-500 bg-red-500/10 px-2.5 py-1 rounded-lg shrink-0">
                                                 {item.date}
                                             </span>
 
-                                            {/* Hari & Pasaran Jawa */}
                                             <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shrink-0">
                                                 {jawaInfo.hariPasaran}
                                             </span>
 
-                                            {/* Keterangan Libur */}
                                             <span className="font-medium truncate">{item.name}</span>
 
                                             {isCuti && (
@@ -1473,7 +1628,6 @@ export function AttendanceSettingsTab() {
                                             )}
                                         </div>
 
-                                        {/* Tombol Aksi: Edit & Hapus */}
                                         {canManageItem && (
                                             <div className="flex items-center gap-1 shrink-0">
                                                 <button
@@ -1508,9 +1662,7 @@ export function AttendanceSettingsTab() {
                 </div>
             </div>
 
-            {/* ====================================================================
-          MODAL 1: EDIT TANGGAL & KETERANGAN HARI LIBUR
-      ==================================================================== */}
+            {/* MODAL 1: EDIT TANGGAL & KETERANGAN HARI LIBUR */}
             {editingHoliday && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
                     <form
@@ -1594,9 +1746,7 @@ export function AttendanceSettingsTab() {
                 </div>
             )}
 
-            {/* ====================================================================
-          MODAL 2: KONFIRMASI HAPUS MODERN & PROFESIONAL
-      ==================================================================== */}
+            {/* MODAL 2: KONFIRMASI HAPUS MODERN */}
             {deleteConfirmModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
                     <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">

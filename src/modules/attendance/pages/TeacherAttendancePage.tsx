@@ -20,7 +20,6 @@ import {
   AlertTriangle,
   XCircle,
   Upload,
-  FileText,
   Sparkles,
   LogIn,
   LogOut,
@@ -37,6 +36,8 @@ import {
   ChevronUp,
   CalendarDays,
   Settings2,
+  Send,
+  Loader2,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -49,17 +50,20 @@ import {
 // ============================================================================
 // PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
 // ============================================================================
-const FALLBACK_WORK_START_TIME = '07:30'; // Jam masuk cadangan jika belum diatur di profil sekolah
-const FALLBACK_WORK_END_TIME = '14:30';   // Jam pulang cadangan jika belum diatur di profil sekolah
-const CHECKOUT_TOLERANCE_MINUTES = 30;    // Toleransi waktu pulang (menit). Lewat batas ini -> "Melewati jadwal pulang"
-const DEFAULT_RADIUS_METERS = 100;        // Radius GPS cadangan (dalam meter)
-const REQUIRE_SELFIE_ON_CHECKIN = true;   // Wajib selfie saat datang (true / false)
-const REQUIRE_SELFIE_ON_CHECKOUT = true;  // Wajib selfie saat pulang (true / false)
-const RECORD_CHECKOUT_STATUS_NOTE = true; // Catat otomatis keterangan pulang lebih awal / melewati jadwal ke log
-const MIN_REASON_LENGTH = 15;             // Minimal karakter alasan izin/sakit
-const FINGERPRINT_GLOW_DURATION_MS = 550; // Durasi efek cahaya tombol sidik jari (ms)
-const TOP_REVEAL_SWIPE_THRESHOLD = 45;    // Jarak usap ke bawah (px) untuk memunculkan header
-const HIDE_HEADER_SCROLL_THRESHOLD = 25;  // Jarak scroll ke bawah (px) untuk menyembunyikan header
+const FALLBACK_WORK_START_TIME = '07:30';      // Jam masuk cadangan jika belum diatur di profil sekolah
+const FALLBACK_WORK_END_TIME = '14:30';        // Jam pulang cadangan jika belum diatur di profil sekolah
+const CHECKOUT_TOLERANCE_MINUTES = 30;         // Toleransi waktu pulang (menit). Lewat batas ini -> "Melewati jadwal pulang"
+const DEFAULT_RADIUS_METERS = 100;             // Radius GPS cadangan (dalam meter)
+const FALLBACK_REQUIRE_SELFIE_CHECKIN = true;  // Cadangan wajib selfie datang jika belum diatur Admin
+const FALLBACK_REQUIRE_SELFIE_CHECKOUT = true; // Cadangan wajib selfie pulang jika belum diatur Admin
+const CONFIRM_EARLY_CHECKOUT = true;           // Tampilkan peringatan jika absen pulang lebih awal dari jadwal
+const CONFIRM_ALL_CHECKOUT = false;            // false = modal konfirmasi HANYA muncul saat pulang lebih awal
+const MIN_EARLY_CHECKOUT_REASON_LENGTH = 10;   // Minimal karakter alasan wajib saat pulang lebih awal
+const RECORD_CHECKOUT_STATUS_NOTE = true;      // Catat otomatis keterangan pulang lebih awal / melewati jadwal ke log
+const MIN_REASON_LENGTH = 15;                  // Minimal karakter alasan izin/sakit
+const FINGERPRINT_GLOW_DURATION_MS = 550;      // Durasi efek cahaya tombol sidik jari (ms)
+const TOP_REVEAL_SWIPE_THRESHOLD = 45;         // Jarak usap ke bawah (px) untuk memunculkan header
+const HIDE_HEADER_SCROLL_THRESHOLD = 25;       // Jarak scroll ke bawah (px) untuk menyembunyikan header
 
 const DEFAULT_DAILY_QUOTES: Array<{ quote: string; author?: string }> = [
   {
@@ -121,6 +125,8 @@ interface SchoolGeoAndSchedule {
   lateToleranceMinutes: number;
   workEndTime: string;
   workDaysMode: WorkDaysMode;
+  requireSelfieCheckIn: boolean;
+  requireSelfieCheckOut: boolean;
 }
 
 interface AttendanceRecord {
@@ -365,6 +371,21 @@ export function TeacherAttendancePage() {
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
+
+  // State Modal Konfirmasi Pulang Lebih Awal (Alasan Wajib Diisi)
+  const [checkoutConfirmModal, setCheckoutConfirmModal] = useState<{
+    open: boolean;
+    isEarly: boolean;
+    formattedDiff: string;
+    currentTimeLabel: string;
+  }>({
+    open: false,
+    isEarly: false,
+    formattedDiff: '',
+    currentTimeLabel: '',
+  });
+  const [earlyCheckoutReason, setEarlyCheckoutReason] = useState<string>('');
+  const [earlyReasonError, setEarlyReasonError] = useState<string | null>(null);
 
   // State Kamera Selfie Modal & Penjaga Anti-Duplikat Upload
   const [cameraModal, setCameraModal] = useState<{
@@ -648,6 +669,14 @@ export function TeacherAttendancePage() {
           workEndTime: schData.workEndTime || FALLBACK_WORK_END_TIME,
           workDaysMode:
             schData.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS',
+          requireSelfieCheckIn:
+            typeof schData.requireSelfieCheckIn === 'boolean'
+              ? schData.requireSelfieCheckIn
+              : FALLBACK_REQUIRE_SELFIE_CHECKIN,
+          requireSelfieCheckOut:
+            typeof schData.requireSelfieCheckOut === 'boolean'
+              ? schData.requireSelfieCheckOut
+              : FALLBACK_REQUIRE_SELFIE_CHECKOUT,
         });
       }
 
@@ -727,6 +756,11 @@ export function TeacherAttendancePage() {
     schoolGeo?.workEndTime || FALLBACK_WORK_END_TIME;
   const effectiveWorkDaysMode: WorkDaysMode =
     schoolGeo?.workDaysMode || 'SIX_DAYS';
+  const effectiveSelfieCheckIn =
+    schoolGeo?.requireSelfieCheckIn ?? FALLBACK_REQUIRE_SELFIE_CHECKIN;
+  const effectiveSelfieCheckOut =
+    schoolGeo?.requireSelfieCheckOut ?? FALLBACK_REQUIRE_SELFIE_CHECKOUT;
+
   const effectiveDeadlineStr = useMemo(
     () =>
       formatDeadlineWithTolerance(
@@ -875,7 +909,6 @@ export function TeacherAttendancePage() {
     todayRecord && ['IZIN', 'SAKIT'].includes(todayRecord.status)
   );
 
-  // Mengecek status waktu check-out hari ini (Lebih Awal, Tepat Waktu, atau Melewati Jadwal)
   const todayCheckOutTimingInfo = useMemo(() => {
     if (!todayRecord?.checkOutTime) {
       return {
@@ -893,9 +926,7 @@ export function TeacherAttendancePage() {
     );
   }, [todayRecord?.checkOutTime, effectiveWorkEndTime]);
 
-  // Kartu Datang terkunci jika sudah absen datang ATAU sedang izin/sakit
   const isCheckInLocked = hasCheckedIn || isOnLeaveToday;
-  // Kartu Pulang aktif hanya jika sudah absen datang dan belum absen pulang
   const canCheckOut = hasCheckedIn && !hasCheckedOut && !isOnLeaveToday;
 
   const attendancePhase: 'CHECK_IN' | 'CHECK_OUT' | 'COMPLETED' | 'ON_LEAVE' =
@@ -908,8 +939,9 @@ export function TeacherAttendancePage() {
 
   const openCameraModal = async (mode: 'CHECK_IN' | 'CHECK_OUT') => {
     const needSelfie =
-      mode === 'CHECK_IN' ? REQUIRE_SELFIE_ON_CHECKIN : REQUIRE_SELFIE_ON_CHECKOUT;
+      mode === 'CHECK_IN' ? effectiveSelfieCheckIn : effectiveSelfieCheckOut;
 
+    // Jika Admin mematikan fitur selfie untuk fase ini, langsung simpan presensi GPS saja
     if (!needSelfie) {
       await submitGpsAttendance(mode, null);
       return;
@@ -946,6 +978,28 @@ export function TeacherAttendancePage() {
     setUploadedSelfiePath(null);
     setCameraError(null);
     setCameraModal((prev) => ({ ...prev, open: false }));
+  };
+
+  const closeCheckoutConfirmModal = () => {
+    setCheckoutConfirmModal((prev) => ({ ...prev, open: false }));
+    setEarlyCheckoutReason('');
+    setEarlyReasonError(null);
+  };
+
+  const handleConfirmProceedCheckout = () => {
+    if (
+      checkoutConfirmModal.isEarly &&
+      earlyCheckoutReason.trim().length < MIN_EARLY_CHECKOUT_REASON_LENGTH
+    ) {
+      setEarlyReasonError(
+        `Alasan pulang lebih awal wajib diisi minimal ${MIN_EARLY_CHECKOUT_REASON_LENGTH} karakter.`
+      );
+      return;
+    }
+
+    setEarlyReasonError(null);
+    setCheckoutConfirmModal((prev) => ({ ...prev, open: false }));
+    openCameraModal('CHECK_OUT');
   };
 
   const handleTakeSnapshot = () => {
@@ -1021,11 +1075,37 @@ export function TeacherAttendancePage() {
       return;
     }
 
+    // Cek waktu pulang: modal peringatan HANYA muncul jika pulang lebih awal
+    if (attendancePhase === 'CHECK_OUT') {
+      const currentCheckDate = new Date();
+      const timing = evaluateCheckOutTiming(
+        currentCheckDate,
+        effectiveWorkEndTime,
+        CHECKOUT_TOLERANCE_MINUTES
+      );
+
+      if ((timing.isEarly && CONFIRM_EARLY_CHECKOUT) || CONFIRM_ALL_CHECKOUT) {
+        const currentTimeLabel = currentCheckDate.toLocaleTimeString('id-ID', {
+          hour: '2-digit',
+          minute: '2-digit',
+        });
+        setEarlyCheckoutReason('');
+        setEarlyReasonError(null);
+        setCheckoutConfirmModal({
+          open: true,
+          isEarly: timing.isEarly,
+          formattedDiff: timing.formattedDiff,
+          currentTimeLabel,
+        });
+        return;
+      }
+    }
+
     openCameraModal(attendancePhase);
   };
 
   // ============================================================================
-  // SIMPAN CHECK-IN / CHECK-OUT KE SUPABASE (DENGAN DETEKSI KETEPATAN PULANG)
+  // SIMPAN CHECK-IN / CHECK-OUT KE SUPABASE
   // ============================================================================
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
@@ -1050,7 +1130,7 @@ export function TeacherAttendancePage() {
       const currentDayStr = getTodayLocal(nowObj);
       const timeTag = getTimeStampTagLocal(nowObj);
 
-      // 1. Unggah foto selfie jika ada dan belum terunggah
+      // 1. Unggah foto selfie hanya jika fitur selfie aktif & blob tersedia
       if (selfieBlob && !finalUploadedPath) {
         const schoolFolder = schoolGeo?.name
           ? sanitizeStorageSegment(schoolGeo.name)
@@ -1129,21 +1209,33 @@ export function TeacherAttendancePage() {
           throw new Error('Anda belum melakukan Check-In masuk hari ini.');
         }
 
-        // Evaluasi apakah pulang lebih awal, tepat waktu, atau melewati jadwal
         const checkOutTiming = evaluateCheckOutTiming(
           nowObj,
           effectiveWorkEndTime,
           CHECKOUT_TOLERANCE_MINUTES
         );
+
+        const trimmedEarlyReason = earlyCheckoutReason.trim();
+        if (
+          checkOutTiming.isEarly &&
+          CONFIRM_EARLY_CHECKOUT &&
+          trimmedEarlyReason.length < MIN_EARLY_CHECKOUT_REASON_LENGTH
+        ) {
+          throw new Error(
+            `Alasan pulang lebih awal wajib diisi minimal ${MIN_EARLY_CHECKOUT_REASON_LENGTH} karakter.`
+          );
+        }
+
         const currentTimeFormatted = nowObj.toLocaleTimeString('id-ID', {
           hour: '2-digit',
           minute: '2-digit',
         });
 
         let updatedNotes = todayRecord.notes ?? null;
+
         if (RECORD_CHECKOUT_STATUS_NOTE) {
           if (checkOutTiming.isEarly) {
-            const earlyNote = `Pulang lebih awal pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, kurang ${checkOutTiming.formattedDiff})`;
+            const earlyNote = `[Pulang Lebih Awal] Pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, kurang ${checkOutTiming.formattedDiff}) — Alasan: ${trimmedEarlyReason}`;
             updatedNotes = updatedNotes
               ? `${updatedNotes} | ${earlyNote}`
               : earlyNote;
@@ -1169,7 +1261,6 @@ export function TeacherAttendancePage() {
           .update(fullUpdatePayload)
           .eq('id', todayRecord.id);
 
-        // Fallback aman: tetap sertakan checkOutSelfieUrl agar foto pulang tidak hilang dari database
         if (error && isMissingColumnSchemaError(error)) {
           const safeCorePayload: Record<string, any> = {
             checkOutTime: nowIso,
@@ -1188,7 +1279,7 @@ export function TeacherAttendancePage() {
         if (checkOutTiming.isEarly) {
           showToast(
             'success',
-            `Check-Out tercatat (Status: Pulang Lebih Awal ${checkOutTiming.formattedDiff} — jadwal pulang ${effectiveWorkEndTime}).`
+            `Check-Out tercatat (Status: Pulang Lebih Awal ${checkOutTiming.formattedDiff}). Alasan Anda telah disimpan ke log.`
           );
         } else if (checkOutTiming.isOvertime) {
           showToast(
@@ -1203,6 +1294,8 @@ export function TeacherAttendancePage() {
         }
       }
 
+      setEarlyCheckoutReason('');
+      setEarlyReasonError(null);
       closeCameraModal();
       await loadTeacherAndAttendance();
       setActiveView('beranda');
@@ -1482,6 +1575,18 @@ export function TeacherAttendancePage() {
 
   const isOnMapView = activeView === 'peta';
   const isCheckOutPhase = attendancePhase === 'CHECK_OUT';
+  const isSelfieRequiredForCurrentPhase = isCheckOutPhase
+    ? effectiveSelfieCheckOut
+    : effectiveSelfieCheckIn;
+
+  const isLeaveFormReady =
+    Boolean(teacher) &&
+    Boolean(leaveFile) &&
+    leaveReason.trim().length >= MIN_REASON_LENGTH &&
+    (leaveCategory !== 'DINAS_LUAR' || leaveRefNumber.trim().length > 0);
+
+  const isEarlyReasonValid =
+    earlyCheckoutReason.trim().length >= MIN_EARLY_CHECKOUT_REASON_LENGTH;
 
   const fingerprintButtonStyle = useMemo(() => {
     if (!isOnMapView) {
@@ -1539,7 +1644,7 @@ export function TeacherAttendancePage() {
         }
       `}</style>
 
-      {/* Notifikasi Melayang di Lapisan Paling Depan (z-60) agar selalu terlihat di atas Modal */}
+      {/* Notifikasi Melayang di Lapisan Paling Depan (z-60) */}
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -1550,8 +1655,8 @@ export function TeacherAttendancePage() {
           >
             <div
               className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-400'
-                : 'bg-red-600 text-white border-red-400'
+                  ? 'bg-emerald-600 text-white border-emerald-400'
+                  : 'bg-red-600 text-white border-red-400'
                 }`}
             >
               <div className="flex items-center gap-2.5">
@@ -1892,8 +1997,8 @@ export function TeacherAttendancePage() {
                     : 'Ketuk untuk melakukan presensi datang di peta'
               }
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -1948,8 +2053,8 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
-                      ? 'bg-emerald-400'
-                      : 'bg-amber-300 animate-pulse'
+                        ? 'bg-emerald-400'
+                        : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
@@ -1977,8 +2082,8 @@ export function TeacherAttendancePage() {
                     : 'Ketuk untuk melakukan presensi pulang di peta'
               }
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2028,13 +2133,13 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                      ? todayCheckOutTimingInfo.isEarly ||
-                        todayCheckOutTimingInfo.isOvertime
-                        ? 'bg-amber-200'
-                        : 'bg-emerald-300'
-                      : canCheckOut
-                        ? 'bg-red-400 animate-ping'
-                        : 'bg-amber-100/60'
+                        ? todayCheckOutTimingInfo.isEarly ||
+                          todayCheckOutTimingInfo.isOvertime
+                          ? 'bg-amber-200'
+                          : 'bg-emerald-300'
+                        : canCheckOut
+                          ? 'bg-red-400 animate-ping'
+                          : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
@@ -2087,8 +2192,8 @@ export function TeacherAttendancePage() {
                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
-                      ? 'bg-red-500/85 text-white'
-                      : 'bg-emerald-500/85 text-white'
+                        ? 'bg-red-500/85 text-white'
+                        : 'bg-emerald-500/85 text-white'
                       }`}
                   >
                     {attendancePhase === 'CHECK_OUT'
@@ -2243,19 +2348,28 @@ export function TeacherAttendancePage() {
             <button
               type="button"
               onClick={handleFingerprintAction}
+              disabled={isSubmittingAttendance}
               className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
-                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
-                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                  ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <span className="text-sm flex items-center gap-1.5">
                 <Fingerprint size={17} />
-                {isCheckOutPhase ? 'Presensi Pulang' : 'Presensi Datang'}
+                {isSubmittingAttendance
+                  ? 'Menyimpan Presensi...'
+                  : isCheckOutPhase
+                    ? 'Presensi Pulang'
+                    : 'Presensi Datang'}
               </span>
               <span className="text-[11px] font-medium text-white/90 mt-0.5">
                 {isCheckOutPhase
-                  ? 'Check-Out • Ketuk tombol sidik jari merah di bawah'
-                  : 'Check-In • Ketuk tombol sidik jari hijau di bawah'}
+                  ? isSelfieRequiredForCurrentPhase
+                    ? 'Check-Out (GPS + Selfie) • Ketuk tombol sidik jari merah di bawah'
+                    : 'Check-Out (Verifikasi GPS) • Ketuk tombol sidik jari merah di bawah'
+                  : isSelfieRequiredForCurrentPhase
+                    ? 'Check-In (GPS + Selfie) • Ketuk tombol sidik jari hijau di bawah'
+                    : 'Check-In (Verifikasi GPS) • Ketuk tombol sidik jari hijau di bawah'}
               </span>
             </button>
           )}
@@ -2309,8 +2423,8 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setLeaveCategory(item.value)}
                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                      ? 'bg-emerald-600 border-emerald-500 text-white'
-                      : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                       }`}
                   >
                     {item.label}
@@ -2378,7 +2492,7 @@ export function TeacherAttendancePage() {
                 <span
                   className={
                     leaveReason.trim().length >= MIN_REASON_LENGTH
-                      ? 'text-emerald-600 dark:text-emerald-400'
+                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
                       : 'text-amber-600 dark:text-amber-400'
                   }
                 >
@@ -2399,15 +2513,26 @@ export function TeacherAttendancePage() {
               <label className="block text-xs font-semibold mb-1.5">
                 Unggah Bukti Surat / Foto Dokumen (Wajib: JPG, PNG, PDF) *
               </label>
-              <label className="flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed border-border hover:border-emerald-500/60 bg-muted/30 cursor-pointer transition">
-                <Upload size={22} className="text-emerald-500 mb-1.5" />
-                <span className="text-xs font-medium text-center">
+              <label
+                className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
+                    ? 'border-emerald-500/70 bg-emerald-500/10'
+                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                  }`}
+              >
+                {leaveFile ? (
+                  <CheckCircle2 size={22} className="text-emerald-500 mb-1.5" />
+                ) : (
+                  <Upload size={22} className="text-emerald-500 mb-1.5" />
+                )}
+                <span className="text-xs font-semibold text-center">
                   {leaveFile
-                    ? `Terpilih: ${leaveFile.name}`
+                    ? `Berkas Siap: ${leaveFile.name}`
                     : 'Klik untuk memilih foto surat dokter / surat tugas'}
                 </span>
                 <span className="text-[11px] opacity-60 mt-0.5">
-                  Maksimal ukuran berkas 5 MB
+                  {leaveFile
+                    ? 'Ketuk lagi jika ingin mengganti berkas'
+                    : 'Maksimal ukuran berkas 5 MB'}
                 </span>
                 <input
                   type="file"
@@ -2425,16 +2550,34 @@ export function TeacherAttendancePage() {
               </label>
             </div>
 
-            <button
-              type="submit"
-              disabled={isSubmittingLeave || !teacher}
-              className="btn-primary w-full py-3 justify-center font-bold"
-            >
-              <FileText size={16} />
-              {isSubmittingLeave
-                ? 'Mengunggah Bukti & Menyimpan...'
-                : 'Kirim Pengajuan Resmi'}
-            </button>
+            {/* Tombol Kirim Pengajuan Modern */}
+            <div className="pt-1">
+              <button
+                type="submit"
+                disabled={isSubmittingLeave || !teacher}
+                className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
+                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                  }`}
+              >
+                {isSubmittingLeave ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin shrink-0" />
+                    <span>Mengunggah Bukti & Menyimpan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send size={17} className="shrink-0" />
+                    <span>Kirim Pengajuan Resmi</span>
+                  </>
+                )}
+              </button>
+              {!isLeaveFormReady && teacher && (
+                <p className="text-[11px] text-center opacity-65 mt-2">
+                  Lengkapi keterangan & lampirkan bukti dokumen untuk mengaktifkan pengiriman penuh.
+                </p>
+              )}
+            </div>
           </form>
         </motion.div>
       )}
@@ -2474,8 +2617,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Bulan Ini
@@ -2484,8 +2627,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Tahunan
@@ -2588,10 +2731,10 @@ export function TeacherAttendancePage() {
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
-                    ? 'text-red-500'
-                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : 'opacity-65'
+                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                        ? 'text-red-500'
+                        : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -2627,10 +2770,10 @@ export function TeacherAttendancePage() {
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                     title={cell.holidayName ?? cell.dateStr}
                     className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                      : isToday
-                        ? 'border-amber-400 font-bold'
-                        : 'border-transparent'
+                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                        : isToday
+                          ? 'border-amber-400 font-bold'
+                          : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
@@ -2673,8 +2816,8 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                  ? 'bg-red-500/10 border-red-500/30'
-                  : 'bg-muted/40 border-border'
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -2731,7 +2874,7 @@ export function TeacherAttendancePage() {
                 Data Log Kehadiran
               </h2>
               <p className="text-xs opacity-70">
-                Catatan waktu check-in, check-out, dan jarak GPS Anda
+                Catatan waktu check-in, check-out, dan keterangan presensi Anda
               </p>
             </div>
             <button
@@ -2750,39 +2893,51 @@ export function TeacherAttendancePage() {
             </p>
           ) : (
             <div className="space-y-2.5 max-h-105 overflow-y-auto pr-1">
-              {historyRecords.map((item) => (
-                <div
-                  key={item.id}
-                  className="p-3.5 rounded-2xl bg-muted/40 border border-border flex items-center justify-between gap-3"
-                >
-                  <div className="min-w-0">
-                    <div className="text-xs font-bold">{item.date}</div>
-                    <div className="text-[11px] opacity-75 mt-0.5 truncate">
-                      {item.checkInTime
-                        ? `Masuk ${formatShortTime(item.checkInTime)} (${item.checkInDistance ?? 0
-                        }m) • Pulang ${formatShortTime(item.checkOutTime)}`
-                        : item.notes || '-'}
-                    </div>
-                    {item.checkInTime && item.notes && (
-                      <div className="text-[10px] text-amber-600 dark:text-amber-300 mt-0.5 truncate">
-                        {item.notes}
-                      </div>
-                    )}
-                  </div>
-                  <span
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                      ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                      : item.status === 'TERLAMBAT'
-                        ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                        : item.status === 'ALPA'
-                          ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                          : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
-                      }`}
+              {historyRecords.map((item) => {
+                const isEarlyLog = Boolean(
+                  item.notes?.toLowerCase().includes('pulang lebih awal')
+                );
+                return (
+                  <div
+                    key={item.id}
+                    className="p-3.5 rounded-2xl bg-muted/40 border border-border flex items-start justify-between gap-3"
                   >
-                    {item.status}
-                  </span>
-                </div>
-              ))}
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-xs font-bold">{item.date}</span>
+                        {isEarlyLog && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                            Pulang Lebih Awal
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] opacity-75">
+                        {item.checkInTime
+                          ? `Masuk ${formatShortTime(item.checkInTime)} (${item.checkInDistance ?? 0
+                          }m) • Pulang ${formatShortTime(item.checkOutTime)}`
+                          : item.notes || '-'}
+                      </div>
+                      {item.checkInTime && item.notes && (
+                        <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/25 rounded-lg px-2.5 py-1 leading-relaxed">
+                          {item.notes}
+                        </div>
+                      )}
+                    </div>
+                    <span
+                      className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                          : item.status === 'TERLAMBAT'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                            : item.status === 'ALPA'
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                              : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                        }`}
+                    >
+                      {item.status}
+                    </span>
+                  </div>
+                );
+              })}
             </div>
           )}
         </motion.div>
@@ -2800,8 +2955,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
@@ -2812,8 +2967,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
@@ -2851,8 +3006,8 @@ export function TeacherAttendancePage() {
               <Fingerprint
                 size={28}
                 className={`transition-transform duration-150 ${isFingerprintGlowing
-                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                  : ''
+                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                    : ''
                   }`}
               />
             </motion.button>
@@ -2862,8 +3017,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
@@ -2874,8 +3029,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
@@ -2883,6 +3038,135 @@ export function TeacherAttendancePage() {
           </button>
         </div>
       </div>
+
+      {/* ====================================================================
+          MODAL PERINGATAN PULANG LEBIH AWAL (ALASAN WAJIB DIISI)
+      ==================================================================== */}
+      <AnimatePresence>
+        {checkoutConfirmModal.open && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.94, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.94, opacity: 0 }}
+              className="data-card max-w-sm w-full p-5 space-y-4 border border-border shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 bg-amber-500/20 text-amber-500">
+                    <AlertTriangle size={22} />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm leading-snug">
+                      Peringatan: Pulang Lebih Awal!
+                    </h3>
+                    <p className="text-[11px] opacity-70">
+                      Jadwal kepulangan sekolah belum berakhir
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={closeCheckoutConfirmModal}
+                  className="p-1 rounded-lg hover:bg-muted shrink-0"
+                  aria-label="Tutup"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {/* Rincian perbandingan jam saat ini vs jadwal pulang */}
+              <div className="p-3.5 rounded-2xl border text-xs space-y-2 bg-amber-500/10 border-amber-500/35">
+                <div className="flex items-center justify-between">
+                  <span className="opacity-75">Waktu Saat Ini:</span>
+                  <span className="font-mono font-extrabold text-sm">
+                    {checkoutConfirmModal.currentTimeLabel} WIB
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="opacity-75">Jadwal Pulang Sekolah:</span>
+                  <span className="font-mono font-bold">
+                    {effectiveWorkEndTime} WIB
+                  </span>
+                </div>
+                <div className="pt-2 border-t border-amber-500/25 flex items-center justify-between text-amber-600 dark:text-amber-300 font-bold">
+                  <span>Selisih Waktu:</span>
+                  <span>Lebih awal {checkoutConfirmModal.formattedDiff}</span>
+                </div>
+              </div>
+
+              <p className="text-xs leading-relaxed opacity-85">
+                Jika Anda melanjutkan, presensi hari ini langsung terkunci dengan
+                status{' '}
+                <strong className="text-amber-600 dark:text-amber-300">
+                  Pulang Lebih Awal
+                </strong>
+                . Alasan Anda akan otomatis tercatat pada log kehadiran untuk
+                diketahui Admin/Kepala Sekolah.
+              </p>
+
+              {/* Input Alasan Pulang Lebih Awal (WAJIB DIISI) */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px]">
+                  <label className="font-bold">
+                    Alasan Pulang Lebih Awal <span className="text-red-500">*</span>
+                  </label>
+                  <span
+                    className={
+                      isEarlyReasonValid
+                        ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                        : 'text-amber-600 dark:text-amber-400'
+                    }
+                  >
+                    {earlyCheckoutReason.trim().length}/{MIN_EARLY_CHECKOUT_REASON_LENGTH}{' '}
+                    karakter
+                  </span>
+                </div>
+                <textarea
+                  rows={2}
+                  required
+                  value={earlyCheckoutReason}
+                  onChange={(e) => {
+                    setEarlyCheckoutReason(e.target.value);
+                    if (earlyReasonError) setEarlyReasonError(null);
+                  }}
+                  placeholder="Wajib diisi, misal: Izin mengantar keluarga berobat / tugas dinas luar..."
+                  className="form-input w-full text-xs py-2"
+                />
+                {earlyReasonError && (
+                  <p className="text-[11px] text-red-500 font-medium">
+                    {earlyReasonError}
+                  </p>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={closeCheckoutConfirmModal}
+                  className="btn-secondary justify-center py-2.5 text-xs font-bold rounded-xl"
+                >
+                  Batal
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmProceedCheckout}
+                  disabled={!isEarlyReasonValid}
+                  className="py-2.5 px-3 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 shadow-md transition bg-amber-600 hover:bg-amber-700 disabled:opacity-45 disabled:cursor-not-allowed"
+                >
+                  <LogOut size={14} />
+                  Ya, Lanjut Pulang
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ====================================================================
           MODAL KAMERA SELFIE (CHECK-IN & CHECK-OUT)
@@ -2935,7 +3219,6 @@ export function TeacherAttendancePage() {
                 )}
               </div>
 
-              {/* Tampilkan pesan error langsung di dalam modal jika pengiriman gagal */}
               {cameraError && (
                 <div className="p-2.5 rounded-xl bg-red-500/15 border border-red-500/40 text-red-600 dark:text-red-300 text-[11px] flex items-start gap-2">
                   <AlertTriangle size={14} className="shrink-0 mt-0.5" />
@@ -2947,7 +3230,7 @@ export function TeacherAttendancePage() {
                 <button
                   type="button"
                   onClick={handleTakeSnapshot}
-                  className="btn-primary w-full justify-center py-3"
+                  className="btn-primary w-full justify-center py-3 rounded-xl font-bold"
                 >
                   <Camera size={18} />
                   Ambil Foto Selfie
@@ -2962,7 +3245,7 @@ export function TeacherAttendancePage() {
                       setUploadedSelfiePath(null);
                       setCameraError(null);
                     }}
-                    className="btn-secondary justify-center"
+                    className="btn-secondary justify-center rounded-xl"
                     disabled={isSubmittingAttendance}
                   >
                     Ulangi Foto
@@ -2972,7 +3255,7 @@ export function TeacherAttendancePage() {
                     onClick={() =>
                       submitGpsAttendance(cameraModal.mode, capturedBlob)
                     }
-                    className="btn-primary justify-center"
+                    className="btn-primary justify-center rounded-xl font-bold"
                     disabled={isSubmittingAttendance}
                   >
                     {isSubmittingAttendance ? 'Menyimpan...' : 'Kirim Presensi'}
