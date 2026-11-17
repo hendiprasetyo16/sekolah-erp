@@ -7,7 +7,7 @@ import { detectDevicePlatform } from '@/utils/devicePlatform';
 // ============================================================================
 export const SECURITY_CONFIG = {
   BLOCK_EMULATOR_SIGNATURES: true,     // true = tolak BlueStacks, Nox, LDPlayer, AVD, dll.
-  BLOCK_VIRTUAL_CAMERA: true,          // true = tolak OBS Virtual Camera, ManyCam, DroidCam
+  BLOCK_VIRTUAL_CAMERA: true,          // true = tolak OBS Virtual Camera, ManyCam, DroidCam (kecuali SUPER_ADMIN)
   MAX_GPS_ACCURACY_METERS: 80,         // Batas maksimal toleransi meleset sinyal GPS (meter)
   MIN_GPS_ACCURACY_METERS: 1.2,        // Di bawah 1.2m = indikasi kuat Fake GPS
   GPS_SAMPLE_COUNT: 3,                 // Jumlah pengambilan sampel GPS beruntun
@@ -33,7 +33,7 @@ export interface VerifiedGpsResult {
 
 /**
  * 1. Memeriksa apakah perangkat adalah Emulator Android, Browser Otomasi, atau Komputer
- * @param isSuperAdmin True jika sedang simulasi Super Admin
+ * @param isSuperAdmin True jika sedang simulasi Super Admin (lolos semua pembatasan perangkat)
  * @param allowDesktopForTeacher True jika guru tersebut diberi izin oleh Admin absen via komputer
  */
 export function inspectDeviceEnvironment(
@@ -188,8 +188,13 @@ export function inspectDeviceEnvironment(
 
 /**
  * 2. Memeriksa apakah kamera berasal dari perangkat fisik asli (bukan OBS / ManyCam / Virtual Cam)
+ * @param stream Aliran video dari navigator.mediaDevices.getUserMedia
+ * @param isSuperAdmin True jika akun adalah SUPER_ADMIN (kamera eksternal/virtual diizinkan untuk pengujian)
  */
-export function validateCameraStream(stream: MediaStream): {
+export function validateCameraStream(
+  stream: MediaStream,
+  isSuperAdmin: boolean = false
+): {
   valid: boolean;
   reason?: string;
   cameraLabel: string;
@@ -204,8 +209,18 @@ export function validateCameraStream(stream: MediaStream): {
   }
 
   const label = track.label || '';
+
+  // SUPER_ADMIN memiliki akses penuh untuk pengujian dengan kamera eksternal maupun virtual
+  if (isSuperAdmin) {
+    return {
+      valid: true,
+      cameraLabel: label || 'Kamera Pengujian Super Admin',
+    };
+  }
+
   const lowerLabel = label.toLowerCase();
 
+  // Daftar kata kunci kamera virtual yang diblokir untuk akun non-Super Admin
   const virtualCamKeywords = [
     'obs',
     'virtual',
