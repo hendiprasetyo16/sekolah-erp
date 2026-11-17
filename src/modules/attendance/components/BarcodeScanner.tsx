@@ -1,5 +1,44 @@
+// D:\APLIKASI\sekolah-erp\src\modules\attendance\components\BarcodeScanner.tsx
+//src/modules/attendance/components/BarcodeScanner.tsx
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Camera, CameraOff, Scan, X } from 'lucide-react';
+
+// ============================================================================
+// PARAMETER YANG BISA DISESUAIKAN
+// ============================================================================
+const SCAN_INTERVAL_MS = 500;
+const SUPPORTED_BARCODE_FORMATS = [
+  'qr_code',
+  'code_128',
+  'code_39',
+  'ean_13',
+  'ean_8',
+  'data_matrix',
+] as const;
+
+// ============================================================================
+// DEFINISI TIPE BROWSER BARCODE DETECTOR API (TANPA ANY)
+// ============================================================================
+interface DetectedBarcode {
+  rawValue: string;
+  format?: string;
+}
+
+interface BarcodeDetectorOptions {
+  formats?: string[];
+}
+
+interface BarcodeDetectorInstance {
+  detect(source: ImageBitmapSource): Promise<DetectedBarcode[]>;
+}
+
+interface BarcodeDetectorConstructor {
+  new(options?: BarcodeDetectorOptions): BarcodeDetectorInstance;
+}
+
+type WindowWithBarcodeDetector = Window & {
+  BarcodeDetector?: BarcodeDetectorConstructor;
+};
 
 interface BarcodeScannerProps {
   onScan: (code: string) => void;
@@ -11,7 +50,11 @@ interface BarcodeScannerProps {
  * Komponen Barcode/QR Scanner menggunakan BarcodeDetector API (native browser)
  * Fallback: input manual NISN/NIS
  */
-export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScannerProps) {
+export function BarcodeScanner({
+  onScan,
+  onError,
+  isActive = true,
+}: BarcodeScannerProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [isScanning, setIsScanning] = useState(false);
@@ -21,9 +64,12 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopCamera = useCallback(() => {
-    if (intervalRef.current) clearInterval(intervalRef.current);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
     if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop());
+      streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
     setIsScanning(false);
@@ -32,39 +78,50 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
   const startCamera = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: {
+          facingMode: 'environment',
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
       });
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        videoRef.current.play();
+        await videoRef.current.play();
       }
+
       setIsScanning(true);
       setError(null);
 
-      // Gunakan BarcodeDetector API jika tersedia
-      if ('BarcodeDetector' in window) {
-        const detector = new (window as any).BarcodeDetector({
-          formats: ['qr_code', 'code_128', 'code_39', 'ean_13', 'ean_8', 'data_matrix'],
+      // Gunakan BarcodeDetector API jika tersedia di browser
+      const BarcodeDetectorCtor = (window as WindowWithBarcodeDetector)
+        .BarcodeDetector;
+
+      if (BarcodeDetectorCtor) {
+        const detector = new BarcodeDetectorCtor({
+          formats: [...SUPPORTED_BARCODE_FORMATS],
         });
 
         intervalRef.current = setInterval(async () => {
           if (!videoRef.current || videoRef.current.readyState !== 4) return;
           try {
             const barcodes = await detector.detect(videoRef.current);
-            if (barcodes.length > 0) {
-              const code = barcodes[0].rawValue as string;
+            if (barcodes.length > 0 && barcodes[0].rawValue) {
+              const code = barcodes[0].rawValue;
               stopCamera();
               onScan(code);
             }
           } catch {
-            // Abaikan error deteksi frame
+            // Abaikan error deteksi pada frame tunggal
           }
-        }, 500);
+        }, SCAN_INTERVAL_MS);
       } else {
-        setError('BarcodeDetector API tidak didukung browser ini. Gunakan input manual.');
+        setError(
+          'BarcodeDetector API tidak didukung browser ini. Gunakan input manual.'
+        );
       }
-    } catch (err) {
+    } catch {
       setHasCamera(false);
       const msg = 'Kamera tidak dapat diakses. Gunakan input manual NISN/NIS.';
       setError(msg);
@@ -81,7 +138,7 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
     return () => stopCamera();
   }, [isActive, startCamera, stopCamera]);
 
-  const handleManualSubmit = (e: React.FormEvent) => {
+  const handleManualSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const code = manualInput.trim();
     if (!code) return;
@@ -95,7 +152,13 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
       <div className="scanner-preview">
         {isScanning ? (
           <div className="scanner-video-wrapper">
-            <video ref={videoRef} autoPlay playsInline muted className="scanner-video" />
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              className="scanner-video"
+            />
             {/* Overlay crosshair */}
             <div className="scanner-overlay">
               <div className="scanner-frame">
@@ -105,9 +168,15 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
                 <div className="scanner-corner br" />
                 <div className="scanner-line" />
               </div>
-              <p className="scanner-hint">Arahkan kamera ke barcode atau QR Code</p>
+              <p className="scanner-hint">
+                Arahkan kamera ke barcode atau QR Code
+              </p>
             </div>
-            <button className="scanner-stop-btn" onClick={stopCamera}>
+            <button
+              type="button"
+              className="scanner-stop-btn"
+              onClick={stopCamera}
+            >
               <X size={16} />
               Hentikan
             </button>
@@ -120,7 +189,11 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
                   <Scan size={48} />
                 </div>
                 <p>Kamera tidak aktif</p>
-                <button className="btn-primary" onClick={startCamera}>
+                <button
+                  type="button"
+                  className="btn-primary"
+                  onClick={startCamera}
+                >
                   <Camera size={16} />
                   Aktifkan Kamera
                 </button>
@@ -158,7 +231,11 @@ export function BarcodeScanner({ onScan, onError, isActive = true }: BarcodeScan
           autoFocus={!isScanning}
           inputMode="numeric"
         />
-        <button type="submit" className="btn-primary" disabled={!manualInput.trim()}>
+        <button
+          type="submit"
+          className="btn-primary"
+          disabled={!manualInput.trim()}
+        >
           <Scan size={16} />
           Cari
         </button>

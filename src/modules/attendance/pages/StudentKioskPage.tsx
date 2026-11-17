@@ -22,6 +22,16 @@ interface FoundStudent {
   className?: string;
 }
 
+// Struktur hasil pencarian siswa beserta relasi tabel classes dari Supabase
+interface StudentLookupResult {
+  id: string;
+  fullName: string;
+  nisn: string;
+  nis?: string | null;
+  photoUrl?: string | null;
+  classes?: { name: string } | Array<{ name: string }> | null;
+}
+
 export function StudentKioskPage() {
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -170,17 +180,22 @@ export function StudentKioskPage() {
           return;
         }
 
+        const typedStudent = student as StudentLookupResult;
+        const resolvedClassName = Array.isArray(typedStudent.classes)
+          ? typedStudent.classes[0]?.name
+          : typedStudent.classes?.name;
+
         setFoundStudent({
-          id: student.id,
-          fullName: student.fullName,
-          nisn: student.nisn,
-          nis: student.nis ?? undefined,
-          photoUrl: student.photoUrl ?? undefined,
-          className: (student as any).classes?.name,
+          id: typedStudent.id,
+          fullName: typedStudent.fullName,
+          nisn: typedStudent.nisn,
+          nis: typedStudent.nis ?? undefined,
+          photoUrl: typedStudent.photoUrl ?? undefined,
+          className: resolvedClassName,
         });
         setKioskState('found');
 
-        setTimeout(() => performCheckIn(student.id, student.fullName), 1200);
+        setTimeout(() => performCheckIn(typedStudent.id, typedStudent.fullName), 1200);
       } catch {
         setResultMessage('Terjadi kesalahan. Periksa koneksi internet.');
         setKioskState('error');

@@ -1,3 +1,4 @@
+// src/modules/finance/services/finance.service.ts
 import { supabase } from '@/services/supabase.client';
 import type { FeeTemplate, StudentBill, PaymentTransaction } from '../types/finance.types';
 
@@ -30,21 +31,44 @@ export interface Arrear {
   months: number;
 }
 
+// Struktur baris hasil query payment_transactions beserta relasinya
+interface RecentTransactionQueryRow {
+  id: string;
+  billId: string;
+  studentId: string;
+  amount: number;
+  paymentMethod: string;
+  paymentDate: string;
+  reference: string;
+  status: string;
+  student_bills?: { title?: string | null } | Array<{ title?: string | null }> | null;
+  students?: { fullName?: string | null } | Array<{ fullName?: string | null }> | null;
+}
+
+// Struktur baris hasil query student_bills untuk daftar tunggakan terbesar
+interface TopArrearQueryRow {
+  id: string;
+  totalAmount: number | string;
+  paidAmount: number | string;
+  students?: {
+    fullName?: string | null;
+    classes?: { name?: string | null } | Array<{ name?: string | null }> | null;
+  } | Array<{
+    fullName?: string | null;
+    classes?: { name?: string | null } | Array<{ name?: string | null }> | null;
+  }> | null;
+}
+
 class FinanceService {
   async getSummary(): Promise<FinanceSummary> {
-    // In a real app, this would be a complex view or RPC function.
-    // For MVP, we'll fetch basic aggregates or return placeholder logic if needed,
-    // but here we do actual queries.
-    
     const { data: incomeData } = await supabase
       .from('payment_transactions')
       .select('amount')
       .eq('status', 'BERHASIL');
 
     const totalIncome = incomeData?.reduce((acc, curr) => acc + Number(curr.amount), 0) || 0;
-    
-    // For expense, we don't have an expenses table yet, so we mock it based on a ratio for MVP,
-    // or return 0. We'll use 0 for now.
+
+    // Pengeluaran sementara 0 sampai tabel expenses tersedia
     const totalExpense = 0;
 
     const { data: billsData } = await supabase
@@ -109,11 +133,24 @@ class FinanceService {
 
     if (error) throw new Error(error.message);
 
-    return data.map((item: any) => ({
-      ...item,
-      studentName: item.students?.fullName,
-      billTitle: item.student_bills?.title
-    }));
+    const typedData = (data ?? []) as RecentTransactionQueryRow[];
+    return typedData.map((item) => {
+      const studentObj = Array.isArray(item.students) ? item.students[0] : item.students;
+      const billObj = Array.isArray(item.student_bills) ? item.student_bills[0] : item.student_bills;
+
+      return {
+        id: item.id,
+        billId: item.billId,
+        studentId: item.studentId,
+        amount: item.amount,
+        paymentMethod: item.paymentMethod,
+        paymentDate: item.paymentDate,
+        reference: item.reference,
+        status: item.status,
+        studentName: studentObj?.fullName ?? undefined,
+        billTitle: billObj?.title ?? undefined,
+      };
+    });
   }
 
   async getTopArrears(): Promise<Arrear[]> {
@@ -130,13 +167,25 @@ class FinanceService {
 
     if (error) throw new Error(error.message);
 
-    return data.map((item: any) => ({
-      id: item.id,
-      studentName: item.students?.fullName || 'Unknown',
-      className: item.students?.classes?.name || '-',
-      amount: Number(item.totalAmount) - Number(item.paidAmount),
-      months: 1 // Simplified
-    })).sort((a, b) => b.amount - a.amount);
+    const typedData = (data ?? []) as TopArrearQueryRow[];
+    return typedData
+      .map((item) => {
+        const studentObj = Array.isArray(item.students) ? item.students[0] : item.students;
+        const classObj = studentObj?.classes
+          ? Array.isArray(studentObj.classes)
+            ? studentObj.classes[0]
+            : studentObj.classes
+          : undefined;
+
+        return {
+          id: item.id,
+          studentName: studentObj?.fullName || 'Unknown',
+          className: classObj?.name || '-',
+          amount: Number(item.totalAmount) - Number(item.paidAmount),
+          months: 1,
+        };
+      })
+      .sort((a, b) => b.amount - a.amount);
   }
 
   // --- Fee Templates CRUD ---
@@ -199,7 +248,7 @@ class FinanceService {
   async createPaymentTransaction(payload: Omit<PaymentTransaction, 'id'>) {
     const { data, error } = await supabase.from('payment_transactions').insert(payload).select().single();
     if (error) throw new Error(error.message);
-    
+
     // Auto update bill paidAmount and status
     if (data) {
       const { data: bill } = await supabase.from('student_bills').select('*').eq('id', payload.billId).single();
@@ -210,7 +259,7 @@ class FinanceService {
         await supabase.from('student_bills').update({ paidAmount: newPaidAmount, status: newStatus }).eq('id', payload.billId);
       }
     }
-    
+
     return data as PaymentTransaction;
   }
 }

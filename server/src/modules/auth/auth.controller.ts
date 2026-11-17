@@ -1,6 +1,16 @@
-import { Controller, Post, Body, Get, UseGuards, Request, HttpCode } from '@nestjs/common';
+// D:\APLIKASI\sekolah-erp\server\src\modules\auth\auth.controller.ts
+import {
+  Controller,
+  Post,
+  Body,
+  Get,
+  UseGuards,
+  Request,
+  HttpCode,
+} from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import type { AuthenticatedRequest } from './types/auth.types';
 
 class LoginDto {
   email!: string;
@@ -32,14 +42,14 @@ export class AuthController {
   @Post('logout')
   @UseGuards(JwtAuthGuard)
   @HttpCode(200)
-  async logout(@Request() req: any) {
+  async logout(@Request() req: AuthenticatedRequest) {
     await this.authService.logout(req.user.sub);
     return { success: true, message: 'Logout berhasil' };
   }
 
   @Get('me')
   @UseGuards(JwtAuthGuard)
-  async getProfile(@Request() req: any) {
+  async getProfile(@Request() req: AuthenticatedRequest) {
     const user = await this.authService.getProfile(req.user.sub);
     return { success: true, data: user };
   }

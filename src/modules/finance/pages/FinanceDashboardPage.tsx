@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+// src/modules/finance/pages/FinanceDashboardPage.tsx
+import { useState, useEffect } from 'react';
 import { motion, type Variants } from 'framer-motion';
 import {
   TrendingUp,
@@ -6,13 +7,8 @@ import {
   Wallet,
   AlertCircle,
   Users,
-  ArrowUpRight,
-  Download,
-  Filter,
   Activity,
   CreditCard,
-  Building,
-  Receipt
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -22,18 +18,12 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip as RechartsTooltip,
-  PieChart,
-  Pie,
-  Cell,
-  Legend
 } from 'recharts';
 
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { formatCurrency, formatDate } from '@/utils/format';
 import { financeService, type FinanceSummary, type Transaction, type Arrear } from '../services/finance.service';
-
-const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#64748b'];
 
 const containerVariants: Variants = {
   hidden: { opacity: 0 },
@@ -97,7 +87,7 @@ export default function FinanceDashboardPage() {
         <div className="flex items-center gap-2">
           <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 px-3 py-1 text-sm font-medium">
             <Activity className="w-4 h-4 mr-2" />
-            Status: Terhubung Supabase
+            {loading ? 'Memuat Data...' : 'Status: Terhubung Supabase'}
           </Badge>
         </div>
       </div>
@@ -201,7 +191,7 @@ export default function FinanceDashboardPage() {
                     <RechartsTooltip
                       contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px' }}
                       itemStyle={{ color: 'hsl(var(--foreground))' }}
-                      formatter={(value: any) => [formatCurrency(Number(value) || 0), 'Pemasukan']}
+                      formatter={(value) => [formatCurrency(Number(value) || 0), 'Pemasukan']}
                     />
                     <Area type="monotone" dataKey="income" stroke="#10b981" strokeWidth={2} fillOpacity={1} fill="url(#incomeGrad)" name="Pemasukan" />
                   </AreaChart>

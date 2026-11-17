@@ -65,6 +65,23 @@ type TeacherAttendanceWithCheckOut = TeacherAttendance & {
   attachmentUrl?: string | null;
 };
 
+// Struktur kolom tambahan saat query ulang data Check-Out guru
+interface AttendanceExtraCols {
+  id: string;
+  checkOutLat?: number | null;
+  checkOutLng?: number | null;
+  checkOutDistance?: number | null;
+  checkOutSelfieUrl?: string | null;
+  attachmentUrl?: string | null;
+}
+
+// Struktur baris file storage saat pembersihan arsip lama
+interface AttendanceFileRow {
+  checkInSelfieUrl?: string | null;
+  checkOutSelfieUrl?: string | null;
+  attachmentUrl?: string | null;
+}
+
 const STATUS_COLORS: Record<string, string> = {
   HADIR: '#10B981',
   TERLAMBAT: '#F59E0B',
@@ -82,6 +99,22 @@ const STATUS_LABELS: Record<string, string> = {
   ALPA: 'Alpa',
   BELUM_ABSEN: 'Belum Absen',
 };
+
+// Helper aman untuk mengambil pesan error dari tipe 'unknown' tanpa memakai 'any'
+function getErrorMessage(error: unknown, fallbackMessage: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof (error as { message: unknown }).message === 'string'
+  ) {
+    return (error as { message: string }).message;
+  }
+  return fallbackMessage;
+}
 
 function getRetentionCutoffDate(years: number): string {
   const d = new Date();
@@ -263,7 +296,10 @@ export function AttendanceDashboardPage() {
           .in('id', ids);
 
         if (!extraErr && extraCols) {
-          const extraMap = new Map(extraCols.map((row: any) => [row.id, row]));
+          const typedExtraCols = extraCols as AttendanceExtraCols[];
+          const extraMap = new Map(
+            typedExtraCols.map((row) => [row.id, row])
+          );
           enrichedTeachers = enrichedTeachers.map((item) => {
             const extra = extraMap.get(item.id);
             return extra ? { ...item, ...extra } : item;
@@ -274,7 +310,7 @@ export function AttendanceDashboardPage() {
       setSummary(sum);
       setStudentRecords(students.data);
       setTeacherRecords(enrichedTeachers);
-    } catch (err) {
+    } catch (err: unknown) {
       console.error('[AttendanceDashboard] Load error:', err);
     } finally {
       setIsLoading(false);
@@ -478,11 +514,13 @@ export function AttendanceDashboardPage() {
         .eq('id', deleteTarget.id)
         .maybeSingle();
 
+      const typedLatestRow = latestRow as AttendanceFileRow | null;
+
       const allPathsToDelete = [
         ...deleteTarget.storagePaths,
-        latestRow?.checkInSelfieUrl,
-        latestRow?.checkOutSelfieUrl,
-        latestRow?.attachmentUrl,
+        typedLatestRow?.checkInSelfieUrl,
+        typedLatestRow?.checkOutSelfieUrl,
+        typedLatestRow?.attachmentUrl,
       ];
 
       await removeFilesFromStorage(allPathsToDelete);
@@ -500,11 +538,13 @@ export function AttendanceDashboardPage() {
       );
       setDeleteTarget(null);
       await loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       showToast(
         'error',
-        err.message ??
-        'Gagal menghapus data. Pastikan kebijakan RLS DELETE untuk SUPER_ADMIN sudah aktif.'
+        getErrorMessage(
+          err,
+          'Gagal menghapus data. Pastikan kebijakan RLS DELETE untuk SUPER_ADMIN sudah aktif.'
+        )
       );
     } finally {
       setIsDeletingRow(false);
@@ -530,8 +570,8 @@ export function AttendanceDashboardPage() {
         const { count, error } = await query;
         if (error) throw error;
         setOldRecordsCount(count ?? 0);
-      } catch (err: any) {
-        showToast('error', err.message ?? 'Gagal menghitung arsip lama.');
+      } catch (err: unknown) {
+        showToast('error', getErrorMessage(err, 'Gagal menghitung arsip lama.'));
         setOldRecordsCount(0);
       } finally {
         setIsCheckingOldRecords(false);
@@ -564,7 +604,7 @@ export function AttendanceDashboardPage() {
       const { data, error } = await query;
       if (error) throw error;
 
-      const rows = data ?? [];
+      const rows = (data ?? []) as Array<Record<string, unknown>>;
       if (rows.length === 0) {
         showToast('error', 'Tidak ada data arsip lama untuk diunduh.');
         return;
@@ -594,8 +634,8 @@ export function AttendanceDashboardPage() {
         'success',
         `File backup (${rows.length} baris) berhasil diunduh.`
       );
-    } catch (err: any) {
-      showToast('error', err.message ?? 'Gagal membuat file backup CSV.');
+    } catch (err: unknown) {
+      showToast('error', getErrorMessage(err, 'Gagal membuat file backup CSV.'));
     }
   };
 
@@ -614,7 +654,8 @@ export function AttendanceDashboardPage() {
       }
 
       const { data: oldFiles } = await fetchFilesQuery;
-      const pathsToRemove = (oldFiles ?? []).flatMap((row: any) => [
+      const typedOldFiles = (oldFiles ?? []) as AttendanceFileRow[];
+      const pathsToRemove = typedOldFiles.flatMap((row) => [
         row.checkInSelfieUrl,
         row.checkOutSelfieUrl,
         row.attachmentUrl,
@@ -640,11 +681,13 @@ export function AttendanceDashboardPage() {
       );
       setPurgeModalOpen(false);
       await loadData();
-    } catch (err: any) {
+    } catch (err: unknown) {
       showToast(
         'error',
-        err.message ??
-        'Gagal menghapus arsip lama. Periksa kebijakan RLS DELETE pada tabel attendances.'
+        getErrorMessage(
+          err,
+          'Gagal menghapus arsip lama. Periksa kebijakan RLS DELETE pada tabel attendances.'
+        )
       );
     } finally {
       setIsPurgingOldRecords(false);
@@ -795,8 +838,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1644,8 +1687,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Sekolah Terpilih Saja
@@ -1654,8 +1697,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Semua Sekolah
@@ -1730,8 +1773,8 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                ? 'max-w-2xl'
-                : 'max-w-md'
+                  ? 'max-w-2xl'
+                  : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -1761,8 +1804,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                    ? 'grid-cols-1 sm:grid-cols-2'
-                    : 'grid-cols-1'
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -1832,8 +1875,8 @@ export function AttendanceDashboardPage() {
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                    : 'bg-muted/50 border-border'
+                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                      : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />

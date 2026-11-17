@@ -45,6 +45,22 @@ const STATUS_OPTIONS: Array<{
         { value: 'ALPA', label: 'Alpa', shortLabel: 'A', color: '#EF4444' },
     ];
 
+// Helper aman untuk mengambil pesan error dari tipe 'unknown' tanpa memakai 'any'
+function getErrorMessage(error: unknown, fallbackMessage: string): string {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'message' in error &&
+        typeof (error as { message: unknown }).message === 'string'
+    ) {
+        return (error as { message: string }).message;
+    }
+    return fallbackMessage;
+}
+
 /**
  * Halaman Absensi Siswa Per Kelas (Untuk Wali Kelas, Guru Mapel, Operator, & Admin)
  */
@@ -153,11 +169,11 @@ export function StudentClassAttendancePage() {
                 } else {
                     setSelectedClassId('');
                 }
-            } catch (err: any) {
+            } catch (err: unknown) {
                 if (isMounted) {
                     setFeedback({
                         type: 'error',
-                        message: err.message ?? 'Gagal memuat daftar kelas.',
+                        message: getErrorMessage(err, 'Gagal memuat daftar kelas.'),
                     });
                 }
             } finally {
@@ -187,10 +203,10 @@ export function StudentClassAttendancePage() {
             });
             setRows(sheet);
             setHasUnsavedChanges(false);
-        } catch (err: any) {
+        } catch (err: unknown) {
             setFeedback({
                 type: 'error',
-                message: err.message ?? 'Gagal memuat data absensi siswa.',
+                message: getErrorMessage(err, 'Gagal memuat data absensi siswa.'),
             });
         } finally {
             setIsLoadingSheet(false);
@@ -291,10 +307,13 @@ export function StudentClassAttendancePage() {
                             : `Berhasil menyimpan presensi lengkap untuk ${res.count} siswa!`,
                 });
             }
-        } catch (err: any) {
+        } catch (err: unknown) {
             setFeedback({
                 type: 'error',
-                message: err.message ?? 'Terjadi kesalahan saat menyimpan presensi kelas.',
+                message: getErrorMessage(
+                    err,
+                    'Terjadi kesalahan saat menyimpan presensi kelas.'
+                ),
             });
         } finally {
             setIsSaving(false);
@@ -597,8 +616,8 @@ export function StudentClassAttendancePage() {
                             type="button"
                             onClick={() => setStatusFilter(tab.key)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${statusFilter === tab.key
-                                ? 'bg-primary text-white'
-                                : 'bg-white/5 opacity-75 hover:opacity-100'
+                                    ? 'bg-primary text-white'
+                                    : 'bg-white/5 opacity-75 hover:opacity-100'
                                 }`}
                         >
                             {tab.label}

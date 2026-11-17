@@ -17,6 +17,121 @@ const DEFAULT_ATTENDANCE_SETTINGS: AttendanceSettings = {
   requireSelfie: false,
 };
 
+// Struktur kolom JSON settings di tabel schools
+interface RawSchoolSettings {
+  attendance?: Partial<AttendanceSettings>;
+}
+
+// Struktur baris absensi siswa saat memuat lembar presensi kelas
+interface StudentSheetAttendanceRow {
+  id: string;
+  studentId: string | null;
+  status: AttendanceStatus;
+  notes: string | null;
+  checkInTime: string | null;
+  recordedBy: string | null;
+}
+
+// Struktur profil siswa aktif saat memuat lembar presensi kelas
+interface StudentSheetProfileRow {
+  id: string;
+  fullName: string;
+  nisn: string;
+  nis: string | null;
+  photoUrl: string | null;
+}
+
+// Struktur payload insert massal presensi siswa
+interface BulkStudentAttendanceInsert {
+  schoolId: string;
+  studentId: string;
+  date: string;
+  type: 'SISWA';
+  status: AttendanceStatus;
+  notes: string | null;
+  recordedBy: string;
+  checkInTime: string | null;
+}
+
+// Struktur baris hasil query absensi siswa dengan relasi students & classes
+interface StudentAttendanceQueryRow {
+  id: string;
+  schoolId: string;
+  studentId: string;
+  date: string;
+  status: AttendanceStatus;
+  notes: string | null;
+  recordedBy: string | null;
+  createdAt: string;
+  checkInTime: string | null;
+  students?: {
+    fullName: string;
+    nisn: string;
+    nis: string | null;
+    photoUrl: string | null;
+    classId: string;
+    classes?: { name: string } | Array<{ name: string }> | null;
+  } | Array<{
+    fullName: string;
+    nisn: string;
+    nis: string | null;
+    photoUrl: string | null;
+    classId: string;
+    classes?: { name: string } | Array<{ name: string }> | null;
+  }> | null;
+}
+
+// Struktur field yang diperbarui saat guru Check-Out
+interface TeacherCheckOutUpdateFields {
+  checkOutTime: string;
+  checkOutLat?: number;
+  checkOutLng?: number;
+  checkOutDistance?: number;
+  checkOutSelfieUrl?: string;
+  notes?: string;
+}
+
+// Struktur baris hasil query absensi guru dengan relasi teachers
+interface TeacherAttendanceQueryRow {
+  id: string;
+  schoolId: string;
+  teacherId: string;
+  date: string;
+  status: AttendanceStatus;
+  checkInTime: string | null;
+  checkOutTime: string | null;
+  checkInLat: number | null;
+  checkInLng: number | null;
+  checkInDistance: number | null;
+  isCheckInMock: boolean;
+  checkInSelfieUrl: string | null;
+  checkOutLat: number | null;
+  checkOutLng: number | null;
+  checkOutDistance: number | null;
+  checkOutSelfieUrl: string | null;
+  notes: string | null;
+  createdAt: string;
+  teachers?: {
+    fullName: string;
+    nip: string | null;
+    nuptk: string | null;
+    position: string | null;
+    photoUrl: string | null;
+  } | Array<{
+    fullName: string;
+    nip: string | null;
+    nuptk: string | null;
+    position: string | null;
+    photoUrl: string | null;
+  }> | null;
+}
+
+// Struktur baris ringkas untuk perhitungan statistik harian
+interface SummaryAttendanceRow {
+  type: string;
+  status: string;
+}
+
 export const attendanceService = {
   // ---- KONFIGURASI & PROFIL ----
 
@@ -29,7 +144,7 @@ export const attendanceService = {
 
     if (error) throw error;
 
-    const rawSettings = (data?.settings as Record<string, any>) ?? {};
+    const rawSettings = (data?.settings as RawSchoolSettings | null) ?? {};
     const attendanceCfg = rawSettings.attendance ?? {};
 
     return {
@@ -252,12 +367,14 @@ export const attendanceService = {
     if (studentsRes.error) throw studentsRes.error;
     if (attendancesRes.error) throw attendancesRes.error;
 
-    const attendanceMap = new Map<string, any>();
-    for (const att of attendancesRes.data ?? []) {
+    const attendanceMap = new Map<string, StudentSheetAttendanceRow>();
+    const typedAttendances = (attendancesRes.data ?? []) as StudentSheetAttendanceRow[];
+    for (const att of typedAttendances) {
       if (att.studentId) attendanceMap.set(att.studentId, att);
     }
 
-    return (studentsRes.data ?? []).map((st: any) => {
+    const typedStudents = (studentsRes.data ?? []) as StudentSheetProfileRow[];
+    return typedStudents.map((st) => {
       const att = attendanceMap.get(st.id);
       return {
         studentId: st.id,
@@ -266,7 +383,7 @@ export const attendanceService = {
         nis: st.nis,
         photoUrl: st.photoUrl,
         attendanceId: att?.id,
-        status: (att?.status as AttendanceStatus) ?? null,
+        status: att?.status ?? null,
         checkInTime: att?.checkInTime ?? null,
         notes: att?.notes ?? '',
         isFromKiosk: Boolean(att && !att.recordedBy),
@@ -306,7 +423,7 @@ export const attendanceService = {
       if (row.studentId) existingMap.set(row.studentId, row);
     }
 
-    const toInsert: any[] = [];
+    const toInsert: BulkStudentAttendanceInsert[] = [];
     const toUpdate: Array<{ id: string; status: AttendanceStatus; notes: string | null }> = [];
     const nowIso = new Date().toISOString();
 
@@ -394,27 +511,37 @@ export const attendanceService = {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    const mapped: StudentAttendance[] = (data ?? []).map((row: any) => ({
-      id: row.id,
-      schoolId: row.schoolId,
-      studentId: row.studentId,
-      date: row.date,
-      status: row.status,
-      notes: row.notes,
-      recordedBy: row.recordedBy,
-      createdAt: row.createdAt,
-      time: row.checkInTime,
-      student: row.students
-        ? {
-            fullName: row.students.fullName,
-            nisn: row.students.nisn,
-            nis: row.students.nis,
-            photoUrl: row.students.photoUrl,
-            classId: row.students.classId,
-            classes: row.students.classes ? { name: row.students.classes.name } : undefined,
-          }
-        : undefined,
-    }));
+    const typedRows = (data ?? []) as StudentAttendanceQueryRow[];
+    const mapped: StudentAttendance[] = typedRows.map((row) => {
+      const studentObj = Array.isArray(row.students) ? row.students[0] : row.students;
+      const classObj = studentObj?.classes
+        ? Array.isArray(studentObj.classes)
+          ? studentObj.classes[0]
+          : studentObj.classes
+        : undefined;
+
+      return {
+        id: row.id,
+        schoolId: row.schoolId,
+        studentId: row.studentId,
+        date: row.date,
+        status: row.status,
+        notes: row.notes,
+        recordedBy: row.recordedBy,
+        createdAt: row.createdAt,
+        time: row.checkInTime,
+        student: studentObj
+          ? {
+              fullName: studentObj.fullName,
+              nisn: studentObj.nisn,
+              nis: studentObj.nis,
+              photoUrl: studentObj.photoUrl,
+              classId: studentObj.classId,
+              classes: classObj ? { name: classObj.name } : undefined,
+            }
+          : undefined,
+      };
+    });
 
     return { data: mapped, total: count ?? 0 };
   },
@@ -565,7 +692,7 @@ export const attendanceService = {
       };
     }
 
-    const updateFields: Record<string, any> = {
+    const updateFields: TeacherCheckOutUpdateFields = {
       checkOutTime: new Date().toISOString(),
       ...(payload.checkOutLat !== undefined ? { checkOutLat: payload.checkOutLat } : {}),
       ...(payload.checkOutLng !== undefined ? { checkOutLng: payload.checkOutLng } : {}),
@@ -622,35 +749,40 @@ export const attendanceService = {
     const { data, error, count } = await query;
     if (error) throw error;
 
-    const mapped: TeacherAttendance[] = (data ?? []).map((row: any) => ({
-      id: row.id,
-      schoolId: row.schoolId,
-      teacherId: row.teacherId,
-      date: row.date,
-      status: row.status,
-      checkInTime: row.checkInTime,
-      checkOutTime: row.checkOutTime,
-      checkInLat: row.checkInLat,
-      checkInLng: row.checkInLng,
-      checkInDistance: row.checkInDistance,
-      isCheckInMock: row.isCheckInMock,
-      checkInSelfieUrl: row.checkInSelfieUrl,
-      checkOutLat: row.checkOutLat,
-      checkOutLng: row.checkOutLng,
-      checkOutDistance: row.checkOutDistance,
-      checkOutSelfieUrl: row.checkOutSelfieUrl,
-      notes: row.notes,
-      createdAt: row.createdAt,
-      teacher: row.teachers
-        ? {
-            fullName: row.teachers.fullName,
-            nip: row.teachers.nip,
-            nuptk: row.teachers.nuptk,
-            position: row.teachers.position,
-            photoUrl: row.teachers.photoUrl,
-          }
-        : undefined,
-    }));
+    const typedRows = (data ?? []) as TeacherAttendanceQueryRow[];
+    const mapped: TeacherAttendance[] = typedRows.map((row) => {
+      const teacherObj = Array.isArray(row.teachers) ? row.teachers[0] : row.teachers;
+
+      return {
+        id: row.id,
+        schoolId: row.schoolId,
+        teacherId: row.teacherId,
+        date: row.date,
+        status: row.status,
+        checkInTime: row.checkInTime,
+        checkOutTime: row.checkOutTime,
+        checkInLat: row.checkInLat,
+        checkInLng: row.checkInLng,
+        checkInDistance: row.checkInDistance,
+        isCheckInMock: row.isCheckInMock,
+        checkInSelfieUrl: row.checkInSelfieUrl,
+        checkOutLat: row.checkOutLat,
+        checkOutLng: row.checkOutLng,
+        checkOutDistance: row.checkOutDistance,
+        checkOutSelfieUrl: row.checkOutSelfieUrl,
+        notes: row.notes,
+        createdAt: row.createdAt,
+        teacher: teacherObj
+          ? {
+              fullName: teacherObj.fullName,
+              nip: teacherObj.nip,
+              nuptk: teacherObj.nuptk,
+              position: teacherObj.position,
+              photoUrl: teacherObj.photoUrl,
+            }
+          : undefined,
+      };
+    });
 
     return { data: mapped, total: count ?? 0 };
   },
@@ -694,11 +826,11 @@ export const attendanceService = {
 
     if (attRes.error) throw attRes.error;
 
-    const rows = attRes.data ?? [];
-    const students = rows.filter((r: any) => r.type === 'SISWA');
-    const teachers = rows.filter((r: any) => r.type === 'GURU');
+    const rows = (attRes.data ?? []) as SummaryAttendanceRow[];
+    const students = rows.filter((r) => r.type === 'SISWA');
+    const teachers = rows.filter((r) => r.type === 'GURU');
 
-    const countStatus = (arr: any[], status: string) =>
+    const countStatus = (arr: SummaryAttendanceRow[], status: string) =>
       arr.filter((r) => r.status === status).length;
 
     const studentTotal = totalStudentsRes.count ?? students.length;

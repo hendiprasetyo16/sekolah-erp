@@ -26,6 +26,22 @@ export interface DailyQuoteItem {
     createdAt?: string;
 }
 
+// Helper aman untuk mengambil pesan error dari tipe 'unknown' tanpa memakai 'any'
+function getErrorMessage(error: unknown, fallbackMessage: string): string {
+    if (error instanceof Error && error.message) {
+        return error.message;
+    }
+    if (
+        typeof error === 'object' &&
+        error !== null &&
+        'message' in error &&
+        typeof (error as { message: unknown }).message === 'string'
+    ) {
+        return (error as { message: string }).message;
+    }
+    return fallbackMessage;
+}
+
 export function DailyQuotesManagePage() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -87,11 +103,13 @@ export function DailyQuotesManagePage() {
             const { data, error } = await query;
             if (error) throw error;
             setQuotes((data ?? []) as DailyQuoteItem[]);
-        } catch (err: any) {
+        } catch (err: unknown) {
             showToast(
                 'error',
-                err.message ??
-                'Tabel daily_quotes belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
+                getErrorMessage(
+                    err,
+                    'Tabel daily_quotes belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
+                )
             );
         } finally {
             setIsLoading(false);
@@ -162,8 +180,11 @@ export function DailyQuotesManagePage() {
 
             resetForm();
             await loadQuotes();
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal menyimpan Kata Hari Ini.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                getErrorMessage(err, 'Gagal menyimpan Kata Hari Ini.')
+            );
         } finally {
             setIsSaving(false);
         }
@@ -188,8 +209,11 @@ export function DailyQuotesManagePage() {
                 !item.isActive ? 'Kutipan diaktifkan.' : 'Kutipan dinonaktifkan.'
             );
             await loadQuotes();
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal mengubah status kutipan.');
+        } catch (err: unknown) {
+            showToast(
+                'error',
+                getErrorMessage(err, 'Gagal mengubah status kutipan.')
+            );
         }
     };
 
@@ -211,8 +235,8 @@ export function DailyQuotesManagePage() {
             showToast('success', 'Kutipan berhasil dihapus.');
             if (editingId === item.id) resetForm();
             await loadQuotes();
-        } catch (err: any) {
-            showToast('error', err.message ?? 'Gagal menghapus kutipan.');
+        } catch (err: unknown) {
+            showToast('error', getErrorMessage(err, 'Gagal menghapus kutipan.'));
         }
     };
 
@@ -241,7 +265,7 @@ export function DailyQuotesManagePage() {
                         Kelola Kata Hari Ini (Quotes)
                     </h1>
                     <p className="page-subtitle">
-                        Atur kata mutiara & motivasi harian yang tampil pada aplikasi
+                        Atur kata mutiara &amp; motivasi harian yang tampil pada aplikasi
                         presensi guru
                     </p>
                 </div>
@@ -426,7 +450,7 @@ export function DailyQuotesManagePage() {
                                                     </div>
 
                                                     <p className="text-xs leading-relaxed italic">
-                                                        "{item.quote}"
+                                                        &ldquo;{item.quote}&rdquo;
                                                     </p>
                                                     {item.author && (
                                                         <p className="text-[11px] font-semibold opacity-70">

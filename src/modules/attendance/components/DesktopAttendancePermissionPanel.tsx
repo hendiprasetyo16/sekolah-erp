@@ -1,3 +1,4 @@
+// D:\APLIKASI\sekolah-erp\src\modules\attendance\components\DesktopAttendancePermissionPanel.tsx
 // src/modules/attendance/components/DesktopAttendancePermissionPanel.tsx
 import { useState, useEffect, useCallback } from 'react';
 import {
@@ -12,6 +13,29 @@ import {
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 
+// ============================================================================
+// PARAMETER YANG BISA DISESUAIKAN
+// ============================================================================
+const ERR_LOAD_TEACHERS = 'Gagal memuat daftar guru.';
+const ERR_UPDATE_PERMISSION = 'Gagal memperbarui izin presensi komputer.';
+
+// ============================================================================
+// DEFINISI TIPE DATA STRICT (TANPA ANY)
+// ============================================================================
+interface SchoolOption {
+    id: string;
+    name: string;
+}
+
+interface RawTeacherPermissionRow {
+    id: string;
+    fullName: string;
+    nip?: string | null;
+    nuptk?: string | null;
+    position?: string | null;
+    allowDesktopAttendance?: boolean | null;
+}
+
 interface TeacherPermissionRow {
     id: string;
     fullName: string;
@@ -21,11 +45,29 @@ interface TeacherPermissionRow {
     allowDesktopAttendance: boolean;
 }
 
+interface FeedbackBanner {
+    type: 'success' | 'error';
+    message: string;
+}
+
+function extractErrorMessage(error: unknown, fallbackMessage: string): string {
+    if (error instanceof Error && error.message.trim().length > 0) {
+        return error.message;
+    }
+    if (typeof error === 'object' && error !== null && 'message' in error) {
+        const msg = (error as { message?: unknown }).message;
+        if (typeof msg === 'string' && msg.trim().length > 0) {
+            return msg;
+        }
+    }
+    return fallbackMessage;
+}
+
 export function DesktopAttendancePermissionPanel() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
-    const [schools, setSchools] = useState<Array<{ id: string; name: string }>>([]);
+    const [schools, setSchools] = useState<SchoolOption[]>([]);
     const [selectedSchoolId, setSelectedSchoolId] = useState<string>(
         school?.id ?? ''
     );
@@ -33,10 +75,7 @@ export function DesktopAttendancePermissionPanel() {
     const [searchQuery, setSearchQuery] = useState<string>('');
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [updatingId, setUpdatingId] = useState<string | null>(null);
-    const [feedback, setFeedback] = useState<{
-        type: 'success' | 'error';
-        message: string;
-    } | null>(null);
+    const [feedback, setFeedback] = useState<FeedbackBanner | null>(null);
 
     useEffect(() => {
         if (!isSuperAdmin) {
@@ -49,7 +88,7 @@ export function DesktopAttendancePermissionPanel() {
             .select('id, name')
             .order('name')
             .then(({ data }) => {
-                const list = data ?? [];
+                const list = (data ?? []) as SchoolOption[];
                 setSchools(list);
                 if (!selectedSchoolId && list.length > 0) {
                     setSelectedSchoolId(list[0].id);
@@ -70,20 +109,23 @@ export function DesktopAttendancePermissionPanel() {
 
             if (error) throw error;
 
+            const rows = (data ?? []) as RawTeacherPermissionRow[];
             setTeachers(
-                (data ?? []).map((row: any) => ({
-                    id: row.id,
-                    fullName: row.fullName,
-                    nip: row.nip ?? null,
-                    nuptk: row.nuptk ?? null,
-                    position: row.position ?? null,
-                    allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
-                }))
+                rows.map(
+                    (row): TeacherPermissionRow => ({
+                        id: row.id,
+                        fullName: row.fullName,
+                        nip: row.nip ?? null,
+                        nuptk: row.nuptk ?? null,
+                        position: row.position ?? null,
+                        allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
+                    })
+                )
             );
-        } catch (err: any) {
+        } catch (err: unknown) {
             setFeedback({
                 type: 'error',
-                message: err?.message ?? 'Gagal memuat daftar guru.',
+                message: extractErrorMessage(err, ERR_LOAD_TEACHERS),
             });
         } finally {
             setIsLoading(false);
@@ -122,10 +164,10 @@ export function DesktopAttendancePermissionPanel() {
                     ? `Izin presensi komputer DIAKTIFKAN untuk ${teacher.fullName}.`
                     : `Izin presensi komputer DIMATIKAN untuk ${teacher.fullName} (Wajib HP).`,
             });
-        } catch (err: any) {
+        } catch (err: unknown) {
             setFeedback({
                 type: 'error',
-                message: err?.message ?? 'Gagal memperbarui izin presensi komputer.',
+                message: extractErrorMessage(err, ERR_UPDATE_PERMISSION),
             });
         } finally {
             setUpdatingId(null);
@@ -153,7 +195,8 @@ export function DesktopAttendancePermissionPanel() {
                         Izin Presensi Melalui Komputer / Laptop (Pengecualian Guru)
                     </h3>
                     <p className="text-xs opacity-70 mt-0.5">
-                        Secara bawaan, guru wajib presensi lewat HP / APK Android. Aktifkan izin komputer khusus bagi guru sepuh atau guru yang membutuhkan.
+                        Secara bawaan, guru wajib presensi lewat HP / APK Android. Aktifkan
+                        izin komputer khusus bagi guru sepuh atau guru yang membutuhkan.
                     </p>
                 </div>
 
@@ -165,8 +208,8 @@ export function DesktopAttendancePermissionPanel() {
             {feedback && (
                 <div
                     className={`p-3 rounded-xl border text-xs flex items-center gap-2 ${feedback.type === 'success'
-                            ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
-                            : 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
+                        ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-700 dark:text-emerald-300'
+                        : 'bg-red-500/10 border-red-500/30 text-red-700 dark:text-red-300'
                         }`}
                 >
                     {feedback.type === 'success' ? (
@@ -239,8 +282,8 @@ export function DesktopAttendancePermissionPanel() {
                                 <div className="flex items-center gap-3 shrink-0">
                                     <span
                                         className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold ${item.allowDesktopAttendance
-                                                ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                                                : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
+                                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                                            : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
                                             }`}
                                     >
                                         {item.allowDesktopAttendance ? (
@@ -262,14 +305,14 @@ export function DesktopAttendancePermissionPanel() {
                                         onClick={() => handleTogglePermission(item)}
                                         aria-label={`Ubah izin komputer untuk ${item.fullName}`}
                                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none disabled:opacity-50 ${item.allowDesktopAttendance
-                                                ? 'bg-emerald-600'
-                                                : 'bg-slate-300 dark:bg-slate-700'
+                                            ? 'bg-emerald-600'
+                                            : 'bg-slate-300 dark:bg-slate-700'
                                             }`}
                                     >
                                         <span
                                             className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${item.allowDesktopAttendance
-                                                    ? 'translate-x-6'
-                                                    : 'translate-x-1'
+                                                ? 'translate-x-6'
+                                                : 'translate-x-1'
                                                 }`}
                                         />
                                     </button>
