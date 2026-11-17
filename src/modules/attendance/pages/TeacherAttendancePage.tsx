@@ -1155,7 +1155,7 @@ export function TeacherAttendancePage() {
   };
 
   // ============================================================================
-  // SIMPAN CHECK-IN / CHECK-OUT VIA SERVER RPC ANTI-CURANG
+  // SIMPAN CHECK-IN / CHECK-OUT VIA SERVER RPC ANTI-CURANG (+ AUTO CLEANUP FOTO)
   // ============================================================================
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
@@ -1173,6 +1173,9 @@ export function TeacherAttendancePage() {
 
     setIsSubmittingAttendance(true);
     setCameraError(null);
+
+    // Menyimpan path foto sementara agar bisa dihapus otomatis jika simpan database gagal
+    let newlyUploadedPath: string | null = null;
 
     try {
       let finalUploadedPath: string | null = uploadedSelfiePath;
@@ -1197,6 +1200,7 @@ export function TeacherAttendancePage() {
         }
 
         finalUploadedPath = fileName;
+        newlyUploadedPath = fileName;
         setUploadedSelfiePath(fileName);
       }
 
@@ -1240,6 +1244,15 @@ export function TeacherAttendancePage() {
       await loadTeacherAndAttendance();
       setActiveView('beranda');
     } catch (err: any) {
+      // Jika RPC gagal, hapus kembali foto yang baru terunggah agar Supabase Storage tetap bersih
+      if (newlyUploadedPath) {
+        await supabase.storage
+          .from('attendance-selfies')
+          .remove([newlyUploadedPath])
+          .catch(() => null);
+        setUploadedSelfiePath(null);
+      }
+
       const errMsg = err?.message ?? 'Gagal menyimpan presensi.';
       setCameraError(errMsg);
       showToast('error', errMsg);
@@ -3145,13 +3158,16 @@ export function TeacherAttendancePage() {
                 <button
                   type="button"
                   onClick={handleTakeSnapshot}
-                  className="btn-primary w-full justify-center py-3 rounded-xl font-bold"
+                  className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
+                    ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                    : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                    }`}
                 >
-                  <Camera size={18} />
-                  Ambil Foto Selfie
+                  <Camera size={18} className="shrink-0" />
+                  <span>Ambil Foto Selfie</span>
                 </button>
               ) : (
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-12 gap-2.5 pt-1">
                   <button
                     type="button"
                     onClick={() => {
@@ -3160,20 +3176,35 @@ export function TeacherAttendancePage() {
                       setUploadedSelfiePath(null);
                       setCameraError(null);
                     }}
-                    className="btn-secondary justify-center rounded-xl"
                     disabled={isSubmittingAttendance}
+                    className="col-span-5 py-3 px-3 rounded-2xl font-bold text-xs border border-slate-300 dark:border-white/15 bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-all duration-200 active:scale-[0.97] disabled:opacity-45 disabled:cursor-not-allowed"
                   >
-                    Ulangi Foto
+                    <RefreshCw size={15} className="shrink-0" />
+                    <span>Ulangi</span>
                   </button>
+
                   <button
                     type="button"
                     onClick={() =>
                       submitGpsAttendance(cameraModal.mode, capturedBlob)
                     }
-                    className="btn-primary justify-center rounded-xl font-bold"
                     disabled={isSubmittingAttendance}
+                    className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
+                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      }`}
                   >
-                    {isSubmittingAttendance ? 'Menyimpan...' : 'Kirim Presensi'}
+                    {isSubmittingAttendance ? (
+                      <>
+                        <Loader2 size={16} className="animate-spin shrink-0" />
+                        <span>Menyimpan...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Send size={15} className="shrink-0" />
+                        <span>Kirim Presensi</span>
+                      </>
+                    )}
                   </button>
                 </div>
               )}
