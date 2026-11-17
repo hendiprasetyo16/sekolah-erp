@@ -157,9 +157,61 @@ interface AttendanceRecord {
   attachmentUrl?: string | null;
 }
 
+// Tipe baris mentah dari Supabase (menggantikan penggunaan tipe longgar)
+interface DailyQuoteDbRow {
+  quote: string;
+  author: string | null;
+}
+
+interface TeacherDbRow {
+  id: string;
+  fullName: string;
+  nik?: string | null;
+  nip?: string | null;
+  nuptk?: string | null;
+  position?: string | null;
+  photoUrl?: string | null;
+  allowDesktopAttendance?: boolean | null;
+}
+
+interface SchoolDbRow {
+  id: string;
+  name?: string | null;
+  latitude?: number | string | null;
+  lat?: number | string | null;
+  longitude?: number | string | null;
+  lng?: number | string | null;
+  attendanceRadiusMeters?: number | string | null;
+  attendanceRadius?: number | string | null;
+  gpsRadius?: number | string | null;
+  radius?: number | string | null;
+  workStartTime?: string | null;
+  lateToleranceMinutes?: number | string | null;
+  workEndTime?: string | null;
+  workDaysMode?: string | null;
+  requireSelfieCheckIn?: boolean | null;
+  requireSelfieCheckOut?: boolean | null;
+}
+
 // ============================================================================
-// FUNGSI BANTUAN (HELPER) WAKTU, JARAK GPS, & VALIDASI
+// FUNGSI BANTUAN (HELPER) ERROR, WAKTU, JARAK GPS, & VALIDASI
 // ============================================================================
+function extractErrorMessage(error: unknown, fallbackMessage: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  if (
+    typeof error === 'object' &&
+    error !== null &&
+    'message' in error &&
+    typeof (error as { message: unknown }).message === 'string'
+  ) {
+    const msg = (error as { message: string }).message.trim();
+    if (msg.length > 0) return msg;
+  }
+  return fallbackMessage;
+}
+
 function getTodayLocal(dateObj: Date = new Date()): string {
   const y = dateObj.getFullYear();
   const m = String(dateObj.getMonth() + 1).padStart(2, '0');
@@ -316,7 +368,7 @@ export function TeacherAttendancePage() {
 
   const devicePlatform = useMemo(() => detectDevicePlatform(), []);
 
-  // State Pelacakan Keamanan & Anti-Cheat (berada di dalam komponen React)
+  // State Pelacakan Keamanan & Anti-Cheat
   const [securityState, setSecurityState] = useState<{
     isSuspectedMock: boolean;
     flags: string[];
@@ -559,7 +611,11 @@ export function TeacherAttendancePage() {
       const { data, error } = await query;
       if (!error && data) {
         const mapped: Record<string, string> = {};
-        for (const row of data) {
+        for (const row of data as Array<{
+          date: string;
+          name: string;
+          schoolId: string | null;
+        }>) {
           if (!mapped[row.date] || row.schoolId !== null) {
             mapped[row.date] = row.name;
           }
@@ -592,8 +648,9 @@ export function TeacherAttendancePage() {
 
       const { data, error } = await query;
       if (!error && data && data.length > 0) {
+        const typedQuotes = data as DailyQuoteDbRow[];
         setActiveQuotes(
-          data.map((d: any) => ({
+          typedQuotes.map((d) => ({
             quote: d.quote,
             author: d.author ?? undefined,
           }))
@@ -618,7 +675,7 @@ export function TeacherAttendancePage() {
       .select('id, name')
       .order('name')
       .then(({ data }) => {
-        const list = data ?? [];
+        const list = (data ?? []) as Array<{ id: string; name: string }>;
         setSimSchools(list);
         if (school?.id) setSimSchoolId(school.id);
         else if (list.length > 0) setSimSchoolId(list[0].id);
@@ -634,7 +691,8 @@ export function TeacherAttendancePage() {
       .eq('isActive', true)
       .order('fullName')
       .then(({ data }) => {
-        const list = (data ?? []).map((t: any) => ({
+        const rows = (data ?? []) as TeacherDbRow[];
+        const list: TeacherProfile[] = rows.map((t) => ({
           id: t.id,
           fullName: t.fullName,
           nik: t.nik ?? null,
@@ -655,11 +713,13 @@ export function TeacherAttendancePage() {
     if (!activeSchoolId || !user?.id) return;
     setIsLoadingData(true);
     try {
-      const { data: schData } = await supabase
+      const { data: schRaw } = await supabase
         .from('schools')
         .select('*')
         .eq('id', activeSchoolId)
         .maybeSingle();
+
+      const schData = schRaw as SchoolDbRow | null;
 
       if (schData) {
         setSchoolGeo({
@@ -698,13 +758,15 @@ export function TeacherAttendancePage() {
         activeTeacher =
           simTeachers.find((t) => t.id === simTeacherId) ?? null;
       } else {
-        const { data: tByUser } = await supabase
+        const { data: tRaw } = await supabase
           .from('teachers')
           .select('*')
           .eq('schoolId', activeSchoolId)
           .or(`userId.eq.${user.id},email.eq.${user.email ?? ''}`)
           .limit(1)
           .maybeSingle();
+
+        const tByUser = tRaw as TeacherDbRow | null;
 
         if (tByUser) {
           activeTeacher = {
@@ -743,8 +805,11 @@ export function TeacherAttendancePage() {
 
       const foundToday = records.find((r) => r.date === todayStr) ?? null;
       setTodayRecord(foundToday);
-    } catch (err) {
-      console.error('[TeacherAttendance] Gagal memuat data:', err);
+    } catch (err: unknown) {
+      console.error(
+        '[TeacherAttendance] Gagal memuat data:',
+        extractErrorMessage(err, 'Kesalahan tidak diketahui')
+      );
     } finally {
       setIsLoadingData(false);
     }
@@ -830,9 +895,9 @@ export function TeacherAttendancePage() {
         flags: Array.from(new Set([...envAudit.flags, ...verifiedGps.flags])),
         telemetry: envAudit.telemetry,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       setUserCoords(null);
-      setGpsError(err?.message ?? 'Gagal memverifikasi sinyal GPS.');
+      setGpsError(extractErrorMessage(err, 'Gagal memverifikasi sinyal GPS.'));
     } finally {
       setIsLocating(false);
     }
@@ -975,6 +1040,18 @@ export function TeacherAttendancePage() {
       return 'COMPLETED';
     }, [isOnLeaveToday, hasCheckedIn, hasCheckedOut]);
 
+  const clearCapturedSelfie = useCallback(() => {
+    setCapturedPreview((prevUrl) => {
+      if (prevUrl) {
+        URL.revokeObjectURL(prevUrl);
+      }
+      return null;
+    });
+    setCapturedBlob(null);
+    setUploadedSelfiePath(null);
+    setCameraError(null);
+  }, []);
+
   const openCameraModal = async (mode: 'CHECK_IN' | 'CHECK_OUT') => {
     const needSelfie =
       mode === 'CHECK_IN' ? effectiveSelfieCheckIn : effectiveSelfieCheckOut;
@@ -984,10 +1061,7 @@ export function TeacherAttendancePage() {
       return;
     }
 
-    setCapturedBlob(null);
-    setCapturedPreview(null);
-    setUploadedSelfiePath(null);
-    setCameraError(null);
+    clearCapturedSelfie();
     setCameraModal({ open: true, mode });
 
     try {
@@ -996,11 +1070,6 @@ export function TeacherAttendancePage() {
         audio: false,
       });
 
-      //const camCheck = validateCameraStream(stream);
-      // Ubah dari:
-      //const camCheck = validateCameraStream(stream);
-
-      // Menjadi:
       const camCheck = validateCameraStream(stream, isSuperAdmin);
       if (!camCheck.valid) {
         stream.getTracks().forEach((t) => t.stop());
@@ -1026,8 +1095,7 @@ export function TeacherAttendancePage() {
       streamRef.current.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
     }
-    setUploadedSelfiePath(null);
-    setCameraError(null);
+    clearCapturedSelfie();
     setCameraModal((prev) => ({ ...prev, open: false }));
   };
 
@@ -1066,10 +1134,9 @@ export function TeacherAttendancePage() {
     canvas.toBlob(
       (blob) => {
         if (blob) {
+          clearCapturedSelfie();
           setCapturedBlob(blob);
           setCapturedPreview(URL.createObjectURL(blob));
-          setUploadedSelfiePath(null);
-          setCameraError(null);
         }
       },
       'image/jpeg',
@@ -1225,7 +1292,7 @@ export function TeacherAttendancePage() {
       if (rpcError) throw rpcError;
 
       if (mode === 'CHECK_IN') {
-        const serverStatus = (rpcResult as { status?: string })?.status;
+        const serverStatus = (rpcResult as { status?: string } | null)?.status;
         showToast(
           'success',
           serverStatus === 'TERLAMBAT'
@@ -1243,7 +1310,7 @@ export function TeacherAttendancePage() {
       closeCameraModal();
       await loadTeacherAndAttendance();
       setActiveView('beranda');
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Jika RPC gagal, hapus kembali foto yang baru terunggah agar Supabase Storage tetap bersih
       if (newlyUploadedPath) {
         await supabase.storage
@@ -1253,7 +1320,7 @@ export function TeacherAttendancePage() {
         setUploadedSelfiePath(null);
       }
 
-      const errMsg = err?.message ?? 'Gagal menyimpan presensi.';
+      const errMsg = extractErrorMessage(err, 'Gagal menyimpan presensi.');
       setCameraError(errMsg);
       showToast('error', errMsg);
     } finally {
@@ -1262,7 +1329,7 @@ export function TeacherAttendancePage() {
   };
 
   // Simpan Pengajuan Ketat Izin / Dinas Luar / Sakit
-  const handleSubmitStrictLeave = async (e: React.FormEvent) => {
+  const handleSubmitStrictLeave = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!teacher || !activeSchoolId) return;
 
@@ -1360,8 +1427,11 @@ export function TeacherAttendancePage() {
         `Pengajuan ${categoryLabel} (${datesToInsert.length} hari) berhasil dicatat beserta bukti lampiran.`
       );
       setActiveView('beranda');
-    } catch (err: any) {
-      showToast('error', err.message ?? 'Gagal mengirim pengajuan izin/dinas.');
+    } catch (err: unknown) {
+      showToast(
+        'error',
+        extractErrorMessage(err, 'Gagal mengirim pengajuan izin/dinas.')
+      );
     } finally {
       setIsSubmittingLeave(false);
     }
@@ -1652,8 +1722,8 @@ export function TeacherAttendancePage() {
           >
             <div
               className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-400'
-                : 'bg-red-600 text-white border-red-400'
+                  ? 'bg-emerald-600 text-white border-emerald-400'
+                  : 'bg-red-600 text-white border-red-400'
                 }`}
             >
               <div className="flex items-center gap-2.5">
@@ -1987,8 +2057,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2040,8 +2110,8 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
-                      ? 'bg-emerald-400'
-                      : 'bg-amber-300 animate-pulse'
+                        ? 'bg-emerald-400'
+                        : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
@@ -2062,8 +2132,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2110,13 +2180,13 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                      ? todayCheckOutTimingInfo.isEarly ||
-                        todayCheckOutTimingInfo.isOvertime
-                        ? 'bg-amber-200'
-                        : 'bg-emerald-300'
-                      : canCheckOut
-                        ? 'bg-red-400 animate-ping'
-                        : 'bg-amber-100/60'
+                        ? todayCheckOutTimingInfo.isEarly ||
+                          todayCheckOutTimingInfo.isOvertime
+                          ? 'bg-amber-200'
+                          : 'bg-emerald-300'
+                        : canCheckOut
+                          ? 'bg-red-400 animate-ping'
+                          : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
@@ -2169,8 +2239,8 @@ export function TeacherAttendancePage() {
                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
-                      ? 'bg-red-500/85 text-white'
-                      : 'bg-emerald-500/85 text-white'
+                        ? 'bg-red-500/85 text-white'
+                        : 'bg-emerald-500/85 text-white'
                       }`}
                   >
                     {attendancePhase === 'CHECK_OUT'
@@ -2327,8 +2397,8 @@ export function TeacherAttendancePage() {
               onClick={handleFingerprintAction}
               disabled={isSubmittingAttendance}
               className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
-                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
-                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                  ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <span className="text-sm flex items-center gap-1.5">
@@ -2400,8 +2470,8 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setLeaveCategory(item.value)}
                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                      ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                      : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                       }`}
                   >
                     {item.label}
@@ -2492,8 +2562,8 @@ export function TeacherAttendancePage() {
               </label>
               <label
                 className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                  ? 'border-emerald-500/70 bg-emerald-500/10'
-                  : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                    ? 'border-emerald-500/70 bg-emerald-500/10'
+                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
                   }`}
               >
                 {leaveFile ? (
@@ -2532,8 +2602,8 @@ export function TeacherAttendancePage() {
                 type="submit"
                 disabled={isSubmittingLeave || !teacher}
                 className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                  ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                  : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                   }`}
               >
                 {isSubmittingLeave ? (
@@ -2588,8 +2658,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Bulan Ini
@@ -2598,8 +2668,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Tahunan
@@ -2699,10 +2769,10 @@ export function TeacherAttendancePage() {
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
-                    ? 'text-red-500'
-                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : 'opacity-65'
+                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                        ? 'text-red-500'
+                        : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -2737,10 +2807,10 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                     className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                      : isToday
-                        ? 'border-amber-400 font-bold'
-                        : 'border-transparent'
+                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                        : isToday
+                          ? 'border-amber-400 font-bold'
+                          : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
@@ -2764,8 +2834,8 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                  ? 'bg-red-500/10 border-red-500/30'
-                  : 'bg-muted/40 border-border'
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -2873,12 +2943,12 @@ export function TeacherAttendancePage() {
                     </div>
                     <span
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                        : item.status === 'TERLAMBAT'
-                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                          : item.status === 'ALPA'
-                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                          : item.status === 'TERLAMBAT'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                            : item.status === 'ALPA'
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                              : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                         }`}
                     >
                       {item.status}
@@ -2903,8 +2973,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
@@ -2915,8 +2985,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
@@ -2947,8 +3017,8 @@ export function TeacherAttendancePage() {
               <Fingerprint
                 size={28}
                 className={`transition-transform duration-150 ${isFingerprintGlowing
-                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                  : ''
+                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                    : ''
                   }`}
               />
             </motion.button>
@@ -2958,8 +3028,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
@@ -2970,8 +3040,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
@@ -3159,8 +3229,8 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={handleTakeSnapshot}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                    ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                    : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                     }`}
                 >
                   <Camera size={18} className="shrink-0" />
@@ -3170,12 +3240,7 @@ export function TeacherAttendancePage() {
                 <div className="grid grid-cols-12 gap-2.5 pt-1">
                   <button
                     type="button"
-                    onClick={() => {
-                      setCapturedBlob(null);
-                      setCapturedPreview(null);
-                      setUploadedSelfiePath(null);
-                      setCameraError(null);
-                    }}
+                    onClick={clearCapturedSelfie}
                     disabled={isSubmittingAttendance}
                     className="col-span-5 py-3 px-3 rounded-2xl font-bold text-xs border border-slate-300 dark:border-white/15 bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-all duration-200 active:scale-[0.97] disabled:opacity-45 disabled:cursor-not-allowed"
                   >
@@ -3190,8 +3255,8 @@ export function TeacherAttendancePage() {
                     }
                     disabled={isSubmittingAttendance}
                     className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                       }`}
                   >
                     {isSubmittingAttendance ? (
