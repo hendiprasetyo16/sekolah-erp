@@ -20,6 +20,7 @@ import {
 import { toast } from 'sonner';
 
 import { cn } from '@/utils/cn';
+import { detectDevicePlatform } from '@/utils/devicePlatform';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useUIStore } from '@/stores/ui.store';
@@ -29,6 +30,32 @@ interface GlassFeatureCard {
   icon: LucideIcon;
   title: string;
   subtitle: string;
+}
+
+/**
+ * Menentukan halaman tujuan otomatis setelah berhasil login:
+ * - SUPER_ADMIN & ADMIN -> selalu ke /dashboard
+ * - Guru / PTK (termasuk Kepala Sekolah, Wali Kelas, Operator, TU, dll.):
+ *     * Login via HP -> langsung ke /attendance/teacher
+ *     * Login via Komputer/Laptop -> ke /dashboard
+ */
+function resolvePostLoginPath(role?: string | null): string {
+  const normalizedRole = String(role ?? '').trim().toUpperCase();
+
+  if (normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'ADMIN') {
+    return '/dashboard';
+  }
+
+  if (
+    normalizedRole === 'SISWA' ||
+    normalizedRole === 'ORANG_TUA' ||
+    normalizedRole === 'WALI_MURID'
+  ) {
+    return '/dashboard';
+  }
+
+  const { isMobilePhone } = detectDevicePlatform();
+  return isMobilePhone ? '/attendance/teacher' : '/dashboard';
 }
 
 export function LoginPage() {
@@ -72,8 +99,8 @@ export function LoginPage() {
         if (result.user?.isFirstLogin) {
           navigate('/force-change-password', { replace: true });
         } else {
-          // MainLayout otomatis menampilkan TenantSelector jika SUPER_ADMIN belum memiliki sekolah aktif
-          navigate('/dashboard', { replace: true });
+          const targetPath = resolvePostLoginPath(result.user?.role);
+          navigate(targetPath, { replace: true });
         }
         return;
       }

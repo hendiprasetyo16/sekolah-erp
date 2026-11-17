@@ -38,6 +38,8 @@ import {
   Settings2,
   Send,
   Loader2,
+  Smartphone,
+  ArrowLeft,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -46,20 +48,26 @@ import {
   checkRedDateStatus,
   type WorkDaysMode,
 } from '../utils/indonesianHolidays';
+import {
+  inspectDeviceEnvironment,
+  validateCameraStream,
+  acquireVerifiedGpsPosition,
+} from '../services/antiCheat.service';
+import { detectDevicePlatform } from '@/utils/devicePlatform';
 
 // ============================================================================
 // PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
 // ============================================================================
+const TEACHER_DASHBOARD_ROUTE = '/dashboard'; // Rute Dashboard Guru jika diakses dari komputer
 const FALLBACK_WORK_START_TIME = '07:30';      // Jam masuk cadangan jika belum diatur di profil sekolah
 const FALLBACK_WORK_END_TIME = '14:30';        // Jam pulang cadangan jika belum diatur di profil sekolah
-const CHECKOUT_TOLERANCE_MINUTES = 30;         // Toleransi waktu pulang (menit). Lewat batas ini -> "Melewati jadwal pulang"
+const CHECKOUT_TOLERANCE_MINUTES = 30;         // Toleransi waktu pulang (menit)
 const DEFAULT_RADIUS_METERS = 100;             // Radius GPS cadangan (dalam meter)
-const FALLBACK_REQUIRE_SELFIE_CHECKIN = true;  // Cadangan wajib selfie datang jika belum diatur Admin
-const FALLBACK_REQUIRE_SELFIE_CHECKOUT = true; // Cadangan wajib selfie pulang jika belum diatur Admin
-const CONFIRM_EARLY_CHECKOUT = true;           // Tampilkan peringatan jika absen pulang lebih awal dari jadwal
-const CONFIRM_ALL_CHECKOUT = false;            // false = modal konfirmasi HANYA muncul saat pulang lebih awal
-const MIN_EARLY_CHECKOUT_REASON_LENGTH = 10;   // Minimal karakter alasan wajib saat pulang lebih awal
-const RECORD_CHECKOUT_STATUS_NOTE = true;      // Catat otomatis keterangan pulang lebih awal / melewati jadwal ke log
+const FALLBACK_REQUIRE_SELFIE_CHECKIN = true;  // Cadangan wajib selfie datang
+const FALLBACK_REQUIRE_SELFIE_CHECKOUT = true; // Cadangan wajib selfie pulang
+const CONFIRM_EARLY_CHECKOUT = true;           // Tampilkan peringatan jika pulang lebih awal
+const CONFIRM_ALL_CHECKOUT = false;            // false = modal HANYA muncul saat pulang lebih awal
+const MIN_EARLY_CHECKOUT_REASON_LENGTH = 10;   // Minimal karakter alasan pulang lebih awal
 const MIN_REASON_LENGTH = 15;                  // Minimal karakter alasan izin/sakit
 const FINGERPRINT_GLOW_DURATION_MS = 550;      // Durasi efek cahaya tombol sidik jari (ms)
 const TOP_REVEAL_SWIPE_THRESHOLD = 45;         // Jarak usap ke bawah (px) untuk memunculkan header
@@ -113,6 +121,7 @@ interface TeacherProfile {
   nuptk?: string | null;
   position?: string | null;
   photoUrl?: string | null;
+  allowDesktopAttendance: boolean;
 }
 
 interface SchoolGeoAndSchedule {
@@ -230,7 +239,6 @@ function formatDurationMinutes(totalMinutes: number): string {
   return `${mins} menit`;
 }
 
-// Mengevaluasi ketepatan waktu pulang: Lebih Awal, Tepat Waktu, atau Melewati Jadwal
 function evaluateCheckOutTiming(
   checkOutDate: Date,
   workEndTime: string,
@@ -289,15 +297,6 @@ function evaluateCheckOutTiming(
   };
 }
 
-function isMissingColumnSchemaError(err: any): boolean {
-  const msg = String(err?.message ?? '').toLowerCase();
-  return (
-    err?.code === 'PGRST204' ||
-    msg.includes('schema cache') ||
-    (msg.includes('column') && msg.includes('does not exist'))
-  );
-}
-
 // ============================================================================
 // KOMPONEN UTAMA HALAMAN PRESENSI GURU
 // ============================================================================
@@ -314,6 +313,19 @@ export function TeacherAttendancePage() {
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
   const isAdminOrSuperAdmin =
     user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+
+  const devicePlatform = useMemo(() => detectDevicePlatform(), []);
+
+  // State Pelacakan Keamanan & Anti-Cheat (berada di dalam komponen React)
+  const [securityState, setSecurityState] = useState<{
+    isSuspectedMock: boolean;
+    flags: string[];
+    telemetry: Record<string, unknown>;
+  }>({
+    isSuspectedMock: false,
+    flags: [],
+    telemetry: {},
+  });
 
   // State Sembunyikan / Tampilkan Header Utama Aplikasi
   const [isTopHeaderVisible, setIsTopHeaderVisible] = useState<boolean>(false);
@@ -372,7 +384,7 @@ export function TeacherAttendancePage() {
   const mapInstanceRef = useRef<L.Map | null>(null);
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
 
-  // State Modal Konfirmasi Pulang Lebih Awal (Alasan Wajib Diisi)
+  // State Modal Konfirmasi Pulang Lebih Awal
   const [checkoutConfirmModal, setCheckoutConfirmModal] = useState<{
     open: boolean;
     isEarly: boolean;
@@ -522,7 +534,6 @@ export function TeacherAttendancePage() {
     }
   };
 
-  // Timer jam digital realtime (sekaligus mendeteksi pergantian hari pada pukul 00:00)
   const todayStr = getTodayLocal(now);
 
   useEffect(() => {
@@ -631,6 +642,7 @@ export function TeacherAttendancePage() {
           nuptk: t.nuptk ?? null,
           position: t.position ?? null,
           photoUrl: t.photoUrl ?? null,
+          allowDesktopAttendance: Boolean(t.allowDesktopAttendance),
         }));
         setSimTeachers(list);
         if (list.length > 0) setSimTeacherId(list[0].id);
@@ -656,6 +668,7 @@ export function TeacherAttendancePage() {
           latitude: Number(schData.latitude ?? schData.lat ?? -7.7956),
           longitude: Number(schData.longitude ?? schData.lng ?? 110.3695),
           radius: Number(
+            schData.attendanceRadiusMeters ??
             schData.attendanceRadius ??
             schData.gpsRadius ??
             schData.radius ??
@@ -702,6 +715,7 @@ export function TeacherAttendancePage() {
             nuptk: tByUser.nuptk ?? null,
             position: tByUser.position ?? null,
             photoUrl: tByUser.photoUrl ?? null,
+            allowDesktopAttendance: Boolean(tByUser.allowDesktopAttendance),
           };
         }
       }
@@ -749,6 +763,14 @@ export function TeacherAttendancePage() {
     loadTeacherAndAttendance();
   }, [loadTeacherAndAttendance]);
 
+  // Cek apakah akses presensi melalui komputer terkunci untuk guru ini
+  const isDesktopBlockedForTeacher = useMemo(() => {
+    if (isSuperAdmin) return false;
+    if (!devicePlatform.isDesktop) return false;
+    if (!teacher) return false;
+    return !teacher.allowDesktopAttendance;
+  }, [isSuperAdmin, devicePlatform.isDesktop, teacher]);
+
   const effectiveWorkStartTime =
     schoolGeo?.workStartTime || FALLBACK_WORK_START_TIME;
   const effectiveToleranceMinutes = schoolGeo?.lateToleranceMinutes ?? 0;
@@ -770,41 +792,57 @@ export function TeacherAttendancePage() {
     [effectiveWorkStartTime, effectiveToleranceMinutes]
   );
 
-  // Pelacakan GPS Live
-  const requestGpsPosition = useCallback(() => {
-    if (!navigator.geolocation) {
-      setGpsError('Perangkat/browser ini tidak mendukung GPS.');
-      return;
-    }
+  // Pelacakan GPS Live dengan Anti-Emulator & Multi-Sample Verification
+  const requestGpsPosition = useCallback(async () => {
     setIsLocating(true);
     setGpsError(null);
 
-    navigator.geolocation.getCurrentPosition(
-      (pos) => {
-        setUserCoords({
-          lat: pos.coords.latitude,
-          lng: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-        });
+    try {
+      const envAudit = inspectDeviceEnvironment(
+        isSuperAdmin,
+        Boolean(teacher?.allowDesktopAttendance)
+      );
+
+      if (!envAudit.allowed) {
         setIsLocating(false);
-      },
-      (err) => {
-        setIsLocating(false);
-        if (err.code === 1) {
-          setGpsError('Izin lokasi ditolak. Aktifkan izin GPS pada browser Anda.');
-        } else {
-          setGpsError('Gagal mendeteksi titik GPS. Pastikan GPS perangkat aktif.');
-        }
-      },
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
-    );
-  }, []);
+        setUserCoords(null);
+        setGpsError(
+          envAudit.blockReason ?? 'Perangkat tidak diizinkan untuk presensi.'
+        );
+        return;
+      }
+
+      const isDev =
+        window.location.hostname === 'localhost' ||
+        window.location.hostname === '127.0.0.1';
+
+      const verifiedGps = await acquireVerifiedGpsPosition(isDev);
+
+      setUserCoords({
+        lat: verifiedGps.latitude,
+        lng: verifiedGps.longitude,
+        accuracy: verifiedGps.accuracy,
+      });
+
+      setSecurityState({
+        isSuspectedMock:
+          envAudit.isSuspectedMock || verifiedGps.isSuspectedMock,
+        flags: Array.from(new Set([...envAudit.flags, ...verifiedGps.flags])),
+        telemetry: envAudit.telemetry,
+      });
+    } catch (err: any) {
+      setUserCoords(null);
+      setGpsError(err?.message ?? 'Gagal memverifikasi sinyal GPS.');
+    } finally {
+      setIsLocating(false);
+    }
+  }, [isSuperAdmin, teacher?.allowDesktopAttendance]);
 
   useEffect(() => {
-    if (activeView === 'peta') {
+    if (activeView === 'peta' && !isDesktopBlockedForTeacher) {
       requestGpsPosition();
     }
-  }, [activeView, requestGpsPosition]);
+  }, [activeView, isDesktopBlockedForTeacher, requestGpsPosition]);
 
   // Inisialisasi Peta Leaflet
   useEffect(() => {
@@ -941,7 +979,6 @@ export function TeacherAttendancePage() {
     const needSelfie =
       mode === 'CHECK_IN' ? effectiveSelfieCheckIn : effectiveSelfieCheckOut;
 
-    // Jika Admin mematikan fitur selfie untuk fase ini, langsung simpan presensi GPS saja
     if (!needSelfie) {
       await submitGpsAttendance(mode, null);
       return;
@@ -958,6 +995,15 @@ export function TeacherAttendancePage() {
         video: { facingMode: 'user', width: { ideal: 720 }, height: { ideal: 720 } },
         audio: false,
       });
+
+      const camCheck = validateCameraStream(stream);
+      if (!camCheck.valid) {
+        stream.getTracks().forEach((t) => t.stop());
+        showToast('error', camCheck.reason ?? 'Kamera virtual tidak diizinkan.');
+        setCameraModal({ open: false, mode });
+        return;
+      }
+
       streamRef.current = stream;
       setTimeout(() => {
         if (videoRef.current) {
@@ -965,7 +1011,7 @@ export function TeacherAttendancePage() {
         }
       }, 100);
     } catch {
-      showToast('error', 'Kamera tidak dapat diakses. Izinkan akses kamera di browser.');
+      showToast('error', 'Kamera tidak dapat diakses. Izinkan akses kamera di perangkat Anda.');
       setCameraModal({ open: false, mode });
     }
   };
@@ -1075,7 +1121,6 @@ export function TeacherAttendancePage() {
       return;
     }
 
-    // Cek waktu pulang: modal peringatan HANYA muncul jika pulang lebih awal
     if (attendancePhase === 'CHECK_OUT') {
       const currentCheckDate = new Date();
       const timing = evaluateCheckOutTiming(
@@ -1105,7 +1150,7 @@ export function TeacherAttendancePage() {
   };
 
   // ============================================================================
-  // SIMPAN CHECK-IN / CHECK-OUT KE SUPABASE
+  // SIMPAN CHECK-IN / CHECK-OUT VIA SERVER RPC ANTI-CURANG
   // ============================================================================
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
@@ -1130,7 +1175,7 @@ export function TeacherAttendancePage() {
       const currentDayStr = getTodayLocal(nowObj);
       const timeTag = getTimeStampTagLocal(nowObj);
 
-      // 1. Unggah foto selfie hanya jika fitur selfie aktif & blob tersedia
+      // 1. Unggah foto selfie jika diwajibkan
       if (selfieBlob && !finalUploadedPath) {
         const schoolFolder = schoolGeo?.name
           ? sanitizeStorageSegment(schoolGeo.name)
@@ -1150,148 +1195,38 @@ export function TeacherAttendancePage() {
         setUploadedSelfiePath(fileName);
       }
 
-      const nowIso = nowObj.toISOString();
+      // 2. Panggil RPC Server (Jam Server + Radius Server + Validasi Izin Komputer)
+      const { data: rpcResult, error: rpcError } = await supabase.rpc(
+        'submit_teacher_gps_attendance',
+        {
+          p_mode: mode,
+          p_lat: userCoords.lat,
+          p_lng: userCoords.lng,
+          p_accuracy: userCoords.accuracy,
+          p_selfie_path: finalUploadedPath,
+          p_early_reason: mode === 'CHECK_OUT' ? earlyCheckoutReason.trim() : null,
+          p_is_suspected_mock: securityState.isSuspectedMock,
+          p_security_flags: securityState.flags,
+          p_device_telemetry: securityState.telemetry,
+          p_sim_teacher_id: isSuperAdmin ? teacher.id : null,
+          p_sim_school_id: isSuperAdmin ? activeSchoolId : null,
+        }
+      );
+
+      if (rpcError) throw rpcError;
 
       if (mode === 'CHECK_IN') {
-        const [startH, startM] = effectiveWorkStartTime.split(':').map(Number);
-        const deadline = new Date(nowObj);
-        deadline.setHours(
-          startH || 7,
-          (startM ?? 30) + effectiveToleranceMinutes,
-          59,
-          999
-        );
-        const status = nowObj > deadline ? 'TERLAMBAT' : 'HADIR';
-
-        const fullPayload: Record<string, any> = {
-          schoolId: activeSchoolId,
-          teacherId: teacher.id,
-          type: 'GURU',
-          date: currentDayStr,
-          status,
-          checkInTime: nowIso,
-          checkInLat: userCoords.lat,
-          checkInLng: userCoords.lng,
-          checkInDistance: Math.round(distanceMeters),
-          isCheckInMock: false,
-          checkInSelfieUrl: finalUploadedPath,
-        };
-
-        let { error } = await supabase.from('attendances').insert(fullPayload);
-
-        if (error && isMissingColumnSchemaError(error)) {
-          const fallbackPayload = {
-            schoolId: activeSchoolId,
-            teacherId: teacher.id,
-            type: 'GURU',
-            date: currentDayStr,
-            status,
-            checkInTime: nowIso,
-            checkInLat: userCoords.lat,
-            checkInLng: userCoords.lng,
-            checkInSelfieUrl: finalUploadedPath,
-          };
-          const retry = await supabase.from('attendances').insert(fallbackPayload);
-          error = retry.error;
-        }
-
-        if (error) throw error;
+        const serverStatus = (rpcResult as { status?: string })?.status;
         showToast(
           'success',
-          status === 'TERLAMBAT'
+          serverStatus === 'TERLAMBAT'
             ? effectiveToleranceMinutes > 0
               ? `Check-In tercatat (Status: Terlambat — lewat batas toleransi ${effectiveDeadlineStr}).`
               : `Check-In tercatat (Status: Terlambat — batas masuk ${effectiveWorkStartTime}).`
             : 'Check-In Datang berhasil tercatat!'
         );
       } else {
-        if (!todayRecord?.id) {
-          throw new Error('Anda belum melakukan Check-In masuk hari ini.');
-        }
-
-        const checkOutTiming = evaluateCheckOutTiming(
-          nowObj,
-          effectiveWorkEndTime,
-          CHECKOUT_TOLERANCE_MINUTES
-        );
-
-        const trimmedEarlyReason = earlyCheckoutReason.trim();
-        if (
-          checkOutTiming.isEarly &&
-          CONFIRM_EARLY_CHECKOUT &&
-          trimmedEarlyReason.length < MIN_EARLY_CHECKOUT_REASON_LENGTH
-        ) {
-          throw new Error(
-            `Alasan pulang lebih awal wajib diisi minimal ${MIN_EARLY_CHECKOUT_REASON_LENGTH} karakter.`
-          );
-        }
-
-        const currentTimeFormatted = nowObj.toLocaleTimeString('id-ID', {
-          hour: '2-digit',
-          minute: '2-digit',
-        });
-
-        let updatedNotes = todayRecord.notes ?? null;
-
-        if (RECORD_CHECKOUT_STATUS_NOTE) {
-          if (checkOutTiming.isEarly) {
-            const earlyNote = `[Pulang Lebih Awal] Pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, kurang ${checkOutTiming.formattedDiff}) — Alasan: ${trimmedEarlyReason}`;
-            updatedNotes = updatedNotes
-              ? `${updatedNotes} | ${earlyNote}`
-              : earlyNote;
-          } else if (checkOutTiming.isOvertime) {
-            const overtimeNote = `Pulang melewati jadwal pukul ${currentTimeFormatted} (jadwal ${effectiveWorkEndTime}, lewat ${checkOutTiming.formattedDiff})`;
-            updatedNotes = updatedNotes
-              ? `${updatedNotes} | ${overtimeNote}`
-              : overtimeNote;
-          }
-        }
-
-        const fullUpdatePayload: Record<string, any> = {
-          checkOutTime: nowIso,
-          checkOutLat: userCoords.lat,
-          checkOutLng: userCoords.lng,
-          checkOutDistance: Math.round(distanceMeters),
-          ...(finalUploadedPath ? { checkOutSelfieUrl: finalUploadedPath } : {}),
-          ...(updatedNotes ? { notes: updatedNotes } : {}),
-        };
-
-        let { error } = await supabase
-          .from('attendances')
-          .update(fullUpdatePayload)
-          .eq('id', todayRecord.id);
-
-        if (error && isMissingColumnSchemaError(error)) {
-          const safeCorePayload: Record<string, any> = {
-            checkOutTime: nowIso,
-            ...(finalUploadedPath ? { checkOutSelfieUrl: finalUploadedPath } : {}),
-            ...(updatedNotes ? { notes: updatedNotes } : {}),
-          };
-          const retry = await supabase
-            .from('attendances')
-            .update(safeCorePayload)
-            .eq('id', todayRecord.id);
-          error = retry.error;
-        }
-
-        if (error) throw error;
-
-        if (checkOutTiming.isEarly) {
-          showToast(
-            'success',
-            `Check-Out tercatat (Status: Pulang Lebih Awal ${checkOutTiming.formattedDiff}). Alasan Anda telah disimpan ke log.`
-          );
-        } else if (checkOutTiming.isOvertime) {
-          showToast(
-            'success',
-            `Check-Out tercatat (Melewati jadwal pulang ${checkOutTiming.formattedDiff} — jadwal pulang ${effectiveWorkEndTime}).`
-          );
-        } else {
-          showToast(
-            'success',
-            'Check-Out Pulang berhasil tercatat tepat waktu! Hati-hati di jalan.'
-          );
-        }
+        showToast('success', 'Check-Out Pulang berhasil tercatat!');
       }
 
       setEarlyCheckoutReason('');
@@ -1345,7 +1280,7 @@ export function TeacherAttendancePage() {
       const storagePath = `${schoolFolder}/Surat_Izin_Dinas/${teacherFolder}_${leaveStartDate}_${timeTag}.${ext}`;
 
       const { error: upErr } = await supabase.storage
-        .from('attendance-selfies')
+        .from('attendance-attachments')
         .upload(storagePath, leaveFile, { upsert: true });
 
       if (upErr) throw new Error(`Gagal mengunggah bukti lampiran: ${upErr.message}`);
@@ -1617,6 +1552,50 @@ export function TeacherAttendancePage() {
     : attendancePhase === 'CHECK_OUT'
       ? 'bg-red-500'
       : 'bg-emerald-400';
+
+  // ============================================================================
+  // LAYAR TERKUNCI JIKA DIBUKA DARI KOMPUTER TANPA IZIN ADMIN
+  // ============================================================================
+  if (!isLoadingData && isDesktopBlockedForTeacher) {
+    return (
+      <div className="min-h-[75vh] flex items-center justify-center p-4">
+        <div className="data-card max-w-md w-full p-6 text-center space-y-4 border border-amber-500/30 shadow-xl">
+          <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/15 text-amber-500 flex items-center justify-center">
+            <Lock size={30} />
+          </div>
+
+          <div className="space-y-1.5">
+            <h2 className="text-lg font-bold">
+              Presensi Terkunci di Komputer
+            </h2>
+            <p className="text-xs opacity-75 leading-relaxed">
+              Halo <strong>{teacher?.fullName}</strong>, akun Anda saat ini
+              diatur untuk melakukan presensi melalui{' '}
+              <strong>HP / Aplikasi Android</strong>. Halaman komputer hanya
+              digunakan untuk pengelolaan administrasi guru.
+            </p>
+          </div>
+
+          <div className="p-3 rounded-2xl bg-muted/50 border border-border text-[11px] opacity-80 flex items-center justify-center gap-2">
+            <Smartphone size={16} className="text-emerald-500 shrink-0" />
+            <span>
+              Hubungi Admin Sekolah jika Anda memerlukan pengecualian presensi
+              menggunakan komputer.
+            </span>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => navigate(TEACHER_DASHBOARD_ROUTE)}
+            className="btn-primary w-full justify-center py-3 rounded-xl font-bold text-xs"
+          >
+            <ArrowLeft size={16} />
+            Kembali ke Dashboard Guru
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -1979,7 +1958,7 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          {/* Dua Kartu Utama: DATANG (Terkunci jika sudah absen masuk) & PULANG */}
+          {/* Dua Kartu Utama: DATANG & PULANG */}
           <div className="grid grid-cols-2 gap-3.5">
             {/* KARTU DATANG */}
             <button
@@ -1989,13 +1968,6 @@ export function TeacherAttendancePage() {
                 if (isCheckInLocked) return;
                 setActiveView('peta');
               }}
-              title={
-                hasCheckedIn
-                  ? 'Presensi datang sudah tercatat dan terkunci.'
-                  : isOnLeaveToday
-                    ? `Hari ini tercatat ${todayRecord?.status}.`
-                    : 'Ketuk untuk melakukan presensi datang di peta'
-              }
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
                   ? 'opacity-65 cursor-not-allowed saturate-75'
                   : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
@@ -2018,10 +1990,7 @@ export function TeacherAttendancePage() {
                     {hasCheckedIn && (
                       <CheckCircle2 size={15} className="text-emerald-300" />
                     )}
-                    <span
-                      className="p-1.5 rounded-lg bg-black/25 text-slate-200"
-                      title="Terkunci"
-                    >
+                    <span className="p-1.5 rounded-lg bg-black/25 text-slate-200">
                       <Lock size={13} />
                     </span>
                   </div>
@@ -2074,13 +2043,6 @@ export function TeacherAttendancePage() {
                 if (!canCheckOut) return;
                 setActiveView('peta');
               }}
-              title={
-                !hasCheckedIn
-                  ? 'Tombol Pulang terkunci. Lakukan absensi Datang terlebih dahulu.'
-                  : hasCheckedOut
-                    ? 'Anda sudah melakukan presensi pulang hari ini.'
-                    : 'Ketuk untuk melakukan presensi pulang di peta'
-              }
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
                   ? 'opacity-65 cursor-not-allowed saturate-75'
                   : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
@@ -2103,10 +2065,7 @@ export function TeacherAttendancePage() {
                     {hasCheckedOut && (
                       <CheckCircle2 size={15} className="text-emerald-200" />
                     )}
-                    <span
-                      className="p-1.5 rounded-lg bg-black/25 text-amber-100"
-                      title="Terkunci"
-                    >
+                    <span className="p-1.5 rounded-lg bg-black/25 text-amber-100">
                       <Lock size={13} />
                     </span>
                   </div>
@@ -2532,7 +2491,7 @@ export function TeacherAttendancePage() {
                 <span className="text-[11px] opacity-60 mt-0.5">
                   {leaveFile
                     ? 'Ketuk lagi jika ingin mengganti berkas'
-                    : 'Maksimal ukuran berkas 5 MB'}
+                    : 'Maksimal ukuran berkas 2 MB'}
                 </span>
                 <input
                   type="file"
@@ -2540,8 +2499,8 @@ export function TeacherAttendancePage() {
                   className="hidden"
                   onChange={(e) => {
                     const file = e.target.files?.[0] ?? null;
-                    if (file && file.size > 5 * 1024 * 1024) {
-                      showToast('error', 'Ukuran file maksimal 5 MB.');
+                    if (file && file.size > 2 * 1024 * 1024) {
+                      showToast('error', 'Ukuran file maksimal 2 MB.');
                       return;
                     }
                     setLeaveFile(file);
@@ -2550,7 +2509,6 @@ export function TeacherAttendancePage() {
               </label>
             </div>
 
-            {/* Tombol Kirim Pengajuan Modern */}
             <div className="pt-1">
               <button
                 type="submit"
@@ -2572,11 +2530,6 @@ export function TeacherAttendancePage() {
                   </>
                 )}
               </button>
-              {!isLeaveFormReady && teacher && (
-                <p className="text-[11px] text-center opacity-65 mt-2">
-                  Lengkapi keterangan & lampirkan bukti dokumen untuk mengaktifkan pengiriman penuh.
-                </p>
-              )}
             </div>
           </form>
         </motion.div>
@@ -2678,7 +2631,6 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          {/* KALENDER / TANGGALAN PRESENSI */}
           <div className="data-card p-4 space-y-3.5">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
@@ -2711,7 +2663,6 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={handlePrevMonth}
                   className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 transition"
-                  title="Bulan Sebelumnya"
                 >
                   <ChevronLeft size={16} />
                 </button>
@@ -2719,7 +2670,6 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={handleNextMonth}
                   className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 transition"
-                  title="Bulan Berikutnya"
                 >
                   <ChevronRight size={16} />
                 </button>
@@ -2768,7 +2718,6 @@ export function TeacherAttendancePage() {
                     key={cell.dateStr}
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
-                    title={cell.holidayName ?? cell.dateStr}
                     className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
                         ? 'border-primary ring-2 ring-primary/30 font-extrabold'
                         : isToday
@@ -2780,7 +2729,6 @@ export function TeacherAttendancePage() {
                       }`}
                   >
                     <span className="text-xs leading-none">{cell.dayNum}</span>
-
                     <div className="mt-1.5 h-1.5 flex items-center justify-center gap-0.5">
                       {statusDotColor ? (
                         <span
@@ -2793,24 +2741,6 @@ export function TeacherAttendancePage() {
                   </button>
                 );
               })}
-            </div>
-
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-border text-[10px] opacity-80">
-              <span className="flex items-center gap-1 text-red-500 font-semibold">
-                <span className="w-2 h-2 rounded-full bg-red-500" /> Tanggal Merah
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-emerald-500" /> Hadir
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-amber-500" /> Terlambat
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-blue-500" /> Izin/Sakit
-              </span>
-              <span className="flex items-center gap-1">
-                <span className="w-2 h-2 rounded-full bg-red-600" /> Alpa
-              </span>
             </div>
 
             {selectedDateInfo && (
@@ -2995,13 +2925,6 @@ export function TeacherAttendancePage() {
                     ? 'Presensi Pulang (Check-Out)'
                     : 'Presensi Datang (Check-In)'
               }
-              aria-label={
-                !isOnMapView
-                  ? 'Buka Peta Presensi'
-                  : isCheckOutPhase
-                    ? 'Tombol Sidik Jari Presensi Pulang'
-                    : 'Tombol Sidik Jari Presensi Datang'
-              }
             >
               <Fingerprint
                 size={28}
@@ -3074,13 +2997,11 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={closeCheckoutConfirmModal}
                   className="p-1 rounded-lg hover:bg-muted shrink-0"
-                  aria-label="Tutup"
                 >
                   <X size={18} />
                 </button>
               </div>
 
-              {/* Rincian perbandingan jam saat ini vs jadwal pulang */}
               <div className="p-3.5 rounded-2xl border text-xs space-y-2 bg-amber-500/10 border-amber-500/35">
                 <div className="flex items-center justify-between">
                   <span className="opacity-75">Waktu Saat Ini:</span>
@@ -3100,17 +3021,6 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              <p className="text-xs leading-relaxed opacity-85">
-                Jika Anda melanjutkan, presensi hari ini langsung terkunci dengan
-                status{' '}
-                <strong className="text-amber-600 dark:text-amber-300">
-                  Pulang Lebih Awal
-                </strong>
-                . Alasan Anda akan otomatis tercatat pada log kehadiran untuk
-                diketahui Admin/Kepala Sekolah.
-              </p>
-
-              {/* Input Alasan Pulang Lebih Awal (WAJIB DIISI) */}
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px]">
                   <label className="font-bold">

@@ -23,6 +23,7 @@ import {
 import { toast } from 'sonner';
 
 import { cn } from '@/utils/cn';
+import { detectDevicePlatform } from '@/utils/devicePlatform';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useUIStore } from '@/stores/ui.store';
@@ -47,6 +48,25 @@ const FORBIDDEN_DEFAULT_PASSWORDS: readonly string[] = [
     'sekolah123',
     'admin123',
 ];
+
+function resolvePostLoginPath(role?: string | null): string {
+    const normalizedRole = String(role ?? '').trim().toUpperCase();
+
+    if (normalizedRole === 'SUPER_ADMIN' || normalizedRole === 'ADMIN') {
+        return '/dashboard';
+    }
+
+    if (
+        normalizedRole === 'SISWA' ||
+        normalizedRole === 'ORANG_TUA' ||
+        normalizedRole === 'WALI_MURID'
+    ) {
+        return '/dashboard';
+    }
+
+    const { isMobilePhone } = detectDevicePlatform();
+    return isMobilePhone ? '/attendance/teacher' : '/dashboard';
+}
 
 function createChangePasswordSchema(locale: string) {
     const isId = locale === 'id';
@@ -178,12 +198,12 @@ export function ForceChangePasswordPage() {
 
             toast.success(
                 locale === 'id'
-                    ? 'Kata sandi pribadi berhasil disimpan. Mengalihkan ke ruang kerja...'
-                    : 'Personal password saved successfully. Redirecting to workspace...'
+                    ? 'Kata sandi pribadi berhasil disimpan. Mengalihkan ke halaman tujuan...'
+                    : 'Personal password saved successfully. Redirecting...'
             );
 
-            // MainLayout otomatis menampilkan TenantSelector jika SUPER_ADMIN belum memilih sekolah
-            navigate('/dashboard', { replace: true });
+            const targetPath = resolvePostLoginPath(user.role);
+            navigate(targetPath, { replace: true });
         } catch (error: unknown) {
             toast.error(
                 getErrorMessage(

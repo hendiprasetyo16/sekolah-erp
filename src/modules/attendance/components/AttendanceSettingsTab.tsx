@@ -24,6 +24,10 @@ import {
     X,
     Camera,
     MapPin,
+    Monitor,
+    Smartphone,
+    Search,
+    Users,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -44,6 +48,13 @@ import { HolidayCalendarView } from './HolidayCalendarView';
 
 const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
 const INITIAL_BASE_YEARS = [2026, 2027, 2028];
+
+interface TeacherDesktopAccessItem {
+    id: string;
+    fullName: string;
+    nip: string | null;
+    allowDesktopAttendance: boolean;
+}
 
 // ============================================================================
 // TEMA TOMBOL MODERN TERPUSAT (MUDAH DISESUAIKAN)
@@ -112,6 +123,27 @@ export function AttendanceSettingsTab() {
     const [requireSelfieCheckOut, setRequireSelfieCheckOut] = useState<boolean>(true);
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
     const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
+
+    // 1B. State Pengaturan Izin Presensi via Komputer (Saklar Global & Saklar Per Guru)
+    const [allowDesktopGlobal, setAllowDesktopGlobal] = useState<boolean>(false);
+    const [teachersDesktopList, setTeachersDesktopList] = useState<
+        TeacherDesktopAccessItem[]
+    >([]);
+    const [isLoadingTeachersDesktop, setIsLoadingTeachersDesktop] =
+        useState<boolean>(false);
+    const [isUpdatingGlobalDesktop, setIsUpdatingGlobalDesktop] =
+        useState<boolean>(false);
+    const [updatingTeacherIds, setUpdatingTeacherIds] = useState<
+        Record<string, boolean>
+    >({});
+    const [teacherSearchQuery, setTeacherSearchQuery] = useState<string>('');
+    const [teacherFilterMode, setTeacherFilterMode] = useState<
+        'ALL' | 'ALLOWED' | 'BLOCKED'
+    >('ALL');
+    const [desktopAccessFeedback, setDesktopAccessFeedback] = useState<{
+        status: 'success' | 'error';
+        text: string;
+    } | null>(null);
 
     // 2. State Tahun, Pilihan Server API, Mode Muhammadiyah, & Hari Libur
     const [filterYear, setFilterYear] = useState<number>(() =>
@@ -247,6 +279,9 @@ export function AttendanceSettingsTab() {
                         ? data.requireSelfieCheckOut
                         : true
                 );
+                if (typeof data.allowDesktopAttendanceGlobal === 'boolean') {
+                    setAllowDesktopGlobal(data.allowDesktopAttendanceGlobal);
+                }
             }
         } catch (err: unknown) {
             const msg =
@@ -262,6 +297,202 @@ export function AttendanceSettingsTab() {
     useEffect(() => {
         loadScheduleSettings();
     }, [loadScheduleSettings]);
+
+    // Muat daftar Guru / PTK untuk pengaturan Saklar Global & Saklar Per Guru
+    const loadTeachersDesktopAccess = useCallback(async () => {
+        if (!selectedSchoolId) return;
+        setIsLoadingTeachersDesktop(true);
+        setDesktopAccessFeedback(null);
+        try {
+            const { data, error } = await supabase
+                .from('teachers')
+                .select('id, "fullName", nip, "allowDesktopAttendance"')
+                .eq('schoolId', selectedSchoolId)
+                .order('fullName', { ascending: true });
+
+            if (error) throw error;
+
+            const mapped: TeacherDesktopAccessItem[] = (data ?? []).map((row) => ({
+                id: String(row.id),
+                fullName: String(row.fullName ?? 'Tanpa Nama'),
+                nip: row.nip ? String(row.nip) : null,
+                allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
+            }));
+
+            setTeachersDesktopList(mapped);
+
+            // Jika seluruh guru di sekolah ini berstatus ON, pastikan Saklar Global ikut menyala
+            if (mapped.length > 0 && mapped.every((t) => t.allowDesktopAttendance)) {
+                setAllowDesktopGlobal(true);
+            } else if (mapped.length > 0 && mapped.every((t) => !t.allowDesktopAttendance)) {
+                setAllowDesktopGlobal(false);
+            }
+        } catch (err: unknown) {
+            setDesktopAccessFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error
+                        ? err.message
+                        : 'Gagal memuat daftar Guru/PTK.',
+            });
+        } finally {
+            setIsLoadingTeachersDesktop(false);
+        }
+    }, [selectedSchoolId]);
+
+    useEffect(() => {
+        loadTeachersDesktopAccess();
+    }, [loadTeachersDesktopAccess]);
+
+    // Handler Saklar Global: Mengizinkan atau Melarang SEMUA Guru/PTK sekaligus
+    const handleToggleGlobalDesktopAttendance = async () => {
+        if (!selectedSchoolId || isUpdatingGlobalDesktop) return;
+        const nextAllow = !allowDesktopGlobal;
+        setIsUpdatingGlobalDesktop(true);
+        setDesktopAccessFeedback(null);
+
+        try {
+            // 1. Panggil fungsi RPC SQL (mengubah sekolah + semua guru sekaligus)
+            const { error: rpcError } = await supabase.rpc(
+                'set_school_desktop_attendance_global',
+                {
+                    p_school_id: selectedSchoolId,
+                    p_allow: nextAllow,
+                }
+            );
+
+            // 2. Fallback aman jika fungsi RPC belum dijalankan di SQL Editor
+            if (rpcError) {
+                const { error: teachersErr } = await supabase
+                    .from('teachers')
+                    .update({ allowDesktopAttendance: nextAllow })
+                    .eq('schoolId', selectedSchoolId);
+
+                if (teachersErr) throw teachersErr;
+
+                const { error: schoolErr } = await supabase
+                    .from('schools')
+                    .update({ allowDesktopAttendanceGlobal: nextAllow })
+                    .eq('id', selectedSchoolId);
+
+                if (schoolErr && !isMissingColumnError(schoolErr)) {
+                    throw schoolErr;
+                }
+            }
+
+            setAllowDesktopGlobal(nextAllow);
+            setTeachersDesktopList((prev) =>
+                prev.map((teacher) => ({
+                    ...teacher,
+                    allowDesktopAttendance: nextAllow,
+                }))
+            );
+
+            setDesktopAccessFeedback({
+                status: 'success',
+                text: nextAllow
+                    ? `Saklar Global AKTIF: Seluruh (${teachersDesktopList.length}) Guru/PTK kini diizinkan presensi lewat Komputer/Laptop.`
+                    : `Saklar Global NONAKTIF: Seluruh Guru/PTK kini wajib presensi lewat HP (kecuali diaktifkan per guru di bawah).`,
+            });
+        } catch (err: unknown) {
+            setDesktopAccessFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error
+                        ? err.message
+                        : 'Gagal mengubah pengaturan global presensi komputer.',
+            });
+        } finally {
+            setIsUpdatingGlobalDesktop(false);
+        }
+    };
+
+    // Handler Saklar Per Guru: Mengizinkan atau Melarang 1 Guru tertentu
+    const handleToggleSingleTeacherDesktop = async (
+        teacher: TeacherDesktopAccessItem
+    ) => {
+        if (updatingTeacherIds[teacher.id]) return;
+        const nextAllow = !teacher.allowDesktopAttendance;
+
+        setUpdatingTeacherIds((prev) => ({ ...prev, [teacher.id]: true }));
+        setDesktopAccessFeedback(null);
+
+        try {
+            // Gunakan fungsi RPC bawaan database jika tersedia
+            const { error: rpcError } = await supabase.rpc(
+                'set_teacher_desktop_attendance',
+                {
+                    p_teacher_id: teacher.id,
+                    p_allow: nextAllow,
+                }
+            );
+
+            // Fallback update langsung ke tabel teachers jika RPC terkendala
+            if (rpcError) {
+                const { error: updErr } = await supabase
+                    .from('teachers')
+                    .update({ allowDesktopAttendance: nextAllow })
+                    .eq('id', teacher.id);
+                if (updErr) throw updErr;
+            }
+
+            setTeachersDesktopList((prev) => {
+                const updated = prev.map((item) =>
+                    item.id === teacher.id
+                        ? { ...item, allowDesktopAttendance: nextAllow }
+                        : item
+                );
+                const allAllowed =
+                    updated.length > 0 &&
+                    updated.every((item) => item.allowDesktopAttendance);
+                setAllowDesktopGlobal(allAllowed);
+                return updated;
+            });
+
+            setDesktopAccessFeedback({
+                status: 'success',
+                text: nextAllow
+                    ? `Izin Komputer DIAKTIFKAN untuk ${teacher.fullName}.`
+                    : `Izin Komputer DIMATIKAN untuk ${teacher.fullName} (wajib lewat HP).`,
+            });
+        } catch (err: unknown) {
+            setDesktopAccessFeedback({
+                status: 'error',
+                text:
+                    err instanceof Error
+                        ? err.message
+                        : `Gagal mengubah izin untuk ${teacher.fullName}.`,
+            });
+        } finally {
+            setUpdatingTeacherIds((prev) => {
+                const copy = { ...prev };
+                delete copy[teacher.id];
+                return copy;
+            });
+        }
+    };
+
+    const allowedDesktopTeachersCount = useMemo(
+        () =>
+            teachersDesktopList.filter((t) => t.allowDesktopAttendance).length,
+        [teachersDesktopList]
+    );
+
+    const filteredTeachersDesktop = useMemo(() => {
+        const keyword = teacherSearchQuery.trim().toLowerCase();
+        return teachersDesktopList.filter((t) => {
+            if (teacherFilterMode === 'ALLOWED' && !t.allowDesktopAttendance) {
+                return false;
+            }
+            if (teacherFilterMode === 'BLOCKED' && t.allowDesktopAttendance) {
+                return false;
+            }
+            if (!keyword) return true;
+            const matchName = t.fullName.toLowerCase().includes(keyword);
+            const matchNip = (t.nip ?? '').toLowerCase().includes(keyword);
+            return matchName || matchNip;
+        });
+    }, [teachersDesktopList, teacherSearchQuery, teacherFilterMode]);
 
     const effectiveDeadlinePreview = useMemo(
         () => calculateEffectiveDeadline(workStartTime, lateToleranceMinutes),
@@ -770,7 +1001,7 @@ export function AttendanceSettingsTab() {
                             Mode Pengaturan Super Admin
                         </p>
                         <p className="text-[11px] opacity-75">
-                            Pilih sekolah untuk mengatur jam kerja, verifikasi selfie, & hari kerja:
+                            Pilih sekolah untuk mengatur jam kerja, izin presensi komputer, verifikasi selfie, & hari kerja:
                         </p>
                     </div>
                     <select
@@ -1081,7 +1312,261 @@ export function AttendanceSettingsTab() {
             </form>
 
             {/* ====================================================================
-          BAGIAN 2: HARI LIBUR NASIONAL & CUTI BERSAMA (SERVER API + EXCEL + DB)
+          BAGIAN 2: IZIN PRESENSI VIA KOMPUTER / LAPTOP (GLOBAL & PER GURU)
+      ==================================================================== */}
+            <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-4">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
+                    <div>
+                        <h2 className="text-base font-bold flex items-center gap-2">
+                            <Monitor size={18} className="text-blue-600" />
+                            Izin Akses Presensi via Komputer / Laptop (Desktop)
+                        </h2>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                            Secara bawaan, Guru/PTK melakukan presensi lewat HP. Gunakan saklar di bawah untuk mengizinkan akses komputer secara global atau khusus guru tertentu.
+                        </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/25">
+                            <Users size={13} />
+                            {allowedDesktopTeachersCount} / {teachersDesktopList.length} Diizinkan
+                        </span>
+                        <button
+                            type="button"
+                            onClick={loadTeachersDesktopAccess}
+                            disabled={isLoadingTeachersDesktop}
+                            className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all cursor-pointer"
+                            title="Muat ulang daftar Guru/PTK"
+                        >
+                            <RefreshCw
+                                size={14}
+                                className={isLoadingTeachersDesktop ? 'animate-spin' : ''}
+                            />
+                        </button>
+                    </div>
+                </div>
+
+                {/* SAKLAR GLOBAL SEKOLAH */}
+                <div
+                    onClick={handleToggleGlobalDesktopAttendance}
+                    role="switch"
+                    aria-checked={allowDesktopGlobal}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            handleToggleGlobalDesktopAttendance();
+                        }
+                    }}
+                    className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-center justify-between gap-4 select-none active:scale-[0.99] ${allowDesktopGlobal
+                        ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
+                        : 'border-border bg-muted/25 hover:bg-muted/40'
+                        } ${isUpdatingGlobalDesktop ? 'opacity-70 pointer-events-none' : ''}`}
+                >
+                    <div className="flex items-start gap-3">
+                        <div
+                            className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${allowDesktopGlobal
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                }`}
+                        >
+                            {isUpdatingGlobalDesktop ? (
+                                <Loader2 size={18} className="animate-spin" />
+                            ) : allowDesktopGlobal ? (
+                                <Monitor size={18} />
+                            ) : (
+                                <Smartphone size={18} />
+                            )}
+                        </div>
+                        <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-bold">
+                                    Saklar Global: Izinkan Semua Guru / PTK Absen via Komputer
+                                </span>
+                                <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${allowDesktopGlobal
+                                        ? 'bg-blue-600 text-white'
+                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                                        }`}
+                                >
+                                    {allowDesktopGlobal ? 'AKTIF (SEMUA BOLEH)' : 'NONAKTIF (KHUSUS HP)'}
+                                </span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                                {allowDesktopGlobal
+                                    ? 'Seluruh Guru/PTK di sekolah ini dapat melakukan presensi dari komputer maupun HP.'
+                                    : 'Default direkomendasikan: Guru/PTK wajib absen dari HP, kecuali guru yang diaktifkan pada daftar di bawah.'}
+                            </p>
+                        </div>
+                    </div>
+
+                    <span
+                        className={`w-12 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${allowDesktopGlobal ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
+                            }`}
+                    >
+                        <span
+                            className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${allowDesktopGlobal ? 'translate-x-6' : 'translate-x-0'
+                                }`}
+                        />
+                    </span>
+                </div>
+
+                {/* Notifikasi umpan balik pengaturan komputer */}
+                {desktopAccessFeedback && (
+                    <div
+                        className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${desktopAccessFeedback.status === 'success'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                            }`}
+                    >
+                        {desktopAccessFeedback.status === 'success' ? (
+                            <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                        ) : (
+                            <AlertTriangle size={15} className="text-red-600 shrink-0" />
+                        )}
+                        <span>{desktopAccessFeedback.text}</span>
+                    </div>
+                )}
+
+                {/* Filter & Pencarian Per Guru */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
+                    <div className="relative flex-1">
+                        <Search
+                            size={14}
+                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                        />
+                        <input
+                            type="text"
+                            value={teacherSearchQuery}
+                            onChange={(e) => setTeacherSearchQuery(e.target.value)}
+                            placeholder="Cari nama Guru/PTK atau NIP..."
+                            className="form-input w-full pl-9 text-xs py-2"
+                        />
+                    </div>
+
+                    <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1 shrink-0">
+                        <button
+                            type="button"
+                            onClick={() => setTeacherFilterMode('ALL')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${teacherFilterMode === 'ALL'
+                                ? 'bg-card text-foreground shadow-2xs'
+                                : 'text-muted-foreground hover:text-foreground'
+                                }`}
+                        >
+                            Semua ({teachersDesktopList.length})
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setTeacherFilterMode('ALLOWED')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${teacherFilterMode === 'ALLOWED'
+                                ? 'bg-card text-blue-600 dark:text-blue-300 shadow-2xs'
+                                : 'text-muted-foreground hover:text-foreground'
+                                }`}
+                        >
+                            Boleh Komputer ({allowedDesktopTeachersCount})
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => setTeacherFilterMode('BLOCKED')}
+                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${teacherFilterMode === 'BLOCKED'
+                                ? 'bg-card text-foreground shadow-2xs'
+                                : 'text-muted-foreground hover:text-foreground'
+                                }`}
+                        >
+                            Wajib HP ({teachersDesktopList.length - allowedDesktopTeachersCount})
+                        </button>
+                    </div>
+                </div>
+
+                {/* Daftar Saklar On/Off Per Guru */}
+                {isLoadingTeachersDesktop ? (
+                    <div className="py-8 text-center text-xs opacity-70 flex items-center justify-center gap-2">
+                        <Loader2 size={15} className="animate-spin" />
+                        Memuat daftar Guru & PTK...
+                    </div>
+                ) : filteredTeachersDesktop.length === 0 ? (
+                    <div className="py-6 text-center text-xs text-muted-foreground border border-dashed border-border rounded-xl">
+                        {teachersDesktopList.length === 0
+                            ? 'Belum ada data Guru / PTK terdaftar pada sekolah ini.'
+                            : 'Tidak ada Guru / PTK yang cocok dengan pencarian Anda.'}
+                    </div>
+                ) : (
+                    <div className="max-h-80 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+                        {filteredTeachersDesktop.map((teacher, idx) => {
+                            const isBusyRow = Boolean(updatingTeacherIds[teacher.id]);
+                            return (
+                                <div
+                                    key={teacher.id}
+                                    className="px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
+                                >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                        <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
+                                            {idx + 1}.
+                                        </span>
+                                        <div className="min-w-0">
+                                            <p className="font-semibold truncate text-foreground">
+                                                {teacher.fullName}
+                                            </p>
+                                            <p className="text-[11px] text-muted-foreground font-mono truncate">
+                                                {teacher.nip ? `NIP: ${teacher.nip}` : 'Tanpa NIP'}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex items-center gap-3 shrink-0">
+                                        <span
+                                            className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${teacher.allowDesktopAttendance
+                                                ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                                                : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
+                                                }`}
+                                        >
+                                            {teacher.allowDesktopAttendance ? (
+                                                <>
+                                                    <Monitor size={11} /> Boleh Komputer
+                                                </>
+                                            ) : (
+                                                <>
+                                                    <Smartphone size={11} /> Wajib HP
+                                                </>
+                                            )}
+                                        </span>
+
+                                        <button
+                                            type="button"
+                                            role="switch"
+                                            aria-checked={teacher.allowDesktopAttendance}
+                                            aria-label={`Izin komputer untuk ${teacher.fullName}`}
+                                            disabled={isBusyRow || isUpdatingGlobalDesktop}
+                                            onClick={() => handleToggleSingleTeacherDesktop(teacher)}
+                                            className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center cursor-pointer disabled:opacity-50 ${teacher.allowDesktopAttendance
+                                                ? 'bg-blue-600'
+                                                : 'bg-slate-300 dark:bg-slate-600'
+                                                }`}
+                                        >
+                                            <span
+                                                className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform flex items-center justify-center ${teacher.allowDesktopAttendance
+                                                    ? 'translate-x-5'
+                                                    : 'translate-x-0'
+                                                    }`}
+                                            >
+                                                {isBusyRow && (
+                                                    <Loader2
+                                                        size={11}
+                                                        className="animate-spin text-blue-600"
+                                                    />
+                                                )}
+                                            </span>
+                                        </button>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+
+            {/* ====================================================================
+          BAGIAN 3: HARI LIBUR NASIONAL & CUTI BERSAMA (SERVER API + EXCEL + DB)
       ==================================================================== */}
             <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-border pb-3">
