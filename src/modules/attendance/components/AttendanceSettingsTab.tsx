@@ -25,9 +25,7 @@ import {
     Camera,
     MapPin,
     Monitor,
-    Smartphone,
-    Search,
-    Users,
+    GraduationCap,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -45,19 +43,25 @@ import {
 } from '../utils/holidayApiService';
 import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { HolidayCalendarView } from './HolidayCalendarView';
-
-const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
-const INITIAL_BASE_YEARS = [2026, 2027, 2028];
-
-interface TeacherDesktopAccessItem {
-    id: string;
-    fullName: string;
-    nip: string | null;
-    allowDesktopAttendance: boolean;
-}
+import { StudentAttendanceSettingsCard } from './StudentAttendanceSettingsCard';
+import { TeacherDesktopAccessCard } from './TeacherDesktopAccessCard';
 
 // ============================================================================
-// TEMA TOMBOL MODERN TERPUSAT (MUDAH DISESUAIKAN)
+// KONSTANTA & PARAMETER YANG BISA KAMU SESUAIKAN
+// ============================================================================
+type AttendanceSettingsSubTab =
+    | 'GURU_SCHEDULE'
+    | 'GURU_DESKTOP'
+    | 'SISWA'
+    | 'HOLIDAYS';
+
+const DEFAULT_SUB_TAB: AttendanceSettingsSubTab = 'GURU_SCHEDULE'; // Sub-tab awal saat halaman dibuka
+const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
+const INITIAL_BASE_YEARS = [2026, 2027, 2028]; // Daftar tahun bawaan pada dropdown kalender libur
+const DEFAULT_HOLIDAY_VIEW_MODE: 'LIST' | 'CALENDAR' = 'CALENDAR'; // 'CALENDAR' atau 'LIST'
+
+// ============================================================================
+// TEMA TOMBOL MODERN TERPUSAT
 // ============================================================================
 const BTN_STYLE = {
     primaryEmerald:
@@ -108,13 +112,17 @@ export function AttendanceSettingsTab() {
     const isAdmin = user?.role === 'ADMIN';
     const canManage = isSuperAdmin || isAdmin;
 
+    // State navigasi sub-tab horizontal
+    const [activeSubTab, setActiveSubTab] =
+        useState<AttendanceSettingsSubTab>(DEFAULT_SUB_TAB);
+
     // Pilihan sekolah (khusus SUPER_ADMIN)
     const [schools, setSchools] = useState<Array<{ id: string; name: string }>>([]);
     const [selectedSchoolId, setSelectedSchoolId] = useState<string>(
         school?.id ?? ''
     );
 
-    // 1. State Pengaturan Jam Kerja, Toleransi, Kamera Selfie, & Hari Kerja
+    // 1. State Pengaturan Jam Kerja, Toleransi, Kamera Selfie, & Hari Kerja Guru
     const [workStartTime, setWorkStartTime] = useState<string>('07:30');
     const [lateToleranceMinutes, setLateToleranceMinutes] = useState<number>(0);
     const [workEndTime, setWorkEndTime] = useState<string>('14:30');
@@ -123,27 +131,6 @@ export function AttendanceSettingsTab() {
     const [requireSelfieCheckOut, setRequireSelfieCheckOut] = useState<boolean>(true);
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
     const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
-
-    // 1B. State Pengaturan Izin Presensi via Komputer (Saklar Global & Saklar Per Guru)
-    const [allowDesktopGlobal, setAllowDesktopGlobal] = useState<boolean>(false);
-    const [teachersDesktopList, setTeachersDesktopList] = useState<
-        TeacherDesktopAccessItem[]
-    >([]);
-    const [isLoadingTeachersDesktop, setIsLoadingTeachersDesktop] =
-        useState<boolean>(false);
-    const [isUpdatingGlobalDesktop, setIsUpdatingGlobalDesktop] =
-        useState<boolean>(false);
-    const [updatingTeacherIds, setUpdatingTeacherIds] = useState<
-        Record<string, boolean>
-    >({});
-    const [teacherSearchQuery, setTeacherSearchQuery] = useState<string>('');
-    const [teacherFilterMode, setTeacherFilterMode] = useState<
-        'ALL' | 'ALLOWED' | 'BLOCKED'
-    >('ALL');
-    const [desktopAccessFeedback, setDesktopAccessFeedback] = useState<{
-        status: 'success' | 'error';
-        text: string;
-    } | null>(null);
 
     // 2. State Tahun, Pilihan Server API, Mode Muhammadiyah, & Hari Libur
     const [filterYear, setFilterYear] = useState<number>(() =>
@@ -170,7 +157,6 @@ export function AttendanceSettingsTab() {
     const [includeAwalRamadan, setIncludeAwalRamadan] = useState<boolean>(true);
     const [isFetchingServer, setIsFetchingServer] = useState<boolean>(false);
 
-    // Status langsung di dalam kotak Sync
     const [syncFeedback, setSyncFeedback] = useState<{
         status: 'loading' | 'success' | 'error';
         text: string;
@@ -182,12 +168,10 @@ export function AttendanceSettingsTab() {
     const [holidays, setHolidays] = useState<HolidayRecord[]>([]);
     const [isLoadingHolidays, setIsLoadingHolidays] = useState<boolean>(false);
 
-    // Default tampilan adalah Kalender
     const [holidayViewMode, setHolidayViewMode] = useState<'LIST' | 'CALENDAR'>(
-        'CALENDAR'
+        DEFAULT_HOLIDAY_VIEW_MODE
     );
 
-    // Checklist ID untuk Hapus Terpilih / Hapus Semua
     const [selectedHolidayIds, setSelectedHolidayIds] = useState<string[]>([]);
 
     // Modal Edit Hari Libur
@@ -198,7 +182,7 @@ export function AttendanceSettingsTab() {
     const [editNameInput, setEditNameInput] = useState<string>('');
     const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
 
-    // Modal Konfirmasi Hapus Modern
+    // Modal Konfirmasi Hapus
     const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
         title: string;
         description: string;
@@ -279,9 +263,6 @@ export function AttendanceSettingsTab() {
                         ? data.requireSelfieCheckOut
                         : true
                 );
-                if (typeof data.allowDesktopAttendanceGlobal === 'boolean') {
-                    setAllowDesktopGlobal(data.allowDesktopAttendanceGlobal);
-                }
             }
         } catch (err: unknown) {
             const msg =
@@ -298,208 +279,11 @@ export function AttendanceSettingsTab() {
         loadScheduleSettings();
     }, [loadScheduleSettings]);
 
-    // Muat daftar Guru / PTK untuk pengaturan Saklar Global & Saklar Per Guru
-    const loadTeachersDesktopAccess = useCallback(async () => {
-        if (!selectedSchoolId) return;
-        setIsLoadingTeachersDesktop(true);
-        setDesktopAccessFeedback(null);
-        try {
-            const { data, error } = await supabase
-                .from('teachers')
-                .select('id, "fullName", nip, "allowDesktopAttendance"')
-                .eq('schoolId', selectedSchoolId)
-                .order('fullName', { ascending: true });
-
-            if (error) throw error;
-
-            const mapped: TeacherDesktopAccessItem[] = (data ?? []).map((row) => ({
-                id: String(row.id),
-                fullName: String(row.fullName ?? 'Tanpa Nama'),
-                nip: row.nip ? String(row.nip) : null,
-                allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
-            }));
-
-            setTeachersDesktopList(mapped);
-
-            // Jika seluruh guru di sekolah ini berstatus ON, pastikan Saklar Global ikut menyala
-            if (mapped.length > 0 && mapped.every((t) => t.allowDesktopAttendance)) {
-                setAllowDesktopGlobal(true);
-            } else if (mapped.length > 0 && mapped.every((t) => !t.allowDesktopAttendance)) {
-                setAllowDesktopGlobal(false);
-            }
-        } catch (err: unknown) {
-            setDesktopAccessFeedback({
-                status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal memuat daftar Guru/PTK.',
-            });
-        } finally {
-            setIsLoadingTeachersDesktop(false);
-        }
-    }, [selectedSchoolId]);
-
-    useEffect(() => {
-        loadTeachersDesktopAccess();
-    }, [loadTeachersDesktopAccess]);
-
-    // Handler Saklar Global: Mengizinkan atau Melarang SEMUA Guru/PTK sekaligus
-    const handleToggleGlobalDesktopAttendance = async () => {
-        if (!selectedSchoolId || isUpdatingGlobalDesktop) return;
-        const nextAllow = !allowDesktopGlobal;
-        setIsUpdatingGlobalDesktop(true);
-        setDesktopAccessFeedback(null);
-
-        try {
-            // 1. Panggil fungsi RPC SQL (mengubah sekolah + semua guru sekaligus)
-            const { error: rpcError } = await supabase.rpc(
-                'set_school_desktop_attendance_global',
-                {
-                    p_school_id: selectedSchoolId,
-                    p_allow: nextAllow,
-                }
-            );
-
-            // 2. Fallback aman jika fungsi RPC belum dijalankan di SQL Editor
-            if (rpcError) {
-                const { error: teachersErr } = await supabase
-                    .from('teachers')
-                    .update({ allowDesktopAttendance: nextAllow })
-                    .eq('schoolId', selectedSchoolId);
-
-                if (teachersErr) throw teachersErr;
-
-                const { error: schoolErr } = await supabase
-                    .from('schools')
-                    .update({ allowDesktopAttendanceGlobal: nextAllow })
-                    .eq('id', selectedSchoolId);
-
-                if (schoolErr && !isMissingColumnError(schoolErr)) {
-                    throw schoolErr;
-                }
-            }
-
-            setAllowDesktopGlobal(nextAllow);
-            setTeachersDesktopList((prev) =>
-                prev.map((teacher) => ({
-                    ...teacher,
-                    allowDesktopAttendance: nextAllow,
-                }))
-            );
-
-            setDesktopAccessFeedback({
-                status: 'success',
-                text: nextAllow
-                    ? `Saklar Global AKTIF: Seluruh (${teachersDesktopList.length}) Guru/PTK kini diizinkan presensi lewat Komputer/Laptop.`
-                    : `Saklar Global NONAKTIF: Seluruh Guru/PTK kini wajib presensi lewat HP (kecuali diaktifkan per guru di bawah).`,
-            });
-        } catch (err: unknown) {
-            setDesktopAccessFeedback({
-                status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal mengubah pengaturan global presensi komputer.',
-            });
-        } finally {
-            setIsUpdatingGlobalDesktop(false);
-        }
-    };
-
-    // Handler Saklar Per Guru: Mengizinkan atau Melarang 1 Guru tertentu
-    const handleToggleSingleTeacherDesktop = async (
-        teacher: TeacherDesktopAccessItem
-    ) => {
-        if (updatingTeacherIds[teacher.id]) return;
-        const nextAllow = !teacher.allowDesktopAttendance;
-
-        setUpdatingTeacherIds((prev) => ({ ...prev, [teacher.id]: true }));
-        setDesktopAccessFeedback(null);
-
-        try {
-            // Gunakan fungsi RPC bawaan database jika tersedia
-            const { error: rpcError } = await supabase.rpc(
-                'set_teacher_desktop_attendance',
-                {
-                    p_teacher_id: teacher.id,
-                    p_allow: nextAllow,
-                }
-            );
-
-            // Fallback update langsung ke tabel teachers jika RPC terkendala
-            if (rpcError) {
-                const { error: updErr } = await supabase
-                    .from('teachers')
-                    .update({ allowDesktopAttendance: nextAllow })
-                    .eq('id', teacher.id);
-                if (updErr) throw updErr;
-            }
-
-            setTeachersDesktopList((prev) => {
-                const updated = prev.map((item) =>
-                    item.id === teacher.id
-                        ? { ...item, allowDesktopAttendance: nextAllow }
-                        : item
-                );
-                const allAllowed =
-                    updated.length > 0 &&
-                    updated.every((item) => item.allowDesktopAttendance);
-                setAllowDesktopGlobal(allAllowed);
-                return updated;
-            });
-
-            setDesktopAccessFeedback({
-                status: 'success',
-                text: nextAllow
-                    ? `Izin Komputer DIAKTIFKAN untuk ${teacher.fullName}.`
-                    : `Izin Komputer DIMATIKAN untuk ${teacher.fullName} (wajib lewat HP).`,
-            });
-        } catch (err: unknown) {
-            setDesktopAccessFeedback({
-                status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : `Gagal mengubah izin untuk ${teacher.fullName}.`,
-            });
-        } finally {
-            setUpdatingTeacherIds((prev) => {
-                const copy = { ...prev };
-                delete copy[teacher.id];
-                return copy;
-            });
-        }
-    };
-
-    const allowedDesktopTeachersCount = useMemo(
-        () =>
-            teachersDesktopList.filter((t) => t.allowDesktopAttendance).length,
-        [teachersDesktopList]
-    );
-
-    const filteredTeachersDesktop = useMemo(() => {
-        const keyword = teacherSearchQuery.trim().toLowerCase();
-        return teachersDesktopList.filter((t) => {
-            if (teacherFilterMode === 'ALLOWED' && !t.allowDesktopAttendance) {
-                return false;
-            }
-            if (teacherFilterMode === 'BLOCKED' && t.allowDesktopAttendance) {
-                return false;
-            }
-            if (!keyword) return true;
-            const matchName = t.fullName.toLowerCase().includes(keyword);
-            const matchNip = (t.nip ?? '').toLowerCase().includes(keyword);
-            return matchName || matchNip;
-        });
-    }, [teachersDesktopList, teacherSearchQuery, teacherFilterMode]);
-
     const effectiveDeadlinePreview = useMemo(
         () => calculateEffectiveDeadline(workStartTime, lateToleranceMinutes),
         [workStartTime, lateToleranceMinutes]
     );
 
-    // Gabungkan tahun dasar (2026-2028) + tahun dari DB + tahun tambahan user
     const availableYears = useMemo(() => {
         const yearsSet = new Set<number>([
             ...INITIAL_BASE_YEARS,
@@ -510,7 +294,6 @@ export function AttendanceSettingsTab() {
         return Array.from(yearsSet).sort((a, b) => a - b);
     }, [dbRecordedYears, customYears, filterYear]);
 
-    // Handler Tombol "+ Tambah Tahun"
     const handleAddNextYear = () => {
         const maxYear =
             availableYears.length > 0
@@ -537,7 +320,6 @@ export function AttendanceSettingsTab() {
         });
     };
 
-    // Simpan pengaturan jam masuk, toleransi, kamera selfie, dan hari kerja
     const handleSaveSchedule = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedSchoolId) {
@@ -579,7 +361,7 @@ export function AttendanceSettingsTab() {
                     if (retry.error) throw retry.error;
                     showToast(
                         'error',
-                        'Jam & hari kerja tersimpan, tetapi kolom requireSelfieCheckIn/Out belum ada di tabel schools Supabase. Jalankan perintah SQL ALTER TABLE terlebih dahulu.'
+                        'Jam & hari kerja tersimpan, tetapi kolom requireSelfieCheckIn/Out belum ada di tabel schools Supabase.'
                     );
                     return;
                 }
@@ -609,7 +391,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Muat daftar hari libur untuk tahun terpilih + deteksi semua tahun yang ada di DB
     const loadHolidays = useCallback(async () => {
         setIsLoadingHolidays(true);
         setSelectedHolidayIds([]);
@@ -665,7 +446,6 @@ export function AttendanceSettingsTab() {
     const resolvedHolidaySchoolId =
         isSuperAdmin && holidayScope === 'GLOBAL' ? null : selectedSchoolId || null;
 
-    // Simpan batch hari libur ke Supabase
     const upsertHolidayRows = async (rows: ParsedHolidayRow[]) => {
         const validRows = rows.filter(
             (r) => r.date.trim().length === 10 && r.name.trim().length > 0
@@ -727,7 +507,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Ambil Data Hari Libur Nasional & Cuti Bersama dari Server API
     const handleFetchFromServer = async () => {
         setIsFetchingServer(true);
         setSyncFeedback({
@@ -766,7 +545,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Tambah 1 Hari Libur Manual
     const handleAddSingleHoliday = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newHolidayDate || newHolidayName.trim().length < 3) {
@@ -802,7 +580,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Buka Modal Edit Hari Libur
     const handleOpenEditModal = (item: HolidayRecord) => {
         if (!isSuperAdmin && item.schoolId === null) {
             setSyncFeedback({
@@ -816,7 +593,6 @@ export function AttendanceSettingsTab() {
         setEditNameInput(item.name);
     };
 
-    // Simpan Perubahan dari Modal Edit
     const handleSaveEditHoliday = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!editingHoliday) return;
@@ -852,7 +628,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Baca File Excel / CSV yang dipilih user
     const handleSelectExcelFile = async (
         e: React.ChangeEvent<HTMLInputElement>
     ) => {
@@ -884,7 +659,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Eksekusi Simpan Pratinjau (Server / Excel) ke Database
     const handleConfirmBatchSave = async () => {
         if (previewRows.length === 0) return;
         setIsImporting(true);
@@ -915,7 +689,6 @@ export function AttendanceSettingsTab() {
         }
     };
 
-    // Daftar item yang boleh dihapus oleh user saat ini
     const deletableHolidays = useMemo(
         () => holidays.filter((item) => isSuperAdmin || item.schoolId !== null),
         [holidays, isSuperAdmin]
@@ -939,7 +712,6 @@ export function AttendanceSettingsTab() {
         );
     };
 
-    // Eksekusi Hapus dari Modal Konfirmasi Modern
     const handleConfirmDeleteExecution = async () => {
         if (!deleteConfirmModal || deleteConfirmModal.targetIds.length === 0) {
             return;
@@ -974,8 +746,46 @@ export function AttendanceSettingsTab() {
 
     if (!canManage) return null;
 
+    // Daftar definisi 4 sub-tab navigasi
+    const subTabs: Array<{
+        id: AttendanceSettingsSubTab;
+        label: string;
+        shortLabel: string;
+        icon: typeof Clock;
+        activeClass: string;
+    }> = [
+            {
+                id: 'GURU_SCHEDULE',
+                label: '1. Jam & Aturan Guru',
+                shortLabel: 'Jam Guru',
+                icon: Clock,
+                activeClass: 'bg-emerald-600 text-white shadow-xs',
+            },
+            {
+                id: 'GURU_DESKTOP',
+                label: '2. Izin Komputer Guru',
+                shortLabel: 'Izin PC',
+                icon: Monitor,
+                activeClass: 'bg-blue-600 text-white shadow-xs',
+            },
+            {
+                id: 'SISWA',
+                label: '3. Presensi Siswa',
+                shortLabel: 'Siswa',
+                icon: GraduationCap,
+                activeClass: 'bg-indigo-600 text-white shadow-xs',
+            },
+            {
+                id: 'HOLIDAYS',
+                label: `4. Kalender Libur (${holidays.length})`,
+                shortLabel: `Libur (${holidays.length})`,
+                icon: CalendarDays,
+                activeClass: 'bg-rose-600 text-white shadow-xs',
+            },
+        ];
+
     return (
-        <div className="space-y-6">
+        <div className="space-y-5">
             {/* Toast Notifikasi Atas */}
             {toast && (
                 <div
@@ -1001,7 +811,7 @@ export function AttendanceSettingsTab() {
                             Mode Pengaturan Super Admin
                         </p>
                         <p className="text-[11px] opacity-75">
-                            Pilih sekolah untuk mengatur jam kerja, izin presensi komputer, verifikasi selfie, & hari kerja:
+                            Pilih sekolah yang ingin diatur:
                         </p>
                     </div>
                     <select
@@ -1019,1155 +829,941 @@ export function AttendanceSettingsTab() {
             )}
 
             {/* ====================================================================
-          BAGIAN 1: JAM KERJA, VERIFIKASI SELFIE, & SISTEM HARI KERJA
-      ==================================================================== */}
-            <form
-                onSubmit={handleSaveSchedule}
-                className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5"
-            >
-                <div className="flex items-center justify-between border-b border-border pb-3">
-                    <div>
-                        <h2 className="text-base font-bold flex items-center gap-2">
-                            <Clock size={18} className="text-emerald-600" />
-                            Jam Kerja, Verifikasi Kamera Selfie & Sistem Hari Kerja
-                        </h2>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                            Mengatur batas keterlambatan check-in, jadwal pulang, kewajiban foto selfie, serta hari libur akhir pekan.
-                        </p>
-                    </div>
-                    {isLoadingSchedule && <RefreshCw size={16} className="spin opacity-60" />}
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                        <label className="block text-xs font-semibold mb-1.5">
-                            Jam Berangkat / Masuk *
-                        </label>
-                        <input
-                            type="time"
-                            required
-                            value={workStartTime}
-                            onChange={(e) => setWorkStartTime(e.target.value)}
-                            className="form-input w-full text-sm font-mono"
-                        />
-                        <p className="text-[11px] text-muted-foreground mt-1">
-                            Jadwal masuk resmi sekolah.
-                        </p>
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-semibold mb-1.5">
-                            Toleransi Keterlambatan (Menit)
-                        </label>
-                        <input
-                            type="number"
-                            min={0}
-                            max={180}
-                            step={1}
-                            value={lateToleranceMinutes}
-                            onChange={(e) =>
-                                setLateToleranceMinutes(
-                                    e.target.value === '' ? 0 : Math.max(0, Number(e.target.value))
-                                )
-                            }
-                            placeholder="0"
-                            className="form-input w-full text-sm font-mono"
-                        />
-                        <p className="text-[11px] text-muted-foreground mt-1">
-                            Isi <strong>0</strong> jika tanpa toleransi.
-                        </p>
-                    </div>
-
-                    <div>
-                        <label className="block text-xs font-semibold mb-1.5">
-                            Jam Pulang Kerja *
-                        </label>
-                        <input
-                            type="time"
-                            required
-                            value={workEndTime}
-                            onChange={(e) => setWorkEndTime(e.target.value)}
-                            className="form-input w-full text-sm font-mono"
-                        />
-                        <p className="text-[11px] text-muted-foreground mt-1">
-                            Acuan jadwal pulang pada kartu presensi.
-                        </p>
-                    </div>
-                </div>
-
-                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs flex flex-wrap items-center justify-between gap-2">
-                    <span className="font-medium">
-                        {lateToleranceMinutes > 0 ? (
-                            <>
-                                Toleransi aktif <strong>{lateToleranceMinutes} menit</strong>: Check-in s.d. pukul{' '}
-                                <strong className="font-mono text-emerald-700 dark:text-emerald-300">
-                                    {effectiveDeadlinePreview}
-                                </strong>{' '}
-                                berstatus <strong>HADIR</strong>, lewat pukul{' '}
-                                <strong className="font-mono text-amber-700 dark:text-amber-300">
-                                    {effectiveDeadlinePreview}
-                                </strong>{' '}
-                                berstatus <strong>TERLAMBAT</strong>.
-                            </>
-                        ) : (
-                            <>
-                                Tanpa toleransi: Check-in melewati pukul{' '}
-                                <strong className="font-mono text-emerald-700 dark:text-emerald-300">
-                                    {workStartTime}
-                                </strong>{' '}
-                                langsung tercatat <strong>TERLAMBAT</strong>.
-                            </>
-                        )}
-                    </span>
-                </div>
-
-                {/* Pengaturan Verifikasi Kamera Selfie (Absen Masuk & Absen Pulang) */}
-                <div className="space-y-2.5 pt-1">
-                    <div>
-                        <label className="block text-xs font-semibold">
-                            Verifikasi Kamera Selfie Presensi (GPS + Foto Selfie vs GPS Saja)
-                        </label>
-                        <p className="text-[11px] text-muted-foreground mt-0.5">
-                            Matikan jika sekolah hanya mewajibkan validasi titik koordinat GPS tanpa mengambil foto wajah.
-                        </p>
-                    </div>
-
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                        {/* Sakelar 1: Selfie Absen Masuk */}
-                        <div
-                            onClick={() => setRequireSelfieCheckIn((prev) => !prev)}
-                            role="switch"
-                            aria-checked={requireSelfieCheckIn}
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    setRequireSelfieCheckIn((prev) => !prev);
-                                }
-                            }}
-                            className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckIn
-                                ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                : 'border-border bg-muted/25 hover:bg-muted/40'
-                                }`}
-                        >
-                            <div className="flex items-start gap-3">
-                                <div
-                                    className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckIn
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                                        }`}
-                                >
-                                    {requireSelfieCheckIn ? <Camera size={16} /> : <MapPin size={16} />}
-                                </div>
-                                <div>
-                                    <div className="text-xs font-bold">
-                                        Selfie Presensi Datang (Check-In)
-                                    </div>
-                                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                                        {requireSelfieCheckIn
-                                            ? 'Aktif: Guru wajib mengambil foto selfie saat absen masuk.'
-                                            : 'Nonaktif: Absen masuk langsung tercatat dengan GPS saja.'}
-                                    </p>
-                                </div>
-                            </div>
-
-                            <span
-                                className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${requireSelfieCheckIn ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
-                                    }`}
-                            >
-                                <span
-                                    className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${requireSelfieCheckIn ? 'translate-x-5' : 'translate-x-0'
-                                        }`}
-                                />
-                            </span>
-                        </div>
-
-                        {/* Sakelar 2: Selfie Absen Pulang */}
-                        <div
-                            onClick={() => setRequireSelfieCheckOut((prev) => !prev)}
-                            role="switch"
-                            aria-checked={requireSelfieCheckOut}
-                            tabIndex={0}
-                            onKeyDown={(e) => {
-                                if (e.key === 'Enter' || e.key === ' ') {
-                                    e.preventDefault();
-                                    setRequireSelfieCheckOut((prev) => !prev);
-                                }
-                            }}
-                            className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckOut
-                                ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                : 'border-border bg-muted/25 hover:bg-muted/40'
-                                }`}
-                        >
-                            <div className="flex items-start gap-3">
-                                <div
-                                    className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckOut
-                                        ? 'bg-emerald-600 text-white'
-                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                                        }`}
-                                >
-                                    {requireSelfieCheckOut ? <Camera size={16} /> : <MapPin size={16} />}
-                                </div>
-                                <div>
-                                    <div className="text-xs font-bold">
-                                        Selfie Presensi Pulang (Check-Out)
-                                    </div>
-                                    <p className="text-[11px] text-muted-foreground mt-0.5">
-                                        {requireSelfieCheckOut
-                                            ? 'Aktif: Guru wajib mengambil foto selfie saat absen pulang.'
-                                            : 'Nonaktif: Absen pulang langsung tercatat dengan GPS saja.'}
-                                    </p>
-                                </div>
-                            </div>
-
-                            <span
-                                className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${requireSelfieCheckOut ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
-                                    }`}
-                            >
-                                <span
-                                    className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${requireSelfieCheckOut ? 'translate-x-5' : 'translate-x-0'
-                                        }`}
-                                />
-                            </span>
-                        </div>
-                    </div>
-                </div>
-
-                {/* Pilihan 5 Hari Kerja vs 6 Hari Kerja */}
-                <div>
-                    <label className="block text-xs font-semibold mb-2">
-                        Sistem Hari Kerja Sekolah *
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                NAVIGASI 4 SUB-TAB HORIZONTAL
+            ==================================================================== */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 p-1.5 rounded-2xl border border-border bg-muted/40">
+                {subTabs.map((tab) => {
+                    const IconComponent = tab.icon;
+                    const isActive = activeSubTab === tab.id;
+                    return (
                         <button
+                            key={tab.id}
                             type="button"
-                            onClick={() => setWorkDaysMode('FIVE_DAYS')}
-                            className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
-                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
-                                : 'border-border bg-muted/20 hover:bg-muted/40'
+                            onClick={() => setActiveSubTab(tab.id)}
+                            className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer ${isActive
+                                ? tab.activeClass
+                                : 'text-muted-foreground hover:text-foreground hover:bg-card/70'
                                 }`}
                         >
-                            <Briefcase
-                                size={20}
-                                className={
-                                    workDaysMode === 'FIVE_DAYS'
-                                        ? 'text-emerald-600 shrink-0 mt-0.5'
-                                        : 'text-muted-foreground shrink-0 mt-0.5'
-                                }
-                            />
-                            <div>
-                                <div className="text-xs font-bold">
-                                    5 Hari Kerja (Senin – Jumat)
-                                </div>
-                                <p className="text-[11px] text-muted-foreground mt-0.5">
-                                    Hari <strong>Sabtu & Minggu</strong> otomatis ditandai sebagai Tanggal Merah pada kalender presensi.
-                                </p>
-                            </div>
+                            <IconComponent size={15} className="shrink-0" />
+                            <span className="hidden sm:inline truncate">{tab.label}</span>
+                            <span className="sm:hidden truncate">{tab.shortLabel}</span>
                         </button>
-
-                        <button
-                            type="button"
-                            onClick={() => setWorkDaysMode('SIX_DAYS')}
-                            className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
-                                ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
-                                : 'border-border bg-muted/20 hover:bg-muted/40'
-                                }`}
-                        >
-                            <Briefcase
-                                size={20}
-                                className={
-                                    workDaysMode === 'SIX_DAYS'
-                                        ? 'text-emerald-600 shrink-0 mt-0.5'
-                                        : 'text-muted-foreground shrink-0 mt-0.5'
-                                }
-                            />
-                            <div>
-                                <div className="text-xs font-bold">
-                                    6 Hari Kerja (Senin – Sabtu)
-                                </div>
-                                <p className="text-[11px] text-muted-foreground mt-0.5">
-                                    Hari Sabtu tetap dihitung hari masuk; hanya <strong>Minggu, Libur Nasional & Cuti Bersama</strong> yang berwarna merah.
-                                </p>
-                            </div>
-                        </button>
-                    </div>
-                </div>
-
-                <div className="flex justify-end pt-2 border-t border-border/60">
-                    <button
-                        type="submit"
-                        disabled={isSavingSchedule || !selectedSchoolId}
-                        className={BTN_STYLE.primaryEmerald}
-                    >
-                        {isSavingSchedule ? (
-                            <Loader2 size={15} className="animate-spin" />
-                        ) : (
-                            <Save size={15} />
-                        )}
-                        {isSavingSchedule
-                            ? 'Menyimpan...'
-                            : 'Simpan Pengaturan Jam, Selfie & Hari Kerja'}
-                    </button>
-                </div>
-            </form>
+                    );
+                })}
+            </div>
 
             {/* ====================================================================
-          BAGIAN 2: IZIN PRESENSI VIA KOMPUTER / LAPTOP (GLOBAL & PER GURU)
-      ==================================================================== */}
-            <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
-                    <div>
-                        <h2 className="text-base font-bold flex items-center gap-2">
-                            <Monitor size={18} className="text-blue-600" />
-                            Izin Akses Presensi via Komputer / Laptop (Desktop)
-                        </h2>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                            Secara bawaan, Guru/PTK melakukan presensi lewat HP. Gunakan saklar di bawah untuk mengizinkan akses komputer secara global atau khusus guru tertentu.
-                        </p>
-                    </div>
-
-                    <div className="flex items-center gap-2 shrink-0">
-                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/25">
-                            <Users size={13} />
-                            {allowedDesktopTeachersCount} / {teachersDesktopList.length} Diizinkan
-                        </span>
-                        <button
-                            type="button"
-                            onClick={loadTeachersDesktopAccess}
-                            disabled={isLoadingTeachersDesktop}
-                            className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all cursor-pointer"
-                            title="Muat ulang daftar Guru/PTK"
-                        >
-                            <RefreshCw
-                                size={14}
-                                className={isLoadingTeachersDesktop ? 'animate-spin' : ''}
-                            />
-                        </button>
-                    </div>
-                </div>
-
-                {/* SAKLAR GLOBAL SEKOLAH */}
-                <div
-                    onClick={handleToggleGlobalDesktopAttendance}
-                    role="switch"
-                    aria-checked={allowDesktopGlobal}
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                        if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            handleToggleGlobalDesktopAttendance();
-                        }
-                    }}
-                    className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-center justify-between gap-4 select-none active:scale-[0.99] ${allowDesktopGlobal
-                        ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
-                        : 'border-border bg-muted/25 hover:bg-muted/40'
-                        } ${isUpdatingGlobalDesktop ? 'opacity-70 pointer-events-none' : ''}`}
+                SUB-TAB 1: JAM KERJA, VERIFIKASI SELFIE, & SISTEM HARI KERJA (GURU)
+            ==================================================================== */}
+            {activeSubTab === 'GURU_SCHEDULE' && (
+                <form
+                    onSubmit={handleSaveSchedule}
+                    className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5"
                 >
-                    <div className="flex items-start gap-3">
-                        <div
-                            className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${allowDesktopGlobal
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
-                                }`}
-                        >
-                            {isUpdatingGlobalDesktop ? (
-                                <Loader2 size={18} className="animate-spin" />
-                            ) : allowDesktopGlobal ? (
-                                <Monitor size={18} />
-                            ) : (
-                                <Smartphone size={18} />
-                            )}
-                        </div>
+                    <div className="flex items-center justify-between border-b border-border pb-3">
                         <div>
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="text-xs font-bold">
-                                    Saklar Global: Izinkan Semua Guru / PTK Absen via Komputer
-                                </span>
-                                <span
-                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${allowDesktopGlobal
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
-                                        }`}
-                                >
-                                    {allowDesktopGlobal ? 'AKTIF (SEMUA BOLEH)' : 'NONAKTIF (KHUSUS HP)'}
-                                </span>
-                            </div>
-                            <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-                                {allowDesktopGlobal
-                                    ? 'Seluruh Guru/PTK di sekolah ini dapat melakukan presensi dari komputer maupun HP.'
-                                    : 'Default direkomendasikan: Guru/PTK wajib absen dari HP, kecuali guru yang diaktifkan pada daftar di bawah.'}
+                            <h2 className="text-base font-bold flex items-center gap-2">
+                                <Clock size={18} className="text-emerald-600" />
+                                Jam Kerja, Verifikasi Kamera Selfie & Sistem Hari Kerja (Guru)
+                            </h2>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                                Mengatur batas keterlambatan check-in, jadwal pulang, kewajiban foto selfie, serta hari libur akhir pekan.
+                            </p>
+                        </div>
+                        {isLoadingSchedule && <RefreshCw size={16} className="spin opacity-60" />}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                            <label className="block text-xs font-semibold mb-1.5">
+                                Jam Berangkat / Masuk *
+                            </label>
+                            <input
+                                type="time"
+                                required
+                                value={workStartTime}
+                                onChange={(e) => setWorkStartTime(e.target.value)}
+                                className="form-input w-full text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                Jadwal masuk resmi sekolah.
+                            </p>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold mb-1.5">
+                                Toleransi Keterlambatan (Menit)
+                            </label>
+                            <input
+                                type="number"
+                                min={0}
+                                max={180}
+                                step={1}
+                                value={lateToleranceMinutes}
+                                onChange={(e) =>
+                                    setLateToleranceMinutes(
+                                        e.target.value === '' ? 0 : Math.max(0, Number(e.target.value))
+                                    )
+                                }
+                                placeholder="0"
+                                className="form-input w-full text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                Isi <strong>0</strong> jika tanpa toleransi.
+                            </p>
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold mb-1.5">
+                                Jam Pulang Kerja *
+                            </label>
+                            <input
+                                type="time"
+                                required
+                                value={workEndTime}
+                                onChange={(e) => setWorkEndTime(e.target.value)}
+                                className="form-input w-full text-sm font-mono"
+                            />
+                            <p className="text-[11px] text-muted-foreground mt-1">
+                                Acuan jadwal pulang pada kartu presensi.
                             </p>
                         </div>
                     </div>
 
-                    <span
-                        className={`w-12 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${allowDesktopGlobal ? 'bg-blue-600' : 'bg-slate-300 dark:bg-slate-600'
-                            }`}
-                    >
-                        <span
-                            className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${allowDesktopGlobal ? 'translate-x-6' : 'translate-x-0'
-                                }`}
-                        />
-                    </span>
-                </div>
-
-                {/* Notifikasi umpan balik pengaturan komputer */}
-                {desktopAccessFeedback && (
-                    <div
-                        className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${desktopAccessFeedback.status === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
-                            }`}
-                    >
-                        {desktopAccessFeedback.status === 'success' ? (
-                            <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
-                        ) : (
-                            <AlertTriangle size={15} className="text-red-600 shrink-0" />
-                        )}
-                        <span>{desktopAccessFeedback.text}</span>
-                    </div>
-                )}
-
-                {/* Filter & Pencarian Per Guru */}
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
-                    <div className="relative flex-1">
-                        <Search
-                            size={14}
-                            className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-                        />
-                        <input
-                            type="text"
-                            value={teacherSearchQuery}
-                            onChange={(e) => setTeacherSearchQuery(e.target.value)}
-                            placeholder="Cari nama Guru/PTK atau NIP..."
-                            className="form-input w-full pl-9 text-xs py-2"
-                        />
-                    </div>
-
-                    <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1 shrink-0">
-                        <button
-                            type="button"
-                            onClick={() => setTeacherFilterMode('ALL')}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${teacherFilterMode === 'ALL'
-                                ? 'bg-card text-foreground shadow-2xs'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            Semua ({teachersDesktopList.length})
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setTeacherFilterMode('ALLOWED')}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${teacherFilterMode === 'ALLOWED'
-                                ? 'bg-card text-blue-600 dark:text-blue-300 shadow-2xs'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            Boleh Komputer ({allowedDesktopTeachersCount})
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setTeacherFilterMode('BLOCKED')}
-                            className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${teacherFilterMode === 'BLOCKED'
-                                ? 'bg-card text-foreground shadow-2xs'
-                                : 'text-muted-foreground hover:text-foreground'
-                                }`}
-                        >
-                            Wajib HP ({teachersDesktopList.length - allowedDesktopTeachersCount})
-                        </button>
-                    </div>
-                </div>
-
-                {/* Daftar Saklar On/Off Per Guru */}
-                {isLoadingTeachersDesktop ? (
-                    <div className="py-8 text-center text-xs opacity-70 flex items-center justify-center gap-2">
-                        <Loader2 size={15} className="animate-spin" />
-                        Memuat daftar Guru & PTK...
-                    </div>
-                ) : filteredTeachersDesktop.length === 0 ? (
-                    <div className="py-6 text-center text-xs text-muted-foreground border border-dashed border-border rounded-xl">
-                        {teachersDesktopList.length === 0
-                            ? 'Belum ada data Guru / PTK terdaftar pada sekolah ini.'
-                            : 'Tidak ada Guru / PTK yang cocok dengan pencarian Anda.'}
-                    </div>
-                ) : (
-                    <div className="max-h-80 overflow-y-auto rounded-xl border border-border divide-y divide-border">
-                        {filteredTeachersDesktop.map((teacher, idx) => {
-                            const isBusyRow = Boolean(updatingTeacherIds[teacher.id]);
-                            return (
-                                <div
-                                    key={teacher.id}
-                                    className="px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
-                                >
-                                    <div className="flex items-center gap-2.5 min-w-0">
-                                        <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
-                                            {idx + 1}.
-                                        </span>
-                                        <div className="min-w-0">
-                                            <p className="font-semibold truncate text-foreground">
-                                                {teacher.fullName}
-                                            </p>
-                                            <p className="text-[11px] text-muted-foreground font-mono truncate">
-                                                {teacher.nip ? `NIP: ${teacher.nip}` : 'Tanpa NIP'}
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    <div className="flex items-center gap-3 shrink-0">
-                                        <span
-                                            className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${teacher.allowDesktopAttendance
-                                                ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                                                : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
-                                                }`}
-                                        >
-                                            {teacher.allowDesktopAttendance ? (
-                                                <>
-                                                    <Monitor size={11} /> Boleh Komputer
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <Smartphone size={11} /> Wajib HP
-                                                </>
-                                            )}
-                                        </span>
-
-                                        <button
-                                            type="button"
-                                            role="switch"
-                                            aria-checked={teacher.allowDesktopAttendance}
-                                            aria-label={`Izin komputer untuk ${teacher.fullName}`}
-                                            disabled={isBusyRow || isUpdatingGlobalDesktop}
-                                            onClick={() => handleToggleSingleTeacherDesktop(teacher)}
-                                            className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center cursor-pointer disabled:opacity-50 ${teacher.allowDesktopAttendance
-                                                ? 'bg-blue-600'
-                                                : 'bg-slate-300 dark:bg-slate-600'
-                                                }`}
-                                        >
-                                            <span
-                                                className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform flex items-center justify-center ${teacher.allowDesktopAttendance
-                                                    ? 'translate-x-5'
-                                                    : 'translate-x-0'
-                                                    }`}
-                                            >
-                                                {isBusyRow && (
-                                                    <Loader2
-                                                        size={11}
-                                                        className="animate-spin text-blue-600"
-                                                    />
-                                                )}
-                                            </span>
-                                        </button>
-                                    </div>
-                                </div>
-                            );
-                        })}
-                    </div>
-                )}
-            </div>
-
-            {/* ====================================================================
-          BAGIAN 3: HARI LIBUR NASIONAL & CUTI BERSAMA (SERVER API + EXCEL + DB)
-      ==================================================================== */}
-            <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5">
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-border pb-3">
-                    <div>
-                        <h2 className="text-base font-bold flex items-center gap-2">
-                            <CalendarDays size={18} className="text-red-500" />
-                            Kalender Hari Libur Nasional, Cuti Bersama & Sekolah
-                        </h2>
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                            Sinkronisasi cepat dari 6 server kalender nasional (dengan penyesuaian Muhammadiyah), impor file Excel (.xlsx / .csv), atau input manual.
-                        </p>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        <button
-                            type="button"
-                            onClick={() => downloadHolidayExcelTemplate(filterYear)}
-                            className={BTN_STYLE.secondary}
-                        >
-                            <Download size={14} className="text-emerald-600" />
-                            Template Excel
-                        </button>
-
-                        <label className={BTN_STYLE.secondary}>
-                            <Upload size={14} className="text-blue-600" />
-                            Import Excel / CSV
-                            <input
-                                type="file"
-                                accept=".xlsx,.csv,.txt"
-                                className="hidden"
-                                onChange={handleSelectExcelFile}
-                            />
-                        </label>
-                    </div>
-                </div>
-
-                {/* Panel Kontrol Sinkronisasi Server API + Kalender Muhammadiyah */}
-                <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
-                    <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
-                        <div className="flex flex-col gap-2.5 flex-1">
-                            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
-                                <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 sm:w-24 shrink-0">
-                                    <Server size={15} />
-                                    Server API:
-                                </span>
-                                <select
-                                    value={selectedApiProvider}
-                                    onChange={(e) =>
-                                        setSelectedApiProvider(e.target.value as HolidayApiProviderId)
-                                    }
-                                    className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
-                                >
-                                    {HOLIDAY_API_PROVIDER_OPTIONS.map((opt) => (
-                                        <option key={opt.id} value={opt.id}>
-                                            {opt.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
-                                <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 sm:w-24 shrink-0">
-                                    <Moon size={15} />
-                                    Kalender:
-                                </span>
-                                <select
-                                    value={calendarRefMode}
-                                    onChange={(e) =>
-                                        setCalendarRefMode(e.target.value as CalendarReferenceMode)
-                                    }
-                                    className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
-                                >
-                                    <option value="MUHAMMADIYAH">
-                                        Muhammadiyah (KHGT / Hisab)
-                                    </option>
-                                    <option value="PEMERINTAH">
-                                        Pemerintah (SKB 3 Menteri)
-                                    </option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <button
-                            type="button"
-                            onClick={handleFetchFromServer}
-                            disabled={isFetchingServer}
-                            className={`${BTN_STYLE.primaryBlue} shrink-0 self-start md:self-center`}
-                        >
-                            {isFetchingServer ? (
-                                <Loader2 size={15} className="animate-spin" />
+                    <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs flex flex-wrap items-center justify-between gap-2">
+                        <span className="font-medium">
+                            {lateToleranceMinutes > 0 ? (
+                                <>
+                                    Toleransi aktif <strong>{lateToleranceMinutes} menit</strong>: Check-in s.d. pukul{' '}
+                                    <strong className="font-mono text-emerald-700 dark:text-emerald-300">
+                                        {effectiveDeadlinePreview}
+                                    </strong>{' '}
+                                    berstatus <strong>HADIR</strong>, lewat pukul{' '}
+                                    <strong className="font-mono text-amber-700 dark:text-amber-300">
+                                        {effectiveDeadlinePreview}
+                                    </strong>{' '}
+                                    berstatus <strong>TERLAMBAT</strong>.
+                                </>
                             ) : (
-                                <Server size={15} />
+                                <>
+                                    Tanpa toleransi: Check-in melewati pukul{' '}
+                                    <strong className="font-mono text-emerald-700 dark:text-emerald-300">
+                                        {workStartTime}
+                                    </strong>{' '}
+                                    langsung tercatat <strong>TERLAMBAT</strong>.
+                                </>
                             )}
-                            {isFetchingServer
-                                ? 'Menarik Data...'
-                                : `Sync dari Server (${filterYear})`}
-                        </button>
+                        </span>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-blue-500/20 text-xs">
-                        <div className="flex flex-wrap items-center gap-4">
-                            <label className="flex items-center gap-2 cursor-pointer font-medium">
-                                <input
-                                    type="checkbox"
-                                    checked={includeCutiFromServer}
-                                    onChange={(e) => setIncludeCutiFromServer(e.target.checked)}
-                                    className="rounded border-border"
-                                />
-                                <span>
-                                    Sertakan jadwal <strong>Cuti Bersama</strong>
-                                </span>
+                    {/* Pengaturan Verifikasi Kamera Selfie */}
+                    <div className="space-y-2.5 pt-1">
+                        <div>
+                            <label className="block text-xs font-semibold">
+                                Verifikasi Kamera Selfie Presensi (GPS + Foto Selfie vs GPS Saja)
                             </label>
-
-                            {calendarRefMode === 'MUHAMMADIYAH' && (
-                                <label className="flex items-center gap-2 cursor-pointer font-medium text-emerald-800 dark:text-emerald-200">
-                                    <input
-                                        type="checkbox"
-                                        checked={includeAwalRamadan}
-                                        onChange={(e) => setIncludeAwalRamadan(e.target.checked)}
-                                        className="rounded border-border"
-                                    />
-                                    <span>
-                                        Sertakan <strong>Awal Puasa (1 Ramadan)</strong>
-                                    </span>
-                                </label>
-                            )}
+                            <p className="text-[11px] text-muted-foreground mt-0.5">
+                                Matikan jika sekolah hanya mewajibkan validasi titik koordinat GPS tanpa mengambil foto wajah.
+                            </p>
                         </div>
 
-                        {isSuperAdmin && (
-                            <div className="flex flex-wrap items-center gap-3">
-                                <span className="font-semibold">Cakupan Simpan:</span>
-                                <label className="flex items-center gap-1.5 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="holidayScope"
-                                        checked={holidayScope === 'GLOBAL'}
-                                        onChange={() => setHolidayScope('GLOBAL')}
-                                    />
-                                    <Globe size={13} className="text-purple-500" />
-                                    <span>Nasional / Global</span>
-                                </label>
-                                <label className="flex items-center gap-1.5 cursor-pointer">
-                                    <input
-                                        type="radio"
-                                        name="holidayScope"
-                                        checked={holidayScope === 'SCHOOL'}
-                                        onChange={() => setHolidayScope('SCHOOL')}
-                                    />
-                                    <Building2 size={13} className="text-blue-500" />
-                                    <span>Khusus Sekolah Ini</span>
-                                </label>
-                            </div>
-                        )}
-                    </div>
-
-                    {syncFeedback && (
-                        <div
-                            className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
-                                ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
-                                : syncFeedback.status === 'success'
-                                    ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                                    : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
-                                }`}
-                        >
-                            {syncFeedback.status === 'loading' ? (
-                                <Loader2 size={15} className="animate-spin shrink-0" />
-                            ) : syncFeedback.status === 'success' ? (
-                                <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
-                            ) : (
-                                <AlertTriangle size={15} className="text-red-600 shrink-0" />
-                            )}
-                            <span>{syncFeedback.text}</span>
-                        </div>
-                    )}
-                </div>
-
-                {/* Kotak Pratinjau Hasil Server / Excel */}
-                {previewRows.length > 0 && (
-                    <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 space-y-3">
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div>
-                                <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
-                                    <FileSpreadsheet size={16} />
-                                    <span>
-                                        Pratinjau: {previewSourceLabel} ({previewRows.length} Tanggal)
-                                    </span>
-                                </div>
-                                <p className="text-[11px] opacity-75 mt-0.5">
-                                    Tip: Klik tanggal atau keterangan di bawah jika ingin menggeser 1 hari sebelum disimpan.
-                                </p>
-                            </div>
-
-                            <div className="flex flex-wrap items-center gap-2">
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        setPreviewRows((prev) => [
-                                            ...prev,
-                                            { date: `${filterYear}-01-01`, name: 'Libur Tambahan' },
-                                        ])
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <div
+                                onClick={() => setRequireSelfieCheckIn((prev) => !prev)}
+                                role="switch"
+                                aria-checked={requireSelfieCheckIn}
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        setRequireSelfieCheckIn((prev) => !prev);
                                     }
-                                    className={BTN_STYLE.secondaryCompact}
-                                    disabled={isImporting}
+                                }}
+                                className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckIn
+                                    ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                                    }`}
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div
+                                        className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckIn
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                            }`}
+                                    >
+                                        {requireSelfieCheckIn ? <Camera size={16} /> : <MapPin size={16} />}
+                                    </div>
+                                    <div>
+                                        <div className="text-xs font-bold">
+                                            Selfie Presensi Datang (Check-In)
+                                        </div>
+                                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                                            {requireSelfieCheckIn
+                                                ? 'Aktif: Guru wajib mengambil foto selfie saat absen masuk.'
+                                                : 'Nonaktif: Absen masuk langsung tercatat dengan GPS saja.'}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <span
+                                    className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${requireSelfieCheckIn ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
+                                        }`}
                                 >
-                                    <Plus size={13} />
-                                    Tambah Baris
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => {
-                                        setPreviewRows([]);
-                                        setPreviewSourceLabel('');
-                                    }}
-                                    className={BTN_STYLE.secondaryCompact}
-                                    disabled={isImporting}
+                                    <span
+                                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${requireSelfieCheckIn ? 'translate-x-5' : 'translate-x-0'
+                                            }`}
+                                    />
+                                </span>
+                            </div>
+
+                            <div
+                                onClick={() => setRequireSelfieCheckOut((prev) => !prev)}
+                                role="switch"
+                                aria-checked={requireSelfieCheckOut}
+                                tabIndex={0}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault();
+                                        setRequireSelfieCheckOut((prev) => !prev);
+                                    }
+                                }}
+                                className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckOut
+                                    ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                                    }`}
+                            >
+                                <div className="flex items-start gap-3">
+                                    <div
+                                        className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckOut
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                            }`}
+                                    >
+                                        {requireSelfieCheckOut ? <Camera size={16} /> : <MapPin size={16} />}
+                                    </div>
+                                    <div>
+                                        <div className="text-xs font-bold">
+                                            Selfie Presensi Pulang (Check-Out)
+                                        </div>
+                                        <p className="text-[11px] text-muted-foreground mt-0.5">
+                                            {requireSelfieCheckOut
+                                                ? 'Aktif: Guru wajib mengambil foto selfie saat absen pulang.'
+                                                : 'Nonaktif: Absen pulang langsung tercatat dengan GPS saja.'}
+                                        </p>
+                                    </div>
+                                </div>
+
+                                <span
+                                    className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${requireSelfieCheckOut ? 'bg-emerald-600' : 'bg-slate-300 dark:bg-slate-600'
+                                        }`}
                                 >
-                                    Batal
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={handleConfirmBatchSave}
-                                    disabled={isImporting}
-                                    className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
-                                >
-                                    <Save size={14} />
-                                    {isImporting ? 'Menyimpan...' : 'Simpan ke Database'}
-                                </button>
+                                    <span
+                                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${requireSelfieCheckOut ? 'translate-x-5' : 'translate-x-0'
+                                            }`}
+                                    />
+                                </span>
                             </div>
                         </div>
+                    </div>
 
-                        <div className="max-h-60 overflow-y-auto rounded-lg border border-border bg-card">
-                            <table className="w-full text-xs">
-                                <thead className="bg-muted/60 text-left">
-                                    <tr>
-                                        <th className="py-2 px-3 font-semibold w-12">No</th>
-                                        <th className="py-2 px-3 font-semibold w-40">Tanggal</th>
-                                        <th className="py-2 px-3 font-semibold w-36">Pasaran Jawa</th>
-                                        <th className="py-2 px-3 font-semibold">Keterangan Libur / Cuti</th>
-                                        <th className="py-2 px-3 font-semibold w-14 text-right">Hapus</th>
-                                    </tr>
-                                </thead>
-                                <tbody className="divide-y divide-border">
-                                    {previewRows.map((row, idx) => {
-                                        const jawaInfo =
-                                            row.date.length === 10
-                                                ? getJavaneseDateInfo(row.date)
-                                                : null;
-                                        return (
-                                            <tr key={`preview-${idx}`}>
-                                                <td className="py-1.5 px-3 font-mono text-muted-foreground">
-                                                    {idx + 1}
-                                                </td>
-                                                <td className="py-1.5 px-3">
-                                                    <input
-                                                        type="date"
-                                                        value={row.date}
-                                                        onChange={(e) =>
-                                                            setPreviewRows((prev) =>
-                                                                prev.map((item, i) =>
-                                                                    i === idx
-                                                                        ? { ...item, date: e.target.value }
-                                                                        : item
-                                                                )
-                                                            )
-                                                        }
-                                                        className="form-input w-auto! text-xs py-1 px-2 font-mono text-red-500 font-semibold"
-                                                    />
-                                                </td>
-                                                <td className="py-1.5 px-3 text-[11px] font-medium text-muted-foreground">
-                                                    {jawaInfo?.hariPasaran ?? '-'}
-                                                </td>
-                                                <td className="py-1.5 px-3">
-                                                    <input
-                                                        type="text"
-                                                        value={row.name}
-                                                        onChange={(e) =>
-                                                            setPreviewRows((prev) =>
-                                                                prev.map((item, i) =>
-                                                                    i === idx
-                                                                        ? { ...item, name: e.target.value }
-                                                                        : item
-                                                                )
-                                                            )
-                                                        }
-                                                        className="form-input w-full text-xs py-1 px-2"
-                                                    />
-                                                </td>
-                                                <td className="py-1.5 px-3 text-right">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                            setPreviewRows((prev) =>
-                                                                prev.filter((_, i) => i !== idx)
-                                                            )
-                                                        }
-                                                        className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 active:scale-95 transition"
-                                                        title="Kecualikan tanggal ini"
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
+                    {/* Pilihan 5 Hari Kerja vs 6 Hari Kerja */}
+                    <div>
+                        <label className="block text-xs font-semibold mb-2">
+                            Sistem Hari Kerja Sekolah *
+                        </label>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setWorkDaysMode('FIVE_DAYS')}
+                                className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
+                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                                    }`}
+                            >
+                                <Briefcase
+                                    size={20}
+                                    className={
+                                        workDaysMode === 'FIVE_DAYS'
+                                            ? 'text-emerald-600 shrink-0 mt-0.5'
+                                            : 'text-muted-foreground shrink-0 mt-0.5'
+                                    }
+                                />
+                                <div>
+                                    <div className="text-xs font-bold">
+                                        5 Hari Kerja (Senin – Jumat)
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                        Hari <strong>Sabtu & Minggu</strong> otomatis ditandai sebagai Tanggal Merah pada kalender presensi.
+                                    </p>
+                                </div>
+                            </button>
+
+                            <button
+                                type="button"
+                                onClick={() => setWorkDaysMode('SIX_DAYS')}
+                                className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
+                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                                    }`}
+                            >
+                                <Briefcase
+                                    size={20}
+                                    className={
+                                        workDaysMode === 'SIX_DAYS'
+                                            ? 'text-emerald-600 shrink-0 mt-0.5'
+                                            : 'text-muted-foreground shrink-0 mt-0.5'
+                                    }
+                                />
+                                <div>
+                                    <div className="text-xs font-bold">
+                                        6 Hari Kerja (Senin – Sabtu)
+                                    </div>
+                                    <p className="text-[11px] text-muted-foreground mt-0.5">
+                                        Hari Sabtu tetap dihitung hari masuk; hanya <strong>Minggu, Libur Nasional & Cuti Bersama</strong> yang berwarna merah.
+                                    </p>
+                                </div>
+                            </button>
                         </div>
                     </div>
-                )}
 
-                {/* Form Tambah 1 Tanggal Libur Manual */}
-                <form
-                    onSubmit={handleAddSingleHoliday}
-                    className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end bg-muted/25 p-3.5 rounded-xl border border-border"
-                >
-                    <div className="sm:col-span-4">
-                        <label className="block text-[11px] font-semibold mb-1">
-                            Tanggal Libur / Cuti *
-                        </label>
-                        <input
-                            type="date"
-                            required
-                            value={newHolidayDate}
-                            onChange={(e) => setNewHolidayDate(e.target.value)}
-                            className="form-input w-full text-xs"
-                        />
-                    </div>
-                    <div className="sm:col-span-5">
-                        <label className="block text-[11px] font-semibold mb-1">
-                            Keterangan Hari Libur *
-                        </label>
-                        <input
-                            type="text"
-                            required
-                            value={newHolidayName}
-                            onChange={(e) => setNewHolidayName(e.target.value)}
-                            placeholder="Contoh: Awal Puasa Ramadan / Cuti Bersama Idul Fitri"
-                            className="form-input w-full text-xs"
-                        />
-                    </div>
-                    <div className="sm:col-span-3">
+                    <div className="flex justify-end pt-2 border-t border-border/60">
                         <button
                             type="submit"
-                            disabled={isAddingHoliday}
-                            className={`${BTN_STYLE.primaryEmerald} w-full py-2!`}
+                            disabled={isSavingSchedule || !selectedSchoolId}
+                            className={BTN_STYLE.primaryEmerald}
                         >
-                            <Plus size={15} />
-                            {isAddingHoliday ? 'Menyimpan...' : 'Tambah Libur'}
+                            {isSavingSchedule ? (
+                                <Loader2 size={15} className="animate-spin" />
+                            ) : (
+                                <Save size={15} />
+                            )}
+                            {isSavingSchedule
+                                ? 'Menyimpan...'
+                                : 'Simpan Pengaturan Jam, Selfie & Hari Kerja'}
                         </button>
                     </div>
                 </form>
+            )}
 
-                {/* DAFTAR TANGGAL MERAH (KALENDER RESPONSIF + OPSI DAFTAR) */}
-                <div className="space-y-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2.5">
-                        <div className="flex flex-wrap items-center gap-2.5">
-                            <h3 className="text-xs font-bold">
-                                Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
-                            </h3>
+            {/* ====================================================================
+                SUB-TAB 2: IZIN PRESENSI VIA KOMPUTER / LAPTOP (GURU)
+            ==================================================================== */}
+            {activeSubTab === 'GURU_DESKTOP' && (
+                <TeacherDesktopAccessCard schoolId={selectedSchoolId} />
+            )}
 
-                            {/* Switcher Mode Kalender vs Daftar */}
-                            <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
+            {/* ====================================================================
+                SUB-TAB 3: PENGATURAN JADWAL & METODE PRESENSI SISWA
+            ==================================================================== */}
+            {activeSubTab === 'SISWA' && (
+                <StudentAttendanceSettingsCard selectedSchoolId={selectedSchoolId} />
+            )}
+
+            {/* ====================================================================
+                SUB-TAB 4: KALENDER HARI LIBUR NASIONAL & SEKOLAH
+            ==================================================================== */}
+            {activeSubTab === 'HOLIDAYS' && (
+                <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5">
+                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-border pb-3">
+                        <div>
+                            <h2 className="text-base font-bold flex items-center gap-2">
+                                <CalendarDays size={18} className="text-red-500" />
+                                Kalender Hari Libur Nasional, Cuti Bersama & Sekolah
+                            </h2>
+                            <p className="text-xs text-muted-foreground mt-0.5">
+                                Sinkronisasi cepat dari server kalender nasional, impor file Excel (.xlsx / .csv), atau input manual.
+                            </p>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                            <button
+                                type="button"
+                                onClick={() => downloadHolidayExcelTemplate(filterYear)}
+                                className={BTN_STYLE.secondary}
+                            >
+                                <Download size={14} className="text-emerald-600" />
+                                Template Excel
+                            </button>
+
+                            <label className={BTN_STYLE.secondary}>
+                                <Upload size={14} className="text-blue-600" />
+                                Import Excel / CSV
+                                <input
+                                    type="file"
+                                    accept=".xlsx,.csv,.txt"
+                                    className="hidden"
+                                    onChange={handleSelectExcelFile}
+                                />
+                            </label>
+                        </div>
+                    </div>
+
+                    {/* Panel Kontrol Sinkronisasi Server API */}
+                    <div className="p-4 rounded-xl bg-blue-500/10 border border-blue-500/30 space-y-3">
+                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+                            <div className="flex flex-col gap-2.5 flex-1">
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                                    <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 sm:w-24 shrink-0">
+                                        <Server size={15} />
+                                        Server API:
+                                    </span>
+                                    <select
+                                        value={selectedApiProvider}
+                                        onChange={(e) =>
+                                            setSelectedApiProvider(e.target.value as HolidayApiProviderId)
+                                        }
+                                        className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
+                                    >
+                                        {HOLIDAY_API_PROVIDER_OPTIONS.map((opt) => (
+                                            <option key={opt.id} value={opt.id}>
+                                                {opt.label}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
+                                    <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 sm:w-24 shrink-0">
+                                        <Moon size={15} />
+                                        Kalender:
+                                    </span>
+                                    <select
+                                        value={calendarRefMode}
+                                        onChange={(e) =>
+                                            setCalendarRefMode(e.target.value as CalendarReferenceMode)
+                                        }
+                                        className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
+                                    >
+                                        <option value="MUHAMMADIYAH">
+                                            Muhammadiyah (KHGT / Hisab)
+                                        </option>
+                                        <option value="PEMERINTAH">
+                                            Pemerintah (SKB 3 Menteri)
+                                        </option>
+                                    </select>
+                                </div>
+                            </div>
+
+                            <button
+                                type="button"
+                                onClick={handleFetchFromServer}
+                                disabled={isFetchingServer}
+                                className={`${BTN_STYLE.primaryBlue} shrink-0 self-start md:self-center`}
+                            >
+                                {isFetchingServer ? (
+                                    <Loader2 size={15} className="animate-spin" />
+                                ) : (
+                                    <Server size={15} />
+                                )}
+                                {isFetchingServer
+                                    ? 'Menarik Data...'
+                                    : `Sync dari Server (${filterYear})`}
+                            </button>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-3 pt-2.5 border-t border-blue-500/20 text-xs">
+                            <div className="flex flex-wrap items-center gap-4">
+                                <label className="flex items-center gap-2 cursor-pointer font-medium">
+                                    <input
+                                        type="checkbox"
+                                        checked={includeCutiFromServer}
+                                        onChange={(e) => setIncludeCutiFromServer(e.target.checked)}
+                                        className="rounded border-border"
+                                    />
+                                    <span>
+                                        Sertakan jadwal <strong>Cuti Bersama</strong>
+                                    </span>
+                                </label>
+
+                                {calendarRefMode === 'MUHAMMADIYAH' && (
+                                    <label className="flex items-center gap-2 cursor-pointer font-medium text-emerald-800 dark:text-emerald-200">
+                                        <input
+                                            type="checkbox"
+                                            checked={includeAwalRamadan}
+                                            onChange={(e) => setIncludeAwalRamadan(e.target.checked)}
+                                            className="rounded border-border"
+                                        />
+                                        <span>
+                                            Sertakan <strong>Awal Puasa (1 Ramadan)</strong>
+                                        </span>
+                                    </label>
+                                )}
+                            </div>
+
+                            {isSuperAdmin && (
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <span className="font-semibold">Cakupan Simpan:</span>
+                                    <label className="flex items-center gap-1.5 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="holidayScope"
+                                            checked={holidayScope === 'GLOBAL'}
+                                            onChange={() => setHolidayScope('GLOBAL')}
+                                        />
+                                        <Globe size={13} className="text-purple-500" />
+                                        <span>Nasional / Global</span>
+                                    </label>
+                                    <label className="flex items-center gap-1.5 cursor-pointer">
+                                        <input
+                                            type="radio"
+                                            name="holidayScope"
+                                            checked={holidayScope === 'SCHOOL'}
+                                            onChange={() => setHolidayScope('SCHOOL')}
+                                        />
+                                        <Building2 size={13} className="text-blue-500" />
+                                        <span>Khusus Sekolah Ini</span>
+                                    </label>
+                                </div>
+                            )}
+                        </div>
+
+                        {syncFeedback && (
+                            <div
+                                className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
+                                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
+                                    : syncFeedback.status === 'success'
+                                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                                    }`}
+                            >
+                                {syncFeedback.status === 'loading' ? (
+                                    <Loader2 size={15} className="animate-spin shrink-0" />
+                                ) : syncFeedback.status === 'success' ? (
+                                    <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
+                                ) : (
+                                    <AlertTriangle size={15} className="text-red-600 shrink-0" />
+                                )}
+                                <span>{syncFeedback.text}</span>
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Kotak Pratinjau Hasil Server / Excel */}
+                    {previewRows.length > 0 && (
+                        <div className="p-4 rounded-xl border border-emerald-500/40 bg-emerald-500/10 space-y-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div>
+                                    <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                                        <FileSpreadsheet size={16} />
+                                        <span>
+                                            Pratinjau: {previewSourceLabel} ({previewRows.length} Tanggal)
+                                        </span>
+                                    </div>
+                                    <p className="text-[11px] opacity-75 mt-0.5">
+                                        Tip: Klik tanggal atau keterangan di bawah jika ingin menggeser 1 hari sebelum disimpan.
+                                    </p>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            setPreviewRows((prev) => [
+                                                ...prev,
+                                                { date: `${filterYear}-01-01`, name: 'Libur Tambahan' },
+                                            ])
+                                        }
+                                        className={BTN_STYLE.secondaryCompact}
+                                        disabled={isImporting}
+                                    >
+                                        <Plus size={13} />
+                                        Tambah Baris
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setPreviewRows([]);
+                                            setPreviewSourceLabel('');
+                                        }}
+                                        className={BTN_STYLE.secondaryCompact}
+                                        disabled={isImporting}
+                                    >
+                                        Batal
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={handleConfirmBatchSave}
+                                        disabled={isImporting}
+                                        className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
+                                    >
+                                        <Save size={14} />
+                                        {isImporting ? 'Menyimpan...' : 'Simpan ke Database'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="max-h-60 overflow-y-auto rounded-lg border border-border bg-card">
+                                <table className="w-full text-xs">
+                                    <thead className="bg-muted/60 text-left">
+                                        <tr>
+                                            <th className="py-2 px-3 font-semibold w-12">No</th>
+                                            <th className="py-2 px-3 font-semibold w-40">Tanggal</th>
+                                            <th className="py-2 px-3 font-semibold w-36">Pasaran Jawa</th>
+                                            <th className="py-2 px-3 font-semibold">Keterangan Libur / Cuti</th>
+                                            <th className="py-2 px-3 font-semibold w-14 text-right">Hapus</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-border">
+                                        {previewRows.map((row, idx) => {
+                                            const jawaInfo =
+                                                row.date.length === 10
+                                                    ? getJavaneseDateInfo(row.date)
+                                                    : null;
+                                            return (
+                                                <tr key={`preview-${idx}`}>
+                                                    <td className="py-1.5 px-3 font-mono text-muted-foreground">
+                                                        {idx + 1}
+                                                    </td>
+                                                    <td className="py-1.5 px-3">
+                                                        <input
+                                                            type="date"
+                                                            value={row.date}
+                                                            onChange={(e) =>
+                                                                setPreviewRows((prev) =>
+                                                                    prev.map((item, i) =>
+                                                                        i === idx
+                                                                            ? { ...item, date: e.target.value }
+                                                                            : item
+                                                                    )
+                                                                )
+                                                            }
+                                                            className="form-input w-auto! text-xs py-1 px-2 font-mono text-red-500 font-semibold"
+                                                        />
+                                                    </td>
+                                                    <td className="py-1.5 px-3 text-[11px] font-medium text-muted-foreground">
+                                                        {jawaInfo?.hariPasaran ?? '-'}
+                                                    </td>
+                                                    <td className="py-1.5 px-3">
+                                                        <input
+                                                            type="text"
+                                                            value={row.name}
+                                                            onChange={(e) =>
+                                                                setPreviewRows((prev) =>
+                                                                    prev.map((item, i) =>
+                                                                        i === idx
+                                                                            ? { ...item, name: e.target.value }
+                                                                            : item
+                                                                    )
+                                                                )
+                                                            }
+                                                            className="form-input w-full text-xs py-1 px-2"
+                                                        />
+                                                    </td>
+                                                    <td className="py-1.5 px-3 text-right">
+                                                        <button
+                                                            type="button"
+                                                            onClick={() =>
+                                                                setPreviewRows((prev) =>
+                                                                    prev.filter((_, i) => i !== idx)
+                                                                )
+                                                            }
+                                                            className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 active:scale-95 transition"
+                                                            title="Kecualikan tanggal ini"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Form Tambah 1 Tanggal Libur Manual */}
+                    <form
+                        onSubmit={handleAddSingleHoliday}
+                        className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end bg-muted/25 p-3.5 rounded-xl border border-border"
+                    >
+                        <div className="sm:col-span-4">
+                            <label className="block text-[11px] font-semibold mb-1">
+                                Tanggal Libur / Cuti *
+                            </label>
+                            <input
+                                type="date"
+                                required
+                                value={newHolidayDate}
+                                onChange={(e) => setNewHolidayDate(e.target.value)}
+                                className="form-input w-full text-xs"
+                            />
+                        </div>
+                        <div className="sm:col-span-5">
+                            <label className="block text-[11px] font-semibold mb-1">
+                                Keterangan Hari Libur *
+                            </label>
+                            <input
+                                type="text"
+                                required
+                                value={newHolidayName}
+                                onChange={(e) => setNewHolidayName(e.target.value)}
+                                placeholder="Contoh: Libur Awal Ramadan / Rapat Kerja Guru"
+                                className="form-input w-full text-xs"
+                            />
+                        </div>
+                        <div className="sm:col-span-3">
+                            <button
+                                type="submit"
+                                disabled={isAddingHoliday}
+                                className={`${BTN_STYLE.primaryEmerald} w-full py-2!`}
+                            >
+                                <Plus size={15} />
+                                {isAddingHoliday ? 'Menyimpan...' : 'Tambah Libur'}
+                            </button>
+                        </div>
+                    </form>
+
+                    {/* Daftar / Kalender Tanggal Merah */}
+                    <div className="space-y-3">
+                        <div className="flex flex-wrap items-center justify-between gap-2.5">
+                            <div className="flex flex-wrap items-center gap-2.5">
+                                <h3 className="text-xs font-bold">
+                                    Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
+                                </h3>
+
+                                <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
+                                    <button
+                                        type="button"
+                                        onClick={() => setHolidayViewMode('CALENDAR')}
+                                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'CALENDAR'
+                                            ? 'bg-card text-foreground shadow-xs'
+                                            : 'text-muted-foreground hover:text-foreground'
+                                            }`}
+                                    >
+                                        <Calendar size={13} />
+                                        Kalender
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setHolidayViewMode('LIST')}
+                                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'LIST'
+                                            ? 'bg-card text-foreground shadow-xs'
+                                            : 'text-muted-foreground hover:text-foreground'
+                                            }`}
+                                    >
+                                        <List size={13} />
+                                        Daftar
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-2 shrink-0">
+                                <select
+                                    value={filterYear}
+                                    onChange={(e) => setFilterYear(Number(e.target.value))}
+                                    className="form-input w-auto! min-w-32 text-xs py-1.5 px-3 font-semibold shrink-0"
+                                >
+                                    {availableYears.map((yr) => (
+                                        <option key={yr} value={yr}>
+                                            Tahun {yr}
+                                        </option>
+                                    ))}
+                                </select>
+
                                 <button
                                     type="button"
-                                    onClick={() => setHolidayViewMode('CALENDAR')}
-                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'CALENDAR'
-                                        ? 'bg-card text-foreground shadow-xs'
-                                        : 'text-muted-foreground hover:text-foreground'
-                                        }`}
+                                    onClick={handleAddNextYear}
+                                    className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 shadow-2xs active:scale-[0.98] transition-all duration-200 shrink-0 whitespace-nowrap cursor-pointer"
+                                    title="Tambahkan tahun berikutnya ke daftar pilihan"
                                 >
-                                    <Calendar size={13} />
-                                    Kalender
+                                    <Plus size={14} />
+                                    Tambah Tahun
                                 </button>
+
                                 <button
                                     type="button"
-                                    onClick={() => setHolidayViewMode('LIST')}
-                                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'LIST'
-                                        ? 'bg-card text-foreground shadow-xs'
-                                        : 'text-muted-foreground hover:text-foreground'
-                                        }`}
+                                    onClick={loadHolidays}
+                                    className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all duration-200 shrink-0 cursor-pointer"
+                                    title="Refresh Daftar Libur"
                                 >
-                                    <List size={13} />
-                                    Daftar
+                                    <RefreshCw
+                                        size={14}
+                                        className={isLoadingHolidays ? 'spin' : ''}
+                                    />
                                 </button>
                             </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
-                            <select
-                                value={filterYear}
-                                onChange={(e) => setFilterYear(Number(e.target.value))}
-                                className="form-input w-auto! min-w-32 text-xs py-1.5 px-3 font-semibold shrink-0"
-                            >
-                                {availableYears.map((yr) => (
-                                    <option key={yr} value={yr}>
-                                        Tahun {yr}
-                                    </option>
-                                ))}
-                            </select>
-
-                            <button
-                                type="button"
-                                onClick={handleAddNextYear}
-                                className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 shadow-2xs active:scale-[0.98] transition-all duration-200 shrink-0 whitespace-nowrap cursor-pointer"
-                                title="Tambahkan tahun berikutnya ke daftar pilihan"
-                            >
-                                <Plus size={14} />
-                                Tambah Tahun
-                            </button>
-
-                            <button
-                                type="button"
-                                onClick={loadHolidays}
-                                className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all duration-200 shrink-0 cursor-pointer"
-                                title="Refresh Daftar Libur"
-                            >
-                                <RefreshCw
-                                    size={14}
-                                    className={isLoadingHolidays ? 'spin' : ''}
-                                />
-                            </button>
-                        </div>
-                    </div>
-
-                    {!isLoadingHolidays && deletableHolidays.length > 0 && (
-                        <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-muted/35 border border-border text-xs">
-                            {holidayViewMode === 'LIST' ? (
-                                <label className="flex items-center gap-2 cursor-pointer font-semibold select-none">
-                                    <input
-                                        type="checkbox"
-                                        checked={isAllSelected}
-                                        onChange={toggleSelectAll}
-                                        className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer"
-                                    />
-                                    <span>
-                                        Pilih Semua ({selectedHolidayIds.length}/
-                                        {deletableHolidays.length} dipilih)
+                        {!isLoadingHolidays && deletableHolidays.length > 0 && (
+                            <div className="flex flex-wrap items-center justify-between gap-2 px-3.5 py-2.5 rounded-xl bg-muted/35 border border-border text-xs">
+                                {holidayViewMode === 'LIST' ? (
+                                    <label className="flex items-center gap-2 cursor-pointer font-semibold select-none">
+                                        <input
+                                            type="checkbox"
+                                            checked={isAllSelected}
+                                            onChange={toggleSelectAll}
+                                            className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer"
+                                        />
+                                        <span>
+                                            Pilih Semua ({selectedHolidayIds.length}/
+                                            {deletableHolidays.length} dipilih)
+                                        </span>
+                                    </label>
+                                ) : (
+                                    <span className="text-[11px] text-muted-foreground">
+                                        Ketuk tanggal mana pun untuk melihat detail & Pasaran Jawa
                                     </span>
-                                </label>
-                            ) : (
-                                <span className="text-[11px] text-muted-foreground">
-                                    Ketuk tanggal mana pun untuk melihat detail & Pasaran Jawa
-                                </span>
-                            )}
+                                )}
 
-                            <div className="flex flex-wrap items-center gap-2">
-                                {holidayViewMode === 'LIST' && selectedHolidayIds.length > 0 && (
+                                <div className="flex flex-wrap items-center gap-2">
+                                    {holidayViewMode === 'LIST' && selectedHolidayIds.length > 0 && (
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                setDeleteConfirmModal({
+                                                    title: `Hapus ${selectedHolidayIds.length} Tanggal Merah Terpilih?`,
+                                                    description: `Anda akan menghapus ${selectedHolidayIds.length} data tanggal merah yang dicentang dari database.`,
+                                                    targetIds: selectedHolidayIds,
+                                                })
+                                            }
+                                            className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm active:scale-[0.98] transition-all duration-200 cursor-pointer"
+                                        >
+                                            <Trash2 size={13} />
+                                            Hapus Terpilih ({selectedHolidayIds.length})
+                                        </button>
+                                    )}
+
                                     <button
                                         type="button"
                                         onClick={() =>
                                             setDeleteConfirmModal({
-                                                title: `Hapus ${selectedHolidayIds.length} Tanggal Merah Terpilih?`,
-                                                description: `Anda akan menghapus ${selectedHolidayIds.length} data tanggal merah yang dicentang dari database. Tindakan ini tidak dapat dibatalkan.`,
-                                                targetIds: selectedHolidayIds,
+                                                title: `Hapus Semua Tanggal Merah Tahun ${filterYear}?`,
+                                                description: `Seluruh ${deletableHolidays.length} data hari libur tahun ${filterYear} yang dapat Anda kelola akan dihapus permanen dari database.`,
+                                                targetIds: deletableHolidays.map((h) => h.id),
                                             })
                                         }
-                                        className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm active:scale-[0.98] transition-all duration-200 cursor-pointer"
+                                        className={BTN_STYLE.dangerOutline}
                                     >
                                         <Trash2 size={13} />
-                                        Hapus Terpilih ({selectedHolidayIds.length})
+                                        Hapus Semua ({deletableHolidays.length})
                                     </button>
-                                )}
-
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        setDeleteConfirmModal({
-                                            title: `Hapus Semua Tanggal Merah Tahun ${filterYear}?`,
-                                            description: `Seluruh ${deletableHolidays.length} data hari libur tahun ${filterYear} yang dapat Anda kelola akan dihapus permanen dari database.`,
-                                            targetIds: deletableHolidays.map((h) => h.id),
-                                        })
-                                    }
-                                    className={BTN_STYLE.dangerOutline}
-                                >
-                                    <Trash2 size={13} />
-                                    Hapus Semua ({deletableHolidays.length})
-                                </button>
+                                </div>
                             </div>
-                        </div>
-                    )}
+                        )}
 
-                    {isLoadingHolidays ? (
-                        <div className="py-8 text-center text-xs opacity-70">
-                            Memuat data hari libur dari database...
-                        </div>
-                    ) : holidayViewMode === 'CALENDAR' ? (
-                        <HolidayCalendarView
-                            year={filterYear}
-                            holidays={holidays}
-                            workDaysMode={workDaysMode}
-                            isSuperAdmin={isSuperAdmin}
-                            onClickEditHoliday={handleOpenEditModal}
-                            onClickAddHolidayOnDate={(isoDate) => {
-                                setNewHolidayDate(isoDate);
-                                setSyncFeedback({
-                                    status: 'success',
-                                    text: `Tanggal ${isoDate} dipilih pada formulir di atas. Ketik keterangannya lalu klik "+ Tambah Libur".`,
-                                });
-                            }}
-                        />
-                    ) : holidays.length === 0 ? (
-                        <div className="py-8 text-center text-xs opacity-75 border border-dashed border-border rounded-xl space-y-2 px-4">
-                            <p>
-                                Belum ada data hari libur tersimpan untuk tahun{' '}
-                                <strong>{filterYear}</strong>.
-                            </p>
-                            <p className="text-[11px] opacity-75">
-                                Klik tombol <strong>Sync dari Server ({filterYear})</strong> di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama, lalu klik <strong>Simpan ke Database</strong>.
-                            </p>
-                        </div>
-                    ) : (
-                        <div className="max-h-96 overflow-y-auto rounded-xl border border-border divide-y divide-border">
-                            {holidays.map((item, index) => {
-                                const isGlobal = item.schoolId === null;
-                                const isCuti = item.name.toLowerCase().includes('cuti bersama');
-                                const canManageItem = isSuperAdmin || !isGlobal;
-                                const isChecked = selectedHolidayIds.includes(item.id);
-                                const jawaInfo = getJavaneseDateInfo(item.date);
+                        {isLoadingHolidays ? (
+                            <div className="py-8 text-center text-xs opacity-70">
+                                Memuat data hari libur dari database...
+                            </div>
+                        ) : holidayViewMode === 'CALENDAR' ? (
+                            <HolidayCalendarView
+                                year={filterYear}
+                                holidays={holidays}
+                                workDaysMode={workDaysMode}
+                                isSuperAdmin={isSuperAdmin}
+                                onClickEditHoliday={handleOpenEditModal}
+                                onClickAddHolidayOnDate={(isoDate) => {
+                                    setNewHolidayDate(isoDate);
+                                    setSyncFeedback({
+                                        status: 'success',
+                                        text: `Tanggal ${isoDate} dipilih pada formulir di atas. Ketik keterangannya lalu klik "+ Tambah Libur".`,
+                                    });
+                                }}
+                            />
+                        ) : holidays.length === 0 ? (
+                            <div className="py-8 text-center text-xs opacity-75 border border-dashed border-border rounded-xl space-y-2 px-4">
+                                <p>
+                                    Belum ada data hari libur tersimpan untuk tahun{' '}
+                                    <strong>{filterYear}</strong>.
+                                </p>
+                                <p className="text-[11px] opacity-75">
+                                    Klik tombol <strong>Sync dari Server ({filterYear})</strong> di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="max-h-96 overflow-y-auto rounded-xl border border-border divide-y divide-border">
+                                {holidays.map((item, index) => {
+                                    const isGlobal = item.schoolId === null;
+                                    const isCuti = item.name.toLowerCase().includes('cuti bersama');
+                                    const canManageItem = isSuperAdmin || !isGlobal;
+                                    const isChecked = selectedHolidayIds.includes(item.id);
+                                    const jawaInfo = getJavaneseDateInfo(item.date);
 
-                                return (
-                                    <div
-                                        key={item.id}
-                                        className={`p-3 flex items-center justify-between gap-3 transition text-xs ${isChecked ? 'bg-emerald-500/10' : 'hover:bg-muted/30'
-                                            }`}
-                                    >
-                                        <div className="flex flex-wrap items-center gap-2.5 min-w-0">
-                                            {canManageItem ? (
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isChecked}
-                                                    onChange={() => toggleSelectOne(item.id)}
-                                                    className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer shrink-0"
-                                                />
-                                            ) : (
-                                                <span className="w-4 shrink-0" />
-                                            )}
+                                    return (
+                                        <div
+                                            key={item.id}
+                                            className={`p-3 flex items-center justify-between gap-3 transition text-xs ${isChecked ? 'bg-emerald-500/10' : 'hover:bg-muted/30'
+                                                }`}
+                                        >
+                                            <div className="flex flex-wrap items-center gap-2.5 min-w-0">
+                                                {canManageItem ? (
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={isChecked}
+                                                        onChange={() => toggleSelectOne(item.id)}
+                                                        className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer shrink-0"
+                                                    />
+                                                ) : (
+                                                    <span className="w-4 shrink-0" />
+                                                )}
 
-                                            <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
-                                                {index + 1}.
-                                            </span>
-
-                                            <span className="font-mono font-bold text-red-500 bg-red-500/10 px-2.5 py-1 rounded-lg shrink-0">
-                                                {item.date}
-                                            </span>
-
-                                            <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shrink-0">
-                                                {jawaInfo.hariPasaran}
-                                            </span>
-
-                                            <span className="font-medium truncate">{item.name}</span>
-
-                                            {isCuti && (
-                                                <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300">
-                                                    Cuti Bersama
+                                                <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
+                                                    {index + 1}.
                                                 </span>
-                                            )}
 
-                                            {isGlobal ? (
-                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
-                                                    <Globe size={10} /> Nasional
+                                                <span className="font-mono font-bold text-red-500 bg-red-500/10 px-2.5 py-1 rounded-lg shrink-0">
+                                                    {item.date}
                                                 </span>
-                                            ) : (
-                                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-600 dark:text-blue-300">
-                                                    <Building2 size={10} /> Sekolah
+
+                                                <span className="px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 shrink-0">
+                                                    {jawaInfo.hariPasaran}
                                                 </span>
+
+                                                <span className="font-medium truncate">{item.name}</span>
+
+                                                {isCuti && (
+                                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300">
+                                                        Cuti Bersama
+                                                    </span>
+                                                )}
+
+                                                {isGlobal ? (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
+                                                        <Globe size={10} /> Nasional
+                                                    </span>
+                                                ) : (
+                                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-600 dark:text-blue-300">
+                                                        <Building2 size={10} /> Sekolah
+                                                    </span>
+                                                )}
+                                            </div>
+
+                                            {canManageItem && (
+                                                <div className="flex items-center gap-1.5 shrink-0">
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleOpenEditModal(item)}
+                                                        className="p-2 rounded-xl border border-blue-500/25 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500/20 active:scale-95 transition-all cursor-pointer"
+                                                        title="Edit tanggal atau keterangan"
+                                                    >
+                                                        <Pencil size={13} />
+                                                    </button>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() =>
+                                                            setDeleteConfirmModal({
+                                                                title: 'Hapus Tanggal Merah?',
+                                                                description: `Apakah Anda yakin ingin menghapus "${item.name}" (${jawaInfo.fullFormattedDate})?`,
+                                                                targetIds: [item.id],
+                                                            })
+                                                        }
+                                                        className="p-2 rounded-xl border border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-95 transition-all cursor-pointer"
+                                                        title="Hapus hari libur"
+                                                    >
+                                                        <Trash2 size={13} />
+                                                    </button>
+                                                </div>
                                             )}
                                         </div>
-
-                                        {canManageItem && (
-                                            <div className="flex items-center gap-1.5 shrink-0">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => handleOpenEditModal(item)}
-                                                    className="p-2 rounded-xl border border-blue-500/25 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500/20 active:scale-95 transition-all cursor-pointer"
-                                                    title="Edit tanggal atau keterangan"
-                                                >
-                                                    <Pencil size={13} />
-                                                </button>
-                                                <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                        setDeleteConfirmModal({
-                                                            title: 'Hapus Tanggal Merah?',
-                                                            description: `Apakah Anda yakin ingin menghapus "${item.name}" (${jawaInfo.fullFormattedDate})?`,
-                                                            targetIds: [item.id],
-                                                        })
-                                                    }
-                                                    className="p-2 rounded-xl border border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-95 transition-all cursor-pointer"
-                                                    title="Hapus hari libur"
-                                                >
-                                                    <Trash2 size={13} />
-                                                </button>
-                                            </div>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
                 </div>
-            </div>
+            )}
 
             {/* MODAL 1: EDIT TANGGAL & KETERANGAN HARI LIBUR */}
             {editingHoliday && (
@@ -2253,7 +1849,7 @@ export function AttendanceSettingsTab() {
                 </div>
             )}
 
-            {/* MODAL 2: KONFIRMASI HAPUS MODERN */}
+            {/* MODAL 2: KONFIRMASI HAPUS */}
             {deleteConfirmModal && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-xs p-4">
                     <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150">

@@ -14,15 +14,26 @@ import {
     School,
     Calendar,
     CheckSquare,
+    LogOut,
+    AlertTriangle,
+    Lock,
+    Unlock,
+    CalendarOff,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 import type {
     AttendanceStatus,
     ClassStudentAttendanceRow,
 } from '../types/attendance.types';
+
+// ============================================================================
+// PARAMETER YANG BISA DISESUAIKAN
+// ============================================================================
+const DEFAULT_CLASS_SPECIAL_EVENT = 'Kegiatan Khusus Sekolah';
 
 interface ClassOption {
     id: string;
@@ -31,6 +42,14 @@ interface ClassOption {
     major?: string | null;
     homeroomTeacherId?: string | null;
 }
+
+type EnrichedClassStudentRow = Omit<
+    ClassStudentAttendanceRow,
+    'attendanceId' | 'checkOutTime'
+> & {
+    attendanceId?: string | null;
+    checkOutTime?: string | null;
+};
 
 const STATUS_OPTIONS: Array<{
     value: AttendanceStatus;
@@ -45,7 +64,6 @@ const STATUS_OPTIONS: Array<{
         { value: 'ALPA', label: 'Alpa', shortLabel: 'A', color: '#EF4444' },
     ];
 
-// Helper aman untuk mengambil pesan error dari tipe 'unknown' tanpa memakai 'any'
 function getErrorMessage(error: unknown, fallbackMessage: string): string {
     if (error instanceof Error && error.message) {
         return error.message;
@@ -61,14 +79,10 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
     return fallbackMessage;
 }
 
-/**
- * Halaman Absensi Siswa Per Kelas (Untuk Wali Kelas, Guru Mapel, Operator, & Admin)
- */
 export function StudentClassAttendancePage() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
-    // State Simulasi Sekolah (Khusus SUPER_ADMIN)
     const [simSchools, setSimSchools] = useState<
         Array<{ id: string; name: string; npsn: string }>
     >([]);
@@ -77,7 +91,6 @@ export function StudentClassAttendancePage() {
         ? simSchoolId || school?.id || ''
         : school?.id || '';
 
-    // State Kelas & Filter
     const [classes, setClasses] = useState<ClassOption[]>([]);
     const [selectedClassId, setSelectedClassId] = useState<string>('');
     const [homeroomClassId, setHomeroomClassId] = useState<string | null>(null);
@@ -85,18 +98,45 @@ export function StudentClassAttendancePage() {
     const [searchQuery, setSearchQuery] = useState<string>('');
     const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
-    // State Lembar Presensi Siswa
-    const [rows, setRows] = useState<ClassStudentAttendanceRow[]>([]);
+    // Hook terpusat pengunci hari libur mengikuti selectedDate
+    const {
+        isLocked: isHolidayLocked,
+        isHoliday,
+        holidayName,
+        isSpecialEventActive,
+        specialEventReason,
+        canManageOverride,
+        isToggling: isTogglingHoliday,
+        activateSpecialEvent,
+        deactivateSpecialEvent,
+    } = useStudentHolidayLock({
+        schoolId: activeSchoolId,
+        targetDate: selectedDate,
+    });
+
+    const [specialEventInput, setSpecialEventInput] = useState<string>('');
+
+    // Pengaturan sekolah untuk siswa
+    const [enableClassAttendance, setEnableClassAttendance] =
+        useState<boolean>(true);
+    const [enableStudentCheckOut, setEnableStudentCheckOut] =
+        useState<boolean>(true);
+
+    const [rows, setRows] = useState<EnrichedClassStudentRow[]>([]);
     const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
     const [isLoadingClasses, setIsLoadingClasses] = useState<boolean>(false);
     const [isLoadingSheet, setIsLoadingSheet] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState<boolean>(false);
+    const [checkingOutStudentId, setCheckingOutStudentId] = useState<
+        string | null
+    >(null);
     const [feedback, setFeedback] = useState<{
         type: 'success' | 'error' | 'warning';
         message: string;
     } | null>(null);
 
-    // 1. Jika SUPER_ADMIN, muat daftar sekolah
+    const isSheetDisabled = !enableClassAttendance || isHolidayLocked;
+
     useEffect(() => {
         if (!isSuperAdmin) return;
         attendanceService
@@ -109,7 +149,30 @@ export function StudentClassAttendancePage() {
             .catch(console.error);
     }, [isSuperAdmin, school?.id]);
 
-    // 2. Muat Daftar Kelas & Deteksi Kelas Perwalian Guru yang Login
+    // Muat pengaturan presensi siswa dari tabel schools
+    useEffect(() => {
+        if (!activeSchoolId) return;
+        supabase
+            .from('schools')
+            .select('*')
+            .eq('id', activeSchoolId)
+            .maybeSingle()
+            .then(({ data }) => {
+                if (!data) return;
+                setEnableClassAttendance(
+                    typeof data.enableStudentClassAttendance === 'boolean'
+                        ? data.enableStudentClassAttendance
+                        : true
+                );
+                setEnableStudentCheckOut(
+                    typeof data.enableStudentCheckOut === 'boolean'
+                        ? data.enableStudentCheckOut
+                        : true
+                );
+            });
+    }, [activeSchoolId]);
+
+    // Muat Daftar Kelas & Deteksi Kelas Perwalian
     useEffect(() => {
         if (!activeSchoolId || !user?.id) return;
 
@@ -118,7 +181,6 @@ export function StudentClassAttendancePage() {
             setIsLoadingClasses(true);
             setFeedback(null);
             try {
-                // Cari Tahun Ajaran aktif terlebih dahulu
                 const { data: activeYear } = await supabase
                     .from('academic_years')
                     .select('id')
@@ -155,7 +217,6 @@ export function StudentClassAttendancePage() {
                 const classList: ClassOption[] = classRes.data ?? [];
                 setClasses(classList);
 
-                // Deteksi apakah user adalah Wali Kelas dari salah satu rombel
                 const myHomeroom = teacherProfile
                     ? classList.find((c) => c.homeroomTeacherId === teacherProfile.id)
                     : undefined;
@@ -186,7 +247,7 @@ export function StudentClassAttendancePage() {
         };
     }, [activeSchoolId, user?.id, user?.email, user?.fullName, isSuperAdmin]);
 
-    // 3. Muat Lembar Absensi Siswa per Kelas & Tanggal
+    // Muat Lembar Absensi Siswa per Kelas & Tanggal (termasuk jam datang & pulang)
     const loadAttendanceSheet = useCallback(async () => {
         if (!activeSchoolId || !selectedClassId || !selectedDate) {
             setRows([]);
@@ -201,7 +262,45 @@ export function StudentClassAttendancePage() {
                 classId: selectedClassId,
                 date: selectedDate,
             });
-            setRows(sheet);
+
+            const studentIds = sheet.map((s) => s.studentId);
+            const extraMap = new Map<
+                string,
+                {
+                    id: string;
+                    time?: string | null;
+                    checkInTime?: string | null;
+                    checkOutTime?: string | null;
+                }
+            >();
+
+            if (studentIds.length > 0) {
+                const { data: attExtra } = await supabase
+                    .from('attendances')
+                    .select('id, studentId, time, checkInTime, checkOutTime')
+                    .eq('schoolId', activeSchoolId)
+                    .eq('date', selectedDate)
+                    .eq('type', 'SISWA')
+                    .in('studentId', studentIds);
+
+                for (const item of attExtra ?? []) {
+                    if (item.studentId) {
+                        extraMap.set(item.studentId, item);
+                    }
+                }
+            }
+
+            const enriched: EnrichedClassStudentRow[] = sheet.map((row) => {
+                const extra = extraMap.get(row.studentId);
+                return {
+                    ...row,
+                    attendanceId: extra?.id ?? null,
+                    checkInTime: row.checkInTime ?? extra?.checkInTime ?? extra?.time ?? null,
+                    checkOutTime: extra?.checkOutTime ?? null,
+                };
+            });
+
+            setRows(enriched);
             setHasUnsavedChanges(false);
         } catch (err: unknown) {
             setFeedback({
@@ -217,8 +316,48 @@ export function StudentClassAttendancePage() {
         loadAttendanceSheet();
     }, [loadAttendanceSheet]);
 
-    // Handler Perubahan Status Individual
-    const handleStatusChange = (studentId: string, newStatus: AttendanceStatus) => {
+    const handleActivateSpecialEvent = async (e: React.FormEvent) => {
+        e.preventDefault();
+        try {
+            const reasonText =
+                specialEventInput.trim() || DEFAULT_CLASS_SPECIAL_EVENT;
+            await activateSpecialEvent(reasonText);
+            setSpecialEventInput('');
+            setFeedback({
+                type: 'success',
+                message: `Mode Kegiatan Khusus ("${reasonText}") diaktifkan untuk tanggal ${selectedDate}.`,
+            });
+        } catch (err: unknown) {
+            setFeedback({
+                type: 'error',
+                message: getErrorMessage(
+                    err,
+                    'Gagal mengaktifkan mode kegiatan khusus.'
+                ),
+            });
+        }
+    };
+
+    const handleDeactivateSpecialEvent = async () => {
+        try {
+            await deactivateSpecialEvent();
+            setFeedback({
+                type: 'warning',
+                message: `Presensi tanggal ${selectedDate} dikunci kembali mengikuti jadwal hari libur.`,
+            });
+        } catch (err: unknown) {
+            setFeedback({
+                type: 'error',
+                message: getErrorMessage(err, 'Gagal mengunci kembali presensi.'),
+            });
+        }
+    };
+
+    const handleStatusChange = (
+        studentId: string,
+        newStatus: AttendanceStatus
+    ) => {
+        if (isSheetDisabled) return;
         setRows((prev) =>
             prev.map((row) =>
                 row.studentId === studentId ? { ...row, status: newStatus } : row
@@ -228,8 +367,8 @@ export function StudentClassAttendancePage() {
         setFeedback(null);
     };
 
-    // Handler Perubahan Catatan / Keterangan Individual
     const handleNotesChange = (studentId: string, newNotes: string) => {
+        if (isSheetDisabled) return;
         setRows((prev) =>
             prev.map((row) =>
                 row.studentId === studentId ? { ...row, notes: newNotes } : row
@@ -238,19 +377,19 @@ export function StudentClassAttendancePage() {
         setHasUnsavedChanges(true);
     };
 
-    // Aksi Cepat 1: Tandai SEMUA siswa sebagai HADIR
     const handleMarkAllPresent = () => {
+        if (isSheetDisabled) return;
         setRows((prev) => prev.map((row) => ({ ...row, status: 'HADIR' })));
         setHasUnsavedChanges(true);
         setFeedback({
             type: 'warning',
             message:
-                'Semua siswa ditandai HADIR. Jangan lupa klik "Simpan Presensi" untuk menyimpan ke database.',
+                'Semua siswa ditandai HADIR. Klik "Simpan Presensi" untuk menyimpan ke database.',
         });
     };
 
-    // Aksi Cepat 2: Hanya isi siswa yang BELUM memiliki status menjadi HADIR
     const handleMarkUnrecordedPresent = () => {
+        if (isSheetDisabled) return;
         setRows((prev) =>
             prev.map((row) =>
                 row.status === null ? { ...row, status: 'HADIR' } : row
@@ -266,11 +405,14 @@ export function StudentClassAttendancePage() {
 
     // Simpan Seluruh Presensi Kelas ke Database
     const handleSave = async () => {
-        if (!activeSchoolId || !user?.id || !selectedClassId) return;
+        if (!activeSchoolId || !user?.id || !selectedClassId || isSheetDisabled) {
+            return;
+        }
 
         const filledRecords = rows
-            .filter((r): r is ClassStudentAttendanceRow & { status: AttendanceStatus } =>
-                r.status !== null
+            .filter(
+                (r): r is EnrichedClassStudentRow & { status: AttendanceStatus } =>
+                    r.status !== null
             )
             .map((r) => ({
                 studentId: r.studentId,
@@ -296,6 +438,23 @@ export function StudentClassAttendancePage() {
                 recordedBy: user.id,
             });
 
+            // Pastikan kolom checkInTime ikut terisi untuk siswa HADIR/TERLAMBAT yang belum memiliki checkInTime
+            const nowIso = new Date().toISOString();
+            const eligibleIds = filledRecords
+                .filter((r) => r.status === 'HADIR' || r.status === 'TERLAMBAT')
+                .map((r) => r.studentId);
+
+            if (eligibleIds.length > 0) {
+                await supabase
+                    .from('attendances')
+                    .update({ checkInTime: nowIso })
+                    .eq('schoolId', activeSchoolId)
+                    .eq('date', selectedDate)
+                    .eq('type', 'SISWA')
+                    .in('studentId', eligibleIds)
+                    .is('checkInTime', null);
+            }
+
             if (res.success) {
                 await loadAttendanceSheet();
                 const unrecordedLeft = rows.length - filledRecords.length;
@@ -320,7 +479,93 @@ export function StudentClassAttendancePage() {
         }
     };
 
-    // Statistik Ringkas Kelas Saat Ini
+    // Catat Jam Pulang (Check-Out) 1 Siswa oleh Guru / Wali Kelas
+    const handleSingleStudentCheckOut = async (row: EnrichedClassStudentRow) => {
+        if (!activeSchoolId || checkingOutStudentId || isSheetDisabled) return;
+        setCheckingOutStudentId(row.studentId);
+        setFeedback(null);
+        try {
+            const nowIso = new Date().toISOString();
+            const { error } = await supabase
+                .from('attendances')
+                .update({ checkOutTime: nowIso })
+                .eq('schoolId', activeSchoolId)
+                .eq('studentId', row.studentId)
+                .eq('date', selectedDate)
+                .eq('type', 'SISWA');
+
+            if (error) throw error;
+
+            setRows((prev) =>
+                prev.map((item) =>
+                    item.studentId === row.studentId
+                        ? { ...item, checkOutTime: nowIso }
+                        : item
+                )
+            );
+            setFeedback({
+                type: 'success',
+                message: `Jam pulang ${row.fullName} berhasil dicatat.`,
+            });
+        } catch (err: unknown) {
+            setFeedback({
+                type: 'error',
+                message: getErrorMessage(err, 'Gagal mencatat jam pulang siswa.'),
+            });
+        } finally {
+            setCheckingOutStudentId(null);
+        }
+    };
+
+    // Catat Jam Pulang Massal untuk Siswa yang Sudah Hadir/Terlambat tapi Belum Pulang
+    const handleBulkClassCheckOut = async () => {
+        if (!activeSchoolId || isSheetDisabled) return;
+        const targetIds = rows
+            .filter(
+                (r) =>
+                    (r.status === 'HADIR' || r.status === 'TERLAMBAT') &&
+                    r.attendanceId &&
+                    !r.checkOutTime
+            )
+            .map((r) => r.studentId);
+
+        if (targetIds.length === 0) {
+            setFeedback({
+                type: 'warning',
+                message:
+                    'Tidak ada siswa hadir yang menunggu pencatatan pulang (pastikan status kehadiran sudah disimpan terlebih dahulu).',
+            });
+            return;
+        }
+
+        setIsSaving(true);
+        try {
+            const nowIso = new Date().toISOString();
+            const { error } = await supabase
+                .from('attendances')
+                .update({ checkOutTime: nowIso })
+                .eq('schoolId', activeSchoolId)
+                .eq('date', selectedDate)
+                .eq('type', 'SISWA')
+                .in('studentId', targetIds)
+                .is('checkOutTime', null);
+
+            if (error) throw error;
+            await loadAttendanceSheet();
+            setFeedback({
+                type: 'success',
+                message: `Jam pulang berhasil dicatat untuk ${targetIds.length} siswa.`,
+            });
+        } catch (err: unknown) {
+            setFeedback({
+                type: 'error',
+                message: getErrorMessage(err, 'Gagal mencatat jam pulang massal.'),
+            });
+        } finally {
+            setIsSaving(false);
+        }
+    };
+
     const stats = useMemo(() => {
         return {
             total: rows.length,
@@ -330,10 +575,10 @@ export function StudentClassAttendancePage() {
             sakit: rows.filter((r) => r.status === 'SAKIT').length,
             alpa: rows.filter((r) => r.status === 'ALPA').length,
             unrecorded: rows.filter((r) => r.status === null).length,
+            checkedOut: rows.filter((r) => Boolean(r.checkOutTime)).length,
         };
     }, [rows]);
 
-    // Filter Pencarian Nama/NISN & Filter Status
     const filteredRows = useMemo(() => {
         return rows.filter((row) => {
             const matchesSearch =
@@ -368,7 +613,8 @@ export function StudentClassAttendancePage() {
                 <div>
                     <h1 className="page-title">Absensi Kelas Siswa</h1>
                     <p className="page-subtitle">
-                        Pencatatan kehadiran harian siswa per rombongan belajar oleh Wali Kelas / Guru
+                        Pencatatan kehadiran &amp; kepulangan harian siswa per rombel oleh
+                        Wali Kelas / Guru
                     </p>
                 </div>
 
@@ -401,13 +647,105 @@ export function StudentClassAttendancePage() {
                         type="button"
                         className="btn-primary"
                         onClick={handleSave}
-                        disabled={isSaving || isLoadingSheet || rows.length === 0}
+                        disabled={
+                            isSaving ||
+                            isLoadingSheet ||
+                            rows.length === 0 ||
+                            isSheetDisabled
+                        }
                     >
                         <Save size={16} />
                         {isSaving ? 'Menyimpan...' : 'Simpan Presensi'}
                     </button>
                 </div>
             </div>
+
+            {/* Banner Terkunci karena Hari Libur */}
+            {isHolidayLocked && (
+                <div className="mb-5 p-4 rounded-2xl border border-red-500/40 bg-red-500/10 space-y-3">
+                    <div className="flex items-start gap-3">
+                        <div className="p-2.5 rounded-xl bg-red-500/20 text-red-500 shrink-0">
+                            <CalendarOff size={20} />
+                        </div>
+                        <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-red-500/20 text-red-600 dark:text-red-300">
+                                    <Lock size={11} /> Absensi Kelas Terkunci
+                                </span>
+                                <span className="text-xs font-bold text-red-600 dark:text-red-300">
+                                    {holidayName} ({selectedDate})
+                                </span>
+                            </div>
+                            <p className="text-xs opacity-85 leading-relaxed">
+                                Pengisian presensi kelas dikunci otomatis karena tanggal ini
+                                merupakan hari libur / akhir pekan.
+                            </p>
+                        </div>
+                    </div>
+
+                    {canManageOverride && (
+                        <form
+                            onSubmit={handleActivateSpecialEvent}
+                            className="pt-3 border-t border-red-500/25 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5"
+                        >
+                            <input
+                                type="text"
+                                value={specialEventInput}
+                                onChange={(e) => setSpecialEventInput(e.target.value)}
+                                placeholder="Keterangan kegiatan khusus (mis. Pramuka, Class Meeting, Lomba)..."
+                                className="form-input flex-1 text-xs"
+                            />
+                            <button
+                                type="submit"
+                                disabled={isTogglingHoliday}
+                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition cursor-pointer disabled:opacity-50 shrink-0"
+                            >
+                                <Unlock size={14} />
+                                {isTogglingHoliday
+                                    ? 'Membuka Kunci...'
+                                    : 'Aktifkan Mode Kegiatan Khusus'}
+                            </button>
+                        </form>
+                    )}
+                </div>
+            )}
+
+            {/* Banner Mode Kegiatan Khusus Sedang Aktif */}
+            {isHoliday && isSpecialEventActive && (
+                <div className="mb-5 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/12 text-xs text-emerald-700 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5">
+                        <Sparkles size={18} className="text-emerald-500 shrink-0" />
+                        <span>
+                            <strong>Mode Kegiatan Khusus Aktif:</strong> {specialEventReason}{' '}
+                            <span className="opacity-75">
+                                (mengecualikan libur {holidayName})
+                            </span>
+                        </span>
+                    </div>
+                    {canManageOverride && (
+                        <button
+                            type="button"
+                            disabled={isTogglingHoliday}
+                            onClick={handleDeactivateSpecialEvent}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition cursor-pointer disabled:opacity-50"
+                        >
+                            <Lock size={13} />
+                            {isTogglingHoliday ? 'Mengunci...' : 'Kunci Kembali'}
+                        </button>
+                    )}
+                </div>
+            )}
+
+            {!enableClassAttendance && (
+                <div className="mb-5 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2.5">
+                    <AlertTriangle size={18} className="shrink-0" />
+                    <span>
+                        Fitur pengisian <strong>Absensi Kelas Siswa</strong> sedang
+                        dinonaktifkan oleh Admin Sekolah. Data kehadiran siswa hanya
+                        dicatat melalui Kiosk.
+                    </span>
+                </div>
+            )}
 
             {/* Panel Pemilihan Kelas & Tanggal */}
             <div className="data-card mb-6">
@@ -458,8 +796,11 @@ export function StudentClassAttendancePage() {
                             type="button"
                             className="btn-secondary flex-1 text-xs"
                             onClick={handleMarkUnrecordedPresent}
-                            disabled={rows.length === 0 || stats.unrecorded === 0}
-                            title="Hanya mengisi siswa yang belum absen menjadi Hadir"
+                            disabled={
+                                rows.length === 0 ||
+                                stats.unrecorded === 0 ||
+                                isSheetDisabled
+                            }
                         >
                             <Sparkles size={14} />
                             Isi Kosong → Hadir ({stats.unrecorded})
@@ -469,21 +810,33 @@ export function StudentClassAttendancePage() {
                             type="button"
                             className="btn-secondary flex-1 text-xs"
                             onClick={handleMarkAllPresent}
-                            disabled={rows.length === 0}
-                            title="Ubah semua siswa di kelas menjadi Hadir"
+                            disabled={rows.length === 0 || isSheetDisabled}
                         >
                             <CheckSquare size={14} />
                             Semua Hadir
                         </button>
+
+                        {enableStudentCheckOut && (
+                            <button
+                                type="button"
+                                className="btn-secondary flex-1 text-xs"
+                                onClick={handleBulkClassCheckOut}
+                                disabled={rows.length === 0 || isSaving || isSheetDisabled}
+                                title="Catat jam pulang untuk semua siswa hadir yang belum pulang"
+                            >
+                                <LogOut size={14} />
+                                Semua Pulang
+                            </button>
+                        )}
                     </div>
                 </div>
 
-                {/* Info Badge Kelas Perwalian */}
                 {selectedClassObj && selectedClassObj.id === homeroomClassId && (
                     <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-2 text-xs text-emerald-400">
                         <UserCheck size={15} />
                         <span>
-                            Anda tercatat sebagai <strong>Wali Kelas {selectedClassObj.name}</strong>.
+                            Anda tercatat sebagai{' '}
+                            <strong>Wali Kelas {selectedClassObj.name}</strong>.
                         </span>
                     </div>
                 )}
@@ -524,7 +877,7 @@ export function StudentClassAttendancePage() {
                         )}
                         <span>{feedback.message}</span>
                     </div>
-                    {hasUnsavedChanges && (
+                    {hasUnsavedChanges && !isSheetDisabled && (
                         <button
                             type="button"
                             className="btn-primary text-xs py-1 px-3"
@@ -539,7 +892,7 @@ export function StudentClassAttendancePage() {
 
             {/* Kartu Ringkasan Statistik Kelas */}
             {selectedClassId && rows.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-6">
+                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-6">
                     <div className="summary-card p-3">
                         <div>
                             <p className="text-xs opacity-70">Total Siswa</p>
@@ -555,7 +908,9 @@ export function StudentClassAttendancePage() {
                     <div className="summary-card p-3">
                         <div>
                             <p className="text-xs text-amber-400">Terlambat</p>
-                            <p className="text-xl font-bold text-amber-400">{stats.terlambat}</p>
+                            <p className="text-xl font-bold text-amber-400">
+                                {stats.terlambat}
+                            </p>
                         </div>
                     </div>
                     <div className="summary-card p-3">
@@ -582,6 +937,16 @@ export function StudentClassAttendancePage() {
                             <p className="text-xl font-bold">{stats.unrecorded}</p>
                         </div>
                     </div>
+                    {enableStudentCheckOut && (
+                        <div className="summary-card p-3">
+                            <div>
+                                <p className="text-xs text-cyan-400">Sudah Pulang</p>
+                                <p className="text-xl font-bold text-cyan-400">
+                                    {stats.checkedOut}
+                                </p>
+                            </div>
+                        </div>
+                    )}
                 </div>
             )}
 
@@ -616,8 +981,8 @@ export function StudentClassAttendancePage() {
                             type="button"
                             onClick={() => setStatusFilter(tab.key)}
                             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${statusFilter === tab.key
-                                    ? 'bg-primary text-white'
-                                    : 'bg-white/5 opacity-75 hover:opacity-100'
+                                ? 'bg-primary text-white'
+                                : 'bg-white/5 opacity-75 hover:opacity-100'
                                 }`}
                         >
                             {tab.label}
@@ -651,94 +1016,137 @@ export function StudentClassAttendancePage() {
                                     <th>Nama Siswa</th>
                                     <th>NISN / NIS</th>
                                     <th>Status Kehadiran</th>
+                                    {enableStudentCheckOut && <th>Jam Pulang</th>}
                                     <th>Keterangan / Catatan</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {filteredRows.map((row, idx) => (
-                                    <tr key={row.studentId}>
-                                        <td className="td-mono text-xs opacity-70">{idx + 1}</td>
-                                        <td>
-                                            <div className="flex items-center gap-2.5">
-                                                {row.photoUrl ? (
-                                                    <img
-                                                        src={row.photoUrl}
-                                                        alt={row.fullName}
-                                                        className="w-8 h-8 rounded-full object-cover"
-                                                    />
-                                                ) : (
-                                                    <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold">
-                                                        {row.fullName.charAt(0).toUpperCase()}
-                                                    </div>
-                                                )}
-                                                <div>
-                                                    <div className="td-name">{row.fullName}</div>
-                                                    {row.isFromKiosk && (
-                                                        <span className="inline-flex items-center gap-1 text-[11px] text-cyan-400">
-                                                            <Clock size={11} />
-                                                            Scan Kiosk{' '}
-                                                            {row.checkInTime ? `(${formatTime(row.checkInTime)})` : ''}
-                                                        </span>
+                                {filteredRows.map((row, idx) => {
+                                    const canRecordCheckOut =
+                                        enableStudentCheckOut &&
+                                        !isSheetDisabled &&
+                                        (row.status === 'HADIR' || row.status === 'TERLAMBAT') &&
+                                        Boolean(row.attendanceId) &&
+                                        !row.checkOutTime;
+
+                                    return (
+                                        <tr key={row.studentId}>
+                                            <td className="td-mono text-xs opacity-70">{idx + 1}</td>
+                                            <td>
+                                                <div className="flex items-center gap-2.5">
+                                                    {row.photoUrl ? (
+                                                        <img
+                                                            src={row.photoUrl}
+                                                            alt={row.fullName}
+                                                            className="w-8 h-8 rounded-full object-cover"
+                                                        />
+                                                    ) : (
+                                                        <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold">
+                                                            {row.fullName.charAt(0).toUpperCase()}
+                                                        </div>
                                                     )}
+                                                    <div>
+                                                        <div className="td-name">{row.fullName}</div>
+                                                        <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                                                            {row.checkInTime && (
+                                                                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-500">
+                                                                    <Clock size={11} />
+                                                                    {row.isFromKiosk ? 'Kiosk' : 'Datang'}:{' '}
+                                                                    {formatTime(row.checkInTime)}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </div>
                                                 </div>
-                                            </div>
-                                        </td>
-                                        <td className="td-mono text-xs">
-                                            <div>{row.nisn}</div>
-                                            {row.nis && (
-                                                <div className="opacity-60">NIS: {row.nis}</div>
-                                            )}
-                                        </td>
-                                        <td>
-                                            <div className="flex flex-wrap gap-1.5">
-                                                {STATUS_OPTIONS.map((opt) => {
-                                                    const isSelected = row.status === opt.value;
-                                                    return (
+                                            </td>
+                                            <td className="td-mono text-xs">
+                                                <div>{row.nisn}</div>
+                                                {row.nis && (
+                                                    <div className="opacity-60">NIS: {row.nis}</div>
+                                                )}
+                                            </td>
+                                            <td>
+                                                <div className="flex flex-wrap gap-1.5">
+                                                    {STATUS_OPTIONS.map((opt) => {
+                                                        const isSelected = row.status === opt.value;
+                                                        return (
+                                                            <button
+                                                                key={opt.value}
+                                                                type="button"
+                                                                disabled={isSheetDisabled}
+                                                                onClick={() =>
+                                                                    handleStatusChange(row.studentId, opt.value)
+                                                                }
+                                                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition border disabled:opacity-50"
+                                                                style={{
+                                                                    backgroundColor: isSelected
+                                                                        ? opt.color
+                                                                        : 'transparent',
+                                                                    borderColor: isSelected
+                                                                        ? opt.color
+                                                                        : 'rgba(255,255,255,0.12)',
+                                                                    color: isSelected ? '#FFFFFF' : 'inherit',
+                                                                    opacity: isSelected ? 1 : 0.72,
+                                                                }}
+                                                            >
+                                                                <span className="hidden sm:inline">
+                                                                    {opt.label}
+                                                                </span>
+                                                                <span className="sm:hidden">
+                                                                    {opt.shortLabel}
+                                                                </span>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            </td>
+
+                                            {enableStudentCheckOut && (
+                                                <td>
+                                                    {row.checkOutTime ? (
+                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
+                                                            <LogOut size={12} />
+                                                            {formatTime(row.checkOutTime)}
+                                                        </span>
+                                                    ) : canRecordCheckOut ? (
                                                         <button
-                                                            key={opt.value}
                                                             type="button"
-                                                            onClick={() =>
-                                                                handleStatusChange(row.studentId, opt.value)
-                                                            }
-                                                            className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition border"
-                                                            style={{
-                                                                backgroundColor: isSelected
-                                                                    ? opt.color
-                                                                    : 'transparent',
-                                                                borderColor: isSelected
-                                                                    ? opt.color
-                                                                    : 'rgba(255,255,255,0.12)',
-                                                                color: isSelected ? '#FFFFFF' : 'inherit',
-                                                                opacity: isSelected ? 1 : 0.72,
-                                                            }}
+                                                            disabled={checkingOutStudentId === row.studentId}
+                                                            onClick={() => handleSingleStudentCheckOut(row)}
+                                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-cyan-500/40 bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-500/20 transition cursor-pointer"
                                                         >
-                                                            <span className="hidden sm:inline">{opt.label}</span>
-                                                            <span className="sm:hidden">{opt.shortLabel}</span>
+                                                            <LogOut size={12} />
+                                                            {checkingOutStudentId === row.studentId
+                                                                ? 'Menyimpan...'
+                                                                : 'Catat Pulang'}
                                                         </button>
-                                                    );
-                                                })}
-                                            </div>
-                                        </td>
-                                        <td>
-                                            <input
-                                                type="text"
-                                                value={row.notes}
-                                                onChange={(e) =>
-                                                    handleNotesChange(row.studentId, e.target.value)
-                                                }
-                                                placeholder="Contoh: Surat dokter, izin acara keluarga..."
-                                                className="form-input text-xs py-1.5 px-2.5 w-full min-w-45"
-                                            />
-                                        </td>
-                                    </tr>
-                                ))}
+                                                    ) : (
+                                                        <span className="text-xs opacity-40">-</span>
+                                                    )}
+                                                </td>
+                                            )}
+
+                                            <td>
+                                                <input
+                                                    type="text"
+                                                    disabled={isSheetDisabled}
+                                                    value={row.notes}
+                                                    onChange={(e) =>
+                                                        handleNotesChange(row.studentId, e.target.value)
+                                                    }
+                                                    placeholder="Contoh: Surat dokter, izin acara keluarga..."
+                                                    className="form-input text-xs py-1.5 px-2.5 w-full min-w-45"
+                                                />
+                                            </td>
+                                        </tr>
+                                    );
+                                })}
                             </tbody>
                         </table>
                     </div>
                 )}
 
-                {/* Footer Tombol Simpan Bawah */}
-                {rows.length > 0 && (
+                {rows.length > 0 && !isSheetDisabled && (
                     <div className="mt-5 pt-4 border-t border-white/10 flex flex-wrap items-center justify-between gap-3">
                         <p className="text-xs opacity-70">
                             {hasUnsavedChanges

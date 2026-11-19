@@ -54,7 +54,13 @@ type TeacherSortKey =
   | 'checkOutTime'
   | 'checkInDistance';
 
-type StudentSortKey = 'fullName' | 'className' | 'nisn' | 'status' | 'time';
+type StudentSortKey =
+  | 'fullName'
+  | 'className'
+  | 'nisn'
+  | 'status'
+  | 'time'
+  | 'checkOutTime';
 
 // Memperluas tipe TeacherAttendance agar mencakup kolom Check-Out GPS & Selfie
 type TeacherAttendanceWithCheckOut = TeacherAttendance & {
@@ -65,6 +71,12 @@ type TeacherAttendanceWithCheckOut = TeacherAttendance & {
   attachmentUrl?: string | null;
 };
 
+// Memperluas tipe StudentAttendance agar mencakup kolom Jam Masuk & Jam Pulang
+type StudentAttendanceWithCheckOut = StudentAttendance & {
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
+};
+
 // Struktur kolom tambahan saat query ulang data Check-Out guru
 interface AttendanceExtraCols {
   id: string;
@@ -73,6 +85,13 @@ interface AttendanceExtraCols {
   checkOutDistance?: number | null;
   checkOutSelfieUrl?: string | null;
   attachmentUrl?: string | null;
+}
+
+// Struktur kolom tambahan saat query ulang data Jam Pulang siswa
+interface StudentAttendanceExtraCols {
+  id: string;
+  checkInTime?: string | null;
+  checkOutTime?: string | null;
 }
 
 // Struktur baris file storage saat pembersihan arsip lama
@@ -167,12 +186,15 @@ export function AttendanceDashboardPage() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
   const [summary, setSummary] = useState<AttendanceSummary | null>(null);
-  const [studentRecords, setStudentRecords] = useState<StudentAttendance[]>([]);
+  const [studentRecords, setStudentRecords] = useState<
+    StudentAttendanceWithCheckOut[]
+  >([]);
   const [teacherRecords, setTeacherRecords] = useState<
     TeacherAttendanceWithCheckOut[]
   >([]);
   const [classes, setClasses] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
+  const [studentStatusFilter, setStudentStatusFilter] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -283,9 +305,37 @@ export function AttendanceDashboardPage() {
         }),
       ]);
 
+      let enrichedStudents = students.data as StudentAttendanceWithCheckOut[];
       let enrichedTeachers = teachers.data as TeacherAttendanceWithCheckOut[];
 
-      // Pastikan kolom Check-Out GPS & Foto Pulang selalu ikut terbaca meskipun service belum diperbarui
+      // Pastikan kolom checkInTime & checkOutTime siswa ikut terbaca
+      if (enrichedStudents.length > 0) {
+        const studentAttIds = enrichedStudents.map((s) => s.id);
+        const { data: studentExtraCols, error: studentExtraErr } = await supabase
+          .from('attendances')
+          .select('id, checkInTime, checkOutTime')
+          .in('id', studentAttIds);
+
+        if (!studentExtraErr && studentExtraCols) {
+          const typedStudentCols =
+            studentExtraCols as StudentAttendanceExtraCols[];
+          const studentExtraMap = new Map(
+            typedStudentCols.map((row) => [row.id, row])
+          );
+          enrichedStudents = enrichedStudents.map((item) => {
+            const extra = studentExtraMap.get(item.id);
+            return extra
+              ? {
+                ...item,
+                checkInTime: extra.checkInTime ?? item.time ?? null,
+                checkOutTime: extra.checkOutTime ?? null,
+              }
+              : item;
+          });
+        }
+      }
+
+      // Pastikan kolom Check-Out GPS & Foto Pulang guru selalu ikut terbaca
       if (enrichedTeachers.length > 0) {
         const ids = enrichedTeachers.map((t) => t.id);
         const { data: extraCols, error: extraErr } = await supabase
@@ -308,7 +358,7 @@ export function AttendanceDashboardPage() {
       }
 
       setSummary(sum);
-      setStudentRecords(students.data);
+      setStudentRecords(enrichedStudents);
       setTeacherRecords(enrichedTeachers);
     } catch (err: unknown) {
       console.error('[AttendanceDashboard] Load error:', err);
@@ -391,17 +441,34 @@ export function AttendanceDashboardPage() {
     );
   };
 
+  // Hitung statistik status siswa berdasarkan kelas terpilih (untuk badge filter status)
+  const studentStatusCounts = useMemo(() => {
+    const classScoped = studentRecords.filter(
+      (r) => selectedClassId === 'ALL' || r.student?.classId === selectedClassId
+    );
+    return {
+      ALL: classScoped.length,
+      HADIR: classScoped.filter((r) => r.status === 'HADIR').length,
+      TERLAMBAT: classScoped.filter((r) => r.status === 'TERLAMBAT').length,
+      IZIN: classScoped.filter((r) => r.status === 'IZIN').length,
+      SAKIT: classScoped.filter((r) => r.status === 'SAKIT').length,
+      ALPA: classScoped.filter((r) => r.status === 'ALPA').length,
+    };
+  }, [studentRecords, selectedClassId]);
+
   // Filter & Urutkan Data Siswa
   const filteredStudents = useMemo(() => {
     const filtered = studentRecords.filter((r) => {
       const matchesClass =
         selectedClassId === 'ALL' || r.student?.classId === selectedClassId;
+      const matchesStatus =
+        studentStatusFilter === 'ALL' || r.status === studentStatusFilter;
       const matchesSearch =
         !searchQuery.trim() ||
         r.student?.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         r.student?.nisn?.includes(searchQuery.trim()) ||
         (r.student?.nis && r.student.nis.includes(searchQuery.trim()));
-      return matchesClass && matchesSearch;
+      return matchesClass && matchesStatus && matchesSearch;
     });
 
     if (!studentSort) return filtered;
@@ -439,13 +506,26 @@ export function AttendanceDashboardPage() {
               'id'
             ) * dir
           );
-        case 'time':
-          return (a.time ?? '').localeCompare(b.time ?? '') * dir;
+        case 'time': {
+          const inA = a.checkInTime || a.time || '';
+          const inB = b.checkInTime || b.time || '';
+          return inA.localeCompare(inB) * dir;
+        }
+        case 'checkOutTime':
+          return (
+            (a.checkOutTime ?? '').localeCompare(b.checkOutTime ?? '') * dir
+          );
         default:
           return 0;
       }
     });
-  }, [studentRecords, selectedClassId, searchQuery, studentSort]);
+  }, [
+    studentRecords,
+    selectedClassId,
+    studentStatusFilter,
+    searchQuery,
+    studentSort,
+  ]);
 
   // Filter & Urutkan Data Guru (termasuk pencarian berdasarkan isi Keterangan/Catatan)
   const filteredTeachers = useMemo(() => {
@@ -787,7 +867,8 @@ export function AttendanceDashboardPage() {
           'NISN',
           'Kelas',
           'Status',
-          'Waktu Masuk',
+          'Jam Masuk',
+          'Jam Pulang',
           'Metode Pencatatan',
           'Keterangan',
         ]
@@ -804,7 +885,8 @@ export function AttendanceDashboardPage() {
             r.student?.nisn ?? '-',
             r.student?.classes?.name ?? '-',
             STATUS_LABELS[r.status] ?? r.status,
-            formatTime(r.time),
+            formatTime(r.checkInTime || r.time),
+            formatTime(r.checkOutTime),
             r.recordedBy ? 'Wali Kelas / Admin' : 'Kiosk / Mandiri',
             r.notes ?? '-',
           ]
@@ -838,8 +920,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1049,6 +1131,7 @@ export function AttendanceDashboardPage() {
             onClick={() => {
               setActiveTab(tab);
               setSearchQuery('');
+              setStudentStatusFilter('ALL');
             }}
           >
             {tab === 'overview' && <Calendar size={16} />}
@@ -1063,34 +1146,99 @@ export function AttendanceDashboardPage() {
         ))}
       </div>
 
-      {/* Toolbar Pencarian & Filter Kelas */}
+      {/* Toolbar Pencarian, Filter Kelas, & Filter Status */}
       {activeTab !== 'overview' && (
-        <div className="table-toolbar flex flex-wrap gap-3">
-          <input
-            type="text"
-            placeholder={
-              activeTab === 'students'
-                ? 'Cari nama siswa, NISN, atau NIS...'
-                : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
-            }
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="form-input search-input flex-1 min-w-55"
-          />
+        <div className="table-toolbar flex flex-col gap-3">
+          <div className="flex flex-wrap gap-3 w-full">
+            <input
+              type="text"
+              placeholder={
+                activeTab === 'students'
+                  ? 'Cari nama siswa, NISN, atau NIS...'
+                  : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
+              }
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="form-input search-input flex-1 min-w-55"
+            />
 
-          {activeTab === 'students' && classes.length > 0 && (
-            <select
-              className="form-input min-w-45"
-              value={selectedClassId}
-              onChange={(e) => setSelectedClassId(e.target.value)}
-            >
-              <option value="ALL">Semua Kelas</option>
-              {classes.map((cls) => (
-                <option key={cls.id} value={cls.id}>
-                  Kelas {cls.name}
-                </option>
-              ))}
-            </select>
+            {activeTab === 'students' && classes.length > 0 && (
+              <select
+                className="form-input min-w-45"
+                value={selectedClassId}
+                onChange={(e) => setSelectedClassId(e.target.value)}
+              >
+                <option value="ALL">Semua Kelas</option>
+                {classes.map((cls) => (
+                  <option key={cls.id} value={cls.id}>
+                    Kelas {cls.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {activeTab === 'students' && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(
+                [
+                  { key: 'ALL', label: 'Semua', count: studentStatusCounts.ALL },
+                  {
+                    key: 'HADIR',
+                    label: 'Hadir',
+                    count: studentStatusCounts.HADIR,
+                  },
+                  {
+                    key: 'TERLAMBAT',
+                    label: 'Terlambat',
+                    count: studentStatusCounts.TERLAMBAT,
+                  },
+                  {
+                    key: 'IZIN',
+                    label: 'Izin',
+                    count: studentStatusCounts.IZIN,
+                  },
+                  {
+                    key: 'SAKIT',
+                    label: 'Sakit',
+                    count: studentStatusCounts.SAKIT,
+                  },
+                  {
+                    key: 'ALPA',
+                    label: 'Alpa',
+                    count: studentStatusCounts.ALPA,
+                  },
+                ] as const
+              ).map((pill) => {
+                const isSelected = studentStatusFilter === pill.key;
+                const badgeColor =
+                  pill.key === 'ALL'
+                    ? '#10B981'
+                    : STATUS_COLORS[pill.key] ?? '#6B7280';
+
+                return (
+                  <button
+                    key={pill.key}
+                    type="button"
+                    onClick={() => setStudentStatusFilter(pill.key)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
+                      ? 'text-white shadow-xs'
+                      : 'bg-card/60 border-border opacity-75 hover:opacity-100'
+                      }`}
+                    style={
+                      isSelected
+                        ? {
+                          backgroundColor: badgeColor,
+                          borderColor: badgeColor,
+                        }
+                        : undefined
+                    }
+                  >
+                    {pill.label} ({pill.count})
+                  </button>
+                );
+              })}
+            </div>
           )}
         </div>
       )}
@@ -1252,9 +1400,19 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortStudent('time')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Waktu
+                        Jam Masuk
                         {renderSortIcon(
                           studentSort?.key === 'time',
+                          studentSort?.direction
+                        )}
+                      </th>
+                      <th
+                        onClick={() => handleSortStudent('checkOutTime')}
+                        className="cursor-pointer select-none hover:text-primary transition"
+                      >
+                        Jam Pulang
+                        {renderSortIcon(
+                          studentSort?.key === 'checkOutTime',
                           studentSort?.direction
                         )}
                       </th>
@@ -1289,7 +1447,18 @@ export function AttendanceDashboardPage() {
                             {STATUS_LABELS[record.status] ?? record.status}
                           </span>
                         </td>
-                        <td className="td-mono">{formatTime(record.time)}</td>
+                        <td className="td-mono">
+                          {formatTime(record.checkInTime || record.time)}
+                        </td>
+                        <td className="td-mono">
+                          {record.checkOutTime ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
+                              {formatTime(record.checkOutTime)}
+                            </span>
+                          ) : (
+                            <span className="opacity-40">-</span>
+                          )}
+                        </td>
                         <td>
                           {record.recordedBy
                             ? 'Admin/Wali Kelas'
@@ -1687,8 +1856,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Sekolah Terpilih Saja
@@ -1697,8 +1866,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Semua Sekolah
@@ -1773,8 +1942,8 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                  ? 'max-w-2xl'
-                  : 'max-w-md'
+                ? 'max-w-2xl'
+                : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -1804,8 +1973,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                      ? 'grid-cols-1 sm:grid-cols-2'
-                      : 'grid-cols-1'
+                    ? 'grid-cols-1 sm:grid-cols-2'
+                    : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -1875,8 +2044,8 @@ export function AttendanceDashboardPage() {
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                      : 'bg-muted/50 border-border'
+                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                    : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />
