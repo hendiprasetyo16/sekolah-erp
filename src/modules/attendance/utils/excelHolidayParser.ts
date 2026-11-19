@@ -183,7 +183,7 @@ export async function parseHolidaySpreadsheetFile(
           : rowValues.length;
         const type = cell.getAttribute('t');
 
-        let val = '';
+        let val: string;
         if (type === 's') {
           const vNode = cell.getElementsByTagName('v')[0];
           const ssIdx = Number(vNode?.textContent ?? -1);

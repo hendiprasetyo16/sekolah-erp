@@ -8,7 +8,7 @@ import { VitePWA } from 'vite-plugin-pwa'
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
-    react(), 
+    react(),
     tailwindcss(),
     // Tambahkan plugin PWA agar aplikasi mendukung standard native
     VitePWA({
@@ -29,37 +29,61 @@ export default defineConfig({
           {
             src: '/pwa-192x192.png',
             sizes: '192x192',
-            type: 'image/png'
+            type: 'image/png',
           },
           {
             src: '/pwa-512x512.png',
             sizes: '512x512',
             type: 'image/png',
-            purpose: 'any maskable'
-          }
-        ]
-      }
-    })
+            purpose: 'any maskable',
+          },
+        ],
+      },
+    }),
   ],
   resolve: {
     alias: {
-      "@": path.resolve(import.meta.dirname, "./src"),
+      '@': path.resolve(import.meta.dirname, './src'),
     },
   },
   server: {
     port: 3000,
     open: true,
   },
-  // MENAMBAHKAN KONFIGURASI BUILD UNTUK MEMECAH CHUNK JS
+  // KONFIGURASI BUILD VITE 8 (ROLLDOWN) UNTUK MEMECAH CHUNK JS AGAR RINGAN DI HP & WEB
   build: {
-    rollupOptions: {
+    chunkSizeWarningLimit: 900,
+    rolldownOptions: {
       output: {
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            return 'vendor'; // Memisahkan library pihak ketiga agar ukuran index.js tidak membengkak
-          }
-        }
-      }
-    }
-  }
+        codeSplitting: {
+          groups: [
+            {
+              name: 'vendor-react',
+              test: /node_modules[\\/](react|react-dom|react-router|react-router-dom|scheduler)[\\/]/,
+            },
+            {
+              name: 'vendor-supabase',
+              test: /node_modules[\\/]@supabase[\\/]/,
+            },
+            {
+              name: 'vendor-ui',
+              test: /node_modules[\\/](framer-motion|lucide-react|@radix-ui|clsx|tailwind-merge)[\\/]/,
+            },
+            {
+              name: 'vendor-maps-charts',
+              test: /node_modules[\\/](leaflet|react-leaflet|recharts|d3-.*)[\\/]/,
+            },
+            {
+              name: 'vendor-forms',
+              test: /node_modules[\\/](react-hook-form|@hookform|zod)[\\/]/,
+            },
+            {
+              name: 'vendor-common',
+              test: /node_modules[\\/]/,
+            },
+          ],
+        },
+      },
+    },
+  },
 })

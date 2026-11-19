@@ -1,45 +1,58 @@
 -- ============================================================================
--- ERP SEKOLAH v17 — HARDENED PRODUCTION FOUNDATION (CLEAN SCHEMA ONLY)
--- Pembaruan & Penyusunan Ulang v17:
---   1. Struktur Modul Terpadu (13 Bagian Berurutan & Idempoten)
---   2. Pemulihan Penuh Skrip dari Truncation v16 + Perapian Policy v15
---   3. Granular PTK RLS (INSERT/UPDATE oleh TU/Operator, DELETE khusus Pimpinan)
---   4. Safe Auth Cascade Cleanup (AFTER DELETE PTK & Guard Multi-Role Ortu/Staf)
---   5. Sanitasi Placeholder Dapodik ('-') & Boolean Parser pada Bulk Import
---   6. Deterministic Linked-Account Email Resolver (Guru, Siswa & Orang Tua)
---   7. Anti-Overpayment Bill Locking & Atomic Tahun Ajaran/Semester Sync
+-- ERP SEKOLAH v20 — HARDENED PRODUCTION FOUNDATION (CLEAN CONSOLIDATED)
+-- Versi: BERSIH / SCHEMA-ONLY (Tanpa Seed Data Sekolah, Super Admin & Admin)
+-- Penyempurnaan & Perapian v20:
+--   1. Konsolidasi penuh skema v19 + seluruh patch absensi GPS, selfie & mode desktop
+--   2. Penyatuan kolom tambahan langsung ke definisi tabel (schools, teachers, attendances)
+--   3. Penghapusan duplikasi fungsi & policy (attendances_manage & submit_teacher_gps_attendance)
+--   4. Penambahan DROP FUNCTION idempoten untuk seluruh fungsi baru di Bagian 01
+--   5. Penyeragaman SECURITY DEFINER, search_path (public, pg_temp), REVOKE/GRANT,
+--      serta dukungan multi-role pada set_school_desktop_attendance_global
+--   6. Siap untuk instalasi multi-tenant bersih (tanpa data sekolah/akun bawaan)
 -- ============================================================================
 
 BEGIN;
 
 -- ============================================================================
--- 01. EXTENSIONS & RESET OBJEK LAMA (IDEMPOTENT)
+-- 01. EXTENSIONS & RESET OBJEK LAMA (100% IDEMPOTENT)
 -- ============================================================================
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- Trigger & Ledger Functions
 DROP FUNCTION IF EXISTS public.library_loan_trigger() CASCADE;
 DROP FUNCTION IF EXISTS public.sync_library_book_copies(UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.library_book_total_copies_trigger() CASCADE;
 DROP FUNCTION IF EXISTS public.payment_change_trigger() CASCADE;
 DROP FUNCTION IF EXISTS public.recalculate_student_bill(UUID) CASCADE;
+DROP FUNCTION IF EXISTS public.student_bill_amount_change_trigger() CASCADE;
 DROP FUNCTION IF EXISTS public.inventory_transaction_trigger() CASCADE;
 DROP FUNCTION IF EXISTS public.sync_inventory_quantity(UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.protect_user_security_fields() CASCADE;
+DROP FUNCTION IF EXISTS public.protect_attendance_approval() CASCADE;
 DROP FUNCTION IF EXISTS public.update_updated_at_column() CASCADE;
 DROP FUNCTION IF EXISTS public.erp_set_updated_at() CASCADE;
 DROP FUNCTION IF EXISTS public.auto_delete_auth_on_student_delete() CASCADE;
 DROP FUNCTION IF EXISTS public.auto_delete_auth_on_teacher_delete() CASCADE;
+DROP FUNCTION IF EXISTS public.sync_new_teacher_desktop_attendance() CASCADE;
+
+-- RPC & Business Logic Functions
 DROP FUNCTION IF EXISTS public.resolve_user_email(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS public.set_active_academic_year(UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.set_active_semester(UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.erp_set_active_academic_year(UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.create_school_for_current_user(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) CASCADE;
+DROP FUNCTION IF EXISTS public.set_teacher_desktop_attendance(UUID, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS public.set_school_desktop_attendance_global(UUID, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_teachers(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.clean_dapodik_str(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS public.parse_dapodik_bool(TEXT, BOOLEAN) CASCADE;
 
+-- Security, Geodesic & Multi-Role Helper Functions
+DROP FUNCTION IF EXISTS public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) CASCADE;
+DROP FUNCTION IF EXISTS public.is_own_school_storage_folder(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS public.map_tugas_tambahan_to_roles(TEXT) CASCADE;
 DROP FUNCTION IF EXISTS public.get_user_all_roles() CASCADE;
 DROP FUNCTION IF EXISTS public.get_user_school_id() CASCADE;
@@ -59,6 +72,7 @@ DROP FUNCTION IF EXISTS public.erp_current_user_role() CASCADE;
 DROP FUNCTION IF EXISTS public.erp_current_user_school_id() CASCADE;
 DROP FUNCTION IF EXISTS public.erp_has_school_access(UUID, BOOLEAN) CASCADE;
 
+-- Drop Tables (Urutan Dependensi Aman)
 DROP TABLE IF EXISTS
     public.library_loans,
     public.library_books,
@@ -69,6 +83,8 @@ DROP TABLE IF EXISTS
     public.administration_records,
     public.inventory_transactions,
     public.inventory_items,
+    public.daily_quotes,
+    public.national_holidays,
     public.schedule_entries,
     public.subjects,
     public.announcements,
@@ -106,12 +122,24 @@ CREATE TABLE public.schools (
     "logoUrl" TEXT,
     "latitude" DOUBLE PRECISION,
     "longitude" DOUBLE PRECISION,
-    "attendanceRadiusMeters" INTEGER DEFAULT 200,
+    "attendanceRadiusMeters" INTEGER NOT NULL DEFAULT 200,
+    "workStartTime" TEXT NOT NULL DEFAULT '07:30',
+    "workEndTime" TEXT NOT NULL DEFAULT '14:30',
+    "workDaysMode" TEXT NOT NULL DEFAULT 'SIX_DAYS',
+    "lateToleranceMinutes" INTEGER NOT NULL DEFAULT 0,
+    "requireSelfieCheckIn" BOOLEAN NOT NULL DEFAULT true,
+    "requireSelfieCheckOut" BOOLEAN NOT NULL DEFAULT true,
+    "allowDesktopAttendanceGlobal" BOOLEAN NOT NULL DEFAULT false,
     "settings" JSONB NOT NULL DEFAULT '{}'::jsonb,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT schools_pkey PRIMARY KEY ("id"),
-    CONSTRAINT schools_npsn_check CHECK (length(trim("npsn")) >= 8)
+    CONSTRAINT schools_npsn_check CHECK (length(trim("npsn")) >= 8),
+    CONSTRAINT schools_radius_check CHECK ("attendanceRadiusMeters" > 0),
+    CONSTRAINT schools_work_start_check CHECK ("workStartTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
+    CONSTRAINT schools_work_end_check CHECK ("workEndTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
+    CONSTRAINT schools_work_days_mode_check CHECK ("workDaysMode" IN ('FIVE_DAYS', 'SIX_DAYS')),
+    CONSTRAINT schools_late_tolerance_check CHECK ("lateToleranceMinutes" >= 0 AND "lateToleranceMinutes" <= 240)
 );
 
 CREATE UNIQUE INDEX schools_npsn_key ON public.schools ("npsn");
@@ -166,6 +194,8 @@ CREATE UNIQUE INDEX semesters_academic_year_type_key
     ON public.semesters ("academicYearId", "type");
 CREATE UNIQUE INDEX semesters_one_active_per_year
     ON public.semesters ("academicYearId") WHERE ("isActive" = true);
+CREATE UNIQUE INDEX semesters_one_active_per_school
+    ON public.semesters ("schoolId") WHERE ("isActive" = true);
 CREATE UNIQUE INDEX semesters_school_id_key
     ON public.semesters ("schoolId", "id");
 CREATE INDEX semesters_school_idx ON public.semesters ("schoolId");
@@ -211,7 +241,9 @@ CREATE TABLE public.users (
     CONSTRAINT users_scope_check CHECK (
         ("role" = 'SUPER_ADMIN' AND "schoolId" IS NULL)
         OR
-        ("role" <> 'SUPER_ADMIN' AND "schoolId" IS NOT NULL)
+        ("role" = 'ADMIN')
+        OR
+        ("role" NOT IN ('SUPER_ADMIN', 'ADMIN') AND "schoolId" IS NOT NULL)
     )
 );
 
@@ -301,6 +333,7 @@ CREATE TABLE public.teachers (
     "certificationNumber" TEXT,
     "joinDate" DATE,
     "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "allowDesktopAttendance" BOOLEAN NOT NULL DEFAULT false,
     "baseSalary" NUMERIC(15,2),
     "subjects" TEXT,
     "maxHoursPerWeek" INTEGER NOT NULL DEFAULT 24,
@@ -605,7 +638,7 @@ CREATE UNIQUE INDEX student_economics_student_key ON public.student_economics ("
 CREATE INDEX economics_school_idx ON public.student_economics ("schoolId");
 
 -- ============================================================================
--- 05. KEGIATAN BELAJAR & OPERASIONAL (ATTENDANCES, SUBJECTS, SCHEDULES, INFO)
+-- 05. KEGIATAN BELAJAR, ABSENSI, KALENDER LIBUR & INFORMASI
 -- ============================================================================
 CREATE TABLE public.attendances (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -614,17 +647,33 @@ CREATE TABLE public.attendances (
     "teacherId" UUID,
     "type" TEXT NOT NULL DEFAULT 'SISWA',
     "date" DATE NOT NULL,
+    "endDate" DATE,
     "status" TEXT NOT NULL,
+    "leaveType" TEXT,
     "notes" TEXT,
+    "attachmentUrl" TEXT,
+    "approvalStatus" TEXT NOT NULL DEFAULT 'APPROVED',
+    "approvedBy" UUID,
+    "approvedAt" TIMESTAMPTZ,
     "recordedBy" UUID,
     "checkInTime" TIMESTAMPTZ,
     "checkOutTime" TIMESTAMPTZ,
     "checkInLat" DOUBLE PRECISION,
     "checkInLng" DOUBLE PRECISION,
     "checkInDistance" DOUBLE PRECISION,
+    "checkInAccuracy" DOUBLE PRECISION,
     "isCheckInMock" BOOLEAN DEFAULT false,
     "checkInSelfieUrl" TEXT,
+    "checkOutLat" DOUBLE PRECISION,
+    "checkOutLng" DOUBLE PRECISION,
+    "checkOutDistance" DOUBLE PRECISION,
+    "checkOutAccuracy" DOUBLE PRECISION,
+    "isCheckOutMock" BOOLEAN DEFAULT false,
+    "checkOutSelfieUrl" TEXT,
+    "securityFlags" TEXT[] NOT NULL DEFAULT '{}'::text[],
+    "deviceTelemetry" JSONB,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT attendances_pkey PRIMARY KEY ("id"),
     CONSTRAINT attendances_type_check CHECK ("type" IN ('SISWA', 'GURU')),
     CONSTRAINT attendances_target_check CHECK (
@@ -632,6 +681,8 @@ CREATE TABLE public.attendances (
         OR
         ("type" = 'GURU' AND "teacherId" IS NOT NULL AND "studentId" IS NULL)
     ),
+    CONSTRAINT attendances_end_date_check CHECK ("endDate" IS NULL OR "endDate" >= "date"),
+    CONSTRAINT attendances_approval_check CHECK ("approvalStatus" IN ('PENDING', 'APPROVED', 'REJECTED')),
     CONSTRAINT attendances_school_fkey
         FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
         ON DELETE RESTRICT,
@@ -643,6 +694,9 @@ CREATE TABLE public.attendances (
         FOREIGN KEY ("schoolId", "teacherId")
         REFERENCES public.teachers("schoolId", "id")
         ON DELETE CASCADE,
+    CONSTRAINT attendances_approved_by_fkey
+        FOREIGN KEY ("approvedBy") REFERENCES public.users("id")
+        ON DELETE SET NULL,
     CONSTRAINT attendances_recorded_by_fkey
         FOREIGN KEY ("recordedBy") REFERENCES public.users("id")
         ON DELETE SET NULL
@@ -658,6 +712,7 @@ CREATE INDEX attendances_school_idx ON public.attendances ("schoolId");
 CREATE INDEX attendances_date_idx ON public.attendances ("date");
 CREATE INDEX attendances_teacher_idx ON public.attendances ("teacherId");
 CREATE INDEX attendances_type_idx ON public.attendances ("type");
+CREATE INDEX attendances_approval_idx ON public.attendances ("schoolId", "approvalStatus");
 
 CREATE TABLE public.subjects (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -751,6 +806,55 @@ CREATE TABLE public.announcements (
 CREATE INDEX announcements_school_idx ON public.announcements ("schoolId");
 CREATE INDEX announcements_publish_idx
     ON public.announcements ("schoolId", "publishDate");
+
+CREATE TABLE public.national_holidays (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "schoolId" UUID,
+    "date" DATE NOT NULL,
+    "name" TEXT NOT NULL,
+    "type" TEXT NOT NULL DEFAULT 'NASIONAL',
+    "createdBy" UUID,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT national_holidays_pkey PRIMARY KEY ("id"),
+    CONSTRAINT national_holidays_type_check
+        CHECK ("type" IN ('NASIONAL', 'CUTI_BERSAMA', 'SEKOLAH')),
+    CONSTRAINT national_holidays_school_fkey
+        FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
+        ON DELETE CASCADE,
+    CONSTRAINT national_holidays_created_by_fkey
+        FOREIGN KEY ("createdBy") REFERENCES public.users("id")
+        ON DELETE SET NULL
+);
+
+CREATE UNIQUE INDEX national_holidays_scope_date_name_key
+    ON public.national_holidays (
+        COALESCE("schoolId", '00000000-0000-0000-0000-000000000000'::uuid),
+        "date",
+        lower(trim("name"))
+    );
+CREATE INDEX national_holidays_date_idx ON public.national_holidays ("date");
+CREATE INDEX national_holidays_school_date_idx ON public.national_holidays ("schoolId", "date");
+
+CREATE TABLE public.daily_quotes (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "schoolId" UUID,
+    "quote" TEXT NOT NULL,
+    "author" TEXT,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdBy" UUID,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT daily_quotes_pkey PRIMARY KEY ("id"),
+    CONSTRAINT daily_quotes_school_fkey
+        FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
+        ON DELETE CASCADE,
+    CONSTRAINT daily_quotes_created_by_fkey
+        FOREIGN KEY ("createdBy") REFERENCES public.users("id")
+        ON DELETE SET NULL
+);
+
+CREATE INDEX daily_quotes_school_active_idx ON public.daily_quotes ("schoolId", "isActive");
 
 -- ============================================================================
 -- 06. SARPRAS, TATA USAHA & BEASISWA
@@ -1104,8 +1208,27 @@ CREATE INDEX library_loans_teacher_idx ON public.library_loans ("teacherId");
 CREATE INDEX library_loans_status_idx ON public.library_loans ("status");
 
 -- ============================================================================
--- 09. SECURITY & MULTI-ROLE HELPER FUNCTIONS (NON-RECURSIVE SECURITY DEFINER)
+-- 09. SECURITY, GEODESIC & MULTI-ROLE HELPER FUNCTIONS
 -- ============================================================================
+CREATE OR REPLACE FUNCTION public.calculate_haversine_meters(
+    lat1 DOUBLE PRECISION,
+    lon1 DOUBLE PRECISION,
+    lat2 DOUBLE PRECISION,
+    lon2 DOUBLE PRECISION
+)
+RETURNS DOUBLE PRECISION
+LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT 6371000.0 * 2.0 * asin(
+        sqrt(
+            power(sin(radians(lat2 - lat1) / 2.0), 2) +
+            cos(radians(lat1)) * cos(radians(lat2)) *
+            power(sin(radians(lon2 - lon1) / 2.0), 2)
+        )
+    );
+$$;
+
 CREATE OR REPLACE FUNCTION public.get_user_school_id()
 RETURNS UUID
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -1130,7 +1253,6 @@ AS $$
     LIMIT 1;
 $$;
 
--- Alias kompatibilitas dengan kode frontend
 CREATE OR REPLACE FUNCTION public.erp_current_user_school_id()
 RETURNS UUID LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $$ SELECT public.get_user_school_id(); $$;
@@ -1138,6 +1260,27 @@ AS $$ SELECT public.get_user_school_id(); $$;
 CREATE OR REPLACE FUNCTION public.erp_current_user_role()
 RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $$ SELECT public.get_user_role(); $$;
+
+-- Validasi folder storage milik sekolah user (mendukung format folder {schoolId} maupun {Nama_Sekolah})
+CREATE OR REPLACE FUNCTION public.is_own_school_storage_folder(p_folder TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql STABLE SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM public.schools s
+        WHERE s."id" = public.get_user_school_id()
+          AND lower(trim(COALESCE(p_folder, ''))) IN (
+              lower(s."id"::text),
+              lower(trim(s."name")),
+              lower(regexp_replace(trim(s."name"), '\s+', '_', 'g')),
+              lower(regexp_replace(trim(s."name"), '\s+', '-', 'g')),
+              lower(regexp_replace(trim(s."name"), '[^a-zA-Z0-9]+', '_', 'g')),
+              lower(regexp_replace(trim(s."name"), '[^a-zA-Z0-9]+', '-', 'g'))
+          )
+    );
+$$;
 
 -- Pemetaan otomatis Tugas Tambahan Dapodik ke role sistem
 CREATE OR REPLACE FUNCTION public.map_tugas_tambahan_to_roles(p_tugas TEXT)
@@ -1195,21 +1338,18 @@ AS $$
         ARRAY(
             SELECT DISTINCT r
             FROM (
-                -- 1. Role utama di tabel users
                 SELECT u."role" AS r
                 FROM public.users u
                 WHERE u."id" = auth.uid() AND u."isActive" = true
 
                 UNION ALL
 
-                -- 2. Role tambahan manual di tabel users
                 SELECT unnest(u."additionalRoles") AS r
                 FROM public.users u
                 WHERE u."id" = auth.uid() AND u."isActive" = true
 
                 UNION ALL
 
-                -- 3. Role otomatis dari kolom tugasTambahan di tabel teachers
                 SELECT unnest(public.map_tugas_tambahan_to_roles(t."tugasTambahan")) AS r
                 FROM public.teachers t
                 WHERE t."userId" = auth.uid() AND t."isActive" = true
@@ -1327,10 +1467,12 @@ AS $$
     ]::text[];
 $$;
 
+REVOKE ALL ON FUNCTION public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_user_school_id() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_user_role() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.erp_current_user_school_id() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.erp_current_user_role() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.is_own_school_storage_folder(TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.map_tugas_tambahan_to_roles(TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_user_all_roles() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.is_user_active() FROM PUBLIC, anon;
@@ -1344,10 +1486,12 @@ REVOKE ALL ON FUNCTION public.current_user_can_manage_inventory() FROM PUBLIC, a
 REVOKE ALL ON FUNCTION public.current_user_can_manage_library() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.current_user_can_manage_administration() FROM PUBLIC, anon;
 
+GRANT EXECUTE ON FUNCTION public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_school_id() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_role() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.erp_current_user_school_id() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.erp_current_user_role() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.is_own_school_storage_folder(TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.map_tugas_tambahan_to_roles(TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_all_roles() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.is_user_active() TO authenticated;
@@ -1362,7 +1506,7 @@ GRANT EXECUTE ON FUNCTION public.current_user_can_manage_library() TO authentica
 GRANT EXECUTE ON FUNCTION public.current_user_can_manage_administration() TO authenticated;
 
 -- ============================================================================
--- 10. TRIGGERS: UPDATED_AT, SECURITY FIELDS, AUTH CLEANUP, STOK, KEUANGAN & PERPUS
+-- 10. TRIGGERS: UPDATED_AT, SECURITY, APPROVAL, AUTH CLEANUP, STOK & KEUANGAN
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.update_updated_at_column()
 RETURNS TRIGGER
@@ -1381,10 +1525,10 @@ DECLARE
 BEGIN
     FOREACH tbl IN ARRAY ARRAY[
         'schools','academic_years','semesters','users','teachers','classes',
-        'students','student_parents','student_economics','subjects',
-        'schedule_entries','announcements','inventory_items',
-        'administration_records','scholarship_records','fee_templates',
-        'student_bills','library_books','library_loans'
+        'students','student_parents','student_economics','attendances','subjects',
+        'schedule_entries','announcements','national_holidays','daily_quotes',
+        'inventory_items','administration_records','scholarship_records',
+        'fee_templates','student_bills','library_books','library_loans'
     ]
     LOOP
         EXECUTE format(
@@ -1394,6 +1538,32 @@ BEGIN
         );
     END LOOP;
 END $trg$;
+
+-- Sinkronisasi otomatis izin presensi komputer saat guru baru ditambahkan jika Saklar Global aktif
+CREATE OR REPLACE FUNCTION public.sync_new_teacher_desktop_attendance()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_global_allow BOOLEAN;
+BEGIN
+    SELECT COALESCE("allowDesktopAttendanceGlobal", false)
+    INTO v_global_allow
+    FROM public.schools
+    WHERE "id" = NEW."schoolId";
+
+    IF v_global_allow IS TRUE THEN
+        NEW."allowDesktopAttendance" := true;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_sync_new_teacher_desktop_attendance
+BEFORE INSERT ON public.teachers
+FOR EACH ROW EXECUTE FUNCTION public.sync_new_teacher_desktop_attendance();
 
 -- Proteksi ketat field keamanan & hierarki SUPER_ADMIN vs ADMIN Sekolah
 CREATE OR REPLACE FUNCTION public.protect_user_security_fields()
@@ -1411,26 +1581,22 @@ BEGIN
     END IF;
 
     IF ('ADMIN' = ANY(public.get_user_all_roles())) THEN
-        -- ADMIN sekolah tidak boleh memodifikasi akun SUPER_ADMIN atau sesama ADMIN lain
         IF OLD."role" IN ('SUPER_ADMIN', 'ADMIN') AND OLD."id" <> auth.uid() THEN
             RAISE EXCEPTION 'ADMIN sekolah tidak diizinkan mengubah akun Admin lain.';
         END IF;
 
-        -- ADMIN sekolah tidak boleh mengangkat role menjadi SUPER_ADMIN/ADMIN atau mengubah role dirinya sendiri
         IF NEW."role" IS DISTINCT FROM OLD."role"
            AND (NEW."role" IN ('SUPER_ADMIN', 'ADMIN') OR OLD."id" = auth.uid())
         THEN
             RAISE EXCEPTION 'Anda tidak memiliki hak untuk menetapkan atau mengubah role Admin.';
         END IF;
 
-        -- ADMIN sekolah tidak boleh menyisipkan ADMIN ke additionalRoles
         IF NEW."additionalRoles" IS DISTINCT FROM OLD."additionalRoles"
            AND ('ADMIN' = ANY(NEW."additionalRoles"))
         THEN
             RAISE EXCEPTION 'ADMIN sekolah tidak diizinkan menambahkan hak akses ADMIN.';
         END IF;
 
-        -- ADMIN sekolah tidak boleh memindahkan schoolId atau menonaktifkan akun sendiri
         IF NEW."schoolId" IS DISTINCT FROM OLD."schoolId"
            OR (OLD."id" = auth.uid() AND NEW."isActive" IS DISTINCT FROM OLD."isActive")
         THEN
@@ -1456,8 +1622,55 @@ CREATE TRIGGER users_security_fields
 BEFORE UPDATE ON public.users
 FOR EACH ROW EXECUTE FUNCTION public.protect_user_security_fields();
 
+-- Proteksi status persetujuan izin/cuti/dinas pada tabel attendances
+CREATE OR REPLACE FUNCTION public.protect_attendance_approval()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_is_approver BOOLEAN;
+BEGIN
+    IF auth.uid() IS NULL THEN
+        RETURN NEW;
+    END IF;
+
+    v_is_approver := public.is_super_admin()
+        OR (public.get_user_all_roles() && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[]);
+
+    IF NOT v_is_approver THEN
+        IF NEW."type" = 'GURU' AND (
+            (NEW."leaveType" IS NOT NULL AND trim(NEW."leaveType") <> '')
+            OR upper(trim(COALESCE(NEW."status", ''))) IN ('IZIN', 'SAKIT', 'CUTI', 'DINAS', 'DINAS_LUAR')
+        ) THEN
+            IF TG_OP = 'INSERT' THEN
+                NEW."approvalStatus" := 'PENDING';
+                NEW."approvedBy" := NULL;
+                NEW."approvedAt" := NULL;
+            ELSIF TG_OP = 'UPDATE' THEN
+                NEW."approvalStatus" := OLD."approvalStatus";
+                NEW."approvedBy" := OLD."approvedBy";
+                NEW."approvedAt" := OLD."approvedAt";
+            END IF;
+        END IF;
+    ELSE
+        IF NEW."approvalStatus" IN ('APPROVED', 'REJECTED')
+           AND (TG_OP = 'INSERT' OR NEW."approvalStatus" IS DISTINCT FROM OLD."approvalStatus")
+        THEN
+            NEW."approvedBy" := COALESCE(NEW."approvedBy", auth.uid());
+            NEW."approvedAt" := COALESCE(NEW."approvedAt", now());
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER attendances_approval_guard
+BEFORE INSERT OR UPDATE ON public.attendances
+FOR EACH ROW EXECUTE FUNCTION public.protect_attendance_approval();
+
 -- Sinkronisasi hapus akun Auth ketika Siswa dihapus
--- Aman untuk ortu multi-anak & melindungi akun pegawai/admin yang juga menjadi wali siswa
 CREATE OR REPLACE FUNCTION public.auto_delete_auth_on_student_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1513,8 +1726,7 @@ CREATE TRIGGER trg_delete_student_auth
 BEFORE DELETE ON public.students
 FOR EACH ROW EXECUTE FUNCTION public.auto_delete_auth_on_student_delete();
 
--- Sinkronisasi hapus akun Auth ketika Guru/PTK dihapus
--- Menggunakan AFTER DELETE agar tidak bentrok dengan ON DELETE SET NULL & melindungi akun Admin
+-- Sinkronisasi hapus akun Auth ketika Guru/PTK dihapus (Aman untuk Admin & Guru yang juga Wali Siswa)
 CREATE OR REPLACE FUNCTION public.auto_delete_auth_on_teacher_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1528,6 +1740,10 @@ BEGIN
               SELECT 1 FROM public.users u
               WHERE u."id" = OLD."userId"
                 AND u."role" IN ('SUPER_ADMIN', 'ADMIN')
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM public.user_student_links l
+              WHERE l."userId" = OLD."userId"
           );
     END IF;
     RETURN OLD;
@@ -1685,6 +1901,36 @@ CREATE TRIGGER payment_status_trigger
 AFTER INSERT OR UPDATE OR DELETE ON public.payment_transactions
 FOR EACH ROW EXECUTE FUNCTION public.payment_change_trigger();
 
+-- Sinkronisasi otomatis status tagihan ketika totalAmount pada student_bills diubah
+CREATE OR REPLACE FUNCTION public.student_bill_amount_change_trigger()
+RETURNS TRIGGER
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+    IF NEW."totalAmount" < NEW."paidAmount" THEN
+        RAISE EXCEPTION 'Total tagihan baru (Rp %) tidak boleh lebih kecil dari jumlah yang sudah dibayar (Rp %).',
+            NEW."totalAmount", NEW."paidAmount";
+    END IF;
+
+    IF NEW."status" <> 'DIBATALKAN' THEN
+        IF NEW."paidAmount" <= 0 THEN
+            NEW."status" := 'BELUM_BAYAR';
+        ELSIF NEW."paidAmount" >= NEW."totalAmount" THEN
+            NEW."status" := 'LUNAS';
+        ELSE
+            NEW."status" := 'CICILAN';
+        END IF;
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER student_bills_amount_sync
+BEFORE UPDATE OF "totalAmount" ON public.student_bills
+FOR EACH ROW EXECUTE FUNCTION public.student_bill_amount_change_trigger();
+
 -- Sinkronisasi stok eksemplar buku perpustakaan otomatis saat sirkulasi peminjaman berubah
 CREATE OR REPLACE FUNCTION public.sync_library_book_copies(p_book_id UUID)
 RETURNS VOID
@@ -1780,7 +2026,7 @@ BEFORE INSERT OR UPDATE OF "totalCopies" ON public.library_books
 FOR EACH ROW EXECUTE FUNCTION public.library_book_total_copies_trigger();
 
 -- ============================================================================
--- 11. RPC FUNCTIONS: LOGIN RESOLVER, TAHUN AJARAN/SEMESTER, ONBOARDING & IMPOR
+-- 11. RPC FUNCTIONS: LOGIN, TAHUN AJARAN, PRESENSI GPS/DESKTOP & IMPOR DAPODIK
 -- ============================================================================
 
 -- 11A. Helper Sanitasi String & Boolean Dapodik
@@ -1820,7 +2066,7 @@ REVOKE ALL ON FUNCTION public.parse_dapodik_bool(TEXT, BOOLEAN) FROM PUBLIC, ano
 GRANT EXECUTE ON FUNCTION public.clean_dapodik_str(TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.parse_dapodik_bool(TEXT, BOOLEAN) TO authenticated;
 
--- 11B. Resolve Email dari NUPTK / NIP / NIK / NISN / NIS (Prioritas Akun Tertaut & Aktif)
+-- 11B. Resolve Email dari NUPTK / NIP / NIK / NISN / NIS
 CREATE OR REPLACE FUNCTION public.resolve_user_email(identifier TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1837,7 +2083,7 @@ BEGIN
 
     clean_id := REPLACE(REPLACE(trim(identifier), ' ', ''), '-', '');
 
-    -- 1. Cek Tabel Teachers (Prioritaskan yang sudah tertaut userId dan aktif)
+    -- 1. Cek Tabel Teachers
     SELECT * INTO master_record FROM public.teachers
     WHERE REPLACE(REPLACE(nuptk, ' ', ''), '-', '') = clean_id
        OR REPLACE(REPLACE(nip, ' ', ''), '-', '') = clean_id
@@ -1873,7 +2119,7 @@ BEGIN
         END IF;
     END IF;
 
-    -- 2. Cek Tabel Students (Prioritaskan siswa yang memiliki akun tertaut & berstatus AKTIF)
+    -- 2. Cek Tabel Students
     SELECT s.* INTO master_record FROM public.students s
     WHERE REPLACE(REPLACE(s.nisn, ' ', ''), '-', '') = clean_id
        OR REPLACE(REPLACE(s.nis, ' ', ''), '-', '') = clean_id
@@ -1958,7 +2204,7 @@ $$;
 REVOKE ALL ON FUNCTION public.resolve_user_email(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.resolve_user_email(TEXT) TO anon, authenticated;
 
--- 11C. Set Tahun Ajaran Aktif + Sinkronisasi Otomatis Semester Aktif (Atomik + Advisory Lock)
+-- 11C. Set Tahun Ajaran Aktif & Semester Aktif
 CREATE OR REPLACE FUNCTION public.set_active_academic_year(
     p_school_id UUID,
     p_academic_year_id UUID
@@ -2005,7 +2251,6 @@ BEGIN
         RAISE EXCEPTION 'Tahun ajaran tidak ditemukan pada sekolah ini.';
     END IF;
 
-    -- 1. Aktifkan Tahun Ajaran terpilih
     UPDATE public.academic_years
     SET "isActive" = false
     WHERE "schoolId" = p_school_id AND "isActive" = true AND "id" <> p_academic_year_id;
@@ -2014,14 +2259,12 @@ BEGIN
     SET "isActive" = true
     WHERE "id" = p_academic_year_id AND "schoolId" = p_school_id;
 
-    -- 2. Nonaktifkan semester dari tahun ajaran lain agar tidak menggantung aktif
     UPDATE public.semesters
     SET "isActive" = false
     WHERE "schoolId" = p_school_id
       AND "academicYearId" <> p_academic_year_id
       AND "isActive" = true;
 
-    -- 3. Jika tahun ajaran baru belum memiliki semester aktif, pilih semester yang sesuai
     IF NOT EXISTS (
         SELECT 1 FROM public.semesters
         WHERE "schoolId" = p_school_id
@@ -2047,10 +2290,6 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.set_active_academic_year(UUID, UUID) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.set_active_academic_year(UUID, UUID) TO authenticated;
-
--- 11D. Set Semester Aktif (Atomik + Sinkronisasi Tahun Ajaran Induk)
 CREATE OR REPLACE FUNCTION public.set_active_semester(
     p_school_id UUID,
     p_semester_id UUID
@@ -2098,7 +2337,6 @@ BEGIN
         RAISE EXCEPTION 'Semester tidak ditemukan pada sekolah ini.';
     END IF;
 
-    -- Pastikan tahun ajaran induk ikut aktif
     UPDATE public.academic_years
     SET "isActive" = false
     WHERE "schoolId" = p_school_id AND "isActive" = true AND "id" <> v_academic_year_id;
@@ -2107,7 +2345,6 @@ BEGIN
     SET "isActive" = true
     WHERE "id" = v_academic_year_id AND "schoolId" = p_school_id;
 
-    -- Nonaktifkan semua semester lain di sekolah ini & aktifkan semester terpilih
     UPDATE public.semesters
     SET "isActive" = false
     WHERE "schoolId" = p_school_id AND "isActive" = true AND "id" <> p_semester_id;
@@ -2118,10 +2355,12 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.set_active_academic_year(UUID, UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.set_active_semester(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_active_academic_year(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.set_active_semester(UUID, UUID) TO authenticated;
 
--- 11E. Onboarding Sekolah Baru untuk Admin yang Belum Punya Sekolah
+-- 11D. Onboarding Sekolah Baru & Setup Tenant oleh SUPER_ADMIN
 CREATE OR REPLACE FUNCTION public.create_school_for_current_user(p_school JSONB)
 RETURNS SETOF public.schools
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2170,10 +2409,6 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.create_school_for_current_user(JSONB) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.create_school_for_current_user(JSONB) TO authenticated;
-
--- 11F. Setup Tenant Baru oleh SUPER_ADMIN
 CREATE OR REPLACE FUNCTION public.setup_new_tenant(
     p_school_name TEXT,
     p_npsn TEXT,
@@ -2227,8 +2462,348 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.create_school_for_current_user(JSONB) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.create_school_for_current_user(JSONB) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) TO authenticated;
+
+-- 11E. Pengaturan Izin Presensi Komputer (Per Guru & Saklar Global Sekolah)
+CREATE OR REPLACE FUNCTION public.set_teacher_desktop_attendance(
+    p_teacher_id UUID,
+    p_allow BOOLEAN
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_is_super BOOLEAN := public.is_super_admin();
+    v_user_school UUID := public.get_user_school_id();
+    v_roles TEXT[] := public.get_user_all_roles();
+    v_target_school UUID;
+BEGIN
+    IF v_uid IS NULL OR NOT public.is_user_active() THEN
+        RAISE EXCEPTION 'Sesi login tidak valid atau akun tidak aktif.';
+    END IF;
+
+    SELECT "schoolId" INTO v_target_school
+    FROM public.teachers
+    WHERE "id" = p_teacher_id;
+
+    IF v_target_school IS NULL THEN
+        RAISE EXCEPTION 'Data guru tidak ditemukan.';
+    END IF;
+
+    IF NOT v_is_super THEN
+        IF v_target_school IS DISTINCT FROM v_user_school
+           OR NOT (v_roles && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        THEN
+            RAISE EXCEPTION 'Anda tidak memiliki hak akses untuk mengubah izin presensi komputer.';
+        END IF;
+    END IF;
+
+    UPDATE public.teachers
+    SET "allowDesktopAttendance" = COALESCE(p_allow, false),
+        "updatedAt" = now()
+    WHERE "id" = p_teacher_id;
+
+    RETURN true;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.set_school_desktop_attendance_global(
+    p_school_id UUID,
+    p_allow BOOLEAN
+)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_is_super BOOLEAN := public.is_super_admin();
+    v_user_school UUID := public.get_user_school_id();
+    v_roles TEXT[] := public.get_user_all_roles();
+BEGIN
+    IF v_uid IS NULL OR NOT public.is_user_active() THEN
+        RAISE EXCEPTION 'Sesi pengguna tidak valid atau akun tidak aktif.';
+    END IF;
+
+    IF NOT v_is_super THEN
+        IF v_user_school IS DISTINCT FROM p_school_id
+           OR NOT ('ADMIN' = ANY(v_roles))
+        THEN
+            RAISE EXCEPTION 'Anda tidak memiliki hak akses untuk mengubah pengaturan sekolah ini.';
+        END IF;
+    END IF;
+
+    -- Simpan status saklar global pada profil sekolah
+    UPDATE public.schools
+    SET "allowDesktopAttendanceGlobal" = COALESCE(p_allow, false),
+        "updatedAt" = now()
+    WHERE "id" = p_school_id;
+
+    -- Terapkan status yang sama ke seluruh Guru/PTK pada sekolah tersebut
+    UPDATE public.teachers
+    SET "allowDesktopAttendance" = COALESCE(p_allow, false),
+        "updatedAt" = now()
+    WHERE "schoolId" = p_school_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_teacher_desktop_attendance(UUID, BOOLEAN) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.set_school_desktop_attendance_global(UUID, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_teacher_desktop_attendance(UUID, BOOLEAN) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.set_school_desktop_attendance_global(UUID, BOOLEAN) TO authenticated;
+
+-- 11F. Presensi GPS Guru (Anti Fake GPS, Validasi Jam Server, Radius, Selfie & Desktop Guard)
+CREATE OR REPLACE FUNCTION public.submit_teacher_gps_attendance(
+    p_mode TEXT,                                      -- 'CHECK_IN' atau 'CHECK_OUT'
+    p_lat DOUBLE PRECISION,
+    p_lng DOUBLE PRECISION,
+    p_accuracy DOUBLE PRECISION,
+    p_selfie_path TEXT DEFAULT NULL,
+    p_early_reason TEXT DEFAULT NULL,
+    p_is_suspected_mock BOOLEAN DEFAULT false,
+    p_security_flags TEXT[] DEFAULT '{}'::text[],
+    p_device_telemetry JSONB DEFAULT '{}'::jsonb,
+    p_sim_teacher_id UUID DEFAULT NULL,               -- Khusus simulasi SUPER_ADMIN
+    p_sim_school_id UUID DEFAULT NULL                 -- Khusus simulasi SUPER_ADMIN
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_is_super BOOLEAN := public.is_super_admin();
+    v_school_id UUID;
+    v_teacher RECORD;
+    v_school RECORD;
+    v_timezone TEXT;
+    v_now_utc TIMESTAMPTZ := now();
+    v_now_local TIMESTAMP;
+    v_today DATE;
+    v_distance DOUBLE PRECISION;
+    v_existing RECORD;
+    v_start_parts TEXT[];
+    v_end_parts TEXT[];
+    v_deadline TIMESTAMP;
+    v_scheduled_end TIMESTAMP;
+    v_latest_ontime TIMESTAMP;
+    v_status TEXT;
+    v_diff_mins INTEGER;
+    v_notes TEXT;
+    v_clean_reason TEXT := trim(COALESCE(p_early_reason, ''));
+    v_flags TEXT[] := COALESCE(p_security_flags, '{}'::text[]);
+    v_is_desktop_request BOOLEAN := false;
+BEGIN
+    IF v_uid IS NULL THEN
+        RAISE EXCEPTION 'Sesi login tidak valid. Silakan masuk kembali.';
+    END IF;
+
+    IF p_mode NOT IN ('CHECK_IN', 'CHECK_OUT') THEN
+        RAISE EXCEPTION 'Mode presensi tidak valid.';
+    END IF;
+
+    -- Validasi koordinat & akurasi GPS dasar
+    IF p_lat IS NULL OR p_lng IS NULL OR p_lat < -90 OR p_lat > 90 OR p_lng < -180 OR p_lng > 180 THEN
+        RAISE EXCEPTION 'Koordinat GPS tidak valid.';
+    END IF;
+
+    IF p_accuracy IS NULL OR p_accuracy <= 1.0 THEN
+        RAISE EXCEPTION 'Terdeteksi sinyal GPS tidak alami (akurasi <= 1m). Matikan aplikasi Fake GPS.';
+    END IF;
+
+    IF p_accuracy > 85.0 THEN
+        RAISE EXCEPTION 'Akurasi GPS terlalu lemah (±% meter). Bergeser ke area terbuka agar sinyal satelit stabil.', round(p_accuracy);
+    END IF;
+
+    -- Tentukan sekolah & profil guru
+    IF v_is_super AND p_sim_school_id IS NOT NULL AND p_sim_teacher_id IS NOT NULL THEN
+        v_school_id := p_sim_school_id;
+        SELECT * INTO v_teacher FROM public.teachers
+        WHERE "id" = p_sim_teacher_id AND "schoolId" = v_school_id AND "isActive" = true;
+    ELSE
+        v_school_id := public.get_user_school_id();
+        SELECT * INTO v_teacher FROM public.teachers
+        WHERE "userId" = v_uid AND "schoolId" = v_school_id AND "isActive" = true
+        LIMIT 1;
+    END IF;
+
+    IF v_teacher.id IS NULL THEN
+        RAISE EXCEPTION 'Profil Guru/PTK Anda tidak ditemukan atau tidak aktif.';
+    END IF;
+
+    -- Validasi izin akses komputer di sisi server
+    v_is_desktop_request := (v_flags @> ARRAY['DESKTOP_BROWSER']::text[])
+        OR COALESCE(p_device_telemetry->>'deviceType', '') = 'DESKTOP';
+
+    IF v_is_desktop_request AND NOT v_is_super AND NOT COALESCE(v_teacher."allowDesktopAttendance", false) THEN
+        RAISE EXCEPTION 'Akun Anda tidak diizinkan melakukan presensi melalui komputer/laptop. Silakan gunakan HP atau APK Android.';
+    END IF;
+
+    -- Ambil pengaturan sekolah
+    SELECT * INTO v_school FROM public.schools WHERE "id" = v_school_id;
+    IF v_school.latitude IS NULL OR v_school.longitude IS NULL THEN
+        RAISE EXCEPTION 'Titik koordinat sekolah belum diatur oleh Admin.';
+    END IF;
+
+    -- Hitung jarak geodesic di sisi server
+    v_distance := public.calculate_haversine_meters(
+        p_lat, p_lng, v_school.latitude, v_school.longitude
+    );
+
+    IF v_distance > COALESCE(v_school."attendanceRadiusMeters", 100) THEN
+        RAISE EXCEPTION 'Posisi Anda berada di luar radius sekolah (% meter dari batas % meter).',
+            round(v_distance), COALESCE(v_school."attendanceRadiusMeters", 100);
+    END IF;
+
+    -- Gunakan jam server sesuai zona waktu sekolah (anti manipulasi jam HP)
+    v_timezone := COALESCE(NULLIF(v_school.settings->>'timezone', ''), 'Asia/Jakarta');
+    v_now_local := v_now_utc AT TIME ZONE v_timezone;
+    v_today := v_now_local::date;
+
+    -- Kunci transaksi per guru & tanggal untuk mencegah double submit
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_teacher.id::text || '|' || v_today::text, 0));
+
+    SELECT * INTO v_existing
+    FROM public.attendances
+    WHERE "schoolId" = v_school_id
+      AND "teacherId" = v_teacher.id
+      AND "date" = v_today
+      AND "type" = 'GURU'
+    FOR UPDATE;
+
+    -- ==================== PROSES CHECK-IN ====================
+    IF p_mode = 'CHECK_IN' THEN
+        IF v_existing.id IS NOT NULL THEN
+            RAISE EXCEPTION 'Anda sudah memiliki catatan presensi hari ini (%).', v_existing.status;
+        END IF;
+
+        IF COALESCE(v_school."requireSelfieCheckIn", true) THEN
+            IF p_selfie_path IS NULL OR trim(p_selfie_path) = '' THEN
+                RAISE EXCEPTION 'Foto selfie wajib dilampirkan saat presensi datang.';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM storage.objects
+                WHERE bucket_id = 'attendance-selfies' AND name = p_selfie_path
+            ) THEN
+                RAISE EXCEPTION 'Bukti foto selfie tidak ditemukan di server penyimpanan.';
+            END IF;
+        END IF;
+
+        v_start_parts := string_to_array(COALESCE(v_school."workStartTime", '07:30'), ':');
+        v_deadline := date_trunc('day', v_now_local)
+            + make_interval(
+                hours => COALESCE(v_start_parts[1]::int, 7),
+                mins  => COALESCE(v_start_parts[2]::int, 30) + COALESCE(v_school."lateToleranceMinutes", 0),
+                secs  => 59
+            );
+
+        v_status := CASE WHEN v_now_local > v_deadline THEN 'TERLAMBAT' ELSE 'HADIR' END;
+
+        INSERT INTO public.attendances (
+            "schoolId", "teacherId", "type", "date", "status",
+            "checkInTime", "checkInLat", "checkInLng", "checkInDistance",
+            "checkInAccuracy", "isCheckInMock", "checkInSelfieUrl",
+            "securityFlags", "deviceTelemetry"
+        ) VALUES (
+            v_school_id, v_teacher.id, 'GURU', v_today, v_status,
+            v_now_utc, p_lat, p_lng, round(v_distance),
+            round(p_accuracy::numeric, 1), p_is_suspected_mock, p_selfie_path,
+            v_flags, p_device_telemetry
+        );
+
+        RETURN jsonb_build_object(
+            'success', true,
+            'mode', 'CHECK_IN',
+            'status', v_status,
+            'distance', round(v_distance),
+            'serverTime', to_char(v_now_local, 'HH24:MI:SS')
+        );
+    END IF;
+
+    -- ==================== PROSES CHECK-OUT ====================
+    IF v_existing.id IS NULL OR v_existing."checkInTime" IS NULL THEN
+        RAISE EXCEPTION 'Anda belum melakukan Check-In masuk hari ini.';
+    END IF;
+
+    IF v_existing."checkOutTime" IS NOT NULL THEN
+        RAISE EXCEPTION 'Anda sudah melakukan Check-Out pulang hari ini.';
+    END IF;
+
+    IF COALESCE(v_school."requireSelfieCheckOut", true) THEN
+        IF p_selfie_path IS NULL OR trim(p_selfie_path) = '' THEN
+            RAISE EXCEPTION 'Foto selfie wajib dilampirkan saat presensi pulang.';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM storage.objects
+            WHERE bucket_id = 'attendance-selfies' AND name = p_selfie_path
+        ) THEN
+            RAISE EXCEPTION 'Bukti foto selfie pulang tidak ditemukan di server penyimpanan.';
+        END IF;
+    END IF;
+
+    v_end_parts := string_to_array(COALESCE(v_school."workEndTime", '14:30'), ':');
+    v_scheduled_end := date_trunc('day', v_now_local)
+        + make_interval(
+            hours => COALESCE(v_end_parts[1]::int, 14),
+            mins  => COALESCE(v_end_parts[2]::int, 30)
+        );
+    v_latest_ontime := v_scheduled_end + interval '30 minutes 59 seconds';
+
+    v_notes := v_existing.notes;
+
+    IF v_now_local < v_scheduled_end THEN
+        IF length(v_clean_reason) < 10 THEN
+            RAISE EXCEPTION 'Alasan pulang lebih awal wajib diisi minimal 10 karakter.';
+        END IF;
+        v_diff_mins := GREATEST(1, ceil(extract(epoch FROM (v_scheduled_end - v_now_local)) / 60.0)::int);
+        v_notes := concat_ws(' | ', v_notes,
+            format('[Pulang Lebih Awal] Pukul %s (jadwal %s, kurang %s menit) — Alasan: %s',
+                to_char(v_now_local, 'HH24:MI'),
+                COALESCE(v_school."workEndTime", '14:30'),
+                v_diff_mins,
+                v_clean_reason
+            )
+        );
+    ELSIF v_now_local > v_latest_ontime THEN
+        v_diff_mins := GREATEST(1, floor(extract(epoch FROM (v_now_local - v_scheduled_end)) / 60.0)::int);
+        v_notes := concat_ws(' | ', v_notes,
+            format('Pulang melewati jadwal pukul %s (jadwal %s, lewat %s menit)',
+                to_char(v_now_local, 'HH24:MI'),
+                COALESCE(v_school."workEndTime", '14:30'),
+                v_diff_mins
+            )
+        );
+    END IF;
+
+    UPDATE public.attendances
+    SET "checkOutTime"      = v_now_utc,
+        "checkOutLat"       = p_lat,
+        "checkOutLng"       = p_lng,
+        "checkOutDistance"  = round(v_distance),
+        "checkOutAccuracy"  = round(p_accuracy::numeric, 1),
+        "isCheckOutMock"    = p_is_suspected_mock,
+        "checkOutSelfieUrl" = COALESCE(p_selfie_path, "checkOutSelfieUrl"),
+        "notes"             = v_notes,
+        "securityFlags"     = ARRAY(SELECT DISTINCT unnest(COALESCE("securityFlags", '{}'::text[]) || v_flags)),
+        "deviceTelemetry"   = COALESCE("deviceTelemetry", '{}'::jsonb) || jsonb_build_object('checkOut', p_device_telemetry)
+    WHERE "id" = v_existing.id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'mode', 'CHECK_OUT',
+        'distance', round(v_distance),
+        'serverTime', to_char(v_now_local, 'HH24:MI:SS')
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) TO authenticated;
 
 -- 11G. Bulk Import Siswa Dapodik (UPSERT + Orang Tua + Kesejahteraan/PIP + Sanitasi)
 CREATE OR REPLACE FUNCTION public.bulk_import_students(batch_data JSONB)
@@ -3095,7 +3670,7 @@ REVOKE ALL ON FUNCTION public.bulk_import_teachers(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.bulk_import_teachers(JSONB) TO authenticated;
 
 -- ============================================================================
--- 12. ROW LEVEL SECURITY (RLS) — MULTI-TENANT & MULTI-ROLE (HARDENED)
+-- 12. ROW LEVEL SECURITY (RLS) — MULTI-TENANT & MULTI-ROLE (HARDENED + CACHED)
 -- ============================================================================
 ALTER TABLE public.schools ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_years ENABLE ROW LEVEL SECURITY;
@@ -3113,6 +3688,8 @@ ALTER TABLE public.attendances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subjects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.schedule_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.announcements ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.national_holidays ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.daily_quotes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.administration_records ENABLE ROW LEVEL SECURITY;
@@ -3130,74 +3707,83 @@ FOR ALL TO authenticated USING (false) WITH CHECK (false);
 
 -- Schools
 CREATE POLICY schools_select ON public.schools FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "id" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "id" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY schools_insert ON public.schools FOR INSERT TO authenticated
-WITH CHECK (public.is_super_admin());
+WITH CHECK ((SELECT public.is_super_admin()));
 
 CREATE POLICY schools_update ON public.schools FOR UPDATE TO authenticated
 USING (
-    public.is_school_admin()
-    AND (public.is_super_admin() OR "id" = public.get_user_school_id())
+    (SELECT public.is_school_admin())
+    AND ((SELECT public.is_super_admin()) OR "id" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    public.is_school_admin()
-    AND (public.is_super_admin() OR "id" = public.get_user_school_id())
+    (SELECT public.is_school_admin())
+    AND ((SELECT public.is_super_admin()) OR "id" = (SELECT public.get_user_school_id()))
 );
 
 CREATE POLICY schools_delete ON public.schools FOR DELETE TO authenticated
-USING (public.is_super_admin());
+USING ((SELECT public.is_super_admin()));
 
 -- Academic Years & Semesters
 CREATE POLICY academic_years_select ON public.academic_years FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY academic_years_manage ON public.academic_years FOR ALL TO authenticated
 USING (
-    public.is_school_admin()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.is_school_admin())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    public.is_school_admin()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.is_school_admin())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
 CREATE POLICY semesters_select ON public.semesters FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY semesters_manage ON public.semesters FOR ALL TO authenticated
 USING (
-    public.is_school_admin()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.is_school_admin())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    public.is_school_admin()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.is_school_admin())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
--- Users (Mendukung Multi-Role & Pembatasan Ketat Akun ADMIN/SUPER_ADMIN)
+-- Users (Mendukung Multi-Role, Onboarding Admin & Pembatasan Ketat Akun ADMIN/SUPER_ADMIN)
 CREATE POLICY users_select ON public.users FOR SELECT TO authenticated
 USING (
-    public.is_super_admin()
-    OR "id" = auth.uid()
+    (SELECT public.is_super_admin())
+    OR "id" = (SELECT auth.uid())
     OR (
-        (public.get_user_all_roles() && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
-        AND "schoolId" = public.get_user_school_id()
+        ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+        AND "schoolId" = (SELECT public.get_user_school_id())
     )
 );
 
 CREATE POLICY users_insert ON public.users FOR INSERT TO authenticated
 WITH CHECK (
-    (public.is_super_admin() AND (("role" = 'SUPER_ADMIN' AND "schoolId" IS NULL) OR ("role" <> 'SUPER_ADMIN' AND "schoolId" IS NOT NULL)))
+    ((SELECT public.is_super_admin()) AND (("role" = 'SUPER_ADMIN' AND "schoolId" IS NULL) OR ("role" <> 'SUPER_ADMIN' AND "schoolId" IS NOT NULL)))
     OR (
-        ('ADMIN' = ANY(public.get_user_all_roles()))
-        AND "schoolId" = public.get_user_school_id()
+        ('ADMIN' = ANY((SELECT public.get_user_all_roles())))
+        AND "schoolId" = (SELECT public.get_user_school_id())
         AND "role" NOT IN ('SUPER_ADMIN', 'ADMIN')
         AND NOT ('ADMIN' = ANY("additionalRoles"))
     )
     OR (
-        (public.get_user_all_roles() && ARRAY['OPERATOR','STAFF_TU']::text[])
-        AND "schoolId" = public.get_user_school_id()
+        ((SELECT public.get_user_all_roles()) && ARRAY['OPERATOR','STAFF_TU']::text[])
+        AND "schoolId" = (SELECT public.get_user_school_id())
         AND "role" IN ('GURU','WALI_KELAS','STAFF_PERPUS','ORANG_TUA','SISWA')
         AND "additionalRoles" = '{}'::text[]
     )
@@ -3205,210 +3791,218 @@ WITH CHECK (
 
 CREATE POLICY users_update ON public.users FOR UPDATE TO authenticated
 USING (
-    public.is_super_admin()
-    OR "id" = auth.uid()
-    OR (('ADMIN' = ANY(public.get_user_all_roles())) AND "schoolId" = public.get_user_school_id())
+    (SELECT public.is_super_admin())
+    OR "id" = (SELECT auth.uid())
+    OR (('ADMIN' = ANY((SELECT public.get_user_all_roles()))) AND "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    public.is_super_admin()
-    OR ("id" = auth.uid() AND "schoolId" IS NOT DISTINCT FROM public.get_user_school_id() AND "role" <> 'SUPER_ADMIN')
-    OR (('ADMIN' = ANY(public.get_user_all_roles())) AND "schoolId" = public.get_user_school_id() AND "role" <> 'SUPER_ADMIN')
+    (SELECT public.is_super_admin())
+    OR ("id" = (SELECT auth.uid()) AND "schoolId" IS NOT DISTINCT FROM (SELECT public.get_user_school_id()) AND "role" <> 'SUPER_ADMIN')
+    OR (('ADMIN' = ANY((SELECT public.get_user_all_roles()))) AND "schoolId" = (SELECT public.get_user_school_id()) AND "role" <> 'SUPER_ADMIN')
 );
 
 CREATE POLICY users_delete ON public.users FOR DELETE TO authenticated
 USING (
-    public.is_super_admin()
+    (SELECT public.is_super_admin())
     OR (
-        ('ADMIN' = ANY(public.get_user_all_roles()))
-        AND "schoolId" = public.get_user_school_id()
+        ('ADMIN' = ANY((SELECT public.get_user_all_roles())))
+        AND "schoolId" = (SELECT public.get_user_school_id())
         AND "role" NOT IN ('SUPER_ADMIN', 'ADMIN')
-        AND "id" <> auth.uid()
+        AND "id" <> (SELECT auth.uid())
     )
 );
 
 -- Teachers (Granular: INSERT/UPDATE oleh Manajemen/TU/Operator, DELETE khusus Pimpinan)
 CREATE POLICY teachers_select ON public.teachers FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY teachers_insert ON public.teachers FOR INSERT TO authenticated
 WITH CHECK (
-    public.current_user_can_manage_administration()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.current_user_can_manage_administration())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
 CREATE POLICY teachers_update ON public.teachers FOR UPDATE TO authenticated
 USING (
-    public.current_user_can_manage_administration()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.current_user_can_manage_administration())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    public.current_user_can_manage_administration()
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    (SELECT public.current_user_can_manage_administration())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
 CREATE POLICY teachers_delete ON public.teachers FOR DELETE TO authenticated
 USING (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
--- Classes (Selaras dengan Operator Dapodik, Kepala Sekolah & Admin)
+-- Classes
 CREATE POLICY classes_select ON public.classes FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY classes_manage ON public.classes FOR ALL TO authenticated
 USING (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
 -- Students
 CREATE POLICY students_select ON public.students FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "id" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY students_manage ON public.students FOR ALL TO authenticated
-USING (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
--- Student Class History (Hardened: Ortu/Siswa hanya melihat riwayat siswa tertaut)
+-- Student Class History
 CREATE POLICY student_history_select ON public.student_class_history FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "studentId" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY student_history_manage ON public.student_class_history FOR ALL TO authenticated
-USING (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
--- User Student Links (Hardened: Khusus Admin, Kepsek, Operator, & Staff TU)
+-- User Student Links
 CREATE POLICY user_student_links_select ON public.user_student_links FOR SELECT TO authenticated
 USING (
-    public.is_super_admin()
-    OR "userId" = auth.uid()
+    (SELECT public.is_super_admin())
+    OR "userId" = (SELECT auth.uid())
     OR (
-        (public.get_user_all_roles() && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
-        AND "schoolId" = public.get_user_school_id()
+        ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+        AND "schoolId" = (SELECT public.get_user_school_id())
     )
 );
 
 CREATE POLICY user_student_links_manage ON public.user_student_links FOR ALL TO authenticated
 USING (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
 -- Student Parents
 CREATE POLICY parents_select ON public.student_parents FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "studentId" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY parents_manage ON public.student_parents FOR ALL TO authenticated
-USING (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- Student Economics
 CREATE POLICY economics_select ON public.student_economics FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
     )
 );
 
 CREATE POLICY economics_manage ON public.student_economics FOR ALL TO authenticated
-USING (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
--- Attendances
+-- Attendances (Presensi HADIR/TERLAMBAT guru wajib melewati RPC submit_teacher_gps_attendance)
 CREATE POLICY attendances_select ON public.attendances FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "studentId" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY attendances_manage ON public.attendances FOR ALL TO authenticated
 USING (
-    public.is_super_admin()
+    (SELECT public.is_super_admin())
     OR (
-        "schoolId" = public.get_user_school_id()
+        "schoolId" = (SELECT public.get_user_school_id())
         AND (
-            (public.get_user_all_roles() && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+            ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
             OR (
                 "type" = 'SISWA'
-                AND (public.get_user_all_roles() && ARRAY['WALI_KELAS','GURU']::text[])
+                AND ((SELECT public.get_user_all_roles()) && ARRAY['WALI_KELAS','GURU']::text[])
             )
             OR (
                 "type" = 'GURU'
-                AND (public.get_user_all_roles() && ARRAY['WALI_KELAS','GURU','BENDAHARA','STAFF_TU','STAFF_SARPRAS','STAFF_PERPUS']::text[])
+                AND "status" IN ('IZIN', 'SAKIT')
+                AND "checkInTime" IS NULL
                 AND "teacherId" IN (
                     SELECT t."id" FROM public.teachers t
-                    WHERE t."userId" = auth.uid()
-                      AND t."schoolId" = public.get_user_school_id()
+                    WHERE t."userId" = (SELECT auth.uid())
+                      AND t."schoolId" = (SELECT public.get_user_school_id())
                 )
             )
         )
     )
 )
 WITH CHECK (
-    public.is_super_admin()
+    (SELECT public.is_super_admin())
     OR (
-        "schoolId" = public.get_user_school_id()
+        "schoolId" = (SELECT public.get_user_school_id())
         AND (
-            (public.get_user_all_roles() && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+            ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
             OR (
                 "type" = 'SISWA'
-                AND (public.get_user_all_roles() && ARRAY['WALI_KELAS','GURU']::text[])
+                AND ((SELECT public.get_user_all_roles()) && ARRAY['WALI_KELAS','GURU']::text[])
             )
             OR (
                 "type" = 'GURU'
-                AND (public.get_user_all_roles() && ARRAY['WALI_KELAS','GURU','BENDAHARA','STAFF_TU','STAFF_SARPRAS','STAFF_PERPUS']::text[])
+                AND "status" IN ('IZIN', 'SAKIT')
+                AND "checkInTime" IS NULL
                 AND "teacherId" IN (
                     SELECT t."id" FROM public.teachers t
-                    WHERE t."userId" = auth.uid()
-                      AND t."schoolId" = public.get_user_school_id()
+                    WHERE t."userId" = (SELECT auth.uid())
+                      AND t."schoolId" = (SELECT public.get_user_school_id())
                 )
             )
         )
@@ -3417,157 +4011,239 @@ WITH CHECK (
 
 -- Subjects & Schedules
 CREATE POLICY subjects_select ON public.subjects FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY subjects_manage ON public.subjects FOR ALL TO authenticated
-USING (public.current_user_can_manage_academic() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_academic() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_academic()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_academic()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 CREATE POLICY schedules_select ON public.schedule_entries FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY schedules_manage ON public.schedule_entries FOR ALL TO authenticated
 USING (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
 -- Announcements
 CREATE POLICY announcements_select ON public.announcements FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY announcements_manage ON public.announcements FOR ALL TO authenticated
 USING (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 )
 WITH CHECK (
-    (public.get_user_all_roles() && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
-    AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id())
+    ((SELECT public.get_user_all_roles()) && ARRAY['SUPER_ADMIN','ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
+
+-- National Holidays (Global "schoolId" IS NULL + Terisolasi Per Sekolah)
+CREATE POLICY national_holidays_select ON public.national_holidays FOR SELECT TO authenticated
+USING (
+    (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR "schoolId" IS NULL
+        OR "schoolId" = (SELECT public.get_user_school_id())
+    )
+);
+
+CREATE POLICY national_holidays_manage ON public.national_holidays FOR ALL TO authenticated
+USING (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" IS NOT NULL
+        AND "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
+)
+WITH CHECK (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" IS NOT NULL
+        AND "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
+);
+
+-- Daily Quotes (Global "schoolId" IS NULL + Terisolasi Per Sekolah)
+CREATE POLICY daily_quotes_select ON public.daily_quotes FOR SELECT TO authenticated
+USING (
+    (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR "schoolId" IS NULL
+        OR "schoolId" = (SELECT public.get_user_school_id())
+    )
+);
+
+CREATE POLICY daily_quotes_manage ON public.daily_quotes FOR ALL TO authenticated
+USING (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" IS NOT NULL
+        AND "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
+)
+WITH CHECK (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" IS NOT NULL
+        AND "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
 );
 
 -- Inventory
 CREATE POLICY inventory_items_select ON public.inventory_items FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY inventory_items_manage ON public.inventory_items FOR ALL TO authenticated
-USING (public.current_user_can_manage_inventory() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_inventory() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_inventory()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_inventory()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 CREATE POLICY inventory_transactions_select ON public.inventory_transactions FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY inventory_transactions_manage ON public.inventory_transactions FOR ALL TO authenticated
-USING (public.current_user_can_manage_inventory() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_inventory() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_inventory()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_inventory()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- Administration & Scholarships
 CREATE POLICY administration_select ON public.administration_records FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY administration_manage ON public.administration_records FOR ALL TO authenticated
-USING (public.current_user_can_manage_administration() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_administration() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_administration()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_administration()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 CREATE POLICY scholarships_select ON public.scholarship_records FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
     )
 );
 
 CREATE POLICY scholarships_manage ON public.scholarship_records FOR ALL TO authenticated
-USING (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_students() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- Finance
 CREATE POLICY fee_templates_select ON public.fee_templates FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY fee_templates_manage ON public.fee_templates FOR ALL TO authenticated
-USING (public.current_user_can_manage_finance() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_finance() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 CREATE POLICY student_bills_select ON public.student_bills FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "studentId" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY student_bills_manage ON public.student_bills FOR ALL TO authenticated
-USING (public.current_user_can_manage_finance() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_finance() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 CREATE POLICY payments_select ON public.payment_transactions FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "studentId" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY payments_manage ON public.payment_transactions FOR ALL TO authenticated
-USING (public.current_user_can_manage_finance() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_finance() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- Library (Perpustakaan)
 CREATE POLICY library_books_select ON public.library_books FOR SELECT TO authenticated
-USING (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
 
 CREATE POLICY library_books_manage ON public.library_books FOR ALL TO authenticated
-USING (public.current_user_can_manage_library() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_library() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_library()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_library()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 CREATE POLICY library_loans_select ON public.library_loans FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
-        OR ("schoolId" = public.get_user_school_id() AND NOT (public.get_user_all_roles() <@ ARRAY['ORANG_TUA','SISWA']::text[]))
+        (SELECT public.is_super_admin())
+        OR ("schoolId" = (SELECT public.get_user_school_id()) AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[]))
         OR "studentId" IN (
             SELECT l."studentId" FROM public.user_student_links l
-            WHERE l."userId" = auth.uid() AND l."schoolId" = public.get_user_school_id()
+            WHERE l."userId" = (SELECT auth.uid()) AND l."schoolId" = (SELECT public.get_user_school_id())
         )
     )
 );
 
 CREATE POLICY library_loans_manage ON public.library_loans FOR ALL TO authenticated
-USING (public.current_user_can_manage_library() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()))
-WITH CHECK (public.current_user_can_manage_library() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+USING ((SELECT public.current_user_can_manage_library()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
+WITH CHECK ((SELECT public.current_user_can_manage_library()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- Audit Logs (Immutable untuk authenticated)
 CREATE POLICY audit_logs_select ON public.audit_logs FOR SELECT TO authenticated
 USING (
-    public.is_user_active()
+    (SELECT public.is_user_active())
     AND (
-        public.is_super_admin()
+        (SELECT public.is_super_admin())
         OR (
-            "schoolId" = public.get_user_school_id()
-            AND (public.get_user_all_roles() && ARRAY['ADMIN','KEPALA_SEKOLAH']::text[])
+            "schoolId" = (SELECT public.get_user_school_id())
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH']::text[])
         )
     )
 );
 
 CREATE POLICY audit_logs_insert ON public.audit_logs FOR INSERT TO authenticated
-WITH CHECK (public.is_user_active() AND (public.is_super_admin() OR "schoolId" = public.get_user_school_id()));
+WITH CHECK ((SELECT public.is_user_active()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- ============================================================================
 -- 13. TABLE GRANTS
@@ -3580,5 +4256,145 @@ REVOKE UPDATE, DELETE, TRUNCATE ON public.audit_logs FROM authenticated;
 REVOKE ALL ON TABLE public.refresh_tokens FROM authenticated;
 
 COMMIT;
+
+-- ============================================================================
+-- 14. STORAGE BUCKETS & RLS POLICIES (MULTI-FORMAT FOLDER ISOLATION)
+-- Mendukung struktur folder {schoolId}/... maupun {Nama_Sekolah}/...
+-- ============================================================================
+INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+VALUES
+    (
+        'attendance-selfies',
+        'attendance-selfies',
+        false,
+        512000, -- Maksimal 500 KB per file selfie
+        ARRAY['image/jpeg', 'image/jpg', 'image/webp']::text[]
+    ),
+    (
+        'attendance-attachments',
+        'attendance-attachments',
+        false,
+        2097152, -- Maksimal 2 MB per dokumen izin/surat dinas
+        ARRAY['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf']::text[]
+    )
+ON CONFLICT (id) DO UPDATE SET
+    public = EXCLUDED.public,
+    file_size_limit = EXCLUDED.file_size_limit,
+    allowed_mime_types = EXCLUDED.allowed_mime_types;
+
+DROP POLICY IF EXISTS "attendance_selfies_select" ON storage.objects;
+DROP POLICY IF EXISTS "attendance_selfies_insert" ON storage.objects;
+DROP POLICY IF EXISTS "attendance_selfies_update" ON storage.objects;
+DROP POLICY IF EXISTS "attendance_selfies_delete" ON storage.objects;
+
+DROP POLICY IF EXISTS "attendance_attachments_select" ON storage.objects;
+DROP POLICY IF EXISTS "attendance_attachments_insert" ON storage.objects;
+DROP POLICY IF EXISTS "attendance_attachments_update" ON storage.objects;
+DROP POLICY IF EXISTS "attendance_attachments_delete" ON storage.objects;
+
+-- Bucket 1: attendance-selfies
+CREATE POLICY "attendance_selfies_select"
+ON storage.objects FOR SELECT TO authenticated
+USING (
+    bucket_id = 'attendance-selfies'
+    AND (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+    )
+);
+
+CREATE POLICY "attendance_selfies_insert"
+ON storage.objects FOR INSERT TO authenticated
+WITH CHECK (
+    bucket_id = 'attendance-selfies'
+    AND (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[])
+        )
+    )
+);
+
+CREATE POLICY "attendance_selfies_update"
+ON storage.objects FOR UPDATE TO authenticated
+USING (
+    bucket_id = 'attendance-selfies'
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        )
+    )
+);
+
+CREATE POLICY "attendance_selfies_delete"
+ON storage.objects FOR DELETE TO authenticated
+USING (
+    bucket_id = 'attendance-selfies'
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        )
+    )
+);
+
+-- Bucket 2: attendance-attachments
+CREATE POLICY "attendance_attachments_select"
+ON storage.objects FOR SELECT TO authenticated
+USING (
+    bucket_id = 'attendance-attachments'
+    AND (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+    )
+);
+
+CREATE POLICY "attendance_attachments_insert"
+ON storage.objects FOR INSERT TO authenticated
+WITH CHECK (
+    bucket_id = 'attendance-attachments'
+    AND (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[])
+        )
+    )
+);
+
+CREATE POLICY "attendance_attachments_update"
+ON storage.objects FOR UPDATE TO authenticated
+USING (
+    bucket_id = 'attendance-attachments'
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        )
+    )
+);
+
+CREATE POLICY "attendance_attachments_delete"
+ON storage.objects FOR DELETE TO authenticated
+USING (
+    bucket_id = 'attendance-attachments'
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            (SELECT public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        )
+    )
+);
+
 
 NOTIFY pgrst, 'reload schema';

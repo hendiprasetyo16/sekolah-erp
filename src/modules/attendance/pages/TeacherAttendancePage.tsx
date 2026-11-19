@@ -271,8 +271,10 @@ function formatDeadlineWithTolerance(
   toleranceMinutes: number
 ): string {
   const [hStr, mStr] = startTime.split(':');
-  const h = Number(hStr) || 7;
-  const m = Number(mStr) || 30;
+  const parsedH = Number(hStr);
+  const parsedM = Number(mStr);
+  const h = Number.isFinite(parsedH) ? parsedH : 7;
+  const m = Number.isFinite(parsedM) ? parsedM : 30;
   const totalMinutes = Math.min(
     23 * 60 + 59,
     h * 60 + m + Math.max(0, toleranceMinutes)
@@ -303,8 +305,10 @@ function evaluateCheckOutTiming(
   formattedDiff: string;
 } {
   const [endHStr, endMStr] = workEndTime.split(':');
-  const endH = Number(endHStr) || 14;
-  const endM = Number(endMStr) ?? 30;
+  const parsedEndH = Number(endHStr);
+  const parsedEndM = Number(endMStr);
+  const endH = Number.isFinite(parsedEndH) ? parsedEndH : 14;
+  const endM = Number.isFinite(parsedEndM) ? parsedEndM : 30;
 
   const scheduledEnd = new Date(checkOutDate);
   scheduledEnd.setHours(endH, endM, 0, 0);
@@ -1722,8 +1726,8 @@ export function TeacherAttendancePage() {
           >
             <div
               className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                  ? 'bg-emerald-600 text-white border-emerald-400'
-                  : 'bg-red-600 text-white border-red-400'
+                ? 'bg-emerald-600 text-white border-emerald-400'
+                : 'bg-red-600 text-white border-red-400'
                 }`}
             >
               <div className="flex items-center gap-2.5">
@@ -2057,8 +2061,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
-                  ? 'opacity-65 cursor-not-allowed saturate-75'
-                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
+                ? 'opacity-65 cursor-not-allowed saturate-75'
+                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2110,8 +2114,8 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
-                        ? 'bg-emerald-400'
-                        : 'bg-amber-300 animate-pulse'
+                      ? 'bg-emerald-400'
+                      : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
@@ -2132,8 +2136,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                  ? 'opacity-65 cursor-not-allowed saturate-75'
-                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
+                ? 'opacity-65 cursor-not-allowed saturate-75'
+                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2180,13 +2184,13 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                        ? todayCheckOutTimingInfo.isEarly ||
-                          todayCheckOutTimingInfo.isOvertime
-                          ? 'bg-amber-200'
-                          : 'bg-emerald-300'
-                        : canCheckOut
-                          ? 'bg-red-400 animate-ping'
-                          : 'bg-amber-100/60'
+                      ? todayCheckOutTimingInfo.isEarly ||
+                        todayCheckOutTimingInfo.isOvertime
+                        ? 'bg-amber-200'
+                        : 'bg-emerald-300'
+                      : canCheckOut
+                        ? 'bg-red-400 animate-ping'
+                        : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
@@ -2239,8 +2243,8 @@ export function TeacherAttendancePage() {
                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
-                        ? 'bg-red-500/85 text-white'
-                        : 'bg-emerald-500/85 text-white'
+                      ? 'bg-red-500/85 text-white'
+                      : 'bg-emerald-500/85 text-white'
                       }`}
                   >
                     {attendancePhase === 'CHECK_OUT'
@@ -2397,8 +2401,8 @@ export function TeacherAttendancePage() {
               onClick={handleFingerprintAction}
               disabled={isSubmittingAttendance}
               className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
-                  ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
-                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <span className="text-sm flex items-center gap-1.5">
@@ -2470,8 +2474,8 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setLeaveCategory(item.value)}
                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                      ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                      : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                       }`}
                   >
                     {item.label}
@@ -2562,8 +2566,8 @@ export function TeacherAttendancePage() {
               </label>
               <label
                 className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                    ? 'border-emerald-500/70 bg-emerald-500/10'
-                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                  ? 'border-emerald-500/70 bg-emerald-500/10'
+                  : 'border-border hover:border-emerald-500/60 bg-muted/30'
                   }`}
               >
                 {leaveFile ? (
@@ -2602,8 +2606,8 @@ export function TeacherAttendancePage() {
                 type="submit"
                 disabled={isSubmittingLeave || !teacher}
                 className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                  ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                  : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                   }`}
               >
                 {isSubmittingLeave ? (
@@ -2658,8 +2662,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                    ? 'bg-white text-slate-900'
-                    : 'text-white'
+                  ? 'bg-white text-slate-900'
+                  : 'text-white'
                   }`}
               >
                 Bulan Ini
@@ -2668,8 +2672,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                    ? 'bg-white text-slate-900'
-                    : 'text-white'
+                  ? 'bg-white text-slate-900'
+                  : 'text-white'
                   }`}
               >
                 Tahunan
@@ -2769,10 +2773,10 @@ export function TeacherAttendancePage() {
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
+                    ? 'text-red-500'
+                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
-                        ? 'text-red-500'
-                        : 'opacity-65'
+                      : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -2807,10 +2811,10 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                     className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                        : isToday
-                          ? 'border-amber-400 font-bold'
-                          : 'border-transparent'
+                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                      : isToday
+                        ? 'border-amber-400 font-bold'
+                        : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
@@ -2834,8 +2838,8 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                    ? 'bg-red-500/10 border-red-500/30'
-                    : 'bg-muted/40 border-border'
+                  ? 'bg-red-500/10 border-red-500/30'
+                  : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -2943,12 +2947,12 @@ export function TeacherAttendancePage() {
                     </div>
                     <span
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                          : item.status === 'TERLAMBAT'
-                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                            : item.status === 'ALPA'
-                              ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                              : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                        : item.status === 'TERLAMBAT'
+                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                          : item.status === 'ALPA'
+                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                         }`}
                     >
                       {item.status}
@@ -2973,8 +2977,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
@@ -2985,8 +2989,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
@@ -3017,8 +3021,8 @@ export function TeacherAttendancePage() {
               <Fingerprint
                 size={28}
                 className={`transition-transform duration-150 ${isFingerprintGlowing
-                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                    : ''
+                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                  : ''
                   }`}
               />
             </motion.button>
@@ -3028,8 +3032,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
@@ -3040,8 +3044,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
@@ -3229,8 +3233,8 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={handleTakeSnapshot}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                    ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                    : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                     }`}
                 >
                   <Camera size={18} className="shrink-0" />
@@ -3255,8 +3259,8 @@ export function TeacherAttendancePage() {
                     }
                     disabled={isSubmittingAttendance}
                     className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                       }`}
                   >
                     {isSubmittingAttendance ? (
