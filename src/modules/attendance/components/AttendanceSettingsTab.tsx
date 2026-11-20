@@ -26,6 +26,7 @@ import {
     MapPin,
     Monitor,
     GraduationCap,
+    MessageSquare,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -45,6 +46,7 @@ import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { HolidayCalendarView } from './HolidayCalendarView';
 import { StudentAttendanceSettingsCard } from './StudentAttendanceSettingsCard';
 import { TeacherDesktopAccessCard } from './TeacherDesktopAccessCard';
+import { WhatsAppSettingsCard } from './WhatsAppSettingsCard';
 
 // ============================================================================
 // KONSTANTA & PARAMETER YANG BISA KAMU SESUAIKAN
@@ -53,12 +55,13 @@ type AttendanceSettingsSubTab =
     | 'GURU_SCHEDULE'
     | 'GURU_DESKTOP'
     | 'SISWA'
-    | 'HOLIDAYS';
+    | 'HOLIDAYS'
+    | 'WHATSAPP';
 
-const DEFAULT_SUB_TAB: AttendanceSettingsSubTab = 'GURU_SCHEDULE'; // Sub-tab awal saat halaman dibuka
+const DEFAULT_SUB_TAB: AttendanceSettingsSubTab = 'GURU_SCHEDULE';
 const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
-const INITIAL_BASE_YEARS = [2026, 2027, 2028]; // Daftar tahun bawaan pada dropdown kalender libur
-const DEFAULT_HOLIDAY_VIEW_MODE: 'LIST' | 'CALENDAR' = 'CALENDAR'; // 'CALENDAR' atau 'LIST'
+const INITIAL_BASE_YEARS = [2026, 2027, 2028];
+const DEFAULT_HOLIDAY_VIEW_MODE: 'LIST' | 'CALENDAR' = 'CALENDAR';
 
 // ============================================================================
 // TEMA TOMBOL MODERN TERPUSAT
@@ -78,9 +81,6 @@ const BTN_STYLE = {
         'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-red-500/35 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-[0.98] transition-all duration-200 cursor-pointer',
 } as const;
 
-/**
- * Helper menghitung jam efektif setelah ditambah toleransi keterlambatan (menit)
- */
 function calculateEffectiveDeadline(
     startTime: string,
     toleranceMinutes: number
@@ -112,17 +112,14 @@ export function AttendanceSettingsTab() {
     const isAdmin = user?.role === 'ADMIN';
     const canManage = isSuperAdmin || isAdmin;
 
-    // State navigasi sub-tab horizontal
     const [activeSubTab, setActiveSubTab] =
         useState<AttendanceSettingsSubTab>(DEFAULT_SUB_TAB);
 
-    // Pilihan sekolah (khusus SUPER_ADMIN)
     const [schools, setSchools] = useState<Array<{ id: string; name: string }>>([]);
     const [selectedSchoolId, setSelectedSchoolId] = useState<string>(
         school?.id ?? ''
     );
 
-    // 1. State Pengaturan Jam Kerja, Toleransi, Kamera Selfie, & Hari Kerja Guru
     const [workStartTime, setWorkStartTime] = useState<string>('07:30');
     const [lateToleranceMinutes, setLateToleranceMinutes] = useState<number>(0);
     const [workEndTime, setWorkEndTime] = useState<string>('14:30');
@@ -132,7 +129,6 @@ export function AttendanceSettingsTab() {
     const [isLoadingSchedule, setIsLoadingSchedule] = useState<boolean>(false);
     const [isSavingSchedule, setIsSavingSchedule] = useState<boolean>(false);
 
-    // 2. State Tahun, Pilihan Server API, Mode Muhammadiyah, & Hari Libur
     const [filterYear, setFilterYear] = useState<number>(() =>
         new Date().getFullYear()
     );
@@ -174,7 +170,6 @@ export function AttendanceSettingsTab() {
 
     const [selectedHolidayIds, setSelectedHolidayIds] = useState<string[]>([]);
 
-    // Modal Edit Hari Libur
     const [editingHoliday, setEditingHoliday] = useState<HolidayRecord | null>(
         null
     );
@@ -182,7 +177,6 @@ export function AttendanceSettingsTab() {
     const [editNameInput, setEditNameInput] = useState<string>('');
     const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
 
-    // Modal Konfirmasi Hapus
     const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
         title: string;
         description: string;
@@ -190,12 +184,10 @@ export function AttendanceSettingsTab() {
     } | null>(null);
     const [isDeletingHolidays, setIsDeletingHolidays] = useState<boolean>(false);
 
-    // Tambah 1 tanggal libur manual
     const [newHolidayDate, setNewHolidayDate] = useState<string>('');
     const [newHolidayName, setNewHolidayName] = useState<string>('');
     const [isAddingHoliday, setIsAddingHoliday] = useState<boolean>(false);
 
-    // Pratinjau Import Excel / Server
     const [previewRows, setPreviewRows] = useState<ParsedHolidayRow[]>([]);
     const [previewSourceLabel, setPreviewSourceLabel] = useState<string>('');
     const [isImporting, setIsImporting] = useState<boolean>(false);
@@ -216,7 +208,6 @@ export function AttendanceSettingsTab() {
         }
     }, [school?.id]);
 
-    // Muat daftar sekolah jika SUPER_ADMIN
     useEffect(() => {
         if (!isSuperAdmin) return;
         supabase
@@ -232,7 +223,6 @@ export function AttendanceSettingsTab() {
             });
     }, [isSuperAdmin, school?.id]);
 
-    // Muat pengaturan jam kerja, toleransi keterlambatan, kamera selfie, & hari kerja
     const loadScheduleSettings = useCallback(async () => {
         if (!selectedSchoolId) return;
         setIsLoadingSchedule(true);
@@ -547,7 +537,8 @@ export function AttendanceSettingsTab() {
 
     const handleAddSingleHoliday = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!newHolidayDate || newHolidayName.trim().length < 3) {
+        const cleanName = newHolidayName.trim();
+        if (!newHolidayDate || cleanName.length < 3) {
             setSyncFeedback({
                 status: 'error',
                 text: 'Isi tanggal dan keterangan hari libur dengan lengkap.',
@@ -558,7 +549,13 @@ export function AttendanceSettingsTab() {
         setIsAddingHoliday(true);
         try {
             await upsertHolidayRows([
-                { date: newHolidayDate, name: newHolidayName.trim() },
+                {
+                    date: newHolidayDate,
+                    name: cleanName,
+                    type: cleanName.toLowerCase().includes('cuti bersama')
+                        ? 'CUTI_BERSAMA'
+                        : 'SEKOLAH',
+                },
             ]);
             const addedYear = Number(newHolidayDate.slice(0, 4));
             if (Number.isFinite(addedYear)) setFilterYear(addedYear);
@@ -746,7 +743,7 @@ export function AttendanceSettingsTab() {
 
     if (!canManage) return null;
 
-    // Daftar definisi 4 sub-tab navigasi
+    // Daftar definisi 5 sub-tab navigasi
     const subTabs: Array<{
         id: AttendanceSettingsSubTab;
         label: string;
@@ -781,6 +778,13 @@ export function AttendanceSettingsTab() {
                 shortLabel: `Libur (${holidays.length})`,
                 icon: CalendarDays,
                 activeClass: 'bg-rose-600 text-white shadow-xs',
+            },
+            {
+                id: 'WHATSAPP',
+                label: '5. WhatsApp Gateway',
+                shortLabel: 'WA Gateway',
+                icon: MessageSquare,
+                activeClass: 'bg-teal-600 text-white shadow-xs',
             },
         ];
 
@@ -829,9 +833,9 @@ export function AttendanceSettingsTab() {
             )}
 
             {/* ====================================================================
-                NAVIGASI 4 SUB-TAB HORIZONTAL
+                NAVIGASI 5 SUB-TAB HORIZONTAL
             ==================================================================== */}
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 p-1.5 rounded-2xl border border-border bg-muted/40">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 p-1.5 rounded-2xl border border-border bg-muted/40">
                 {subTabs.map((tab) => {
                     const IconComponent = tab.icon;
                     const isActive = activeSubTab === tab.id;
@@ -1157,7 +1161,7 @@ export function AttendanceSettingsTab() {
                 SUB-TAB 3: PENGATURAN JADWAL & METODE PRESENSI SISWA
             ==================================================================== */}
             {activeSubTab === 'SISWA' && (
-                <StudentAttendanceSettingsCard selectedSchoolId={selectedSchoolId} />
+                <StudentAttendanceSettingsCard schoolId={selectedSchoolId} />
             )}
 
             {/* ====================================================================
@@ -1361,7 +1365,11 @@ export function AttendanceSettingsTab() {
                                         onClick={() =>
                                             setPreviewRows((prev) => [
                                                 ...prev,
-                                                { date: `${filterYear}-01-01`, name: 'Libur Tambahan' },
+                                                {
+                                                    date: `${filterYear}-01-01`,
+                                                    name: 'Libur Tambahan',
+                                                    type: 'SEKOLAH',
+                                                },
                                             ])
                                         }
                                         className={BTN_STYLE.secondaryCompact}
@@ -1763,6 +1771,13 @@ export function AttendanceSettingsTab() {
                         )}
                     </div>
                 </div>
+            )}
+
+            {/* ====================================================================
+                SUB-TAB 5: INTEGRASI WHATSAPP GATEWAY ORANG TUA
+            ==================================================================== */}
+            {activeSubTab === 'WHATSAPP' && (
+                <WhatsAppSettingsCard schoolId={selectedSchoolId} />
             )}
 
             {/* MODAL 1: EDIT TANGGAL & KETERANGAN HARI LIBUR */}

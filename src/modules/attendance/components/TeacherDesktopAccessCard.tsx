@@ -11,49 +11,85 @@ import {
     AlertTriangle,
     ChevronDown,
     ChevronUp,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 
 // ============================================================================
-// PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
+// PARAMETER KONFIGURASI TAMPILAN & PAGINATION
 // ============================================================================
-const DEFAULT_LIST_EXPANDED = true; // Ubah ke false jika daftar guru ingin tertutup (ringkas) saat awal dibuka
-const LIST_MAX_HEIGHT_CLASS = 'max-h-80'; // Tinggi maksimal area scroll daftar guru (mis. 'max-h-64', 'max-h-80', 'max-h-96')
+const DEFAULT_LIST_EXPANDED = true;
+const DEFAULT_TEACHER_PAGE_SIZE = 10;
+const TEACHER_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
 
-interface TeacherDesktopAccessItem {
+// ============================================================================
+// TIPE DATA STRICT (TANPA `any`)
+// ============================================================================
+export interface TeacherDesktopAccessItem {
     id: string;
     fullName: string;
     nip: string | null;
     allowDesktopAttendance: boolean;
 }
 
-interface TeacherDesktopAccessCardProps {
-    /** ID sekolah aktif yang sedang diatur */
+export interface TeacherDesktopAccessCardProps {
     schoolId: string;
 }
 
-/**
- * Helper mendeteksi jika kolom database belum ditambahkan di Supabase
- */
-function isMissingColumnError(err: unknown): boolean {
-    const msg = String((err as { message?: string })?.message ?? '').toLowerCase();
-    const code = String((err as { code?: string })?.code ?? '');
+type FilterMode = 'ALL' | 'ALLOWED' | 'BLOCKED';
+
+interface FeedbackState {
+    status: 'success' | 'error';
+    text: string;
+}
+
+interface RawTeacherRow {
+    id: string;
+    fullName: string | null;
+    nip: string | null;
+    allowDesktopAttendance: boolean | null;
+}
+
+interface RawSchoolDesktopRow {
+    allowDesktopAttendanceGlobal: boolean | null;
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error && error.message.trim().length > 0) {
+        return error.message;
+    }
+    if (typeof error === 'object' && error !== null) {
+        const record = error as Record<string, unknown>;
+        if (typeof record.message === 'string' && record.message.trim().length > 0) {
+            return record.message;
+        }
+    }
+    return fallback;
+}
+
+function isMissingColumnError(error: unknown): boolean {
+    if (typeof error !== 'object' || error === null) return false;
+    const record = error as Record<string, unknown>;
+    const code = typeof record.code === 'string' ? record.code : '';
+    const message =
+        typeof record.message === 'string' ? record.message.toLowerCase() : '';
+
     return (
         code === 'PGRST204' ||
         code === '42703' ||
-        msg.includes('schema cache') ||
-        (msg.includes('column') && msg.includes('does not exist'))
+        message.includes('schema cache') ||
+        (message.includes('column') && message.includes('does not exist'))
     );
 }
 
 /**
  * Kartu Pengaturan Izin Presensi via Komputer / Laptop (Desktop)
- * Mendukung Saklar Global (semua guru sekaligus) dan Saklar Individual per Guru/PTK.
+ * Mendukung Saklar Global sekolah, Saklar Individual per Guru/PTK, serta Pagination.
  */
 export function TeacherDesktopAccessCard({
     schoolId,
 }: TeacherDesktopAccessCardProps) {
-    // 1. State utama daftar guru & saklar global
     const [allowDesktopGlobal, setAllowDesktopGlobal] = useState<boolean>(false);
     const [teachersList, setTeachersList] = useState<TeacherDesktopAccessItem[]>(
         []
@@ -64,22 +100,17 @@ export function TeacherDesktopAccessCard({
         Record<string, boolean>
     >({});
 
-    // 2. State pencarian, filter tab, & lipat/buka daftar
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [filterMode, setFilterMode] = useState<'ALL' | 'ALLOWED' | 'BLOCKED'>(
-        'ALL'
-    );
+    const [filterMode, setFilterMode] = useState<FilterMode>('ALL');
     const [isListExpanded, setIsListExpanded] = useState<boolean>(
         DEFAULT_LIST_EXPANDED
     );
+    const [feedback, setFeedback] = useState<FeedbackState | null>(null);
 
-    // 3. State notifikasi umpan balik di dalam kartu
-    const [feedback, setFeedback] = useState<{
-        status: 'success' | 'error';
-        text: string;
-    } | null>(null);
+    // State Pagination
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const [pageSize, setPageSize] = useState<number>(DEFAULT_TEACHER_PAGE_SIZE);
 
-    // Muat data guru & status saklar global dari Supabase
     const loadTeachersDesktopAccess = useCallback(async () => {
         if (!schoolId) return;
         setIsLoadingTeachers(true);
@@ -89,54 +120,52 @@ export function TeacherDesktopAccessCard({
             const [teachersRes, schoolRes] = await Promise.all([
                 supabase
                     .from('teachers')
-                    .select('id, "fullName", nip, "allowDesktopAttendance"')
+                    .select('id, fullName, nip, allowDesktopAttendance')
                     .eq('schoolId', schoolId)
                     .order('fullName', { ascending: true }),
                 supabase
                     .from('schools')
-                    .select('*')
+                    .select('allowDesktopAttendanceGlobal')
                     .eq('id', schoolId)
                     .maybeSingle(),
             ]);
 
             if (teachersRes.error) throw teachersRes.error;
+            if (schoolRes.error && !isMissingColumnError(schoolRes.error)) {
+                throw schoolRes.error;
+            }
 
-            const mapped: TeacherDesktopAccessItem[] = (
-                teachersRes.data ?? []
-            ).map((row) => ({
+            const rawTeachers = (teachersRes.data ?? []) as RawTeacherRow[];
+            const mapped: TeacherDesktopAccessItem[] = rawTeachers.map((row) => ({
                 id: String(row.id),
-                fullName: String(row.fullName ?? 'Tanpa Nama'),
-                nip: row.nip ? String(row.nip) : null,
+                fullName:
+                    row.fullName && row.fullName.trim().length > 0
+                        ? row.fullName
+                        : 'Tanpa Nama',
+                nip: row.nip && row.nip.trim().length > 0 ? row.nip : null,
                 allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
             }));
 
             setTeachersList(mapped);
+            setCurrentPage(1);
 
-            // Sinkronkan status Saklar Global berdasarkan data guru atau tabel schools
-            if (
-                mapped.length > 0 &&
-                mapped.every((t) => t.allowDesktopAttendance)
-            ) {
+            const schoolRow = schoolRes.data as RawSchoolDesktopRow | null;
+            if (mapped.length > 0 && mapped.every((t) => t.allowDesktopAttendance)) {
                 setAllowDesktopGlobal(true);
             } else if (
                 mapped.length > 0 &&
                 mapped.every((t) => !t.allowDesktopAttendance)
             ) {
                 setAllowDesktopGlobal(false);
-            } else if (
-                typeof schoolRes.data?.allowDesktopAttendanceGlobal === 'boolean'
-            ) {
-                setAllowDesktopGlobal(
-                    schoolRes.data.allowDesktopAttendanceGlobal
-                );
+            } else if (typeof schoolRow?.allowDesktopAttendanceGlobal === 'boolean') {
+                setAllowDesktopGlobal(schoolRow.allowDesktopAttendanceGlobal);
+            } else {
+                setAllowDesktopGlobal(false);
             }
         } catch (err: unknown) {
             setFeedback({
                 status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal memuat daftar Guru/PTK.',
+                text: getErrorMessage(err, 'Gagal memuat daftar Guru/PTK.'),
             });
         } finally {
             setIsLoadingTeachers(false);
@@ -144,10 +173,9 @@ export function TeacherDesktopAccessCard({
     }, [schoolId]);
 
     useEffect(() => {
-        loadTeachersDesktopAccess();
+        void loadTeachersDesktopAccess();
     }, [loadTeachersDesktopAccess]);
 
-    // Handler Saklar Global: Mengubah izin semua guru sekaligus
     const handleToggleGlobal = async () => {
         if (!schoolId || isUpdatingGlobal) return;
         const nextAllow = !allowDesktopGlobal;
@@ -155,7 +183,6 @@ export function TeacherDesktopAccessCard({
         setFeedback(null);
 
         try {
-            // Prioritas 1: Gunakan fungsi RPC SQL
             const { error: rpcError } = await supabase.rpc(
                 'set_school_desktop_attendance_global',
                 {
@@ -164,7 +191,6 @@ export function TeacherDesktopAccessCard({
                 }
             );
 
-            // Prioritas 2 (Fallback): Update langsung jika fungsi RPC belum dibuat
             if (rpcError) {
                 const { error: teachersErr } = await supabase
                     .from('teachers')
@@ -200,17 +226,16 @@ export function TeacherDesktopAccessCard({
         } catch (err: unknown) {
             setFeedback({
                 status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal mengubah pengaturan global presensi komputer.',
+                text: getErrorMessage(
+                    err,
+                    'Gagal mengubah pengaturan global presensi komputer.'
+                ),
             });
         } finally {
             setIsUpdatingGlobal(false);
         }
     };
 
-    // Handler Saklar Per Guru: Mengubah izin 1 guru tertentu
     const handleToggleSingleTeacher = async (
         teacher: TeacherDesktopAccessItem
     ) => {
@@ -259,16 +284,16 @@ export function TeacherDesktopAccessCard({
         } catch (err: unknown) {
             setFeedback({
                 status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : `Gagal mengubah izin untuk ${teacher.fullName}.`,
+                text: getErrorMessage(
+                    err,
+                    `Gagal mengubah izin untuk ${teacher.fullName}.`
+                ),
             });
         } finally {
             setUpdatingTeacherIds((prev) => {
-                const copy = { ...prev };
-                delete copy[teacher.id];
-                return copy;
+                const nextMap = { ...prev };
+                delete nextMap[teacher.id];
+                return nextMap;
             });
         }
     };
@@ -294,11 +319,26 @@ export function TeacherDesktopAccessCard({
         });
     }, [teachersList, searchQuery, filterMode]);
 
+    // Kalkulasi Pagination
+    const totalPages = Math.max(1, Math.ceil(filteredTeachers.length / pageSize));
+    const safeCurrentPage = Math.min(currentPage, totalPages);
+
+    const paginatedTeachers = useMemo(() => {
+        const startIdx = (safeCurrentPage - 1) * pageSize;
+        return filteredTeachers.slice(startIdx, startIdx + pageSize);
+    }, [filteredTeachers, pageSize, safeCurrentPage]);
+
+    const startItemNumber =
+        filteredTeachers.length === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1;
+    const endItemNumber = Math.min(
+        safeCurrentPage * pageSize,
+        filteredTeachers.length
+    );
+
     if (!schoolId) return null;
 
     return (
         <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-4">
-            {/* Header Kartu */}
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
                 <div>
                     <h2 className="text-base font-bold flex items-center gap-2">
@@ -306,9 +346,9 @@ export function TeacherDesktopAccessCard({
                         Izin Akses Presensi via Komputer / Laptop (Desktop)
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                        Secara bawaan, Guru/PTK melakukan presensi lewat HP.
-                        Gunakan saklar di bawah untuk mengizinkan akses komputer
-                        secara global atau khusus guru tertentu.
+                        Secara bawaan, Guru/PTK melakukan presensi lewat HP. Gunakan saklar
+                        di bawah untuk mengizinkan akses komputer secara global atau khusus
+                        guru tertentu.
                     </p>
                 </div>
 
@@ -320,7 +360,7 @@ export function TeacherDesktopAccessCard({
 
                     <button
                         type="button"
-                        onClick={loadTeachersDesktopAccess}
+                        onClick={() => void loadTeachersDesktopAccess()}
                         disabled={isLoadingTeachers}
                         className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all cursor-pointer"
                         title="Muat ulang daftar Guru/PTK"
@@ -349,9 +389,7 @@ export function TeacherDesktopAccessCard({
                         ) : (
                             <>
                                 <ChevronDown size={14} />
-                                <span className="hidden sm:inline">
-                                    Daftar Guru
-                                </span>
+                                <span className="hidden sm:inline">Daftar Guru</span>
                             </>
                         )}
                     </button>
@@ -360,14 +398,14 @@ export function TeacherDesktopAccessCard({
 
             {/* Saklar Global Sekolah */}
             <div
-                onClick={handleToggleGlobal}
+                onClick={() => void handleToggleGlobal()}
                 role="switch"
                 aria-checked={allowDesktopGlobal}
                 tabIndex={0}
                 onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        handleToggleGlobal();
+                        void handleToggleGlobal();
                     }
                 }}
                 className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-center justify-between gap-4 select-none active:scale-[0.99] ${allowDesktopGlobal
@@ -393,8 +431,7 @@ export function TeacherDesktopAccessCard({
                     <div>
                         <div className="flex flex-wrap items-center gap-2">
                             <span className="text-xs font-bold">
-                                Saklar Global: Izinkan Semua Guru / PTK Absen
-                                via Komputer
+                                Saklar Global: Izinkan Semua Guru / PTK Absen via Komputer
                             </span>
                             <span
                                 className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${allowDesktopGlobal
@@ -422,15 +459,12 @@ export function TeacherDesktopAccessCard({
                         }`}
                 >
                     <span
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${allowDesktopGlobal
-                                ? 'translate-x-6'
-                                : 'translate-x-0'
+                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${allowDesktopGlobal ? 'translate-x-6' : 'translate-x-0'
                             }`}
                     />
                 </span>
             </div>
 
-            {/* Notifikasi Umpan Balik */}
             {feedback && (
                 <div
                     className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${feedback.status === 'success'
@@ -439,42 +473,43 @@ export function TeacherDesktopAccessCard({
                         }`}
                 >
                     {feedback.status === 'success' ? (
-                        <CheckCircle2
-                            size={15}
-                            className="text-emerald-600 shrink-0"
-                        />
+                        <CheckCircle2 size={15} className="text-emerald-600 shrink-0" />
                     ) : (
-                        <AlertTriangle
-                            size={15}
-                            className="text-red-600 shrink-0"
-                        />
+                        <AlertTriangle size={15} className="text-red-600 shrink-0" />
                     )}
                     <span>{feedback.text}</span>
                 </div>
             )}
 
-            {/* Area Pencarian, Filter & Daftar Saklar Per Guru (Dapat Dilipat/Dibuka) */}
             {isListExpanded && (
                 <>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
-                        <div className="relative flex-1">
+                        {/* Flex input wrapper: mencegah ikon search menumpuk dengan teks */}
+                        <div className="flex items-center gap-2 flex-1 min-w-0 rounded-xl border border-border bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500/40">
                             <Search
                                 size={14}
-                                className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                                className="shrink-0 text-muted-foreground"
+                                aria-hidden="true"
                             />
                             <input
                                 type="text"
                                 value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onChange={(e) => {
+                                    setSearchQuery(e.target.value);
+                                    setCurrentPage(1);
+                                }}
                                 placeholder="Cari nama Guru/PTK atau NIP..."
-                                className="form-input w-full pl-9 text-xs py-2"
+                                className="w-full min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                             />
                         </div>
 
                         <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1 shrink-0">
                             <button
                                 type="button"
-                                onClick={() => setFilterMode('ALL')}
+                                onClick={() => {
+                                    setFilterMode('ALL');
+                                    setCurrentPage(1);
+                                }}
                                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${filterMode === 'ALL'
                                         ? 'bg-card text-foreground shadow-2xs'
                                         : 'text-muted-foreground hover:text-foreground'
@@ -484,7 +519,10 @@ export function TeacherDesktopAccessCard({
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setFilterMode('ALLOWED')}
+                                onClick={() => {
+                                    setFilterMode('ALLOWED');
+                                    setCurrentPage(1);
+                                }}
                                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${filterMode === 'ALLOWED'
                                         ? 'bg-card text-blue-600 dark:text-blue-300 shadow-2xs'
                                         : 'text-muted-foreground hover:text-foreground'
@@ -494,7 +532,10 @@ export function TeacherDesktopAccessCard({
                             </button>
                             <button
                                 type="button"
-                                onClick={() => setFilterMode('BLOCKED')}
+                                onClick={() => {
+                                    setFilterMode('BLOCKED');
+                                    setCurrentPage(1);
+                                }}
                                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${filterMode === 'BLOCKED'
                                         ? 'bg-card text-foreground shadow-2xs'
                                         : 'text-muted-foreground hover:text-foreground'
@@ -508,102 +549,149 @@ export function TeacherDesktopAccessCard({
                     {isLoadingTeachers ? (
                         <div className="py-8 text-center text-xs opacity-70 flex items-center justify-center gap-2">
                             <Loader2 size={15} className="animate-spin" />
-                            Memuat daftar Guru &amp; PTK...
+                            Memuat daftar Guru & PTK...
                         </div>
-                    ) : filteredTeachers.length === 0 ? (
+                    ) : paginatedTeachers.length === 0 ? (
                         <div className="py-6 text-center text-xs text-muted-foreground border border-dashed border-border rounded-xl">
                             {teachersList.length === 0
                                 ? 'Belum ada data Guru / PTK terdaftar pada sekolah ini.'
                                 : 'Tidak ada Guru / PTK yang cocok dengan pencarian Anda.'}
                         </div>
                     ) : (
-                        <div
-                            className={`${LIST_MAX_HEIGHT_CLASS} overflow-y-auto rounded-xl border border-border divide-y divide-border`}
-                        >
-                            {filteredTeachers.map((teacher, idx) => {
-                                const isBusyRow = Boolean(
-                                    updatingTeacherIds[teacher.id]
-                                );
-                                return (
-                                    <div
-                                        key={teacher.id}
-                                        className="px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
-                                    >
-                                        <div className="flex items-center gap-2.5 min-w-0">
-                                            <span className="w-6 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
-                                                {idx + 1}.
-                                            </span>
-                                            <div className="min-w-0">
-                                                <p className="font-semibold truncate text-foreground">
-                                                    {teacher.fullName}
-                                                </p>
-                                                <p className="text-[11px] text-muted-foreground font-mono truncate">
-                                                    {teacher.nip
-                                                        ? `NIP: ${teacher.nip}`
-                                                        : 'Tanpa NIP'}
-                                                </p>
+                        <div className="rounded-xl border border-border overflow-hidden">
+                            <div className="divide-y divide-border">
+                                {paginatedTeachers.map((teacher, idx) => {
+                                    const rowNumber =
+                                        (safeCurrentPage - 1) * pageSize + idx + 1;
+                                    const isBusyRow = Boolean(updatingTeacherIds[teacher.id]);
+                                    return (
+                                        <div
+                                            key={teacher.id}
+                                            className="px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
+                                        >
+                                            <div className="flex items-center gap-2.5 min-w-0">
+                                                <span className="w-7 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
+                                                    {rowNumber}.
+                                                </span>
+                                                <div className="min-w-0">
+                                                    <p className="font-semibold truncate text-foreground">
+                                                        {teacher.fullName}
+                                                    </p>
+                                                    <p className="text-[11px] text-muted-foreground font-mono truncate">
+                                                        {teacher.nip ? `NIP: ${teacher.nip}` : 'Tanpa NIP'}
+                                                    </p>
+                                                </div>
                                             </div>
-                                        </div>
 
-                                        <div className="flex items-center gap-3 shrink-0">
-                                            <span
-                                                className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${teacher.allowDesktopAttendance
-                                                        ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                                                        : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
-                                                    }`}
-                                            >
-                                                {teacher.allowDesktopAttendance ? (
-                                                    <>
-                                                        <Monitor size={11} />{' '}
-                                                        Boleh Komputer
-                                                    </>
-                                                ) : (
-                                                    <>
-                                                        <Smartphone size={11} />{' '}
-                                                        Wajib HP
-                                                    </>
-                                                )}
-                                            </span>
-
-                                            <button
-                                                type="button"
-                                                role="switch"
-                                                aria-checked={
-                                                    teacher.allowDesktopAttendance
-                                                }
-                                                aria-label={`Izin komputer untuk ${teacher.fullName}`}
-                                                disabled={
-                                                    isBusyRow ||
-                                                    isUpdatingGlobal
-                                                }
-                                                onClick={() =>
-                                                    handleToggleSingleTeacher(
-                                                        teacher
-                                                    )
-                                                }
-                                                className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center cursor-pointer disabled:opacity-50 ${teacher.allowDesktopAttendance
-                                                        ? 'bg-blue-600'
-                                                        : 'bg-slate-300 dark:bg-slate-600'
-                                                    }`}
-                                            >
+                                            <div className="flex items-center gap-3 shrink-0">
                                                 <span
-                                                    className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform flex items-center justify-center ${teacher.allowDesktopAttendance
-                                                            ? 'translate-x-5'
-                                                            : 'translate-x-0'
+                                                    className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${teacher.allowDesktopAttendance
+                                                            ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                                                            : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
                                                         }`}
                                                 >
-                                                    {isBusyRow && (
-                                                        <Loader2
-                                                            size={11}
-                                                            className="animate-spin text-blue-600"
-                                                        />
+                                                    {teacher.allowDesktopAttendance ? (
+                                                        <>
+                                                            <Monitor size={11} /> Boleh Komputer
+                                                        </>
+                                                    ) : (
+                                                        <>
+                                                            <Smartphone size={11} /> Wajib HP
+                                                        </>
                                                     )}
                                                 </span>
-                                            </button>
+
+                                                <button
+                                                    type="button"
+                                                    role="switch"
+                                                    aria-checked={teacher.allowDesktopAttendance}
+                                                    aria-label={`Izin komputer untuk ${teacher.fullName}`}
+                                                    disabled={isBusyRow || isUpdatingGlobal}
+                                                    onClick={() =>
+                                                        void handleToggleSingleTeacher(teacher)
+                                                    }
+                                                    className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center cursor-pointer disabled:opacity-50 ${teacher.allowDesktopAttendance
+                                                            ? 'bg-blue-600'
+                                                            : 'bg-slate-300 dark:bg-slate-600'
+                                                        }`}
+                                                >
+                                                    <span
+                                                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform flex items-center justify-center ${teacher.allowDesktopAttendance
+                                                                ? 'translate-x-5'
+                                                                : 'translate-x-0'
+                                                            }`}
+                                                    >
+                                                        {isBusyRow && (
+                                                            <Loader2
+                                                                size={11}
+                                                                className="animate-spin text-blue-600"
+                                                            />
+                                                        )}
+                                                    </span>
+                                                </button>
+                                            </div>
                                         </div>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Footer Kontrol Pagination */}
+                            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-4 py-2.5 border-t border-border bg-muted/25 text-xs">
+                                <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                                    <span>
+                                        Menampilkan <strong>{startItemNumber}</strong>–
+                                        <strong>{endItemNumber}</strong> dari{' '}
+                                        <strong>{filteredTeachers.length}</strong> Guru/PTK
+                                    </span>
+                                    <select
+                                        value={pageSize}
+                                        onChange={(e) => {
+                                            setPageSize(Number(e.target.value));
+                                            setCurrentPage(1);
+                                        }}
+                                        aria-label="Jumlah guru per halaman"
+                                        className="form-input w-auto! text-xs py-1 px-2 bg-card font-medium"
+                                    >
+                                        {TEACHER_PAGE_SIZE_OPTIONS.map((opt) => (
+                                            <option key={opt} value={opt}>
+                                                {opt} / halaman
+                                            </option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {totalPages > 1 && (
+                                    <div className="flex items-center gap-1.5">
+                                        <button
+                                            type="button"
+                                            disabled={safeCurrentPage <= 1}
+                                            onClick={() =>
+                                                setCurrentPage((p) => Math.max(1, p - 1))
+                                            }
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
+                                        >
+                                            <ChevronLeft size={14} />
+                                            Sebelumnya
+                                        </button>
+
+                                        <span className="px-2 py-1 font-mono font-semibold text-foreground">
+                                            Hal {safeCurrentPage} / {totalPages}
+                                        </span>
+
+                                        <button
+                                            type="button"
+                                            disabled={safeCurrentPage >= totalPages}
+                                            onClick={() =>
+                                                setCurrentPage((p) => Math.min(totalPages, p + 1))
+                                            }
+                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
+                                        >
+                                            Berikutnya
+                                            <ChevronRight size={14} />
+                                        </button>
                                     </div>
-                                );
-                            })}
+                                )}
+                            </div>
                         </div>
                     )}
                 </>

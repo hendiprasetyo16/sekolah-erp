@@ -1,5 +1,6 @@
 // src/modules/attendance/utils/holidayApiService.ts
 import type { ParsedHolidayRow } from './excelHolidayParser';
+import type { HolidayCategoryType } from '../types/attendance.types';
 
 export type HolidayApiProviderId =
   | 'AUTO'
@@ -70,9 +71,6 @@ interface SingleProviderConfig {
   buildUrl: (year: number) => string;
 }
 
-/**
- * Konfigurasi Endpoint untuk ke-6 Server API Publik Indonesia
- */
 const SINGLE_PROVIDERS: SingleProviderConfig[] = [
   {
     id: 'TANGGAL_MERAH_UPSET',
@@ -111,64 +109,64 @@ const SINGLE_PROVIDERS: SingleProviderConfig[] = [
  */
 const BUILTIN_FALLBACK_HOLIDAYS: Record<number, ParsedHolidayRow[]> = {
   2026: [
-    { date: '2026-01-01', name: 'Tahun Baru 2026 Masehi' },
-    { date: '2026-01-16', name: 'Isra Mikraj Nabi Muhammad SAW' },
-    { date: '2026-02-16', name: 'Cuti Bersama Tahun Baru Imlek 2577' },
-    { date: '2026-02-17', name: 'Tahun Baru Imlek 2577 Kongzili' },
-    { date: '2026-03-18', name: 'Cuti Bersama Hari Suci Nyepi' },
-    { date: '2026-03-19', name: 'Hari Suci Nyepi Tahun Baru Saka 1948' },
-    { date: '2026-03-20', name: 'Cuti Bersama Idul Fitri 1447 H' },
-    { date: '2026-03-21', name: 'Hari Raya Idul Fitri 1447 H' },
-    { date: '2026-03-22', name: 'Hari Raya Idul Fitri 1447 H (Hari Kedua)' },
-    { date: '2026-03-23', name: 'Cuti Bersama Idul Fitri 1447 H' },
-    { date: '2026-03-24', name: 'Cuti Bersama Idul Fitri 1447 H' },
-    { date: '2026-04-03', name: 'Wafat Yesus Kristus' },
-    { date: '2026-04-05', name: 'Kebangkitan Yesus Kristus (Paskah)' },
-    { date: '2026-05-01', name: 'Hari Buruh Internasional' },
-    { date: '2026-05-14', name: 'Kenaikan Yesus Kristus' },
-    { date: '2026-05-15', name: 'Cuti Bersama Kenaikan Yesus Kristus' },
-    { date: '2026-05-27', name: 'Hari Raya Idul Adha 1447 H' },
-    { date: '2026-05-28', name: 'Cuti Bersama Idul Adha 1447 H' },
-    { date: '2026-05-31', name: 'Hari Raya Waisak 2570 BE' },
-    { date: '2026-06-01', name: 'Hari Lahir Pancasila' },
-    { date: '2026-06-16', name: 'Tahun Baru Islam 1448 H' },
-    { date: '2026-08-17', name: 'Hari Kemerdekaan Republik Indonesia' },
-    { date: '2026-08-25', name: 'Maulid Nabi Muhammad SAW' },
-    { date: '2026-12-24', name: 'Cuti Bersama Kelahiran Yesus Kristus' },
-    { date: '2026-12-25', name: 'Kelahiran Yesus Kristus (Natal)' },
+    { date: '2026-01-01', name: 'Tahun Baru 2026 Masehi', type: 'NASIONAL' },
+    { date: '2026-01-16', name: 'Isra Mikraj Nabi Muhammad SAW', type: 'NASIONAL' },
+    { date: '2026-02-16', name: 'Cuti Bersama Tahun Baru Imlek 2577', type: 'CUTI_BERSAMA' },
+    { date: '2026-02-17', name: 'Tahun Baru Imlek 2577 Kongzili', type: 'NASIONAL' },
+    { date: '2026-03-18', name: 'Cuti Bersama Hari Suci Nyepi', type: 'CUTI_BERSAMA' },
+    { date: '2026-03-19', name: 'Hari Suci Nyepi Tahun Baru Saka 1948', type: 'NASIONAL' },
+    { date: '2026-03-20', name: 'Cuti Bersama Idul Fitri 1447 H', type: 'CUTI_BERSAMA' },
+    { date: '2026-03-21', name: 'Hari Raya Idul Fitri 1447 H', type: 'NASIONAL' },
+    { date: '2026-03-22', name: 'Hari Raya Idul Fitri 1447 H (Hari Kedua)', type: 'NASIONAL' },
+    { date: '2026-03-23', name: 'Cuti Bersama Idul Fitri 1447 H', type: 'CUTI_BERSAMA' },
+    { date: '2026-03-24', name: 'Cuti Bersama Idul Fitri 1447 H', type: 'CUTI_BERSAMA' },
+    { date: '2026-04-03', name: 'Wafat Yesus Kristus', type: 'NASIONAL' },
+    { date: '2026-04-05', name: 'Kebangkitan Yesus Kristus (Paskah)', type: 'NASIONAL' },
+    { date: '2026-05-01', name: 'Hari Buruh Internasional', type: 'NASIONAL' },
+    { date: '2026-05-14', name: 'Kenaikan Yesus Kristus', type: 'NASIONAL' },
+    { date: '2026-05-15', name: 'Cuti Bersama Kenaikan Yesus Kristus', type: 'CUTI_BERSAMA' },
+    { date: '2026-05-27', name: 'Hari Raya Idul Adha 1447 H', type: 'NASIONAL' },
+    { date: '2026-05-28', name: 'Cuti Bersama Idul Adha 1447 H', type: 'CUTI_BERSAMA' },
+    { date: '2026-05-31', name: 'Hari Raya Waisak 2570 BE', type: 'NASIONAL' },
+    { date: '2026-06-01', name: 'Hari Lahir Pancasila', type: 'NASIONAL' },
+    { date: '2026-06-16', name: 'Tahun Baru Islam 1448 H', type: 'NASIONAL' },
+    { date: '2026-08-17', name: 'Hari Kemerdekaan Republik Indonesia', type: 'NASIONAL' },
+    { date: '2026-08-25', name: 'Maulid Nabi Muhammad SAW', type: 'NASIONAL' },
+    { date: '2026-12-24', name: 'Cuti Bersama Kelahiran Yesus Kristus', type: 'CUTI_BERSAMA' },
+    { date: '2026-12-25', name: 'Kelahiran Yesus Kristus (Natal)', type: 'NASIONAL' },
   ],
   2027: [
-    { date: '2027-01-01', name: 'Tahun Baru 2027 Masehi' },
-    { date: '2027-01-05', name: 'Isra Mikraj Nabi Muhammad SAW' },
-    { date: '2027-02-06', name: 'Tahun Baru Imlek 2578 Kongzili' },
-    { date: '2027-03-09', name: 'Hari Suci Nyepi Tahun Baru Saka 1949' },
-    { date: '2027-03-10', name: 'Hari Raya Idul Fitri 1448 H' },
-    { date: '2027-03-11', name: 'Hari Raya Idul Fitri 1448 H (Hari Kedua)' },
-    { date: '2027-03-26', name: 'Wafat Yesus Kristus' },
-    { date: '2027-03-28', name: 'Kebangkitan Yesus Kristus (Paskah)' },
-    { date: '2027-05-01', name: 'Hari Buruh Internasional' },
-    { date: '2027-05-06', name: 'Kenaikan Yesus Kristus' },
-    { date: '2027-05-17', name: 'Hari Raya Idul Adha 1448 H' },
-    { date: '2027-05-20', name: 'Hari Raya Waisak 2571 BE' },
-    { date: '2027-06-01', name: 'Hari Lahir Pancasila' },
-    { date: '2027-06-06', name: 'Tahun Baru Islam 1449 H' },
-    { date: '2027-08-14', name: 'Maulid Nabi Muhammad SAW' },
-    { date: '2027-08-17', name: 'Hari Kemerdekaan Republik Indonesia' },
-    { date: '2027-12-25', name: 'Kelahiran Yesus Kristus (Natal)' },
+    { date: '2027-01-01', name: 'Tahun Baru 2027 Masehi', type: 'NASIONAL' },
+    { date: '2027-01-05', name: 'Isra Mikraj Nabi Muhammad SAW', type: 'NASIONAL' },
+    { date: '2027-02-06', name: 'Tahun Baru Imlek 2578 Kongzili', type: 'NASIONAL' },
+    { date: '2027-03-09', name: 'Hari Suci Nyepi Tahun Baru Saka 1949', type: 'NASIONAL' },
+    { date: '2027-03-10', name: 'Hari Raya Idul Fitri 1448 H', type: 'NASIONAL' },
+    { date: '2027-03-11', name: 'Hari Raya Idul Fitri 1448 H (Hari Kedua)', type: 'NASIONAL' },
+    { date: '2027-03-26', name: 'Wafat Yesus Kristus', type: 'NASIONAL' },
+    { date: '2027-03-28', name: 'Kebangkitan Yesus Kristus (Paskah)', type: 'NASIONAL' },
+    { date: '2027-05-01', name: 'Hari Buruh Internasional', type: 'NASIONAL' },
+    { date: '2027-05-06', name: 'Kenaikan Yesus Kristus', type: 'NASIONAL' },
+    { date: '2027-05-17', name: 'Hari Raya Idul Adha 1448 H', type: 'NASIONAL' },
+    { date: '2027-05-20', name: 'Hari Raya Waisak 2571 BE', type: 'NASIONAL' },
+    { date: '2027-06-01', name: 'Hari Lahir Pancasila', type: 'NASIONAL' },
+    { date: '2027-06-06', name: 'Tahun Baru Islam 1449 H', type: 'NASIONAL' },
+    { date: '2027-08-14', name: 'Maulid Nabi Muhammad SAW', type: 'NASIONAL' },
+    { date: '2027-08-17', name: 'Hari Kemerdekaan Republik Indonesia', type: 'NASIONAL' },
+    { date: '2027-12-25', name: 'Kelahiran Yesus Kristus (Natal)', type: 'NASIONAL' },
   ],
   2028: [
-    { date: '2028-01-01', name: 'Tahun Baru 2028 Masehi' },
-    { date: '2028-01-26', name: 'Tahun Baru Imlek 2579 Kongzili' },
-    { date: '2028-02-27', name: 'Hari Raya Idul Fitri 1449 H' },
-    { date: '2028-02-28', name: 'Hari Raya Idul Fitri 1449 H (Hari Kedua)' },
-    { date: '2028-03-27', name: 'Hari Suci Nyepi Tahun Baru Saka 1950' },
-    { date: '2028-04-14', name: 'Wafat Yesus Kristus' },
-    { date: '2028-05-01', name: 'Hari Buruh Internasional' },
-    { date: '2028-05-05', name: 'Hari Raya Idul Adha 1449 H' },
-    { date: '2028-05-25', name: 'Kenaikan Yesus Kristus' },
-    { date: '2028-06-01', name: 'Hari Lahir Pancasila' },
-    { date: '2028-08-17', name: 'Hari Kemerdekaan Republik Indonesia' },
-    { date: '2028-12-25', name: 'Kelahiran Yesus Kristus (Natal)' },
+    { date: '2028-01-01', name: 'Tahun Baru 2028 Masehi', type: 'NASIONAL' },
+    { date: '2028-01-26', name: 'Tahun Baru Imlek 2579 Kongzili', type: 'NASIONAL' },
+    { date: '2028-02-27', name: 'Hari Raya Idul Fitri 1449 H', type: 'NASIONAL' },
+    { date: '2028-02-28', name: 'Hari Raya Idul Fitri 1449 H (Hari Kedua)', type: 'NASIONAL' },
+    { date: '2028-03-27', name: 'Hari Suci Nyepi Tahun Baru Saka 1950', type: 'NASIONAL' },
+    { date: '2028-04-14', name: 'Wafat Yesus Kristus', type: 'NASIONAL' },
+    { date: '2028-05-01', name: 'Hari Buruh Internasional', type: 'NASIONAL' },
+    { date: '2028-05-05', name: 'Hari Raya Idul Adha 1449 H', type: 'NASIONAL' },
+    { date: '2028-05-25', name: 'Kenaikan Yesus Kristus', type: 'NASIONAL' },
+    { date: '2028-06-01', name: 'Hari Lahir Pancasila', type: 'NASIONAL' },
+    { date: '2028-08-17', name: 'Hari Kemerdekaan Republik Indonesia', type: 'NASIONAL' },
+    { date: '2028-12-25', name: 'Kelahiran Yesus Kristus (Natal)', type: 'NASIONAL' },
   ],
 };
 
@@ -178,23 +176,26 @@ const BUILTIN_FALLBACK_HOLIDAYS: Record<number, ParsedHolidayRow[]> = {
 const MUHAMMADIYAH_CALENDAR_NOTES: Record<
   number,
   {
-    awalRamadan?: { date: string; name: string };
-    idulFitriDates?: Array<{ date: string; name: string }>;
+    awalRamadan?: ParsedHolidayRow;
+    idulFitriDates?: ParsedHolidayRow[];
   }
 > = {
   2026: {
     awalRamadan: {
       date: '2026-02-18',
       name: 'Awal Puasa 1 Ramadan 1447 H (Muhammadiyah)',
+      type: 'SEKOLAH',
     },
     idulFitriDates: [
       {
         date: '2026-03-20',
         name: 'Hari Raya Idul Fitri 1 Syawal 1447 H (Muhammadiyah)',
+        type: 'NASIONAL',
       },
       {
         date: '2026-03-21',
         name: 'Hari Raya Idul Fitri 1447 H (Hari Kedua)',
+        type: 'NASIONAL',
       },
     ],
   },
@@ -202,12 +203,14 @@ const MUHAMMADIYAH_CALENDAR_NOTES: Record<
     awalRamadan: {
       date: '2027-02-08',
       name: 'Awal Puasa 1 Ramadan 1448 H (Muhammadiyah)',
+      type: 'SEKOLAH',
     },
   },
   2028: {
     awalRamadan: {
       date: '2028-01-28',
       name: 'Awal Puasa 1 Ramadan 1449 H (Muhammadiyah)',
+      type: 'SEKOLAH',
     },
   },
 };
@@ -227,10 +230,6 @@ interface RawHolidayApiItem {
   is_national_holiday?: boolean;
 }
 
-/**
- * Mengekstrak array data libur dari berbagai bentuk pembungkus JSON server
- * (Array langsung, { data: [...] }, { holidays: [...] }, atau { result: [...] })
- */
 function extractRawHolidayList(payload: unknown): RawHolidayApiItem[] {
   if (Array.isArray(payload)) {
     return payload as RawHolidayApiItem[];
@@ -252,9 +251,6 @@ function normalizeIsoDateString(rawDate: string): string | null {
   return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
 }
 
-/**
- * Menyesuaikan hasil API dengan Kalender Muhammadiyah (Awal Ramadan & Idul Fitri)
- */
 function applyMuhammadiyahCalendar(
   rows: ParsedHolidayRow[],
   year: number,
@@ -291,9 +287,6 @@ function applyMuhammadiyahCalendar(
   );
 }
 
-/**
- * Mengambil dan menormalisasi data dari satu server spesifik
- */
 async function fetchFromSingleProvider(
   provider: SingleProviderConfig,
   year: number,
@@ -354,9 +347,14 @@ async function fetchFromSingleProvider(
           ? `Cuti Bersama ${rawName}`
           : rawName;
 
+      const categoryType: HolidayCategoryType = isCuti
+        ? 'CUTI_BERSAMA'
+        : 'NASIONAL';
+
       results.push({
         date: normalizedDate,
         name: formattedName,
+        type: categoryType,
       });
     }
 
@@ -371,9 +369,6 @@ async function fetchFromSingleProvider(
   }
 }
 
-/**
- * Fungsi utama: sinkronisasi 6 server API + pelaporan progres + cadangan otomatis
- */
 export async function fetchHolidaysFromServer(options: {
   year: number;
   includeCutiBersama: boolean;
@@ -409,10 +404,9 @@ export async function fetchHolidaysFromServer(options: {
     };
   };
 
-  // Jika user memilih langsung Cadangan Lokal
   if (providerId === 'BUILTIN_MUHAMMADIYAH') {
     const localRows = (BUILTIN_FALLBACK_HOLIDAYS[year] ?? []).filter((r) =>
-      includeCutiBersama ? true : !r.name.toLowerCase().includes('cuti bersama')
+      includeCutiBersama ? true : r.type !== 'CUTI_BERSAMA'
     );
     if (localRows.length === 0) {
       throw new Error(
@@ -453,11 +447,10 @@ export async function fetchHolidaysFromServer(options: {
     }
   }
 
-  // Jika mode AUTO dan keenam server eksternal gagal, pakai Cadangan Lokal (2026-2028)
   if (providerId === 'AUTO' && BUILTIN_FALLBACK_HOLIDAYS[year]) {
     onProgress?.('Semua server luar sibuk, memuat dari Cadangan Lokal...');
     const localRows = BUILTIN_FALLBACK_HOLIDAYS[year].filter((r) =>
-      includeCutiBersama ? true : !r.name.toLowerCase().includes('cuti bersama')
+      includeCutiBersama ? true : r.type !== 'CUTI_BERSAMA'
     );
     return finalizeRows(localRows, 'Cadangan Lokal (Auto-Fallback)');
   }

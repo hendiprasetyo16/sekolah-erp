@@ -1,8 +1,10 @@
 // src/modules/attendance/utils/excelHolidayParser.ts
+import type { HolidayCategoryType } from '../types/attendance.types';
 
 export interface ParsedHolidayRow {
   date: string; // YYYY-MM-DD
   name: string;
+  type: HolidayCategoryType;
 }
 
 type ZipXmlEntries = Record<string, string>;
@@ -48,6 +50,29 @@ export function normalizeHolidayDate(raw: string): string | null {
   }
 
   return null;
+}
+
+/**
+ * Menormalisasi kategori hari libur agar selaras dengan constraint SQL v20.1
+ */
+function normalizeHolidayCategory(
+  rawCategory: string,
+  holidayName: string
+): HolidayCategoryType {
+  const upperCat = rawCategory.trim().toUpperCase().replace(/\s+/g, '_');
+  if (upperCat === 'NASIONAL' || upperCat === 'LIBUR_NASIONAL') {
+    return 'NASIONAL';
+  }
+  if (upperCat === 'CUTI_BERSAMA' || upperCat === 'CUTI') {
+    return 'CUTI_BERSAMA';
+  }
+  if (upperCat === 'SEKOLAH' || upperCat === 'LIBUR_SEKOLAH') {
+    return 'SEKOLAH';
+  }
+  if (holidayName.toLowerCase().includes('cuti bersama')) {
+    return 'CUTI_BERSAMA';
+  }
+  return 'SEKOLAH';
 }
 
 /**
@@ -102,20 +127,19 @@ async function extractZipEntries(buffer: ArrayBuffer): Promise<ZipXmlEntries> {
     const lfNameLen = view.getUint16(localHeaderOffset + 26, true);
     const lfExtraLen = view.getUint16(localHeaderOffset + 28, true);
     const dataStart = localHeaderOffset + 30 + lfNameLen + lfExtraLen;
-    const compressedData = bytes.slice(dataStart, dataStart + compressedSize);
+    const compressedSlice = buffer.slice(dataStart, dataStart + compressedSize);
 
     if (
       fileName === 'xl/sharedStrings.xml' ||
       fileName === 'xl/worksheets/sheet1.xml'
     ) {
       if (compressionMethod === 0) {
-        files[fileName] = decoder.decode(compressedData);
+        files[fileName] = decoder.decode(new Uint8Array(compressedSlice));
       } else if (compressionMethod === 8) {
-        const ds = new DecompressionStream('deflate-raw');
-        const writer = ds.writable.getWriter();
-        writer.write(compressedData);
-        writer.close();
-        const decompressedBuf = await new Response(ds.readable).arrayBuffer();
+        const decompressedStream = new Blob([compressedSlice])
+          .stream()
+          .pipeThrough(new DecompressionStream('deflate-raw'));
+        const decompressedBuf = await new Response(decompressedStream).arrayBuffer();
         files[fileName] = decoder.decode(decompressedBuf);
       }
     }
@@ -127,7 +151,7 @@ async function extractZipEntries(buffer: ArrayBuffer): Promise<ZipXmlEntries> {
 }
 
 /**
- * Membaca file Excel (.xlsx) atau .csv menjadi daftar { date, name }
+ * Membaca file Excel (.xlsx) atau .csv menjadi daftar { date, name, type }
  */
 export async function parseHolidaySpreadsheetFile(
   file: File
@@ -209,17 +233,20 @@ export async function parseHolidaySpreadsheetFile(
     );
   }
 
-  // Konversi baris menjadi objek tanggal & keterangan (otomatis melewati baris header)
+  // Konversi baris menjadi objek tanggal, keterangan & kategori (otomatis melewati baris header)
   const parsed: ParsedHolidayRow[] = [];
   for (const cols of rowsMatrix) {
     const rawDate = cols[0] ?? '';
     const rawName = cols[1] ?? '';
+    const rawCategory = cols[2] ?? '';
     const normalizedDate = normalizeHolidayDate(rawDate);
 
     if (normalizedDate && rawName.trim().length > 0) {
+      const cleanName = rawName.trim();
       parsed.push({
         date: normalizedDate,
-        name: rawName.trim(),
+        name: cleanName,
+        type: normalizeHolidayCategory(rawCategory, cleanName),
       });
     }
   }
@@ -231,21 +258,21 @@ export async function parseHolidaySpreadsheetFile(
  * Membuat & mengunduh file template Excel (.xlsx) valid tanpa library eksternal
  */
 export function downloadHolidayExcelTemplate(year: number): void {
-  const sampleRows: Array<[string, string]> = [
-    ['tanggal', 'keterangan'],
-    [`${year}-01-01`, 'Tahun Baru Masehi'],
-    [`${year}-05-01`, 'Hari Buruh Internasional'],
-    [`${year}-06-01`, 'Hari Lahir Pancasila'],
-    [`${year}-08-17`, 'Hari Kemerdekaan Republik Indonesia'],
-    [`${year}-12-25`, 'Hari Raya Natal'],
+  const sampleRows: Array<[string, string, string]> = [
+    ['tanggal', 'keterangan', 'kategori'],
+    [`${year}-01-01`, 'Tahun Baru Masehi', 'NASIONAL'],
+    [`${year}-05-01`, 'Hari Buruh Internasional', 'NASIONAL'],
+    [`${year}-06-01`, 'Hari Lahir Pancasila', 'NASIONAL'],
+    [`${year}-08-17`, 'Hari Kemerdekaan Republik Indonesia', 'NASIONAL'],
+    [`${year}-12-25`, 'Hari Raya Natal', 'NASIONAL'],
   ];
 
   const escapeXml = (str: string) =>
     str
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/&/g, '&')
+      .replace(/</g, '<')
+      .replace(/>/g, '>')
+      .replace(/"/g, '"');
 
   const sheetRowsXml = sampleRows
     .map(
@@ -253,6 +280,7 @@ export function downloadHolidayExcelTemplate(year: number): void {
         `<row r="${idx + 1}">` +
         `<c r="A${idx + 1}" t="inlineStr"><is><t>${escapeXml(r[0])}</t></is></c>` +
         `<c r="B${idx + 1}" t="inlineStr"><is><t>${escapeXml(r[1])}</t></is></c>` +
+        `<c r="C${idx + 1}" t="inlineStr"><is><t>${escapeXml(r[2])}</t></is></c>` +
         `</row>`
     )
     .join('');

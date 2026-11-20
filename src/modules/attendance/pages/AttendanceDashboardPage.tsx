@@ -25,6 +25,7 @@ import {
   CheckCircle2,
   LogIn,
   LogOut,
+  Search,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
@@ -40,7 +41,8 @@ import type {
 // PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
 // ============================================================================
 const ARCHIVE_RETENTION_YEARS = 2; // Batas umur arsip absensi dalam tahun (default: 2 tahun)
-const STORAGE_BUCKET_NAME = 'attendance-selfies'; // Nama bucket penyimpanan foto selfie
+const STORAGE_BUCKET_NAME = 'attendance-selfies'; // Bucket penyimpanan foto selfie
+const ATTACHMENT_BUCKET_NAME = 'attendance-attachments'; // Bucket penyimpanan surat izin/dinas
 const STORAGE_DELETE_BATCH_SIZE = 100; // Jumlah maksimal file yang dihapus per gelombang
 
 type ActiveTab = 'overview' | 'students' | 'teachers';
@@ -77,7 +79,6 @@ type StudentAttendanceWithCheckOut = StudentAttendance & {
   checkOutTime?: string | null;
 };
 
-// Struktur kolom tambahan saat query ulang data Check-Out guru
 interface AttendanceExtraCols {
   id: string;
   checkOutLat?: number | null;
@@ -87,14 +88,12 @@ interface AttendanceExtraCols {
   attachmentUrl?: string | null;
 }
 
-// Struktur kolom tambahan saat query ulang data Jam Pulang siswa
 interface StudentAttendanceExtraCols {
   id: string;
   checkInTime?: string | null;
   checkOutTime?: string | null;
 }
 
-// Struktur baris file storage saat pembersihan arsip lama
 interface AttendanceFileRow {
   checkInSelfieUrl?: string | null;
   checkOutSelfieUrl?: string | null;
@@ -119,7 +118,12 @@ const STATUS_LABELS: Record<string, string> = {
   BELUM_ABSEN: 'Belum Absen',
 };
 
-// Helper aman untuk mengambil pesan error dari tipe 'unknown' tanpa memakai 'any'
+// Normalisasi status agar variasi penulisan ALPHA tetap terbaca sebagai ALPA
+function normalizeStatusKey(status?: string | null): string {
+  const upper = (status ?? '').toUpperCase();
+  return upper === 'ALPHA' ? 'ALPA' : upper;
+}
+
 function getErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -144,8 +148,10 @@ function getRetentionCutoffDate(years: number): string {
   return `${y}-${m}-${day}`;
 }
 
-// Menghapus file di Supabase Storage secara bertahap (aman untuk banyak file)
-async function removeFilesFromStorage(paths: Array<string | null | undefined>) {
+async function removeFilesFromStorage(
+  paths: Array<string | null | undefined>,
+  bucketName: string = STORAGE_BUCKET_NAME
+) {
   const validPaths = Array.from(
     new Set(paths.filter((p): p is string => Boolean(p && p.trim())))
   );
@@ -153,17 +159,17 @@ async function removeFilesFromStorage(paths: Array<string | null | undefined>) {
 
   for (let i = 0; i < validPaths.length; i += STORAGE_DELETE_BATCH_SIZE) {
     const chunk = validPaths.slice(i, i + STORAGE_DELETE_BATCH_SIZE);
-    const { error } = await supabase.storage
-      .from(STORAGE_BUCKET_NAME)
-      .remove(chunk);
+    const { error } = await supabase.storage.from(bucketName).remove(chunk);
 
     if (error) {
-      console.warn('[StorageCleanup] Sebagian file gagal dihapus:', error.message);
+      console.warn(
+        `[StorageCleanup:${bucketName}] Sebagian file gagal dihapus:`,
+        error.message
+      );
     }
   }
 }
 
-// Helper mendeteksi apakah catatan berisi alasan Pulang Awal
 function isEarlyCheckoutNote(notes?: string | null): boolean {
   if (!notes) return false;
   const lower = notes.toLowerCase();
@@ -180,8 +186,8 @@ export function AttendanceDashboardPage() {
   >([]);
   const [simSchoolId, setSimSchoolId] = useState<string>('');
   const activeSchoolId = isSuperAdmin
-    ? simSchoolId || school?.id || ''
-    : school?.id || '';
+    ? simSchoolId || school?.id || user?.schoolId || ''
+    : school?.id || user?.schoolId || '';
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
@@ -241,7 +247,8 @@ export function AttendanceDashboardPage() {
     id: string;
     name: string;
     date: string;
-    storagePaths: string[];
+    selfiePaths: string[];
+    attachmentPaths: string[];
   } | null>(null);
   const [isDeletingRow, setIsDeletingRow] = useState<boolean>(false);
 
@@ -286,7 +293,7 @@ export function AttendanceDashboardPage() {
       });
   }, [activeSchoolId]);
 
-  // 3. Muat Ringkasan & Data Absensi Siswa + Guru (Termasuk kolom Check-Out GPS & Selfie)
+  // 3. Muat Ringkasan & Data Absensi Siswa + Guru
   const loadData = useCallback(async () => {
     if (!activeSchoolId) return;
     setIsLoading(true);
@@ -308,7 +315,6 @@ export function AttendanceDashboardPage() {
       let enrichedStudents = students.data as StudentAttendanceWithCheckOut[];
       let enrichedTeachers = teachers.data as TeacherAttendanceWithCheckOut[];
 
-      // Pastikan kolom checkInTime & checkOutTime siswa ikut terbaca
       if (enrichedStudents.length > 0) {
         const studentAttIds = enrichedStudents.map((s) => s.id);
         const { data: studentExtraCols, error: studentExtraErr } = await supabase
@@ -335,7 +341,6 @@ export function AttendanceDashboardPage() {
         }
       }
 
-      // Pastikan kolom Check-Out GPS & Foto Pulang guru selalu ikut terbaca
       if (enrichedTeachers.length > 0) {
         const ids = enrichedTeachers.map((t) => t.id);
         const { data: extraCols, error: extraErr } = await supabase
@@ -371,7 +376,7 @@ export function AttendanceDashboardPage() {
     loadData();
   }, [loadData]);
 
-  // Buka Modal Pratinjau Foto Selfie Guru (Datang & Pulang sekaligus)
+  // Buka Modal Pratinjau Foto Selfie Guru
   const handlePreviewSelfie = async (record: TeacherAttendanceWithCheckOut) => {
     const hasCheckInPhoto = Boolean(record.checkInSelfieUrl);
     const hasCheckOutPhoto = Boolean(record.checkOutSelfieUrl);
@@ -441,28 +446,36 @@ export function AttendanceDashboardPage() {
     );
   };
 
-  // Hitung statistik status siswa berdasarkan kelas terpilih (untuk badge filter status)
+  // Hitung statistik status siswa berdasarkan kelas terpilih
   const studentStatusCounts = useMemo(() => {
     const classScoped = studentRecords.filter(
       (r) => selectedClassId === 'ALL' || r.student?.classId === selectedClassId
     );
     return {
       ALL: classScoped.length,
-      HADIR: classScoped.filter((r) => r.status === 'HADIR').length,
-      TERLAMBAT: classScoped.filter((r) => r.status === 'TERLAMBAT').length,
-      IZIN: classScoped.filter((r) => r.status === 'IZIN').length,
-      SAKIT: classScoped.filter((r) => r.status === 'SAKIT').length,
-      ALPA: classScoped.filter((r) => r.status === 'ALPA').length,
+      HADIR: classScoped.filter((r) => normalizeStatusKey(r.status) === 'HADIR')
+        .length,
+      TERLAMBAT: classScoped.filter(
+        (r) => normalizeStatusKey(r.status) === 'TERLAMBAT'
+      ).length,
+      IZIN: classScoped.filter((r) => normalizeStatusKey(r.status) === 'IZIN')
+        .length,
+      SAKIT: classScoped.filter((r) => normalizeStatusKey(r.status) === 'SAKIT')
+        .length,
+      ALPA: classScoped.filter((r) => normalizeStatusKey(r.status) === 'ALPA')
+        .length,
     };
   }, [studentRecords, selectedClassId]);
 
   // Filter & Urutkan Data Siswa
   const filteredStudents = useMemo(() => {
     const filtered = studentRecords.filter((r) => {
+      const normalizedStatus = normalizeStatusKey(r.status);
       const matchesClass =
         selectedClassId === 'ALL' || r.student?.classId === selectedClassId;
       const matchesStatus =
-        studentStatusFilter === 'ALL' || r.status === studentStatusFilter;
+        studentStatusFilter === 'ALL' ||
+        normalizedStatus === studentStatusFilter;
       const matchesSearch =
         !searchQuery.trim() ||
         r.student?.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -499,13 +512,16 @@ export function AttendanceDashboardPage() {
               { numeric: true }
             ) * dir
           );
-        case 'status':
+        case 'status': {
+          const stA = normalizeStatusKey(a.status);
+          const stB = normalizeStatusKey(b.status);
           return (
-            (STATUS_LABELS[a.status] ?? a.status).localeCompare(
-              STATUS_LABELS[b.status] ?? b.status,
+            (STATUS_LABELS[stA] ?? stA).localeCompare(
+              STATUS_LABELS[stB] ?? stB,
               'id'
             ) * dir
           );
+        }
         case 'time': {
           const inA = a.checkInTime || a.time || '';
           const inB = b.checkInTime || b.time || '';
@@ -527,7 +543,7 @@ export function AttendanceDashboardPage() {
     studentSort,
   ]);
 
-  // Filter & Urutkan Data Guru (termasuk pencarian berdasarkan isi Keterangan/Catatan)
+  // Filter & Urutkan Data Guru
   const filteredTeachers = useMemo(() => {
     const filtered = teacherRecords.filter((r) => {
       if (!searchQuery.trim()) return true;
@@ -557,13 +573,16 @@ export function AttendanceDashboardPage() {
           const idB = b.teacher?.nip || b.teacher?.nuptk || '';
           return idA.localeCompare(idB, 'id', { numeric: true }) * dir;
         }
-        case 'status':
+        case 'status': {
+          const stA = normalizeStatusKey(a.status);
+          const stB = normalizeStatusKey(b.status);
           return (
-            (STATUS_LABELS[a.status] ?? a.status).localeCompare(
-              STATUS_LABELS[b.status] ?? b.status,
+            (STATUS_LABELS[stA] ?? stA).localeCompare(
+              STATUS_LABELS[stB] ?? stB,
               'id'
             ) * dir
           );
+        }
         case 'checkInTime':
           return (
             (a.checkInTime ?? '').localeCompare(b.checkInTime ?? '') * dir
@@ -583,7 +602,7 @@ export function AttendanceDashboardPage() {
     });
   }, [teacherRecords, searchQuery, teacherSort]);
 
-  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto (Datang & Pulang) di Storage
+  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat
   const handleConfirmDeleteSingle = async () => {
     if (!deleteTarget || !isSuperAdmin) return;
     setIsDeletingRow(true);
@@ -596,14 +615,21 @@ export function AttendanceDashboardPage() {
 
       const typedLatestRow = latestRow as AttendanceFileRow | null;
 
-      const allPathsToDelete = [
-        ...deleteTarget.storagePaths,
+      const selfiePathsToDelete = [
+        ...deleteTarget.selfiePaths,
         typedLatestRow?.checkInSelfieUrl,
         typedLatestRow?.checkOutSelfieUrl,
+      ];
+
+      const attachmentPathsToDelete = [
+        ...deleteTarget.attachmentPaths,
         typedLatestRow?.attachmentUrl,
       ];
 
-      await removeFilesFromStorage(allPathsToDelete);
+      await Promise.all([
+        removeFilesFromStorage(selfiePathsToDelete, STORAGE_BUCKET_NAME),
+        removeFilesFromStorage(attachmentPathsToDelete, ATTACHMENT_BUCKET_NAME),
+      ]);
 
       const { error } = await supabase
         .from('attendances')
@@ -666,7 +692,7 @@ export function AttendanceDashboardPage() {
     }
   }, [purgeModalOpen, purgeScope, isSuperAdmin, checkOldAttendanceRecords]);
 
-  // Ekspor Backup CSV Arsip Lama (> 2 Tahun) Sebelum Dihapus
+  // Ekspor Backup CSV Arsip Lama (> 2 Tahun)
   const handleBackupOldRecordsCsv = async () => {
     if (!isSuperAdmin) return;
     try {
@@ -719,7 +745,7 @@ export function AttendanceDashboardPage() {
     }
   };
 
-  // Eksekusi Hapus Permanen Arsip > 2 Tahun (Termasuk Foto Datang, Pulang, & Lampiran)
+  // Eksekusi Hapus Permanen Arsip > 2 Tahun
   const handlePurgeOldRecords = async () => {
     if (!isSuperAdmin) return;
     setIsPurgingOldRecords(true);
@@ -735,13 +761,18 @@ export function AttendanceDashboardPage() {
 
       const { data: oldFiles } = await fetchFilesQuery;
       const typedOldFiles = (oldFiles ?? []) as AttendanceFileRow[];
-      const pathsToRemove = typedOldFiles.flatMap((row) => [
+      const selfiePathsToRemove = typedOldFiles.flatMap((row) => [
         row.checkInSelfieUrl,
         row.checkOutSelfieUrl,
-        row.attachmentUrl,
       ]);
+      const attachmentPathsToRemove = typedOldFiles.map(
+        (row) => row.attachmentUrl
+      );
 
-      await removeFilesFromStorage(pathsToRemove);
+      await Promise.all([
+        removeFilesFromStorage(selfiePathsToRemove, STORAGE_BUCKET_NAME),
+        removeFilesFromStorage(attachmentPathsToRemove, ATTACHMENT_BUCKET_NAME),
+      ]);
 
       let deleteQuery = supabase
         .from('attendances')
@@ -757,7 +788,7 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        `Pembersihan selesai! ${oldRecordsCount ?? 0} arsip absensi sebelum ${cutoffDate} beserta foto datang & pulangnya telah dihapus.`
+        `Pembersihan selesai! ${oldRecordsCount ?? 0} arsip absensi sebelum ${cutoffDate} beserta foto datang, pulang & lampirannya telah dihapus.`
       );
       setPurgeModalOpen(false);
       await loadData();
@@ -776,7 +807,12 @@ export function AttendanceDashboardPage() {
 
   const formatTime = (iso?: string | null) => {
     if (!iso) return '-';
-    return new Date(iso).toLocaleTimeString('id-ID', {
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(iso.trim())) {
+      return iso.trim().slice(0, 5);
+    }
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) return '-';
+    return parsed.toLocaleTimeString('id-ID', {
       hour: '2-digit',
       minute: '2-digit',
     });
@@ -839,6 +875,7 @@ export function AttendanceDashboardPage() {
       );
 
       filteredTeachers.forEach((r, idx) => {
+        const st = normalizeStatusKey(r.status);
         lines.push(
           [
             idx + 1,
@@ -846,7 +883,7 @@ export function AttendanceDashboardPage() {
             r.teacher?.fullName ?? '-',
             r.teacher?.nip ?? '-',
             r.teacher?.nuptk ?? '-',
-            STATUS_LABELS[r.status] ?? r.status,
+            STATUS_LABELS[st] ?? st,
             formatTime(r.checkInTime),
             formatTime(r.checkOutTime),
             r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
@@ -877,6 +914,7 @@ export function AttendanceDashboardPage() {
       );
 
       filteredStudents.forEach((r, idx) => {
+        const st = normalizeStatusKey(r.status);
         lines.push(
           [
             idx + 1,
@@ -884,7 +922,7 @@ export function AttendanceDashboardPage() {
             r.student?.fullName ?? '-',
             r.student?.nisn ?? '-',
             r.student?.classes?.name ?? '-',
-            STATUS_LABELS[r.status] ?? r.status,
+            STATUS_LABELS[st] ?? st,
             formatTime(r.checkInTime || r.time),
             formatTime(r.checkOutTime),
             r.recordedBy ? 'Wali Kelas / Admin' : 'Kiosk / Mandiri',
@@ -970,7 +1008,7 @@ export function AttendanceDashboardPage() {
               title={`Kelola & hapus arsip absensi yang berumur lebih dari ${ARCHIVE_RETENTION_YEARS} tahun`}
             >
               <ArchiveX size={15} />
-              <span>Arsip &gt; {ARCHIVE_RETENTION_YEARS} Tahun</span>
+              <span>Arsip {'>'} {ARCHIVE_RETENTION_YEARS} Tahun</span>
             </button>
           </div>
         </div>
@@ -1146,25 +1184,42 @@ export function AttendanceDashboardPage() {
         ))}
       </div>
 
-      {/* Toolbar Pencarian, Filter Kelas, & Filter Status */}
+      {/* Toolbar Pencarian (Flex Input Wrapper Anti-Tumpuk), Filter Kelas, & Filter Status */}
       {activeTab !== 'overview' && (
         <div className="table-toolbar flex flex-col gap-3">
-          <div className="flex flex-wrap gap-3 w-full">
-            <input
-              type="text"
-              placeholder={
-                activeTab === 'students'
-                  ? 'Cari nama siswa, NISN, atau NIS...'
-                  : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
-              }
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="form-input search-input flex-1 min-w-55"
-            />
+          <div className="flex flex-wrap items-center gap-3 w-full">
+            <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 flex-1 min-w-60 focus-within:ring-2 focus-within:ring-primary/40">
+              <Search
+                size={15}
+                className="shrink-0 text-muted-foreground"
+                aria-hidden="true"
+              />
+              <input
+                type="text"
+                placeholder={
+                  activeTab === 'students'
+                    ? 'Cari nama siswa, NISN, atau NIS...'
+                    : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
+                }
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSearchQuery('')}
+                  className="p-0.5 rounded-md text-muted-foreground hover:text-foreground shrink-0"
+                  title="Bersihkan pencarian"
+                >
+                  <X size={14} />
+                </button>
+              )}
+            </div>
 
             {activeTab === 'students' && classes.length > 0 && (
               <select
-                className="form-input min-w-45"
+                className="form-input min-w-45 text-xs"
                 value={selectedClassId}
                 onChange={(e) => setSelectedClassId(e.target.value)}
               >
@@ -1422,72 +1477,75 @@ export function AttendanceDashboardPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredStudents.map((record, index) => (
-                      <tr key={record.id}>
-                        <td className="td-mono text-xs text-center opacity-70">
-                          {index + 1}
-                        </td>
-                        <td className="td-name">
-                          {record.student?.fullName ?? '-'}
-                        </td>
-                        <td>{record.student?.classes?.name ?? '-'}</td>
-                        <td className="td-mono">
-                          {record.student?.nisn ?? '-'}
-                        </td>
-                        <td>
-                          <span
-                            className="status-badge"
-                            style={{
-                              background:
-                                (STATUS_COLORS[record.status] ?? '#6B7280') +
-                                '20',
-                              color: STATUS_COLORS[record.status] ?? '#6B7280',
-                            }}
-                          >
-                            {STATUS_LABELS[record.status] ?? record.status}
-                          </span>
-                        </td>
-                        <td className="td-mono">
-                          {formatTime(record.checkInTime || record.time)}
-                        </td>
-                        <td className="td-mono">
-                          {record.checkOutTime ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
-                              {formatTime(record.checkOutTime)}
-                            </span>
-                          ) : (
-                            <span className="opacity-40">-</span>
-                          )}
-                        </td>
-                        <td>
-                          {record.recordedBy
-                            ? 'Admin/Wali Kelas'
-                            : 'Kiosk/Mandiri'}
-                        </td>
-                        <td className="text-sm opacity-75">
-                          {record.notes ?? '-'}
-                        </td>
-                        {isSuperAdmin && (
-                          <td className="text-center">
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setDeleteTarget({
-                                  id: record.id,
-                                  name: record.student?.fullName ?? 'Siswa',
-                                  date: record.date,
-                                  storagePaths: [],
-                                })
-                              }
-                              className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                              title="Hapus data absensi ini (Super Admin)"
-                            >
-                              <Trash2 size={15} />
-                            </button>
+                    {filteredStudents.map((record, index) => {
+                      const stKey = normalizeStatusKey(record.status);
+                      return (
+                        <tr key={record.id}>
+                          <td className="td-mono text-xs text-center opacity-70">
+                            {index + 1}
                           </td>
-                        )}
-                      </tr>
-                    ))}
+                          <td className="td-name">
+                            {record.student?.fullName ?? '-'}
+                          </td>
+                          <td>{record.student?.classes?.name ?? '-'}</td>
+                          <td className="td-mono">
+                            {record.student?.nisn ?? '-'}
+                          </td>
+                          <td>
+                            <span
+                              className="status-badge"
+                              style={{
+                                background:
+                                  (STATUS_COLORS[stKey] ?? '#6B7280') + '20',
+                                color: STATUS_COLORS[stKey] ?? '#6B7280',
+                              }}
+                            >
+                              {STATUS_LABELS[stKey] ?? stKey}
+                            </span>
+                          </td>
+                          <td className="td-mono">
+                            {formatTime(record.checkInTime || record.time)}
+                          </td>
+                          <td className="td-mono">
+                            {record.checkOutTime ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
+                                {formatTime(record.checkOutTime)}
+                              </span>
+                            ) : (
+                              <span className="opacity-40">-</span>
+                            )}
+                          </td>
+                          <td>
+                            {record.recordedBy
+                              ? 'Admin/Wali Kelas'
+                              : 'Kiosk/Mandiri'}
+                          </td>
+                          <td className="text-sm opacity-75">
+                            {record.notes ?? '-'}
+                          </td>
+                          {isSuperAdmin && (
+                            <td className="text-center">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setDeleteTarget({
+                                    id: record.id,
+                                    name: record.student?.fullName ?? 'Siswa',
+                                    date: record.date,
+                                    selfiePaths: [],
+                                    attachmentPaths: [],
+                                  })
+                                }
+                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
+                                title="Hapus data absensi ini (Super Admin)"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </td>
+                          )}
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1584,6 +1642,7 @@ export function AttendanceDashboardPage() {
                       const hasInPhoto = Boolean(record.checkInSelfieUrl);
                       const hasOutPhoto = Boolean(record.checkOutSelfieUrl);
                       const hasAnyPhoto = hasInPhoto || hasOutPhoto;
+                      const stKey = normalizeStatusKey(record.status);
 
                       return (
                         <tr key={record.id}>
@@ -1608,12 +1667,11 @@ export function AttendanceDashboardPage() {
                               className="status-badge"
                               style={{
                                 background:
-                                  (STATUS_COLORS[record.status] ?? '#6B7280') +
-                                  '20',
-                                color: STATUS_COLORS[record.status] ?? '#6B7280',
+                                  (STATUS_COLORS[stKey] ?? '#6B7280') + '20',
+                                color: STATUS_COLORS[stKey] ?? '#6B7280',
                               }}
                             >
-                              {STATUS_LABELS[record.status] ?? record.status}
+                              {STATUS_LABELS[stKey] ?? stKey}
                             </span>
                           </td>
                           <td className="td-mono">
@@ -1718,9 +1776,11 @@ export function AttendanceDashboardPage() {
                                     name:
                                       record.teacher?.fullName ?? 'Guru / PTK',
                                     date: record.date,
-                                    storagePaths: [
+                                    selfiePaths: [
                                       record.checkInSelfieUrl,
                                       record.checkOutSelfieUrl,
+                                    ].filter((p): p is string => Boolean(p)),
+                                    attachmentPaths: [
                                       record.attachmentUrl,
                                     ].filter((p): p is string => Boolean(p)),
                                   })
@@ -1772,8 +1832,8 @@ export function AttendanceDashboardPage() {
                     Anda akan menghapus catatan absensi milik{' '}
                     <strong>{deleteTarget.name}</strong> pada tanggal{' '}
                     <strong>{deleteTarget.date}</strong> beserta seluruh foto
-                    selfie (Datang &amp; Pulang) dari penyimpanan. Tindakan ini
-                    tidak dapat dibatalkan.
+                    selfie (Datang & Pulang) dan lampirannya dari penyimpanan.
+                    Tindakan ini tidak dapat dibatalkan.
                   </p>
                 </div>
               </div>
@@ -1824,7 +1884,7 @@ export function AttendanceDashboardPage() {
                 <div className="flex items-center gap-2">
                   <ArchiveX size={19} className="text-red-500" />
                   <h3 className="font-bold text-base">
-                    Pembersihan Arsip &gt; {ARCHIVE_RETENTION_YEARS} Tahun
+                    Pembersihan Arsip {'>'} {ARCHIVE_RETENTION_YEARS} Tahun
                   </h3>
                 </div>
                 <button

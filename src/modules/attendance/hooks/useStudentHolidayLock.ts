@@ -2,274 +2,281 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import type { WorkDaysMode } from '../utils/indonesianHolidays';
+import type { WorkDaysMode } from '../types/attendance.types';
+import { getSchoolDateString } from '../services/gps.utils';
 
 // ============================================================================
-// KONSTANTA & PARAMETER YANG BISA KAMU SESUAIKAN
+// KONSTANTA & PARAMETER YANG DAPAT DISESUAIKAN (SELARAS RLS v20.1)
 // ============================================================================
-const ALLOWED_OVERRIDE_ROLES = ['TEACHER', 'ADMIN', 'SUPER_ADMIN'] as const;
+const ALLOWED_OVERRIDE_ROLES = [
+  'SUPER_ADMIN',
+  'ADMIN',
+  'KEPALA_SEKOLAH',
+  'OPERATOR',
+  'STAFF_TU',
+] as const;
+
 const DEFAULT_EVENT_REASON = 'Kegiatan Khusus Sekolah';
-const OVERRIDE_LOCAL_STORAGE_PREFIX = 'sekolah_erp_holiday_override';
+const OVERRIDE_LOCAL_STORAGE_PREFIX = 'sekolah_erp_special_event';
 
 export interface StudentHolidayLockState {
-    /** Apakah presensi siswa saat ini terkunci karena hari libur */
-    isLocked: boolean;
-    /** Apakah tanggal target sebenarnya adalah hari libur / akhir pekan */
-    isHoliday: boolean;
-    /** Nama hari libur (misal: "Hari Minggu" atau "Idul Fitri") */
-    holidayName: string;
-    /** Apakah mode kegiatan khusus sedang diaktifkan untuk tanggal ini */
-    isSpecialEventActive: boolean;
-    /** Keterangan kegiatan khusus yang sedang berlangsung */
-    specialEventReason: string;
-    /** Apakah user yang login berhak mengaktifkan/menonaktifkan mode kegiatan khusus */
-    canManageOverride: boolean;
-    /** Status loading pengecekan jadwal libur */
-    isLoading: boolean;
-    /** Status loading saat menyimpan perubahan kunci */
-    isToggling: boolean;
-    /** Fungsi untuk membuka kunci presensi (aktifkan kegiatan khusus) */
-    activateSpecialEvent: (reason?: string) => Promise<void>;
-    /** Fungsi untuk mengunci kembali presensi hari libur */
-    deactivateSpecialEvent: () => Promise<void>;
-    /** Memuat ulang status libur & override */
-    refreshLockState: () => Promise<void>;
+  /** Apakah presensi siswa saat ini terkunci karena hari libur */
+  isLocked: boolean;
+  /** Apakah tanggal target sebenarnya adalah hari libur / akhir pekan */
+  isHoliday: boolean;
+  /** Nama hari libur (misal: "Hari Minggu" atau "Idul Fitri") */
+  holidayName: string;
+  /** Apakah mode kegiatan khusus sedang diaktifkan untuk tanggal ini */
+  isSpecialEventActive: boolean;
+  /** Keterangan kegiatan khusus yang sedang berlangsung */
+  specialEventReason: string;
+  /** Apakah user yang login berhak mengaktifkan/menonaktifkan mode kegiatan khusus */
+  canManageOverride: boolean;
+  /** Status loading pengecekan jadwal libur */
+  isLoading: boolean;
+  /** Status loading saat menyimpan perubahan kunci */
+  isToggling: boolean;
+  /** Fungsi untuk membuka kunci presensi (aktifkan kegiatan khusus) */
+  activateSpecialEvent: (reason?: string) => Promise<void>;
+  /** Fungsi untuk mengunci kembali presensi hari libur */
+  deactivateSpecialEvent: () => Promise<void>;
+  /** Memuat ulang status libur & override */
+  refreshLockState: () => Promise<void>;
 }
 
 /**
- * Mengambil tanggal lokal hari ini dalam format YYYY-MM-DD
+ * Mengambil tanggal hari ini dalam zona waktu sekolah (default WIB / Asia/Jakarta)
  */
-export function getTodayLocalISO(): string {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, '0');
-    const d = String(now.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
+export function getTodayLocalISO(timeZone: string = 'Asia/Jakarta'): string {
+  return getSchoolDateString(new Date(), timeZone);
 }
 
 function getLocalOverrideKey(schoolId: string, dateISO: string): string {
-    return `${OVERRIDE_LOCAL_STORAGE_PREFIX}_${schoolId}_${dateISO}`;
-}
-
-function isMissingColumnError(err: unknown): boolean {
-    const msg = String((err as { message?: string })?.message ?? '').toLowerCase();
-    const code = String((err as { code?: string })?.code ?? '');
-    return (
-        code === 'PGRST204' ||
-        code === '42703' ||
-        msg.includes('schema cache') ||
-        (msg.includes('column') && msg.includes('does not exist'))
-    );
+  return `${OVERRIDE_LOCAL_STORAGE_PREFIX}_${schoolId}_${dateISO}`;
 }
 
 /**
  * Hook terpusat untuk mengecek status hari libur siswa dan mengelola
- * pembukaan kunci sementara ("Mode Kegiatan Khusus") oleh Guru/Wali/Admin/SuperAdmin.
+ * pembukaan kunci sementara ("Mode Kegiatan Khusus") via tabel `school_special_events`.
  */
 export function useStudentHolidayLock(params?: {
-    schoolId?: string;
-    targetDate?: string;
+  schoolId?: string;
+  targetDate?: string;
 }): StudentHolidayLockState {
-    const { user, school } = useAuthStore();
-    const activeSchoolId = params?.schoolId || school?.id || '';
-    const activeDate = params?.targetDate || getTodayLocalISO();
+  const { user, school } = useAuthStore();
+  const activeSchoolId = params?.schoolId || school?.id || '';
+  const activeDate = params?.targetDate || getTodayLocalISO();
 
-    const [isHoliday, setIsHoliday] = useState<boolean>(false);
-    const [holidayName, setHolidayName] = useState<string>('');
-    const [isSpecialEventActive, setIsSpecialEventActive] = useState<boolean>(false);
-    const [specialEventReason, setSpecialEventReason] = useState<string>('');
-    const [isLoading, setIsLoading] = useState<boolean>(true);
-    const [isToggling, setIsToggling] = useState<boolean>(false);
+  const [isHoliday, setIsHoliday] = useState<boolean>(false);
+  const [holidayName, setHolidayName] = useState<string>('');
+  const [isSpecialEventActive, setIsSpecialEventActive] = useState<boolean>(false);
+  const [specialEventReason, setSpecialEventReason] = useState<string>('');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isToggling, setIsToggling] = useState<boolean>(false);
 
-    const canManageOverride = Boolean(
-        user?.role &&
-        (ALLOWED_OVERRIDE_ROLES as readonly string[]).includes(user.role)
-    );
+  // Evaluasi gabungan role utama & additionalRoles (v20.1)
+  const userWithAdditionalRoles = user as
+    | (typeof user & { additionalRoles?: string[] })
+    | null;
 
-    const refreshLockState = useCallback(async () => {
-        if (!activeSchoolId || activeDate.length !== 10) {
-            setIsHoliday(false);
-            setHolidayName('');
-            setIsSpecialEventActive(false);
-            setSpecialEventReason('');
-            setIsLoading(false);
-            return;
+  const allUserRoles: string[] = [
+    ...(userWithAdditionalRoles?.role ? [userWithAdditionalRoles.role] : []),
+    ...(Array.isArray(userWithAdditionalRoles?.additionalRoles)
+      ? userWithAdditionalRoles.additionalRoles
+      : []),
+  ];
+
+  const canManageOverride = allUserRoles.some((r) =>
+    (ALLOWED_OVERRIDE_ROLES as readonly string[]).includes(r)
+  );
+
+  const refreshLockState = useCallback(async () => {
+    if (!activeSchoolId || activeDate.length !== 10) {
+      setIsHoliday(false);
+      setHolidayName('');
+      setIsSpecialEventActive(false);
+      setSpecialEventReason('');
+      setIsLoading(false);
+      return;
+    }
+
+    setIsLoading(true);
+    try {
+      // 1. Ambil pengaturan hari kerja sekolah & status kegiatan khusus secara paralel
+      const [schoolRes, holidayRes, specialEventRes] = await Promise.all([
+        supabase
+          .from('schools')
+          .select('workDaysMode')
+          .eq('id', activeSchoolId)
+          .maybeSingle(),
+        supabase
+          .from('national_holidays')
+          .select('id, schoolId, date, name')
+          .eq('date', activeDate),
+        supabase
+          .from('school_special_events')
+          .select('id, eventDate, reason, isActive')
+          .eq('schoolId', activeSchoolId)
+          .eq('eventDate', activeDate)
+          .maybeSingle(),
+      ]);
+
+      if (schoolRes.error) throw schoolRes.error;
+
+      const workDaysMode: WorkDaysMode =
+        schoolRes.data?.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS';
+
+      // 2. Cek akhir pekan (Minggu selalu libur; Sabtu libur jika FIVE_DAYS)
+      const [yStr, mStr, dStr] = activeDate.split('-');
+      const localDateObj = new Date(
+        Number(yStr),
+        Number(mStr) - 1,
+        Number(dStr)
+      );
+      const dayOfWeek = localDateObj.getDay();
+
+      let detectedHolidayName = '';
+      if (dayOfWeek === 0) {
+        detectedHolidayName = 'Hari Minggu (Akhir Pekan)';
+      } else if (dayOfWeek === 6 && workDaysMode === 'FIVE_DAYS') {
+        detectedHolidayName = 'Hari Sabtu (Libur 5 Hari Kerja)';
+      }
+
+      // 3. Cek hari libur nasional / sekolah pada tanggal target
+      if (!holidayRes.error && holidayRes.data && holidayRes.data.length > 0) {
+        const matched = holidayRes.data.find(
+          (row: { schoolId: string | null; name: string }) =>
+            row.schoolId === activeSchoolId || row.schoolId === null
+        );
+        if (matched) {
+          detectedHolidayName = matched.name;
         }
+      }
 
-        setIsLoading(true);
+      const holidayFound = detectedHolidayName.length > 0;
+      setIsHoliday(holidayFound);
+      setHolidayName(detectedHolidayName);
+
+      // 4. Cek status kegiatan khusus dari tabel public.school_special_events
+      let overrideActive = false;
+      let overrideText = '';
+
+      if (!specialEventRes.error && specialEventRes.data) {
+        overrideActive = Boolean(specialEventRes.data.isActive);
+        overrideText = overrideActive
+          ? String(specialEventRes.data.reason || '').trim() || DEFAULT_EVENT_REASON
+          : '';
+      } else if (specialEventRes.error) {
+        // Cadangan pembacaan lokal hanya jika jaringan terputus
         try {
-            // 1. Ambil pengaturan hari kerja & status override dari tabel schools
-            const { data: schoolData, error: schoolErr } = await supabase
-                .from('schools')
-                .select('*')
-                .eq('id', activeSchoolId)
-                .maybeSingle();
-
-            if (schoolErr) throw schoolErr;
-
-            const workDaysMode: WorkDaysMode =
-                schoolData?.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS';
-
-            // 2. Cek apakah tanggal target adalah akhir pekan (Minggu atau Sabtu pada mode 5 hari)
-            const [yStr, mStr, dStr] = activeDate.split('-');
-            const localDateObj = new Date(
-                Number(yStr),
-                Number(mStr) - 1,
-                Number(dStr)
-            );
-            const dayOfWeek = localDateObj.getDay(); // 0 = Minggu, 6 = Sabtu
-
-            let detectedHolidayName = '';
-            if (dayOfWeek === 0) {
-                detectedHolidayName = 'Hari Minggu (Akhir Pekan)';
-            } else if (dayOfWeek === 6 && workDaysMode === 'FIVE_DAYS') {
-                detectedHolidayName = 'Hari Sabtu (Libur 5 Hari Kerja)';
+          const savedLocal = localStorage.getItem(
+            getLocalOverrideKey(activeSchoolId, activeDate)
+          );
+          if (savedLocal) {
+            const parsed = JSON.parse(savedLocal) as {
+              active?: boolean;
+              reason?: string;
+            };
+            if (parsed.active) {
+              overrideActive = true;
+              overrideText = parsed.reason || DEFAULT_EVENT_REASON;
             }
-
-            // 3. Cek apakah tanggal target terdaftar di tabel national_holidays
-            const { data: holidayRows, error: holidayErr } = await supabase
-                .from('national_holidays')
-                .select('id, schoolId, date, name')
-                .eq('date', activeDate);
-
-            if (!holidayErr && holidayRows && holidayRows.length > 0) {
-                const matched = holidayRows.find(
-                    (row: { schoolId: string | null; name: string }) =>
-                        row.schoolId === activeSchoolId || row.schoolId === null
-                );
-                if (matched) {
-                    detectedHolidayName = matched.name;
-                }
-            }
-
-            const holidayFound = detectedHolidayName.length > 0;
-            setIsHoliday(holidayFound);
-            setHolidayName(detectedHolidayName);
-
-            // 4. Cek apakah Mode Kegiatan Khusus sedang diaktifkan untuk tanggal ini
-            let overrideActive = false;
-            let overrideText = '';
-
-            if (schoolData?.holidayOverrideDate === activeDate) {
-                overrideActive = true;
-                overrideText =
-                    String(schoolData.holidayOverrideReason || '').trim() ||
-                    DEFAULT_EVENT_REASON;
-            } else {
-                // Cek cadangan di localStorage jika kolom DB belum ditambahkan
-                try {
-                    const savedLocal = localStorage.getItem(
-                        getLocalOverrideKey(activeSchoolId, activeDate)
-                    );
-                    if (savedLocal) {
-                        const parsed = JSON.parse(savedLocal) as {
-                            active?: boolean;
-                            reason?: string;
-                        };
-                        if (parsed.active) {
-                            overrideActive = true;
-                            overrideText = parsed.reason || DEFAULT_EVENT_REASON;
-                        }
-                    }
-                } catch {
-                    // abaikan error pembacaan storage
-                }
-            }
-
-            setIsSpecialEventActive(overrideActive);
-            setSpecialEventReason(overrideText);
-        } catch (err) {
-            console.error('Gagal memeriksa status hari libur siswa:', err);
-        } finally {
-            setIsLoading(false);
+          }
+        } catch {
+          // Abaikan error storage
         }
-    }, [activeSchoolId, activeDate]);
+      }
 
-    useEffect(() => {
-        refreshLockState();
-    }, [refreshLockState]);
+      setIsSpecialEventActive(overrideActive);
+      setSpecialEventReason(overrideText);
+    } catch (err: unknown) {
+      console.error('Gagal memeriksa status hari libur siswa:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [activeSchoolId, activeDate]);
 
-    const activateSpecialEvent = async (reason?: string) => {
-        if (!activeSchoolId || !canManageOverride) return;
-        const cleanReason = (reason ?? '').trim() || DEFAULT_EVENT_REASON;
+  useEffect(() => {
+    refreshLockState();
+  }, [refreshLockState]);
 
-        setIsToggling(true);
-        try {
-            // Simpan ke localStorage sebagai cadangan instan
-            try {
-                localStorage.setItem(
-                    getLocalOverrideKey(activeSchoolId, activeDate),
-                    JSON.stringify({ active: true, reason: cleanReason })
-                );
-            } catch {
-                // abaikan jika storage penuh
-            }
+  const activateSpecialEvent = async (reason?: string) => {
+    if (!activeSchoolId || !canManageOverride) return;
+    const cleanReason = (reason ?? '').trim() || DEFAULT_EVENT_REASON;
 
-            // Simpan ke Supabase agar sinkron ke perangkat Kiosk & Wali Kelas lain
-            const { error } = await supabase
-                .from('schools')
-                .update({
-                    holidayOverrideDate: activeDate,
-                    holidayOverrideReason: cleanReason,
-                })
-                .eq('id', activeSchoolId);
-
-            if (error && !isMissingColumnError(error)) {
-                throw error;
-            }
-
-            setIsSpecialEventActive(true);
-            setSpecialEventReason(cleanReason);
-        } finally {
-            setIsToggling(false);
+    setIsToggling(true);
+    try {
+      const { error } = await supabase.from('school_special_events').upsert(
+        {
+          schoolId: activeSchoolId,
+          eventDate: activeDate,
+          reason: cleanReason,
+          isActive: true,
+        },
+        {
+          onConflict: 'schoolId,eventDate',
         }
-    };
+      );
 
-    const deactivateSpecialEvent = async () => {
-        if (!activeSchoolId || !canManageOverride) return;
+      if (error) throw error;
 
-        setIsToggling(true);
-        try {
-            try {
-                localStorage.removeItem(
-                    getLocalOverrideKey(activeSchoolId, activeDate)
-                );
-            } catch {
-                // abaikan
-            }
+      try {
+        localStorage.setItem(
+          getLocalOverrideKey(activeSchoolId, activeDate),
+          JSON.stringify({ active: true, reason: cleanReason })
+        );
+      } catch {
+        // Abaikan jika storage penuh
+      }
 
-            const { error } = await supabase
-                .from('schools')
-                .update({
-                    holidayOverrideDate: null,
-                    holidayOverrideReason: null,
-                })
-                .eq('id', activeSchoolId);
+      setIsSpecialEventActive(true);
+      setSpecialEventReason(cleanReason);
+    } finally {
+      setIsToggling(false);
+    }
+  };
 
-            if (error && !isMissingColumnError(error)) {
-                throw error;
-            }
+  const deactivateSpecialEvent = async () => {
+    if (!activeSchoolId || !canManageOverride) return;
 
-            setIsSpecialEventActive(false);
-            setSpecialEventReason('');
-        } finally {
-            setIsToggling(false);
-        }
-    };
+    setIsToggling(true);
+    try {
+      const { error } = await supabase
+        .from('school_special_events')
+        .update({ isActive: false })
+        .eq('schoolId', activeSchoolId)
+        .eq('eventDate', activeDate);
 
-    const isLocked = isHoliday && !isSpecialEventActive;
+      if (error) throw error;
 
-    return {
-        isLocked,
-        isHoliday,
-        holidayName,
-        isSpecialEventActive,
-        specialEventReason,
-        canManageOverride,
-        isLoading,
-        isToggling,
-        activateSpecialEvent,
-        deactivateSpecialEvent,
-        refreshLockState,
-    };
+      try {
+        localStorage.removeItem(
+          getLocalOverrideKey(activeSchoolId, activeDate)
+        );
+      } catch {
+        // Abaikan
+      }
+
+      setIsSpecialEventActive(false);
+      setSpecialEventReason('');
+    } finally {
+      setIsToggling(false);
+    }
+  };
+
+  const isLocked = isHoliday && !isSpecialEventActive;
+
+  return {
+    isLocked,
+    isHoliday,
+    holidayName,
+    isSpecialEventActive,
+    specialEventReason,
+    canManageOverride,
+    isLoading,
+    isToggling,
+    activateSpecialEvent,
+    deactivateSpecialEvent,
+    refreshLockState,
+  };
 }

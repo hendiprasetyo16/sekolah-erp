@@ -1,53 +1,97 @@
 // src/modules/attendance/components/StudentAttendanceSettingsCard.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
+    Clock,
     GraduationCap,
     Save,
     Loader2,
-    RefreshCw,
-    Scan,
-    Users,
-    LogOut,
     CheckCircle2,
     AlertTriangle,
+    QrCode,
+    ClipboardList,
+    LogOut,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 
 // ============================================================================
-// PARAMETER YANG BISA DISESUAIKAN
+// PARAMETER DEFAULT KONFIGURASI PRESENSI SISWA
 // ============================================================================
-const DEFAULT_STUDENT_START_TIME = '07:00';
-const DEFAULT_STUDENT_END_TIME = '13:30';
-const DEFAULT_STUDENT_CHECKOUT_START = '11:30';
+const DEFAULT_STUDENT_WORK_START = '07:00';
+const DEFAULT_STUDENT_LATE_TOLERANCE = 15;
+const DEFAULT_STUDENT_WORK_END = '14:00';
+const DEFAULT_STUDENT_CHECKOUT_START = '12:00';
 
-interface StudentAttendanceSettingsCardProps {
-    selectedSchoolId: string;
+// ============================================================================
+// TIPE DATA STRICT (TANPA `any`)
+// ============================================================================
+export interface StudentAttendanceSettingsCardProps {
+    schoolId: string;
+    onSaved?: () => void;
 }
 
-function calculateStudentDeadline(
-    startTime: string,
-    toleranceMinutes: number
-): string {
-    const [hStr, mStr] = startTime.split(':');
-    const h = Number(hStr) || 7;
-    const m = Number(mStr) || 0;
-    const safeTolerance = Math.max(0, Math.floor(Number(toleranceMinutes) || 0));
-    const totalMinutes = Math.min(23 * 60 + 59, h * 60 + m + safeTolerance);
-    const finalH = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
-    const finalM = String(totalMinutes % 60).padStart(2, '0');
-    return `${finalH}:${finalM}`;
+interface SaveMessageState {
+    status: 'success' | 'error';
+    text: string;
 }
 
+interface RawSchoolStudentSettingsRow {
+    studentWorkStartTime: string | null;
+    studentLateToleranceMinutes: number | null;
+    studentWorkEndTime: string | null;
+    studentCheckOutStartTime: string | null;
+    enableStudentKiosk: boolean | null;
+    enableStudentClassAttendance: boolean | null;
+    enableStudentCheckOut: boolean | null;
+}
+
+function getErrorDetails(err: unknown): { code: string; message: string } {
+    if (typeof err === 'object' && err !== null) {
+        const rec = err as Record<string, unknown>;
+        return {
+            code: typeof rec.code === 'string' ? rec.code : '',
+            message:
+                typeof rec.message === 'string' && rec.message.trim().length > 0
+                    ? rec.message
+                    : 'Terjadi kesalahan pada database.',
+        };
+    }
+    if (err instanceof Error) {
+        return { code: '', message: err.message };
+    }
+    return { code: '', message: 'Terjadi kesalahan tidak terduga.' };
+}
+
+function isMissingColumnError(err: unknown): boolean {
+    const { code, message } = getErrorDetails(err);
+    const lower = message.toLowerCase();
+    return (
+        code === 'PGRST204' ||
+        code === '42703' ||
+        lower.includes('schema cache') ||
+        (lower.includes('column') && lower.includes('does not exist'))
+    );
+}
+
+/**
+ * Kartu Pengaturan Presensi Siswa
+ * Mengatur Jam Masuk, Toleransi Terlambat, Jam Mulai Pulang, Jam Pulang,
+ * serta Metode Presensi (Kiosk QR/NISN vs Manual Wali Kelas) & Toggle Absen Pulang.
+ */
 export function StudentAttendanceSettingsCard({
-    selectedSchoolId,
+    schoolId,
+    onSaved,
 }: StudentAttendanceSettingsCardProps) {
+    const [isLoading, setIsLoading] = useState<boolean>(false);
+    const [isSaving, setIsSaving] = useState<boolean>(false);
+    const [saveMessage, setSaveMessage] = useState<SaveMessageState | null>(null);
+
     const [studentWorkStartTime, setStudentWorkStartTime] = useState<string>(
-        DEFAULT_STUDENT_START_TIME
+        DEFAULT_STUDENT_WORK_START
     );
     const [studentLateToleranceMinutes, setStudentLateToleranceMinutes] =
-        useState<number>(0);
+        useState<number>(DEFAULT_STUDENT_LATE_TOLERANCE);
     const [studentWorkEndTime, setStudentWorkEndTime] = useState<string>(
-        DEFAULT_STUDENT_END_TIME
+        DEFAULT_STUDENT_WORK_END
     );
     const [studentCheckOutStartTime, setStudentCheckOutStartTime] =
         useState<string>(DEFAULT_STUDENT_CHECKOUT_START);
@@ -58,371 +102,353 @@ export function StudentAttendanceSettingsCard({
     const [enableStudentCheckOut, setEnableStudentCheckOut] =
         useState<boolean>(true);
 
-    const [isLoading, setIsLoading] = useState<boolean>(false);
-    const [isSaving, setIsSaving] = useState<boolean>(false);
-    const [feedback, setFeedback] = useState<{
-        type: 'success' | 'error';
-        text: string;
-    } | null>(null);
-
-    const loadStudentSettings = useCallback(async () => {
-        if (!selectedSchoolId) return;
+    const loadSettings = useCallback(async () => {
+        if (!schoolId) return;
         setIsLoading(true);
-        setFeedback(null);
         try {
             const { data, error } = await supabase
                 .from('schools')
-                .select('*')
-                .eq('id', selectedSchoolId)
+                .select(
+                    'studentWorkStartTime, studentLateToleranceMinutes, studentWorkEndTime, studentCheckOutStartTime, enableStudentKiosk, enableStudentClassAttendance, enableStudentCheckOut'
+                )
+                .eq('id', schoolId)
                 .maybeSingle();
 
-            if (error) throw error;
-            if (data) {
-                setStudentWorkStartTime(
-                    data.studentWorkStartTime || DEFAULT_STUDENT_START_TIME
-                );
-                setStudentLateToleranceMinutes(
-                    Math.max(0, Number(data.studentLateToleranceMinutes) || 0)
-                );
-                setStudentWorkEndTime(
-                    data.studentWorkEndTime || DEFAULT_STUDENT_END_TIME
-                );
-                setStudentCheckOutStartTime(
-                    data.studentCheckOutStartTime || DEFAULT_STUDENT_CHECKOUT_START
-                );
-                setEnableStudentKiosk(
-                    typeof data.enableStudentKiosk === 'boolean'
-                        ? data.enableStudentKiosk
-                        : true
-                );
-                setEnableStudentClassAttendance(
-                    typeof data.enableStudentClassAttendance === 'boolean'
-                        ? data.enableStudentClassAttendance
-                        : true
-                );
-                setEnableStudentCheckOut(
-                    typeof data.enableStudentCheckOut === 'boolean'
-                        ? data.enableStudentCheckOut
-                        : true
-                );
+            if (error && !isMissingColumnError(error)) {
+                throw error;
+            }
+
+            const row = data as RawSchoolStudentSettingsRow | null;
+            if (row) {
+                if (row.studentWorkStartTime) {
+                    setStudentWorkStartTime(row.studentWorkStartTime);
+                }
+                if (typeof row.studentLateToleranceMinutes === 'number') {
+                    setStudentLateToleranceMinutes(row.studentLateToleranceMinutes);
+                }
+                if (row.studentWorkEndTime) {
+                    setStudentWorkEndTime(row.studentWorkEndTime);
+                }
+                if (row.studentCheckOutStartTime) {
+                    setStudentCheckOutStartTime(row.studentCheckOutStartTime);
+                }
+                if (typeof row.enableStudentKiosk === 'boolean') {
+                    setEnableStudentKiosk(row.enableStudentKiosk);
+                }
+                if (typeof row.enableStudentClassAttendance === 'boolean') {
+                    setEnableStudentClassAttendance(row.enableStudentClassAttendance);
+                }
+                if (typeof row.enableStudentCheckOut === 'boolean') {
+                    setEnableStudentCheckOut(row.enableStudentCheckOut);
+                }
             }
         } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal memuat pengaturan presensi siswa.',
+            const { message } = getErrorDetails(err);
+            setSaveMessage({
+                status: 'error',
+                text: `Gagal memuat pengaturan siswa: ${message}`,
             });
         } finally {
             setIsLoading(false);
         }
-    }, [selectedSchoolId]);
+    }, [schoolId]);
 
     useEffect(() => {
-        loadStudentSettings();
-    }, [loadStudentSettings]);
+        void loadSettings();
+    }, [loadSettings]);
 
-    const effectiveDeadline = useMemo(
-        () =>
-            calculateStudentDeadline(
-                studentWorkStartTime,
-                studentLateToleranceMinutes
-            ),
-        [studentWorkStartTime, studentLateToleranceMinutes]
-    );
+    const handleSave = async () => {
+        if (!schoolId) return;
 
-    const handleSave = async (e: React.FormEvent) => {
-        e.preventDefault();
-        if (!selectedSchoolId) return;
-
-        const cleanTolerance = Math.max(
-            0,
-            Math.min(180, Math.floor(Number(studentLateToleranceMinutes) || 0))
-        );
+        if (!enableStudentKiosk && !enableStudentClassAttendance) {
+            setSaveMessage({
+                status: 'error',
+                text: 'Minimal satu metode presensi siswa (Kiosk atau Manual Wali Kelas) harus diaktifkan.',
+            });
+            return;
+        }
 
         setIsSaving(true);
-        setFeedback(null);
+        setSaveMessage(null);
+
         try {
+            const payload = {
+                studentWorkStartTime:
+                    studentWorkStartTime.trim() || DEFAULT_STUDENT_WORK_START,
+                studentLateToleranceMinutes: Math.max(
+                    0,
+                    Number(studentLateToleranceMinutes) || 0
+                ),
+                studentWorkEndTime:
+                    studentWorkEndTime.trim() || DEFAULT_STUDENT_WORK_END,
+                studentCheckOutStartTime:
+                    studentCheckOutStartTime.trim() || DEFAULT_STUDENT_CHECKOUT_START,
+                enableStudentKiosk,
+                enableStudentClassAttendance,
+                enableStudentCheckOut,
+            };
+
             const { error } = await supabase
                 .from('schools')
-                .update({
-                    studentWorkStartTime,
-                    studentLateToleranceMinutes: cleanTolerance,
-                    studentWorkEndTime,
-                    studentCheckOutStartTime,
-                    enableStudentKiosk,
-                    enableStudentClassAttendance,
-                    enableStudentCheckOut,
-                })
-                .eq('id', selectedSchoolId);
+                .update(payload)
+                .eq('id', schoolId);
 
-            if (error) throw error;
+            if (error) {
+                if (isMissingColumnError(error)) {
+                    throw new Error(
+                        'Kolom pengaturan siswa belum ada di database. Jalankan SQL Migration Patch v20 terlebih dahulu.'
+                    );
+                }
+                throw error;
+            }
 
-            setStudentLateToleranceMinutes(cleanTolerance);
-            setFeedback({
-                type: 'success',
-                text: `Pengaturan siswa tersimpan! Masuk ${studentWorkStartTime} (batas ${effectiveDeadline}), buka pulang ${studentCheckOutStartTime}, jadwal pulang ${studentWorkEndTime}.`,
+            setSaveMessage({
+                status: 'success',
+                text: 'Pengaturan jadwal & metode presensi siswa berhasil disimpan.',
             });
+            onSaved?.();
         } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal menyimpan pengaturan siswa. Pastikan skrip SQL kolom siswa sudah dijalankan.',
+            const { message } = getErrorDetails(err);
+            setSaveMessage({
+                status: 'error',
+                text: `Gagal menyimpan pengaturan siswa: ${message}`,
             });
         } finally {
             setIsSaving(false);
         }
     };
 
+    if (!schoolId) return null;
+
     return (
-        <form
-            onSubmit={handleSave}
-            className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5"
-        >
-            <div className="flex items-center justify-between border-b border-border pb-3">
+        <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-border pb-3">
                 <div>
                     <h2 className="text-base font-bold flex items-center gap-2">
-                        <GraduationCap size={18} className="text-indigo-600" />
+                        <GraduationCap size={18} className="text-emerald-600" />
                         Pengaturan Jadwal & Metode Presensi Siswa
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                        Diatur terpisah dari jadwal Guru/PTK. Mendukung Kiosk Siswa, Absensi
-                        Kelas, dan pencatatan Jam Pulang untuk notifikasi WhatsApp orang tua.
-                    </p>
-                </div>
-                {isLoading && <RefreshCw size={16} className="animate-spin opacity-60" />}
-            </div>
-
-            {feedback && (
-                <div
-                    className={`p-3 rounded-xl border text-xs font-medium flex items-center gap-2 ${feedback.type === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
-                        }`}
-                >
-                    {feedback.type === 'success' ? (
-                        <CheckCircle2 size={15} className="text-emerald-500 shrink-0" />
-                    ) : (
-                        <AlertTriangle size={15} className="text-red-500 shrink-0" />
-                    )}
-                    <span>{feedback.text}</span>
-                </div>
-            )}
-
-            {/* Pengaturan Jam Siswa */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                    <label className="block text-xs font-semibold mb-1.5">
-                        Jam Masuk Siswa *
-                    </label>
-                    <input
-                        type="time"
-                        required
-                        value={studentWorkStartTime}
-                        onChange={(e) => setStudentWorkStartTime(e.target.value)}
-                        className="form-input w-full text-sm font-mono"
-                    />
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                        Jadwal bel masuk siswa.
+                        Atur jam masuk, batas keterlambatan, jam pulang siswa, serta
+                        metode presensi yang digunakan di sekolah.
                     </p>
                 </div>
 
-                <div>
-                    <label className="block text-xs font-semibold mb-1.5">
-                        Toleransi Terlambat (Menit)
-                    </label>
-                    <input
-                        type="number"
-                        min={0}
-                        max={180}
-                        step={1}
-                        value={studentLateToleranceMinutes}
-                        onChange={(e) =>
-                            setStudentLateToleranceMinutes(
-                                e.target.value === '' ? 0 : Math.max(0, Number(e.target.value))
-                            )
-                        }
-                        className="form-input w-full text-sm font-mono"
-                    />
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                        Batas hadir: <strong className="font-mono">{effectiveDeadline}</strong>
-                    </p>
-                </div>
-
-                <div>
-                    <label className="block text-xs font-semibold mb-1.5">
-                        Mulai Buka Absen Pulang *
-                    </label>
-                    <input
-                        type="time"
-                        required
-                        disabled={!enableStudentCheckOut}
-                        value={studentCheckOutStartTime}
-                        onChange={(e) => setStudentCheckOutStartTime(e.target.value)}
-                        className="form-input w-full text-sm font-mono disabled:opacity-50"
-                    />
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                        Mencegah scan pagi dianggap pulang.
-                    </p>
-                </div>
-
-                <div>
-                    <label className="block text-xs font-semibold mb-1.5">
-                        Jam Pulang Resmi Siswa *
-                    </label>
-                    <input
-                        type="time"
-                        required
-                        value={studentWorkEndTime}
-                        onChange={(e) => setStudentWorkEndTime(e.target.value)}
-                        className="form-input w-full text-sm font-mono"
-                    />
-                    <p className="text-[11px] text-muted-foreground mt-1">
-                        Acuan jadwal kepulangan siswa.
-                    </p>
-                </div>
-            </div>
-
-            {/* Saklar Metode Absensi Siswa */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-3 pt-1">
-                {/* 1. Kiosk Siswa */}
-                <div
-                    onClick={() => setEnableStudentKiosk((prev) => !prev)}
-                    role="switch"
-                    aria-checked={enableStudentKiosk}
-                    tabIndex={0}
-                    className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${enableStudentKiosk
-                        ? 'border-indigo-600/70 bg-indigo-500/10'
-                        : 'border-border bg-muted/25'
-                        }`}
-                >
-                    <div className="flex items-start gap-2.5">
-                        <Scan
-                            size={17}
-                            className={
-                                enableStudentKiosk
-                                    ? 'text-indigo-600 shrink-0 mt-0.5'
-                                    : 'text-muted-foreground shrink-0 mt-0.5'
-                            }
-                        />
-                        <div>
-                            <div className="text-xs font-bold">Kiosk Siswa (QR / NISN)</div>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                                Siswa scan mandiri di perangkat Kiosk sekolah.
-                            </p>
-                        </div>
-                    </div>
-                    <span
-                        className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${enableStudentKiosk
-                            ? 'bg-indigo-600'
-                            : 'bg-slate-300 dark:bg-slate-600'
-                            }`}
-                    >
-                        <span
-                            className={`w-4 h-4 rounded-full bg-white transition-transform ${enableStudentKiosk ? 'translate-x-5' : 'translate-x-0'
-                                }`}
-                        />
-                    </span>
-                </div>
-
-                {/* 2. Absensi Per Kelas */}
-                <div
-                    onClick={() => setEnableStudentClassAttendance((prev) => !prev)}
-                    role="switch"
-                    aria-checked={enableStudentClassAttendance}
-                    tabIndex={0}
-                    className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${enableStudentClassAttendance
-                        ? 'border-indigo-600/70 bg-indigo-500/10'
-                        : 'border-border bg-muted/25'
-                        }`}
-                >
-                    <div className="flex items-start gap-2.5">
-                        <Users
-                            size={17}
-                            className={
-                                enableStudentClassAttendance
-                                    ? 'text-indigo-600 shrink-0 mt-0.5'
-                                    : 'text-muted-foreground shrink-0 mt-0.5'
-                            }
-                        />
-                        <div>
-                            <div className="text-xs font-bold">Absensi Kelas (Wali Kelas)</div>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                                Guru/Wali kelas mengabsen siswa per rombel.
-                            </p>
-                        </div>
-                    </div>
-                    <span
-                        className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${enableStudentClassAttendance
-                            ? 'bg-indigo-600'
-                            : 'bg-slate-300 dark:bg-slate-600'
-                            }`}
-                    >
-                        <span
-                            className={`w-4 h-4 rounded-full bg-white transition-transform ${enableStudentClassAttendance ? 'translate-x-5' : 'translate-x-0'
-                                }`}
-                        />
-                    </span>
-                </div>
-
-                {/* 3. Pencatatan Jam Pulang (Check-Out) */}
-                <div
-                    onClick={() => setEnableStudentCheckOut((prev) => !prev)}
-                    role="switch"
-                    aria-checked={enableStudentCheckOut}
-                    tabIndex={0}
-                    className={`p-3.5 rounded-xl border cursor-pointer transition flex items-start justify-between gap-3 select-none ${enableStudentCheckOut
-                        ? 'border-emerald-600/70 bg-emerald-500/10'
-                        : 'border-border bg-muted/25'
-                        }`}
-                >
-                    <div className="flex items-start gap-2.5">
-                        <LogOut
-                            size={17}
-                            className={
-                                enableStudentCheckOut
-                                    ? 'text-emerald-600 shrink-0 mt-0.5'
-                                    : 'text-muted-foreground shrink-0 mt-0.5'
-                            }
-                        />
-                        <div>
-                            <div className="text-xs font-bold">Catat Jam Pulang Siswa</div>
-                            <p className="text-[11px] text-muted-foreground mt-0.5">
-                                Merekam waktu pulang (siap untuk notif WA orang tua).
-                            </p>
-                        </div>
-                    </div>
-                    <span
-                        className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${enableStudentCheckOut
-                            ? 'bg-emerald-600'
-                            : 'bg-slate-300 dark:bg-slate-600'
-                            }`}
-                    >
-                        <span
-                            className={`w-4 h-4 rounded-full bg-white transition-transform ${enableStudentCheckOut ? 'translate-x-5' : 'translate-x-0'
-                                }`}
-                        />
-                    </span>
-                </div>
-            </div>
-
-            <div className="flex justify-end pt-2 border-t border-border/60">
                 <button
-                    type="submit"
-                    disabled={isSaving || !selectedSchoolId}
-                    className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 shadow-sm active:scale-[0.98] transition-all disabled:opacity-50 cursor-pointer"
+                    type="button"
+                    onClick={() => void handleSave()}
+                    disabled={isSaving || isLoading}
+                    className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-95 transition-all cursor-pointer disabled:opacity-60"
                 >
                     {isSaving ? (
-                        <Loader2 size={15} className="animate-spin" />
+                        <Loader2 size={14} className="animate-spin" />
                     ) : (
-                        <Save size={15} />
+                        <Save size={14} />
                     )}
                     {isSaving ? 'Menyimpan...' : 'Simpan Pengaturan Siswa'}
                 </button>
             </div>
-        </form>
+
+            {saveMessage && (
+                <div
+                    className={`p-3 rounded-lg border text-xs font-medium flex items-center gap-2 ${saveMessage.status === 'success'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        }`}
+                >
+                    {saveMessage.status === 'success' ? (
+                        <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                    ) : (
+                        <AlertTriangle size={16} className="text-red-600 shrink-0" />
+                    )}
+                    <span>{saveMessage.text}</span>
+                </div>
+            )}
+
+            {/* Bagian 1: Pengaturan Jam Operasional Siswa */}
+            <div className="space-y-2.5">
+                <div className="text-xs font-bold flex items-center gap-1.5 text-foreground">
+                    <Clock size={14} className="text-emerald-600" />
+                    <span>Jadwal Jam Masuk & Pulang Siswa</span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div>
+                        <label className="text-[11px] font-semibold block mb-1">
+                            Jam Masuk Siswa
+                        </label>
+                        <input
+                            type="time"
+                            value={studentWorkStartTime}
+                            onChange={(e) => setStudentWorkStartTime(e.target.value)}
+                            className="form-input w-full text-xs"
+                        />
+                        <span className="text-[10px] text-muted-foreground">
+                            Default: 07:00
+                        </span>
+                    </div>
+
+                    <div>
+                        <label className="text-[11px] font-semibold block mb-1">
+                            Toleransi Terlambat (Menit)
+                        </label>
+                        <input
+                            type="number"
+                            min={0}
+                            max={180}
+                            value={studentLateToleranceMinutes}
+                            onChange={(e) =>
+                                setStudentLateToleranceMinutes(
+                                    Math.max(0, Number(e.target.value))
+                                )
+                            }
+                            className="form-input w-full text-xs"
+                        />
+                        <span className="text-[10px] text-muted-foreground">
+                            Lewat batas otomatis status TERLAMBAT
+                        </span>
+                    </div>
+
+                    <div>
+                        <label className="text-[11px] font-semibold block mb-1">
+                            Jam Mulai Boleh Absen Pulang
+                        </label>
+                        <input
+                            type="time"
+                            value={studentCheckOutStartTime}
+                            onChange={(e) => setStudentCheckOutStartTime(e.target.value)}
+                            disabled={!enableStudentCheckOut}
+                            className="form-input w-full text-xs disabled:opacity-50"
+                        />
+                        <span className="text-[10px] text-muted-foreground">
+                            Mencegah siswa absen pulang terlalu pagi
+                        </span>
+                    </div>
+
+                    <div>
+                        <label className="text-[11px] font-semibold block mb-1">
+                            Jam Pulang Normal Siswa
+                        </label>
+                        <input
+                            type="time"
+                            value={studentWorkEndTime}
+                            onChange={(e) => setStudentWorkEndTime(e.target.value)}
+                            className="form-input w-full text-xs"
+                        />
+                        <span className="text-[10px] text-muted-foreground">
+                            Default: 14:00
+                        </span>
+                    </div>
+                </div>
+            </div>
+
+            {/* Bagian 2: Metode Presensi Siswa & Fitur Absen Pulang */}
+            <div className="space-y-2.5 pt-1">
+                <div className="text-xs font-bold text-foreground">
+                    Metode Presensi Siswa yang Diaktifkan
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    {/* Card 1: Kiosk QR / NISN */}
+                    <button
+                        type="button"
+                        onClick={() => setEnableStudentKiosk((prev) => !prev)}
+                        className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex items-start justify-between gap-3 cursor-pointer active:scale-[0.98] ${enableStudentKiosk
+                                ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
+                            }`}
+                    >
+                        <div className="space-y-1">
+                            <div className="text-xs font-bold flex items-center gap-1.5">
+                                <QrCode size={14} className="text-emerald-600 shrink-0" />
+                                <span>Kiosk Mandiri (Scan QR / NISN)</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                Siswa melakukan scan kartu QR atau ketik NISN di terminal
+                                gerbang/kelas.
+                            </p>
+                        </div>
+                        <span
+                            className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 mt-0.5 flex items-center ${enableStudentKiosk
+                                    ? 'bg-emerald-600'
+                                    : 'bg-slate-300 dark:bg-slate-600'
+                                }`}
+                        >
+                            <span
+                                className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${enableStudentKiosk ? 'translate-x-5' : 'translate-x-0'
+                                    }`}
+                            />
+                        </span>
+                    </button>
+
+                    {/* Card 2: Manual Wali Kelas / Guru */}
+                    <button
+                        type="button"
+                        onClick={() => setEnableStudentClassAttendance((prev) => !prev)}
+                        className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex items-start justify-between gap-3 cursor-pointer active:scale-[0.98] ${enableStudentClassAttendance
+                                ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
+                                : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
+                            }`}
+                    >
+                        <div className="space-y-1">
+                            <div className="text-xs font-bold flex items-center gap-1.5">
+                                <ClipboardList size={14} className="text-blue-600 shrink-0" />
+                                <span>Input Manual Wali Kelas / Guru</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                Wali kelas atau guru mengabsen siswa per kelas secara manual di
+                                dalam kelas.
+                            </p>
+                        </div>
+                        <span
+                            className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 mt-0.5 flex items-center ${enableStudentClassAttendance
+                                    ? 'bg-blue-600'
+                                    : 'bg-slate-300 dark:bg-slate-600'
+                                }`}
+                        >
+                            <span
+                                className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${enableStudentClassAttendance
+                                        ? 'translate-x-5'
+                                        : 'translate-x-0'
+                                    }`}
+                            />
+                        </span>
+                    </button>
+
+                    {/* Card 3: Absen Pulang Siswa */}
+                    <button
+                        type="button"
+                        onClick={() => setEnableStudentCheckOut((prev) => !prev)}
+                        className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex items-start justify-between gap-3 cursor-pointer active:scale-[0.98] ${enableStudentCheckOut
+                                ? 'border-indigo-600/70 bg-indigo-500/10 shadow-2xs'
+                                : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
+                            }`}
+                    >
+                        <div className="space-y-1">
+                            <div className="text-xs font-bold flex items-center gap-1.5">
+                                <LogOut size={14} className="text-indigo-600 shrink-0" />
+                                <span>Aktifkan Absen Pulang Siswa</span>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground leading-relaxed">
+                                {enableStudentCheckOut
+                                    ? 'Siswa dapat mencatat jam pulang saat pulang sekolah.'
+                                    : 'Absen pulang siswa dinonaktifkan (hanya mencatat absen masuk).'}
+                            </p>
+                        </div>
+                        <span
+                            className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 mt-0.5 flex items-center ${enableStudentCheckOut
+                                    ? 'bg-indigo-600'
+                                    : 'bg-slate-300 dark:bg-slate-600'
+                                }`}
+                        >
+                            <span
+                                className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${enableStudentCheckOut ? 'translate-x-5' : 'translate-x-0'
+                                    }`}
+                            />
+                        </span>
+                    </button>
+                </div>
+            </div>
+        </div>
     );
 }

@@ -1,82 +1,195 @@
 // src/modules/attendance/pages/StudentClassAttendancePage.tsx
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { motion } from 'framer-motion';
 import {
     Users,
-    CheckCircle,
+    CheckCircle2,
     Clock,
+    FileText,
     AlertCircle,
-    Save,
-    RefreshCw,
+    XCircle,
     Search,
-    UserCheck,
-    Sparkles,
-    School,
+    Save,
+    Loader2,
     Calendar,
-    CheckSquare,
     LogOut,
-    AlertTriangle,
+    CheckCheck,
+    Info,
     Lock,
     Unlock,
     CalendarOff,
+    Sparkles,
+    FlaskConical,
+    X,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
+import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
-import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
-import type {
-    AttendanceStatus,
-    ClassStudentAttendanceRow,
-} from '../types/attendance.types';
 
 // ============================================================================
-// PARAMETER YANG BISA DISESUAIKAN
+// PARAMETER KONFIGURASI PAGINATION & STATUS PRESENSI SISWA
 // ============================================================================
-const DEFAULT_CLASS_SPECIAL_EVENT = 'Kegiatan Khusus Sekolah';
+const DEFAULT_STUDENT_PAGE_SIZE = 10;
+const STUDENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 0] as const; // 0 = Semua
 
-interface ClassOption {
-    id: string;
-    name: string;
-    gradeLevel: number;
-    major?: string | null;
-    homeroomTeacherId?: string | null;
+type StudentAttendanceStatus =
+    | 'HADIR'
+    | 'TERLAMBAT'
+    | 'IZIN'
+    | 'SAKIT'
+    | 'ALPA';
+
+interface StudentRowItem {
+    studentId: string;
+    fullName: string;
+    nisn: string | null;
+    nis: string | null;
+    classId: string;
+    className: string;
+    gender: string | null;
+    status: StudentAttendanceStatus | null;
+    checkInTime: string | null;
+    checkOutTime: string | null;
+    notes: string;
+    existingRecordId: string | null;
+    isDirty: boolean;
 }
 
-type EnrichedClassStudentRow = Omit<
-    ClassStudentAttendanceRow,
-    'attendanceId' | 'checkOutTime'
-> & {
-    attendanceId?: string | null;
-    checkOutTime?: string | null;
-};
+interface RawStudentDbRow {
+    id: string;
+    fullName: string | null;
+    nisn: string | null;
+    nis: string | null;
+    classId: string | null;
+    gender: string | null;
+    classes?: { name: string } | Array<{ name: string }> | null;
+}
 
-const STATUS_OPTIONS: Array<{
-    value: AttendanceStatus;
+interface RawStudentAttendanceDbRow {
+    id: string;
+    studentId: string | null;
+    status: string | null;
+    checkInTime: string | null;
+    checkOutTime: string | null;
+    time?: string | null;
+    notes?: string | null;
+}
+
+interface MessageBanner {
+    status: 'success' | 'error';
+    text: string;
+}
+
+const STATUS_OPTIONS: {
+    value: StudentAttendanceStatus;
     label: string;
-    shortLabel: string;
-    color: string;
-}> = [
-        { value: 'HADIR', label: 'Hadir', shortLabel: 'H', color: '#10B981' },
-        { value: 'TERLAMBAT', label: 'Terlambat', shortLabel: 'T', color: '#F59E0B' },
-        { value: 'IZIN', label: 'Izin', shortLabel: 'I', color: '#3B82F6' },
-        { value: 'SAKIT', label: 'Sakit', shortLabel: 'S', color: '#8B5CF6' },
-        { value: 'ALPA', label: 'Alpa', shortLabel: 'A', color: '#EF4444' },
+    short: string;
+    activeClass: string;
+    icon: typeof CheckCircle2;
+}[] = [
+        {
+            value: 'HADIR',
+            label: 'Hadir',
+            short: 'H',
+            activeClass:
+                'bg-emerald-600 text-white border-emerald-600 shadow-2xs ring-1 ring-emerald-600/30',
+            icon: CheckCircle2,
+        },
+        {
+            value: 'TERLAMBAT',
+            label: 'Terlambat',
+            short: 'T',
+            activeClass:
+                'bg-amber-500 text-white border-amber-500 shadow-2xs ring-1 ring-amber-500/30',
+            icon: Clock,
+        },
+        {
+            value: 'IZIN',
+            label: 'Izin',
+            short: 'I',
+            activeClass:
+                'bg-blue-600 text-white border-blue-600 shadow-2xs ring-1 ring-blue-600/30',
+            icon: FileText,
+        },
+        {
+            value: 'SAKIT',
+            label: 'Sakit',
+            short: 'S',
+            activeClass:
+                'bg-purple-600 text-white border-purple-600 shadow-2xs ring-1 ring-purple-600/30',
+            icon: AlertCircle,
+        },
+        {
+            value: 'ALPA',
+            label: 'Alpa',
+            short: 'A',
+            activeClass:
+                'bg-red-600 text-white border-red-600 shadow-2xs ring-1 ring-red-600/30',
+            icon: XCircle,
+        },
     ];
 
-function getErrorMessage(error: unknown, fallbackMessage: string): string {
-    if (error instanceof Error && error.message) {
-        return error.message;
+function buildIsoTimestampForDate(dateStr: string): string {
+    const now = new Date();
+    const [yStr, mStr, dStr] = dateStr.split('-');
+    const y = Number(yStr) || now.getFullYear();
+    const m = (Number(mStr) || now.getMonth() + 1) - 1;
+    const d = Number(dStr) || now.getDate();
+
+    const combined = new Date(
+        y,
+        m,
+        d,
+        now.getHours(),
+        now.getMinutes(),
+        now.getSeconds()
+    );
+    return combined.toISOString();
+}
+
+function formatTimeDisplay(value?: string | null): string | null {
+    if (!value) return null;
+    const trimmed = value.trim();
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
+        return trimmed.slice(0, 5);
     }
-    if (
-        typeof error === 'object' &&
-        error !== null &&
-        'message' in error &&
-        typeof (error as { message: unknown }).message === 'string'
-    ) {
-        return (error as { message: string }).message;
+    const parsed = new Date(trimmed);
+    if (Number.isNaN(parsed.getTime())) return null;
+    return parsed.toLocaleTimeString('id-ID', {
+        hour: '2-digit',
+        minute: '2-digit',
+    });
+}
+
+function getErrorInfo(err: unknown): { code: string; message: string } {
+    if (typeof err === 'object' && err !== null) {
+        const rec = err as Record<string, unknown>;
+        return {
+            code: typeof rec.code === 'string' ? rec.code : '',
+            message:
+                typeof rec.message === 'string' && rec.message.trim().length > 0
+                    ? rec.message
+                    : 'Terjadi kesalahan saat memproses data.',
+        };
     }
-    return fallbackMessage;
+    if (err instanceof Error) {
+        return { code: '', message: err.message };
+    }
+    return { code: '', message: 'Terjadi kesalahan tidak terduga.' };
+}
+
+function isMissingColumnError(err: unknown): boolean {
+    const { code, message } = getErrorInfo(err);
+    const lower = message.toLowerCase();
+    return (
+        code === 'PGRST204' ||
+        code === '42703' ||
+        lower.includes('schema cache') ||
+        (lower.includes('column') && lower.includes('does not exist'))
+    );
 }
 
 export function StudentClassAttendancePage() {
@@ -88,54 +201,57 @@ export function StudentClassAttendancePage() {
     >([]);
     const [simSchoolId, setSimSchoolId] = useState<string>('');
     const activeSchoolId = isSuperAdmin
-        ? simSchoolId || school?.id || ''
-        : school?.id || '';
+        ? simSchoolId || school?.id || user?.schoolId || ''
+        : school?.id || user?.schoolId || '';
 
-    const [classes, setClasses] = useState<ClassOption[]>([]);
+    const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString);
+    const [classesList, setClassesList] = useState<
+        Array<{ id: string; name: string }>
+    >([]);
     const [selectedClassId, setSelectedClassId] = useState<string>('');
-    const [homeroomClassId, setHomeroomClassId] = useState<string | null>(null);
-    const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
     const [searchQuery, setSearchQuery] = useState<string>('');
-    const [statusFilter, setStatusFilter] = useState<string>('ALL');
 
-    // Hook terpusat pengunci hari libur mengikuti selectedDate
-    const {
-        isLocked: isHolidayLocked,
-        isHoliday,
-        holidayName,
-        isSpecialEventActive,
-        specialEventReason,
-        canManageOverride,
-        isToggling: isTogglingHoliday,
-        activateSpecialEvent,
-        deactivateSpecialEvent,
-    } = useStudentHolidayLock({
-        schoolId: activeSchoolId,
-        targetDate: selectedDate,
-    });
+    // State Pagination
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const [pageSize, setPageSize] = useState<number>(DEFAULT_STUDENT_PAGE_SIZE);
 
-    const [specialEventInput, setSpecialEventInput] = useState<string>('');
+    const [rows, setRows] = useState<StudentRowItem[]>([]);
+    const [isLoadingClasses, setIsLoadingClasses] = useState<boolean>(false);
+    const [isLoadingRows, setIsLoadingRows] = useState<boolean>(false);
+    const [isSaving, setIsSaving] = useState<boolean>(false);
+    const [checkingOutId, setCheckingOutId] = useState<string | null>(null);
+    const [message, setMessage] = useState<MessageBanner | null>(null);
 
-    // Pengaturan sekolah untuk siswa
     const [enableClassAttendance, setEnableClassAttendance] =
         useState<boolean>(true);
     const [enableStudentCheckOut, setEnableStudentCheckOut] =
         useState<boolean>(true);
 
-    const [rows, setRows] = useState<EnrichedClassStudentRow[]>([]);
-    const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
-    const [isLoadingClasses, setIsLoadingClasses] = useState<boolean>(false);
-    const [isLoadingSheet, setIsLoadingSheet] = useState<boolean>(false);
-    const [isSaving, setIsSaving] = useState<boolean>(false);
-    const [checkingOutStudentId, setCheckingOutStudentId] = useState<
-        string | null
-    >(null);
-    const [feedback, setFeedback] = useState<{
-        type: 'success' | 'error' | 'warning';
-        message: string;
-    } | null>(null);
+    const holidayLock = useStudentHolidayLock({
+        schoolId: activeSchoolId,
+        targetDate: selectedDate,
+    });
 
-    const isSheetDisabled = !enableClassAttendance || isHolidayLocked;
+    const [showSpecialEventModal, setShowSpecialEventModal] =
+        useState<boolean>(false);
+    const [specialEventInput, setSpecialEventInput] = useState<string>('');
+
+    const lockBannerMessage = useMemo(() => {
+        if (holidayLock.isHoliday) {
+            return `Presensi dikunci otomatis karena hari libur (${holidayLock.holidayName ?? 'Libur Kalender'
+                }).`;
+        }
+        if (holidayLock.isSpecialEventActive) {
+            return `Mode kegiatan khusus aktif: ${holidayLock.specialEventReason ?? 'Kegiatan Sekolah'
+                }.`;
+        }
+        return 'Presensi pada tanggal ini sedang dikunci.';
+    }, [
+        holidayLock.isHoliday,
+        holidayLock.holidayName,
+        holidayLock.isSpecialEventActive,
+        holidayLock.specialEventReason,
+    ]);
 
     useEffect(() => {
         if (!isSuperAdmin) return;
@@ -149,350 +265,368 @@ export function StudentClassAttendancePage() {
             .catch(console.error);
     }, [isSuperAdmin, school?.id]);
 
-    // Muat pengaturan presensi siswa dari tabel schools
-    useEffect(() => {
+    const loadClassesAndConfig = useCallback(async () => {
         if (!activeSchoolId) return;
-        supabase
-            .from('schools')
-            .select('*')
-            .eq('id', activeSchoolId)
-            .maybeSingle()
-            .then(({ data }) => {
-                if (!data) return;
-                setEnableClassAttendance(
-                    typeof data.enableStudentClassAttendance === 'boolean'
-                        ? data.enableStudentClassAttendance
-                        : true
-                );
-                setEnableStudentCheckOut(
-                    typeof data.enableStudentCheckOut === 'boolean'
-                        ? data.enableStudentCheckOut
-                        : true
-                );
-            });
-    }, [activeSchoolId]);
-
-    // Muat Daftar Kelas & Deteksi Kelas Perwalian
-    useEffect(() => {
-        if (!activeSchoolId || !user?.id) return;
-
-        let isMounted = true;
-        (async () => {
-            setIsLoadingClasses(true);
-            setFeedback(null);
-            try {
-                const { data: activeYear } = await supabase
-                    .from('academic_years')
-                    .select('id')
-                    .eq('schoolId', activeSchoolId)
-                    .eq('isActive', true)
-                    .maybeSingle();
-
-                let classQuery = supabase
+        setIsLoadingClasses(true);
+        try {
+            const [classesRes, schoolRes] = await Promise.all([
+                supabase
                     .from('classes')
-                    .select('id, name, gradeLevel, major, homeroomTeacherId')
+                    .select('id, name')
                     .eq('schoolId', activeSchoolId)
                     .order('gradeLevel', { ascending: true })
-                    .order('name', { ascending: true });
+                    .order('name', { ascending: true }),
+                supabase
+                    .from('schools')
+                    .select('*')
+                    .eq('id', activeSchoolId)
+                    .maybeSingle(),
+            ]);
 
-                if (activeYear?.id) {
-                    classQuery = classQuery.eq('academicYearId', activeYear.id);
-                }
+            if (classesRes.error) throw classesRes.error;
 
-                const [classRes, teacherProfile] = await Promise.all([
-                    classQuery,
-                    !isSuperAdmin
-                        ? attendanceService.getTeacherProfileByUser({
-                            schoolId: activeSchoolId,
-                            userId: user.id,
-                            email: user.email,
-                            fullName: user.fullName,
-                        })
-                        : Promise.resolve(null),
-                ]);
+            const loadedClasses = (classesRes.data ?? []) as Array<{
+                id: string;
+                name: string;
+            }>;
+            setClassesList(loadedClasses);
 
-                if (classRes.error) throw classRes.error;
-                if (!isMounted) return;
-
-                const classList: ClassOption[] = classRes.data ?? [];
-                setClasses(classList);
-
-                const myHomeroom = teacherProfile
-                    ? classList.find((c) => c.homeroomTeacherId === teacherProfile.id)
-                    : undefined;
-
-                setHomeroomClassId(myHomeroom?.id ?? null);
-
-                if (myHomeroom) {
-                    setSelectedClassId(myHomeroom.id);
-                } else if (classList.length > 0) {
-                    setSelectedClassId(classList[0].id);
-                } else {
-                    setSelectedClassId('');
-                }
-            } catch (err: unknown) {
-                if (isMounted) {
-                    setFeedback({
-                        type: 'error',
-                        message: getErrorMessage(err, 'Gagal memuat daftar kelas.'),
-                    });
-                }
-            } finally {
-                if (isMounted) setIsLoadingClasses(false);
+            if (loadedClasses.length > 0) {
+                setSelectedClassId((prev) =>
+                    loadedClasses.some((c) => c.id === prev) ? prev : loadedClasses[0].id
+                );
+            } else {
+                setSelectedClassId('');
             }
-        })();
 
-        return () => {
-            isMounted = false;
-        };
-    }, [activeSchoolId, user?.id, user?.email, user?.fullName, isSuperAdmin]);
+            if (!schoolRes.error && schoolRes.data) {
+                const sRow = schoolRes.data as Record<string, unknown>;
+                if (typeof sRow.enableStudentClassAttendance === 'boolean') {
+                    setEnableClassAttendance(sRow.enableStudentClassAttendance);
+                }
+                if (typeof sRow.enableStudentCheckOut === 'boolean') {
+                    setEnableStudentCheckOut(sRow.enableStudentCheckOut);
+                }
+            }
+        } catch (err: unknown) {
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal memuat daftar kelas: ${errMsg}`,
+            });
+        } finally {
+            setIsLoadingClasses(false);
+        }
+    }, [activeSchoolId]);
 
-    // Muat Lembar Absensi Siswa per Kelas & Tanggal (termasuk jam datang & pulang)
-    const loadAttendanceSheet = useCallback(async () => {
+    useEffect(() => {
+        void loadClassesAndConfig();
+    }, [loadClassesAndConfig]);
+
+    const selectedClassName = useMemo(
+        () =>
+            classesList.find((c) => c.id === selectedClassId)?.name ?? 'Terpilih',
+        [classesList, selectedClassId]
+    );
+
+    const loadClassStudentsAndAttendance = useCallback(async () => {
         if (!activeSchoolId || !selectedClassId || !selectedDate) {
             setRows([]);
             return;
         }
 
-        setIsLoadingSheet(true);
-        setFeedback(null);
-        try {
-            const sheet = await attendanceService.getClassAttendanceSheet({
-                schoolId: activeSchoolId,
-                classId: selectedClassId,
-                date: selectedDate,
-            });
+        setIsLoadingRows(true);
+        setMessage(null);
+        setCurrentPage(1);
 
-            const studentIds = sheet.map((s) => s.studentId);
-            const extraMap = new Map<
-                string,
-                {
-                    id: string;
-                    time?: string | null;
-                    checkInTime?: string | null;
-                    checkOutTime?: string | null;
-                }
-            >();
+        try {
+            const { data: studentsData, error: studentsErr } = await supabase
+                .from('students')
+                .select('id, fullName, nisn, nis, classId, gender, classes(name)')
+                .eq('schoolId', activeSchoolId)
+                .eq('classId', selectedClassId)
+                .order('fullName', { ascending: true });
+
+            if (studentsErr) throw studentsErr;
+
+            const typedStudents = (studentsData ?? []) as RawStudentDbRow[];
+            const studentIds = typedStudents.map((s) => String(s.id));
+
+            const attendanceMap = new Map<string, RawStudentAttendanceDbRow>();
 
             if (studentIds.length > 0) {
-                const { data: attExtra } = await supabase
+                const { data: attData, error: attErr } = await supabase
                     .from('attendances')
-                    .select('id, studentId, time, checkInTime, checkOutTime')
+                    .select(
+                        'id, studentId, status, checkInTime, checkOutTime, time, notes'
+                    )
                     .eq('schoolId', activeSchoolId)
                     .eq('date', selectedDate)
                     .eq('type', 'SISWA')
                     .in('studentId', studentIds);
 
-                for (const item of attExtra ?? []) {
-                    if (item.studentId) {
-                        extraMap.set(item.studentId, item);
+                if (attErr) throw attErr;
+
+                const typedAtts = (attData ?? []) as RawStudentAttendanceDbRow[];
+                for (const att of typedAtts) {
+                    if (att.studentId) {
+                        attendanceMap.set(String(att.studentId), att);
                     }
                 }
             }
 
-            const enriched: EnrichedClassStudentRow[] = sheet.map((row) => {
-                const extra = extraMap.get(row.studentId);
+            const combinedRows: StudentRowItem[] = typedStudents.map((st) => {
+                const sid = String(st.id);
+                const existing = attendanceMap.get(sid);
+                const rawStatus = existing?.status
+                    ? existing.status.toUpperCase()
+                    : null;
+                const normalizedRaw = rawStatus === 'ALPHA' ? 'ALPA' : rawStatus;
+
+                const validStatus: StudentAttendanceStatus | null =
+                    normalizedRaw === 'HADIR' ||
+                        normalizedRaw === 'TERLAMBAT' ||
+                        normalizedRaw === 'IZIN' ||
+                        normalizedRaw === 'SAKIT' ||
+                        normalizedRaw === 'ALPA'
+                        ? normalizedRaw
+                        : null;
+
+                const resolvedClassName = Array.isArray(st.classes)
+                    ? st.classes[0]?.name
+                    : st.classes?.name;
+
                 return {
-                    ...row,
-                    attendanceId: extra?.id ?? null,
-                    checkInTime: row.checkInTime ?? extra?.checkInTime ?? extra?.time ?? null,
-                    checkOutTime: extra?.checkOutTime ?? null,
+                    studentId: sid,
+                    fullName: st.fullName ?? 'Tanpa Nama',
+                    nisn: st.nisn ?? null,
+                    nis: st.nis ?? null,
+                    classId: st.classId ?? selectedClassId,
+                    className: resolvedClassName ?? selectedClassName,
+                    gender: st.gender ?? null,
+                    status: validStatus,
+                    checkInTime: existing?.checkInTime ?? existing?.time ?? null,
+                    checkOutTime: existing?.checkOutTime ?? null,
+                    notes: existing?.notes ?? '',
+                    existingRecordId: existing?.id ? String(existing.id) : null,
+                    isDirty: false,
                 };
             });
 
-            setRows(enriched);
-            setHasUnsavedChanges(false);
+            setRows(combinedRows);
         } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                message: getErrorMessage(err, 'Gagal memuat data absensi siswa.'),
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal memuat data siswa kelas ${selectedClassName}: ${errMsg}`,
             });
         } finally {
-            setIsLoadingSheet(false);
+            setIsLoadingRows(false);
         }
-    }, [activeSchoolId, selectedClassId, selectedDate]);
+    }, [activeSchoolId, selectedClassId, selectedClassName, selectedDate]);
 
     useEffect(() => {
-        loadAttendanceSheet();
-    }, [loadAttendanceSheet]);
+        void loadClassStudentsAndAttendance();
+    }, [loadClassStudentsAndAttendance]);
 
-    const handleActivateSpecialEvent = async (e: React.FormEvent) => {
-        e.preventDefault();
-        try {
-            const reasonText =
-                specialEventInput.trim() || DEFAULT_CLASS_SPECIAL_EVENT;
-            await activateSpecialEvent(reasonText);
-            setSpecialEventInput('');
-            setFeedback({
-                type: 'success',
-                message: `Mode Kegiatan Khusus ("${reasonText}") diaktifkan untuk tanggal ${selectedDate}.`,
-            });
-        } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                message: getErrorMessage(
-                    err,
-                    'Gagal mengaktifkan mode kegiatan khusus.'
-                ),
-            });
-        }
-    };
-
-    const handleDeactivateSpecialEvent = async () => {
-        try {
-            await deactivateSpecialEvent();
-            setFeedback({
-                type: 'warning',
-                message: `Presensi tanggal ${selectedDate} dikunci kembali mengikuti jadwal hari libur.`,
-            });
-        } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                message: getErrorMessage(err, 'Gagal mengunci kembali presensi.'),
-            });
-        }
-    };
-
-    const handleStatusChange = (
+    const handleSetStudentStatus = (
         studentId: string,
-        newStatus: AttendanceStatus
+        newStatus: StudentAttendanceStatus
     ) => {
-        if (isSheetDisabled) return;
-        setRows((prev) =>
-            prev.map((row) =>
-                row.studentId === studentId ? { ...row, status: newStatus } : row
-            )
-        );
-        setHasUnsavedChanges(true);
-        setFeedback(null);
-    };
-
-    const handleNotesChange = (studentId: string, newNotes: string) => {
-        if (isSheetDisabled) return;
-        setRows((prev) =>
-            prev.map((row) =>
-                row.studentId === studentId ? { ...row, notes: newNotes } : row
-            )
-        );
-        setHasUnsavedChanges(true);
-    };
-
-    const handleMarkAllPresent = () => {
-        if (isSheetDisabled) return;
-        setRows((prev) => prev.map((row) => ({ ...row, status: 'HADIR' })));
-        setHasUnsavedChanges(true);
-        setFeedback({
-            type: 'warning',
-            message:
-                'Semua siswa ditandai HADIR. Klik "Simpan Presensi" untuk menyimpan ke database.',
-        });
-    };
-
-    const handleMarkUnrecordedPresent = () => {
-        if (isSheetDisabled) return;
-        setRows((prev) =>
-            prev.map((row) =>
-                row.status === null ? { ...row, status: 'HADIR' } : row
-            )
-        );
-        setHasUnsavedChanges(true);
-        setFeedback({
-            type: 'warning',
-            message:
-                'Siswa yang belum terdata otomatis ditandai HADIR. Klik "Simpan Presensi" untuk menyimpan.',
-        });
-    };
-
-    // Simpan Seluruh Presensi Kelas ke Database
-    const handleSave = async () => {
-        if (!activeSchoolId || !user?.id || !selectedClassId || isSheetDisabled) {
+        if (holidayLock.isLocked) {
+            setMessage({
+                status: 'error',
+                text: lockBannerMessage,
+            });
             return;
         }
 
-        const filledRecords = rows
-            .filter(
-                (r): r is EnrichedClassStudentRow & { status: AttendanceStatus } =>
-                    r.status !== null
-            )
-            .map((r) => ({
-                studentId: r.studentId,
-                status: r.status,
-                notes: r.notes,
-            }));
+        const nowIso = buildIsoTimestampForDate(selectedDate);
+        setRows((prev) =>
+            prev.map((row) => {
+                if (row.studentId !== studentId) return row;
+                const isPresent = newStatus === 'HADIR' || newStatus === 'TERLAMBAT';
+                return {
+                    ...row,
+                    status: newStatus,
+                    checkInTime: isPresent ? row.checkInTime || nowIso : null,
+                    isDirty: true,
+                };
+            })
+        );
+    };
 
-        if (filledRecords.length === 0) {
-            setFeedback({
-                type: 'warning',
-                message: 'Belum ada status kehadiran siswa yang dipilih untuk disimpan.',
+    const handleSetStudentNote = (studentId: string, notes: string) => {
+        if (holidayLock.isLocked) return;
+        setRows((prev) =>
+            prev.map((row) =>
+                row.studentId === studentId ? { ...row, notes, isDirty: true } : row
+            )
+        );
+    };
+
+    const handleMarkAllHadir = () => {
+        if (holidayLock.isLocked) {
+            setMessage({
+                status: 'error',
+                text: lockBannerMessage,
+            });
+            return;
+        }
+
+        const nowIso = buildIsoTimestampForDate(selectedDate);
+        setRows((prev) =>
+            prev.map((row) => {
+                if (row.status !== null) return row;
+                return {
+                    ...row,
+                    status: 'HADIR',
+                    checkInTime: row.checkInTime ?? nowIso,
+                    isDirty: true,
+                };
+            })
+        );
+    };
+
+    const handleSaveAll = async () => {
+        if (!activeSchoolId) return;
+
+        if (holidayLock.isLocked) {
+            setMessage({
+                status: 'error',
+                text: lockBannerMessage,
+            });
+            return;
+        }
+
+        const rowsToSave = rows.filter((r) => r.isDirty && r.status !== null);
+        if (rowsToSave.length === 0) {
+            setMessage({
+                status: 'error',
+                text: 'Tidak ada perubahan presensi baru untuk disimpan. Pilih status siswa terlebih dahulu.',
             });
             return;
         }
 
         setIsSaving(true);
-        setFeedback(null);
+        setMessage(null);
+
         try {
-            const res = await attendanceService.bulkStudentAttendance({
-                schoolId: activeSchoolId,
-                date: selectedDate,
-                records: filledRecords,
-                recordedBy: user.id,
+            const nowIso = buildIsoTimestampForDate(selectedDate);
+
+            for (const item of rowsToSave) {
+                if (!item.status) continue;
+                const isPresent =
+                    item.status === 'HADIR' || item.status === 'TERLAMBAT';
+                const effectiveCheckIn = isPresent
+                    ? item.checkInTime || nowIso
+                    : null;
+
+                if (item.existingRecordId) {
+                    const updatePayload: Record<string, string | null> = {
+                        status: item.status,
+                        time: effectiveCheckIn,
+                        checkInTime: effectiveCheckIn,
+                        notes: item.notes.trim() || null,
+                        recordedBy: user?.id ?? null,
+                    };
+
+                    const { error: updErr } = await supabase
+                        .from('attendances')
+                        .update(updatePayload)
+                        .eq('id', item.existingRecordId);
+
+                    if (updErr) {
+                        if (isMissingColumnError(updErr)) {
+                            const { error: fallbackErr } = await supabase
+                                .from('attendances')
+                                .update({
+                                    status: item.status,
+                                    time: effectiveCheckIn,
+                                    notes: item.notes.trim() || null,
+                                })
+                                .eq('id', item.existingRecordId);
+                            if (fallbackErr) throw fallbackErr;
+                        } else {
+                            throw updErr;
+                        }
+                    }
+                } else {
+                    const insertPayload: Record<string, string | null> = {
+                        schoolId: activeSchoolId,
+                        studentId: item.studentId,
+                        type: 'SISWA',
+                        date: selectedDate,
+                        status: item.status,
+                        time: effectiveCheckIn,
+                        checkInTime: effectiveCheckIn,
+                        notes: item.notes.trim() || null,
+                        recordedBy: user?.id ?? null,
+                    };
+
+                    const { error: insErr } = await supabase
+                        .from('attendances')
+                        .insert(insertPayload);
+
+                    if (insErr) {
+                        if (isMissingColumnError(insErr)) {
+                            const { error: fallbackInsErr } = await supabase
+                                .from('attendances')
+                                .insert({
+                                    schoolId: activeSchoolId,
+                                    studentId: item.studentId,
+                                    type: 'SISWA',
+                                    date: selectedDate,
+                                    status: item.status,
+                                    time: effectiveCheckIn,
+                                    notes: item.notes.trim() || null,
+                                });
+                            if (fallbackInsErr) throw fallbackInsErr;
+                        } else {
+                            throw insErr;
+                        }
+                    }
+                }
+            }
+
+            setMessage({
+                status: 'success',
+                text: `Berhasil menyimpan presensi ${rowsToSave.length} siswa kelas ${selectedClassName} (${selectedDate}).`,
             });
-
-            // Pastikan kolom checkInTime ikut terisi untuk siswa HADIR/TERLAMBAT yang belum memiliki checkInTime
-            const nowIso = new Date().toISOString();
-            const eligibleIds = filledRecords
-                .filter((r) => r.status === 'HADIR' || r.status === 'TERLAMBAT')
-                .map((r) => r.studentId);
-
-            if (eligibleIds.length > 0) {
-                await supabase
-                    .from('attendances')
-                    .update({ checkInTime: nowIso })
-                    .eq('schoolId', activeSchoolId)
-                    .eq('date', selectedDate)
-                    .eq('type', 'SISWA')
-                    .in('studentId', eligibleIds)
-                    .is('checkInTime', null);
-            }
-
-            if (res.success) {
-                await loadAttendanceSheet();
-                const unrecordedLeft = rows.length - filledRecords.length;
-                setFeedback({
-                    type: 'success',
-                    message:
-                        unrecordedLeft > 0
-                            ? `Berhasil menyimpan presensi ${res.count} siswa (${unrecordedLeft} siswa masih belum diisi).`
-                            : `Berhasil menyimpan presensi lengkap untuk ${res.count} siswa!`,
-                });
-            }
+            await loadClassStudentsAndAttendance();
         } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                message: getErrorMessage(
-                    err,
-                    'Terjadi kesalahan saat menyimpan presensi kelas.'
-                ),
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal menyimpan presensi kelas: ${errMsg}`,
             });
         } finally {
             setIsSaving(false);
         }
     };
 
-    // Catat Jam Pulang (Check-Out) 1 Siswa oleh Guru / Wali Kelas
-    const handleSingleStudentCheckOut = async (row: EnrichedClassStudentRow) => {
-        if (!activeSchoolId || checkingOutStudentId || isSheetDisabled) return;
-        setCheckingOutStudentId(row.studentId);
-        setFeedback(null);
+    const handleStudentCheckOut = async (row: StudentRowItem) => {
+        if (!row.existingRecordId || !enableStudentCheckOut) return;
+
+        if (holidayLock.isLocked) {
+            setMessage({
+                status: 'error',
+                text: lockBannerMessage,
+            });
+            return;
+        }
+
+        setCheckingOutId(row.studentId);
+        setMessage(null);
+
         try {
-            const nowIso = new Date().toISOString();
+            const nowIso = buildIsoTimestampForDate(selectedDate);
+            const formattedClock = formatTimeDisplay(nowIso) ?? '';
+
             const { error } = await supabase
                 .from('attendances')
                 .update({ checkOutTime: nowIso })
-                .eq('schoolId', activeSchoolId)
-                .eq('studentId', row.studentId)
-                .eq('date', selectedDate)
-                .eq('type', 'SISWA');
+                .eq('id', row.existingRecordId);
 
             if (error) throw error;
 
@@ -503,668 +637,678 @@ export function StudentClassAttendancePage() {
                         : item
                 )
             );
-            setFeedback({
-                type: 'success',
-                message: `Jam pulang ${row.fullName} berhasil dicatat.`,
+            setMessage({
+                status: 'success',
+                text: `Absen pulang ${row.fullName} berhasil dicatat pukul ${formattedClock}.`,
             });
         } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                message: getErrorMessage(err, 'Gagal mencatat jam pulang siswa.'),
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal mencatat absen pulang ${row.fullName}: ${errMsg}`,
             });
         } finally {
-            setCheckingOutStudentId(null);
+            setCheckingOutId(null);
         }
     };
 
-    // Catat Jam Pulang Massal untuk Siswa yang Sudah Hadir/Terlambat tapi Belum Pulang
-    const handleBulkClassCheckOut = async () => {
-        if (!activeSchoolId || isSheetDisabled) return;
-        const targetIds = rows
-            .filter(
-                (r) =>
-                    (r.status === 'HADIR' || r.status === 'TERLAMBAT') &&
-                    r.attendanceId &&
-                    !r.checkOutTime
-            )
-            .map((r) => r.studentId);
-
-        if (targetIds.length === 0) {
-            setFeedback({
-                type: 'warning',
-                message:
-                    'Tidak ada siswa hadir yang menunggu pencatatan pulang (pastikan status kehadiran sudah disimpan terlebih dahulu).',
-            });
-            return;
-        }
-
-        setIsSaving(true);
+    const handleConfirmActivateSpecialEvent = async () => {
+        if (!specialEventInput.trim()) return;
         try {
-            const nowIso = new Date().toISOString();
-            const { error } = await supabase
-                .from('attendances')
-                .update({ checkOutTime: nowIso })
-                .eq('schoolId', activeSchoolId)
-                .eq('date', selectedDate)
-                .eq('type', 'SISWA')
-                .in('studentId', targetIds)
-                .is('checkOutTime', null);
-
-            if (error) throw error;
-            await loadAttendanceSheet();
-            setFeedback({
-                type: 'success',
-                message: `Jam pulang berhasil dicatat untuk ${targetIds.length} siswa.`,
+            await holidayLock.activateSpecialEvent(specialEventInput.trim());
+            setShowSpecialEventModal(false);
+            setSpecialEventInput('');
+            setMessage({
+                status: 'success',
+                text: 'Mode Kegiatan Khusus berhasil diaktifkan. Presensi siswa pada tanggal libur ini kini dibuka.',
             });
         } catch (err: unknown) {
-            setFeedback({
-                type: 'error',
-                message: getErrorMessage(err, 'Gagal mencatat jam pulang massal.'),
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal mengaktifkan kegiatan khusus: ${errMsg}`,
             });
-        } finally {
-            setIsSaving(false);
         }
     };
 
-    const stats = useMemo(() => {
+    const handleDeactivateSpecialEvent = async () => {
+        try {
+            await holidayLock.deactivateSpecialEvent();
+            setMessage({
+                status: 'success',
+                text: 'Mode Kegiatan Khusus dinonaktifkan. Penguncian hari libur kembali berlaku.',
+            });
+        } catch (err: unknown) {
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal menonaktifkan kegiatan khusus: ${errMsg}`,
+            });
+        }
+    };
+
+    const filteredRows = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        if (!q) return rows;
+        return rows.filter(
+            (r) =>
+                r.fullName.toLowerCase().includes(q) ||
+                (r.nisn ?? '').toLowerCase().includes(q) ||
+                (r.nis ?? '').toLowerCase().includes(q)
+        );
+    }, [rows, searchQuery]);
+
+    // Kalkulasi Pagination
+    const effectivePageSize = pageSize === 0 ? filteredRows.length || 1 : pageSize;
+    const totalPages =
+        pageSize === 0
+            ? 1
+            : Math.max(1, Math.ceil(filteredRows.length / effectivePageSize));
+    const safeCurrentPage = Math.min(currentPage, totalPages);
+
+    const paginatedRows = useMemo(() => {
+        if (pageSize === 0) return filteredRows;
+        const startIdx = (safeCurrentPage - 1) * pageSize;
+        return filteredRows.slice(startIdx, startIdx + pageSize);
+    }, [filteredRows, pageSize, safeCurrentPage]);
+
+    const startItemNumber =
+        filteredRows.length === 0
+            ? 0
+            : pageSize === 0
+                ? 1
+                : (safeCurrentPage - 1) * pageSize + 1;
+    const endItemNumber =
+        pageSize === 0
+            ? filteredRows.length
+            : Math.min(safeCurrentPage * pageSize, filteredRows.length);
+
+    const summary = useMemo(() => {
+        let hadir = 0;
+        let terlambat = 0;
+        let izin = 0;
+        let sakit = 0;
+        let alpa = 0;
+        let belum = 0;
+        let dirtyCount = 0;
+
+        for (const r of rows) {
+            if (r.isDirty) dirtyCount++;
+            if (r.status === 'HADIR') hadir++;
+            else if (r.status === 'TERLAMBAT') terlambat++;
+            else if (r.status === 'IZIN') izin++;
+            else if (r.status === 'SAKIT') sakit++;
+            else if (r.status === 'ALPA') alpa++;
+            else belum++;
+        }
+
         return {
             total: rows.length,
-            hadir: rows.filter((r) => r.status === 'HADIR').length,
-            terlambat: rows.filter((r) => r.status === 'TERLAMBAT').length,
-            izin: rows.filter((r) => r.status === 'IZIN').length,
-            sakit: rows.filter((r) => r.status === 'SAKIT').length,
-            alpa: rows.filter((r) => r.status === 'ALPA').length,
-            unrecorded: rows.filter((r) => r.status === null).length,
-            checkedOut: rows.filter((r) => Boolean(r.checkOutTime)).length,
+            hadir,
+            terlambat,
+            izin,
+            sakit,
+            alpa,
+            belum,
+            dirtyCount,
         };
     }, [rows]);
 
-    const filteredRows = useMemo(() => {
-        return rows.filter((row) => {
-            const matchesSearch =
-                !searchQuery.trim() ||
-                row.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                row.nisn.includes(searchQuery.trim()) ||
-                (row.nis && row.nis.includes(searchQuery.trim()));
-
-            const matchesStatus =
-                statusFilter === 'ALL' ||
-                (statusFilter === 'UNRECORDED' && row.status === null) ||
-                row.status === statusFilter;
-
-            return matchesSearch && matchesStatus;
-        });
-    }, [rows, searchQuery, statusFilter]);
-
-    const formatTime = (iso?: string | null) => {
-        if (!iso) return '';
-        return new Date(iso).toLocaleTimeString('id-ID', {
-            hour: '2-digit',
-            minute: '2-digit',
-        });
-    };
-
-    const selectedClassObj = classes.find((c) => c.id === selectedClassId);
-
     return (
-        <div className="page-container">
+        <div className="space-y-5 max-w-6xl mx-auto">
+            {/* Banner Simulasi Khusus SUPER_ADMIN */}
+            {isSuperAdmin && simSchools.length > 0 && (
+                <div
+                    className="p-3.5 rounded-xl border flex flex-wrap items-center justify-between gap-3"
+                    style={{
+                        background: 'rgba(139, 92, 246, 0.1)',
+                        borderColor: 'rgba(139, 92, 246, 0.35)',
+                    }}
+                >
+                    <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-300">
+                        <FlaskConical size={16} />
+                        <span>Mode Simulasi Super Admin:</span>
+                    </div>
+                    <select
+                        className="form-input min-w-60 text-xs"
+                        value={simSchoolId}
+                        onChange={(e) => setSimSchoolId(e.target.value)}
+                    >
+                        {simSchools.map((s) => (
+                            <option key={s.id} value={s.id}>
+                                {s.name} ({s.npsn})
+                            </option>
+                        ))}
+                    </select>
+                </div>
+            )}
+
             {/* Header Halaman */}
-            <div className="page-header">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
                 <div>
-                    <h1 className="page-title">Absensi Kelas Siswa</h1>
-                    <p className="page-subtitle">
-                        Pencatatan kehadiran &amp; kepulangan harian siswa per rombel oleh
-                        Wali Kelas / Guru
+                    <h1 className="text-2xl font-bold flex items-center gap-2">
+                        <Users className="text-emerald-600" size={24} />
+                        Presensi Siswa per Kelas
+                    </h1>
+                    <p className="text-sm text-muted-foreground mt-0.5">
+                        Input & kelola kehadiran siswa harian secara kolektif oleh Wali
+                        Kelas / Guru Mata Pelajaran.
                     </p>
                 </div>
 
-                <div className="page-header-actions">
-                    {isSuperAdmin && simSchools.length > 0 && (
-                        <select
-                            className="form-input"
-                            value={simSchoolId}
-                            onChange={(e) => setSimSchoolId(e.target.value)}
-                        >
-                            {simSchools.map((s) => (
-                                <option key={s.id} value={s.id}>
-                                    Sekolah: {s.name}
-                                </option>
-                            ))}
-                        </select>
-                    )}
+                <div className="flex flex-wrap items-center gap-2">
+                    {holidayLock.isHoliday &&
+                        holidayLock.canManageOverride &&
+                        (holidayLock.isSpecialEventActive ? (
+                            <button
+                                type="button"
+                                disabled={holidayLock.isToggling}
+                                onClick={() => void handleDeactivateSpecialEvent()}
+                                className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-bold border border-red-500/40 bg-red-500/15 text-red-700 dark:text-red-200 hover:bg-red-500/25 transition-all cursor-pointer disabled:opacity-50"
+                            >
+                                <Lock size={14} />
+                                {holidayLock.isToggling
+                                    ? 'Mengunci...'
+                                    : 'Kunci Kembali Hari Libur'}
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                onClick={() => setShowSpecialEventModal(true)}
+                                className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground transition-all cursor-pointer"
+                            >
+                                <Sparkles size={14} className="text-amber-500" />
+                                Buka Presensi Kegiatan Khusus
+                            </button>
+                        ))}
 
                     <button
                         type="button"
-                        className="btn-secondary"
-                        onClick={loadAttendanceSheet}
-                        disabled={isLoadingSheet || !selectedClassId}
+                        onClick={handleMarkAllHadir}
+                        disabled={
+                            holidayLock.isLocked ||
+                            isLoadingRows ||
+                            rows.length === 0 ||
+                            summary.belum === 0
+                        }
+                        className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border border-emerald-600/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 transition-all cursor-pointer"
                     >
-                        <RefreshCw size={16} className={isLoadingSheet ? 'spin' : ''} />
-                        Muat Ulang
+                        <CheckCheck size={15} />
+                        Tandai Semua Belum Diabsen = HADIR ({summary.belum})
                     </button>
 
                     <button
                         type="button"
-                        className="btn-primary"
-                        onClick={handleSave}
+                        onClick={() => void handleSaveAll()}
                         disabled={
-                            isSaving ||
-                            isLoadingSheet ||
-                            rows.length === 0 ||
-                            isSheetDisabled
+                            holidayLock.isLocked || isSaving || summary.dirtyCount === 0
                         }
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-95 disabled:opacity-50 transition-all cursor-pointer"
                     >
-                        <Save size={16} />
-                        {isSaving ? 'Menyimpan...' : 'Simpan Presensi'}
+                        {isSaving ? (
+                            <Loader2 size={15} className="animate-spin" />
+                        ) : (
+                            <Save size={15} />
+                        )}
+                        {isSaving
+                            ? 'Menyimpan...'
+                            : `Simpan Presensi (${summary.dirtyCount})`}
                     </button>
                 </div>
             </div>
 
-            {/* Banner Terkunci karena Hari Libur */}
-            {isHolidayLocked && (
-                <div className="mb-5 p-4 rounded-2xl border border-red-500/40 bg-red-500/10 space-y-3">
-                    <div className="flex items-start gap-3">
-                        <div className="p-2.5 rounded-xl bg-red-500/20 text-red-500 shrink-0">
-                            <CalendarOff size={20} />
-                        </div>
-                        <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
-                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-red-500/20 text-red-600 dark:text-red-300">
-                                    <Lock size={11} /> Absensi Kelas Terkunci
-                                </span>
-                                <span className="text-xs font-bold text-red-600 dark:text-red-300">
-                                    {holidayName} ({selectedDate})
-                                </span>
-                            </div>
-                            <p className="text-xs opacity-85 leading-relaxed">
-                                Pengisian presensi kelas dikunci otomatis karena tanggal ini
-                                merupakan hari libur / akhir pekan.
-                            </p>
-                        </div>
+            {/* Banner Status Hari Libur / Kegiatan Khusus */}
+            {holidayLock.isLocked ? (
+                <div className="p-4 rounded-xl border border-amber-500/50 bg-amber-500/15 text-amber-900 dark:text-amber-100 flex items-start gap-3">
+                    <CalendarOff size={20} className="text-amber-600 shrink-0 mt-0.5" />
+                    <div className="text-xs space-y-1">
+                        <p className="font-bold text-sm">
+                            Hari Libur: {holidayLock.holidayName ?? 'Libur Kalender'}
+                        </p>
+                        <p className="opacity-90 leading-relaxed">
+                            Pengisian presensi siswa untuk tanggal{' '}
+                            <strong>{selectedDate}</strong> dikunci otomatis dan tidak
+                            dihitung sebagai Alpa.
+                        </p>
                     </div>
-
-                    {canManageOverride && (
-                        <form
-                            onSubmit={handleActivateSpecialEvent}
-                            className="pt-3 border-t border-red-500/25 flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5"
-                        >
-                            <input
-                                type="text"
-                                value={specialEventInput}
-                                onChange={(e) => setSpecialEventInput(e.target.value)}
-                                placeholder="Keterangan kegiatan khusus (mis. Pramuka, Class Meeting, Lomba)..."
-                                className="form-input flex-1 text-xs"
-                            />
-                            <button
-                                type="submit"
-                                disabled={isTogglingHoliday}
-                                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-xs transition cursor-pointer disabled:opacity-50 shrink-0"
-                            >
-                                <Unlock size={14} />
-                                {isTogglingHoliday
-                                    ? 'Membuka Kunci...'
-                                    : 'Aktifkan Mode Kegiatan Khusus'}
-                            </button>
-                        </form>
-                    )}
                 </div>
-            )}
-
-            {/* Banner Mode Kegiatan Khusus Sedang Aktif */}
-            {isHoliday && isSpecialEventActive && (
-                <div className="mb-5 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/12 text-xs text-emerald-700 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-2.5">
-                        <Sparkles size={18} className="text-emerald-500 shrink-0" />
+            ) : (
+                holidayLock.isHoliday &&
+                holidayLock.isSpecialEventActive && (
+                    <div className="p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 flex items-center gap-2.5 text-xs">
+                        <Unlock size={17} className="text-emerald-600 shrink-0" />
                         <span>
-                            <strong>Mode Kegiatan Khusus Aktif:</strong> {specialEventReason}{' '}
-                            <span className="opacity-75">
-                                (mengecualikan libur {holidayName})
-                            </span>
+                            <strong>Mode Kegiatan Khusus Aktif:</strong>{' '}
+                            {holidayLock.specialEventReason} (Pengecualian untuk jadwal libur{' '}
+                            {holidayLock.holidayName})
                         </span>
                     </div>
-                    {canManageOverride && (
-                        <button
-                            type="button"
-                            disabled={isTogglingHoliday}
-                            onClick={handleDeactivateSpecialEvent}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition cursor-pointer disabled:opacity-50"
-                        >
-                            <Lock size={13} />
-                            {isTogglingHoliday ? 'Mengunci...' : 'Kunci Kembali'}
-                        </button>
-                    )}
-                </div>
+                )
             )}
 
             {!enableClassAttendance && (
-                <div className="mb-5 p-4 rounded-xl border border-amber-500/40 bg-amber-500/10 text-xs text-amber-700 dark:text-amber-300 flex items-center gap-2.5">
-                    <AlertTriangle size={18} className="shrink-0" />
+                <div className="p-3.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 text-xs flex items-center gap-2">
+                    <Info size={16} className="shrink-0" />
                     <span>
-                        Fitur pengisian <strong>Absensi Kelas Siswa</strong> sedang
-                        dinonaktifkan oleh Admin Sekolah. Data kehadiran siswa hanya
-                        dicatat melalui Kiosk.
+                        Catatan: Metode presensi manual wali kelas saat ini dinonaktifkan di
+                        Pengaturan Sekolah, namun Anda tetap dapat melihat dan memperbarui
+                        data kelas.
                     </span>
                 </div>
             )}
 
-            {/* Panel Pemilihan Kelas & Tanggal */}
-            <div className="data-card mb-6">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-                    <div>
-                        <label className="block text-xs font-semibold uppercase tracking-wider opacity-75 mb-1.5">
-                            <School size={13} className="inline mr-1" />
-                            Pilih Kelas / Rombel
-                        </label>
-                        <select
-                            className="form-input w-full"
-                            value={selectedClassId}
-                            onChange={(e) => setSelectedClassId(e.target.value)}
-                            disabled={isLoadingClasses || classes.length === 0}
-                        >
-                            {classes.length === 0 ? (
-                                <option value="">
-                                    {isLoadingClasses
-                                        ? 'Memuat daftar kelas...'
-                                        : 'Belum ada data kelas aktif'}
-                                </option>
-                            ) : (
-                                classes.map((cls) => (
-                                    <option key={cls.id} value={cls.id}>
-                                        {cls.name} {cls.major ? `(${cls.major})` : ''}
-                                        {cls.id === homeroomClassId ? ' — ★ Kelas Wali Anda' : ''}
-                                    </option>
-                                ))
-                            )}
-                        </select>
-                    </div>
+            {message && (
+                <div
+                    className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${message.status === 'success'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        }`}
+                >
+                    {message.status === 'success' ? (
+                        <CheckCircle2 size={16} className="text-emerald-600 shrink-0" />
+                    ) : (
+                        <AlertCircle size={16} className="text-red-600 shrink-0" />
+                    )}
+                    <span>{message.text}</span>
+                </div>
+            )}
 
-                    <div>
-                        <label className="block text-xs font-semibold uppercase tracking-wider opacity-75 mb-1.5">
-                            <Calendar size={13} className="inline mr-1" />
-                            Tanggal Presensi
-                        </label>
+            {/* Filter Bar */}
+            <div className="rounded-xl border border-border bg-card p-4 shadow-sm flex flex-wrap items-end gap-3">
+                <div>
+                    <label className="text-[11px] font-semibold block mb-1">
+                        Tanggal Presensi
+                    </label>
+                    <div className="relative">
                         <input
                             type="date"
                             value={selectedDate}
                             onChange={(e) => setSelectedDate(e.target.value)}
-                            className="form-input w-full"
+                            className="form-input text-xs pr-8"
+                        />
+                        <Calendar
+                            size={14}
+                            className="absolute right-2.5 top-1/2 -translate-y-1/2 opacity-50 pointer-events-none"
                         />
                     </div>
+                </div>
 
-                    <div className="flex flex-wrap gap-2">
-                        <button
-                            type="button"
-                            className="btn-secondary flex-1 text-xs"
-                            onClick={handleMarkUnrecordedPresent}
-                            disabled={
-                                rows.length === 0 ||
-                                stats.unrecorded === 0 ||
-                                isSheetDisabled
-                            }
-                        >
-                            <Sparkles size={14} />
-                            Isi Kosong → Hadir ({stats.unrecorded})
-                        </button>
+                <div className="min-w-44">
+                    <label className="text-[11px] font-semibold block mb-1">
+                        Pilih Kelas
+                    </label>
+                    <select
+                        value={selectedClassId}
+                        onChange={(e) => setSelectedClassId(e.target.value)}
+                        disabled={isLoadingClasses || classesList.length === 0}
+                        className="form-input w-full text-xs font-semibold"
+                    >
+                        {classesList.length === 0 ? (
+                            <option value="">Belum ada data kelas</option>
+                        ) : (
+                            classesList.map((cls) => (
+                                <option key={cls.id} value={cls.id}>
+                                    Kelas {cls.name}
+                                </option>
+                            ))
+                        )}
+                    </select>
+                </div>
 
-                        <button
-                            type="button"
-                            className="btn-secondary flex-1 text-xs"
-                            onClick={handleMarkAllPresent}
-                            disabled={rows.length === 0 || isSheetDisabled}
-                        >
-                            <CheckSquare size={14} />
-                            Semua Hadir
-                        </button>
-
-                        {enableStudentCheckOut && (
+                {/* Flex Input Wrapper: Ikon Search Anti-Tumpuk */}
+                <div className="flex-1 min-w-60">
+                    <label className="text-[11px] font-semibold block mb-1">
+                        Cari Siswa
+                    </label>
+                    <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500/40">
+                        <Search
+                            size={15}
+                            className="shrink-0 text-muted-foreground"
+                            aria-hidden="true"
+                        />
+                        <input
+                            type="text"
+                            value={searchQuery}
+                            onChange={(e) => {
+                                setSearchQuery(e.target.value);
+                                setCurrentPage(1);
+                            }}
+                            placeholder="Cari nama siswa, NISN, atau NIS..."
+                            className="w-full min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+                        />
+                        {searchQuery && (
                             <button
                                 type="button"
-                                className="btn-secondary flex-1 text-xs"
-                                onClick={handleBulkClassCheckOut}
-                                disabled={rows.length === 0 || isSaving || isSheetDisabled}
-                                title="Catat jam pulang untuk semua siswa hadir yang belum pulang"
+                                onClick={() => {
+                                    setSearchQuery('');
+                                    setCurrentPage(1);
+                                }}
+                                className="p-0.5 rounded-md text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
+                                title="Bersihkan pencarian"
                             >
-                                <LogOut size={14} />
-                                Semua Pulang
+                                <X size={14} />
                             </button>
                         )}
                     </div>
                 </div>
-
-                {selectedClassObj && selectedClassObj.id === homeroomClassId && (
-                    <div className="mt-3 pt-3 border-t border-white/10 flex items-center gap-2 text-xs text-emerald-400">
-                        <UserCheck size={15} />
-                        <span>
-                            Anda tercatat sebagai{' '}
-                            <strong>Wali Kelas {selectedClassObj.name}</strong>.
-                        </span>
-                    </div>
-                )}
             </div>
 
-            {/* Notifikasi / Feedback */}
-            {feedback && (
-                <motion.div
-                    initial={{ opacity: 0, y: -8 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    className="mb-5 p-3.5 rounded-xl border flex items-center justify-between gap-3 text-sm"
-                    style={{
-                        background:
-                            feedback.type === 'success'
-                                ? 'rgba(16, 185, 129, 0.12)'
-                                : feedback.type === 'warning'
-                                    ? 'rgba(245, 158, 11, 0.12)'
-                                    : 'rgba(239, 68, 68, 0.12)',
-                        borderColor:
-                            feedback.type === 'success'
-                                ? 'rgba(16, 185, 129, 0.35)'
-                                : feedback.type === 'warning'
-                                    ? 'rgba(245, 158, 11, 0.35)'
-                                    : 'rgba(239, 68, 68, 0.35)',
-                        color:
-                            feedback.type === 'success'
-                                ? '#34D399'
-                                : feedback.type === 'warning'
-                                    ? '#FBBF24'
-                                    : '#F87171',
-                    }}
-                >
-                    <div className="flex items-center gap-2">
-                        {feedback.type === 'success' ? (
-                            <CheckCircle size={18} />
-                        ) : (
-                            <AlertCircle size={18} />
-                        )}
-                        <span>{feedback.message}</span>
-                    </div>
-                    {hasUnsavedChanges && !isSheetDisabled && (
-                        <button
-                            type="button"
-                            className="btn-primary text-xs py-1 px-3"
-                            onClick={handleSave}
-                            disabled={isSaving}
-                        >
-                            Simpan Sekarang
-                        </button>
-                    )}
-                </motion.div>
-            )}
-
-            {/* Kartu Ringkasan Statistik Kelas */}
-            {selectedClassId && rows.length > 0 && (
-                <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 mb-6">
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs opacity-70">Total Siswa</p>
-                            <p className="text-xl font-bold">{stats.total}</p>
-                        </div>
-                    </div>
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs text-emerald-400">Hadir</p>
-                            <p className="text-xl font-bold text-emerald-400">{stats.hadir}</p>
-                        </div>
-                    </div>
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs text-amber-400">Terlambat</p>
-                            <p className="text-xl font-bold text-amber-400">
-                                {stats.terlambat}
-                            </p>
-                        </div>
-                    </div>
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs text-blue-400">Izin</p>
-                            <p className="text-xl font-bold text-blue-400">{stats.izin}</p>
-                        </div>
-                    </div>
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs text-purple-400">Sakit</p>
-                            <p className="text-xl font-bold text-purple-400">{stats.sakit}</p>
-                        </div>
-                    </div>
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs text-red-400">Alpa</p>
-                            <p className="text-xl font-bold text-red-400">{stats.alpa}</p>
-                        </div>
-                    </div>
-                    <div className="summary-card p-3">
-                        <div>
-                            <p className="text-xs opacity-70">Belum Diisi</p>
-                            <p className="text-xl font-bold">{stats.unrecorded}</p>
-                        </div>
-                    </div>
-                    {enableStudentCheckOut && (
-                        <div className="summary-card p-3">
-                            <div>
-                                <p className="text-xs text-cyan-400">Sudah Pulang</p>
-                                <p className="text-xl font-bold text-cyan-400">
-                                    {stats.checkedOut}
-                                </p>
-                            </div>
-                        </div>
-                    )}
+            {/* Ringkasan Statistik Kelas */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
+                <div className="p-3 rounded-xl border border-border bg-card">
+                    <p className="text-[11px] opacity-65">Total Siswa</p>
+                    <p className="text-xl font-bold mt-0.5">{summary.total}</p>
                 </div>
-            )}
-
-            {/* Toolbar Pencarian & Filter Status */}
-            <div className="table-toolbar flex flex-wrap items-center justify-between gap-3 mb-4">
-                <div className="relative flex-1 min-w-60">
-                    <Search
-                        size={16}
-                        className="absolute left-3 top-1/2 -translate-y-1/2 opacity-50"
-                    />
-                    <input
-                        type="text"
-                        placeholder="Cari nama siswa, NISN, atau NIS..."
-                        value={searchQuery}
-                        onChange={(e) => setSearchQuery(e.target.value)}
-                        className="form-input w-full pl-9"
-                    />
+                <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5">
+                    <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
+                        Hadir
+                    </p>
+                    <p className="text-xl font-bold text-emerald-600 mt-0.5">
+                        {summary.hadir}
+                    </p>
                 </div>
-
-                <div className="flex flex-wrap gap-1.5">
-                    {[
-                        { key: 'ALL', label: `Semua (${rows.length})` },
-                        { key: 'UNRECORDED', label: `Belum Diisi (${stats.unrecorded})` },
-                        { key: 'HADIR', label: `Hadir (${stats.hadir})` },
-                        { key: 'TERLAMBAT', label: `Terlambat (${stats.terlambat})` },
-                        { key: 'IZIN', label: `Izin (${stats.izin})` },
-                        { key: 'SAKIT', label: `Sakit (${stats.sakit})` },
-                        { key: 'ALPA', label: `Alpa (${stats.alpa})` },
-                    ].map((tab) => (
-                        <button
-                            key={tab.key}
-                            type="button"
-                            onClick={() => setStatusFilter(tab.key)}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition ${statusFilter === tab.key
-                                ? 'bg-primary text-white'
-                                : 'bg-white/5 opacity-75 hover:opacity-100'
-                                }`}
-                        >
-                            {tab.label}
-                        </button>
-                    ))}
+                <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5">
+                    <p className="text-[11px] text-amber-700 dark:text-amber-300">
+                        Terlambat
+                    </p>
+                    <p className="text-xl font-bold text-amber-600 mt-0.5">
+                        {summary.terlambat}
+                    </p>
+                </div>
+                <div className="p-3 rounded-xl border border-blue-500/30 bg-blue-500/5">
+                    <p className="text-[11px] text-blue-700 dark:text-blue-300">Izin</p>
+                    <p className="text-xl font-bold text-blue-600 mt-0.5">
+                        {summary.izin}
+                    </p>
+                </div>
+                <div className="p-3 rounded-xl border border-purple-500/30 bg-purple-500/5">
+                    <p className="text-[11px] text-purple-700 dark:text-purple-300">
+                        Sakit
+                    </p>
+                    <p className="text-xl font-bold text-purple-600 mt-0.5">
+                        {summary.sakit}
+                    </p>
+                </div>
+                <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/5">
+                    <p className="text-[11px] text-red-700 dark:text-red-300">Alpa</p>
+                    <p className="text-xl font-bold text-red-600 mt-0.5">
+                        {summary.alpa}
+                    </p>
                 </div>
             </div>
 
-            {/* Tabel Daftar Siswa */}
-            <div className="data-card">
-                {isLoadingSheet || isLoadingClasses ? (
-                    <div className="table-loading">
-                        <RefreshCw size={24} className="spin" /> Memuat daftar siswa...
-                    </div>
-                ) : !selectedClassId ? (
-                    <div className="table-empty">
-                        <Users size={40} className="opacity-30" />
-                        <p>Silakan pilih kelas terlebih dahulu untuk memulai absensi</p>
-                    </div>
-                ) : filteredRows.length === 0 ? (
-                    <div className="table-empty">
-                        <AlertCircle size={40} className="opacity-30" />
-                        <p>Tidak ada data siswa aktif yang sesuai dengan filter</p>
-                    </div>
-                ) : (
-                    <div className="table-wrapper">
-                        <table className="data-table">
-                            <thead>
+            {/* Tabel Daftar Siswa Kelas + Pagination */}
+            <div className="rounded-xl border border-border bg-card shadow-sm overflow-hidden">
+                <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                        <thead>
+                            <tr className="border-b border-border bg-muted/40 text-left">
+                                <th className="py-3 px-3 w-10 text-center font-semibold">No</th>
+                                <th className="py-3 px-3 font-semibold min-w-44">Nama Siswa</th>
+                                <th className="py-3 px-3 font-semibold min-w-64">
+                                    Status Kehadiran
+                                </th>
+                                <th className="py-3 px-3 font-semibold">Jam Masuk</th>
+                                {enableStudentCheckOut && (
+                                    <th className="py-3 px-3 font-semibold">Jam Pulang</th>
+                                )}
+                                <th className="py-3 px-3 font-semibold min-w-40">
+                                    Keterangan
+                                </th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {isLoadingRows ? (
                                 <tr>
-                                    <th style={{ width: '48px' }}>No</th>
-                                    <th>Nama Siswa</th>
-                                    <th>NISN / NIS</th>
-                                    <th>Status Kehadiran</th>
-                                    {enableStudentCheckOut && <th>Jam Pulang</th>}
-                                    <th>Keterangan / Catatan</th>
+                                    <td
+                                        colSpan={enableStudentCheckOut ? 6 : 5}
+                                        className="py-12 text-center opacity-70"
+                                    >
+                                        <div className="inline-flex items-center gap-2">
+                                            <Loader2 size={16} className="animate-spin" />
+                                            Memuat daftar siswa kelas {selectedClassName}...
+                                        </div>
+                                    </td>
                                 </tr>
-                            </thead>
-                            <tbody>
-                                {filteredRows.map((row, idx) => {
-                                    const canRecordCheckOut =
+                            ) : paginatedRows.length === 0 ? (
+                                <tr>
+                                    <td
+                                        colSpan={enableStudentCheckOut ? 6 : 5}
+                                        className="py-12 text-center opacity-65"
+                                    >
+                                        {classesList.length === 0
+                                            ? 'Belum ada data kelas/siswa terdaftar di sekolah ini.'
+                                            : 'Tidak ada siswa yang sesuai dengan filter kelas/pencarian.'}
+                                    </td>
+                                </tr>
+                            ) : (
+                                paginatedRows.map((row, idx) => {
+                                    const rowNumber =
+                                        pageSize === 0
+                                            ? idx + 1
+                                            : (safeCurrentPage - 1) * pageSize + idx + 1;
+                                    const formattedIn = formatTimeDisplay(row.checkInTime);
+                                    const formattedOut = formatTimeDisplay(row.checkOutTime);
+                                    const canCheckOut =
                                         enableStudentCheckOut &&
-                                        !isSheetDisabled &&
+                                        !holidayLock.isLocked &&
+                                        row.existingRecordId !== null &&
                                         (row.status === 'HADIR' || row.status === 'TERLAMBAT') &&
-                                        Boolean(row.attendanceId) &&
-                                        !row.checkOutTime;
+                                        !formattedOut;
 
                                     return (
-                                        <tr key={row.studentId}>
-                                            <td className="td-mono text-xs opacity-70">{idx + 1}</td>
-                                            <td>
-                                                <div className="flex items-center gap-2.5">
-                                                    {row.photoUrl ? (
-                                                        <img
-                                                            src={row.photoUrl}
-                                                            alt={row.fullName}
-                                                            className="w-8 h-8 rounded-full object-cover"
-                                                        />
-                                                    ) : (
-                                                        <div className="w-8 h-8 rounded-full bg-primary/20 text-primary flex items-center justify-center text-xs font-bold">
-                                                            {row.fullName.charAt(0).toUpperCase()}
-                                                        </div>
-                                                    )}
-                                                    <div>
-                                                        <div className="td-name">{row.fullName}</div>
-                                                        <div className="flex flex-wrap items-center gap-2 mt-0.5">
-                                                            {row.checkInTime && (
-                                                                <span className="inline-flex items-center gap-1 text-[11px] text-emerald-500">
-                                                                    <Clock size={11} />
-                                                                    {row.isFromKiosk ? 'Kiosk' : 'Datang'}:{' '}
-                                                                    {formatTime(row.checkInTime)}
-                                                                </span>
-                                                            )}
-                                                        </div>
-                                                    </div>
+                                        <tr
+                                            key={row.studentId}
+                                            className={`border-b border-border/60 transition hover:bg-muted/20 ${row.isDirty ? 'bg-emerald-500/5' : ''
+                                                }`}
+                                        >
+                                            <td className="py-2.5 px-3 text-center font-mono opacity-65">
+                                                {rowNumber}
+                                            </td>
+                                            <td className="py-2.5 px-3">
+                                                <div className="font-semibold text-foreground">
+                                                    {row.fullName}
+                                                </div>
+                                                <div className="text-[11px] opacity-65 font-mono">
+                                                    {row.nisn
+                                                        ? `NISN: ${row.nisn}`
+                                                        : row.nis
+                                                            ? `NIS: ${row.nis}`
+                                                            : `Kelas ${row.className}`}
                                                 </div>
                                             </td>
-                                            <td className="td-mono text-xs">
-                                                <div>{row.nisn}</div>
-                                                {row.nis && (
-                                                    <div className="opacity-60">NIS: {row.nis}</div>
-                                                )}
-                                            </td>
-                                            <td>
-                                                <div className="flex flex-wrap gap-1.5">
+
+                                            <td className="py-2.5 px-3">
+                                                <div className="flex flex-wrap items-center gap-1.5">
                                                     {STATUS_OPTIONS.map((opt) => {
                                                         const isSelected = row.status === opt.value;
+                                                        const IconComp = opt.icon;
                                                         return (
                                                             <button
                                                                 key={opt.value}
                                                                 type="button"
-                                                                disabled={isSheetDisabled}
+                                                                disabled={holidayLock.isLocked}
                                                                 onClick={() =>
-                                                                    handleStatusChange(row.studentId, opt.value)
+                                                                    handleSetStudentStatus(
+                                                                        row.studentId,
+                                                                        opt.value
+                                                                    )
                                                                 }
-                                                                className="px-2.5 py-1.5 rounded-lg text-xs font-semibold transition border disabled:opacity-50"
-                                                                style={{
-                                                                    backgroundColor: isSelected
-                                                                        ? opt.color
-                                                                        : 'transparent',
-                                                                    borderColor: isSelected
-                                                                        ? opt.color
-                                                                        : 'rgba(255,255,255,0.12)',
-                                                                    color: isSelected ? '#FFFFFF' : 'inherit',
-                                                                    opacity: isSelected ? 1 : 0.72,
-                                                                }}
+                                                                className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer disabled:opacity-50 ${isSelected
+                                                                        ? opt.activeClass
+                                                                        : 'border-border bg-background hover:bg-muted text-foreground/80'
+                                                                    }`}
                                                             >
-                                                                <span className="hidden sm:inline">
-                                                                    {opt.label}
-                                                                </span>
-                                                                <span className="sm:hidden">
-                                                                    {opt.shortLabel}
-                                                                </span>
+                                                                <IconComp size={12} />
+                                                                <span>{opt.label}</span>
                                                             </button>
                                                         );
                                                     })}
                                                 </div>
                                             </td>
 
+                                            <td className="py-2.5 px-3 font-mono font-semibold">
+                                                {formattedIn ? (
+                                                    <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">
+                                                        {formattedIn}
+                                                    </span>
+                                                ) : (
+                                                    <span className="opacity-40">-</span>
+                                                )}
+                                            </td>
+
                                             {enableStudentCheckOut && (
-                                                <td>
-                                                    {row.checkOutTime ? (
-                                                        <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
-                                                            <LogOut size={12} />
-                                                            {formatTime(row.checkOutTime)}
+                                                <td className="py-2.5 px-3">
+                                                    {formattedOut ? (
+                                                        <span className="font-mono font-semibold px-2 py-0.5 rounded bg-indigo-500/10 text-indigo-700 dark:text-indigo-300">
+                                                            {formattedOut}
                                                         </span>
-                                                    ) : canRecordCheckOut ? (
+                                                    ) : canCheckOut ? (
                                                         <button
                                                             type="button"
-                                                            disabled={checkingOutStudentId === row.studentId}
-                                                            onClick={() => handleSingleStudentCheckOut(row)}
-                                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold border border-cyan-500/40 bg-cyan-500/10 text-cyan-600 dark:text-cyan-300 hover:bg-cyan-500/20 transition cursor-pointer"
+                                                            disabled={checkingOutId === row.studentId}
+                                                            onClick={() => void handleStudentCheckOut(row)}
+                                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-600 hover:bg-indigo-700 text-white transition cursor-pointer disabled:opacity-50"
                                                         >
-                                                            <LogOut size={12} />
-                                                            {checkingOutStudentId === row.studentId
-                                                                ? 'Menyimpan...'
-                                                                : 'Catat Pulang'}
+                                                            {checkingOutId === row.studentId ? (
+                                                                <Loader2 size={11} className="animate-spin" />
+                                                            ) : (
+                                                                <LogOut size={11} />
+                                                            )}
+                                                            Absen Pulang
                                                         </button>
                                                     ) : (
-                                                        <span className="text-xs opacity-40">-</span>
+                                                        <span className="opacity-40 font-mono">-</span>
                                                     )}
                                                 </td>
                                             )}
 
-                                            <td>
+                                            <td className="py-2.5 px-3">
                                                 <input
                                                     type="text"
-                                                    disabled={isSheetDisabled}
                                                     value={row.notes}
+                                                    disabled={holidayLock.isLocked}
                                                     onChange={(e) =>
-                                                        handleNotesChange(row.studentId, e.target.value)
+                                                        handleSetStudentNote(row.studentId, e.target.value)
                                                     }
-                                                    placeholder="Contoh: Surat dokter, izin acara keluarga..."
-                                                    className="form-input text-xs py-1.5 px-2.5 w-full min-w-45"
+                                                    placeholder="Catatan opsional..."
+                                                    className="form-input w-full text-[11px] py-1 px-2"
                                                 />
                                             </td>
                                         </tr>
                                     );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
+                                })
+                            )}
+                        </tbody>
+                    </table>
+                </div>
 
-                {rows.length > 0 && !isSheetDisabled && (
-                    <div className="mt-5 pt-4 border-t border-white/10 flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-xs opacity-70">
-                            {hasUnsavedChanges
-                                ? '⚠️ Terdapat perubahan yang belum disimpan.'
-                                : 'Semua perubahan tersinkronisasi dengan server.'}
-                        </p>
-                        <button
-                            type="button"
-                            className="btn-primary"
-                            onClick={handleSave}
-                            disabled={isSaving || isLoadingSheet}
-                        >
-                            <Save size={16} />
-                            {isSaving ? 'Menyimpan...' : 'Simpan Presensi Kelas'}
-                        </button>
+                {/* Footer Kontrol Pagination */}
+                {!isLoadingRows && filteredRows.length > 0 && (
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-t border-border bg-muted/25 text-xs">
+                        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                            <span>
+                                Menampilkan <strong>{startItemNumber}</strong>–
+                                <strong>{endItemNumber}</strong> dari{' '}
+                                <strong>{filteredRows.length}</strong> siswa
+                            </span>
+                            <select
+                                value={pageSize}
+                                onChange={(e) => {
+                                    setPageSize(Number(e.target.value));
+                                    setCurrentPage(1);
+                                }}
+                                aria-label="Jumlah siswa per halaman"
+                                className="form-input w-auto! text-xs py-1 px-2 bg-card font-medium"
+                            >
+                                {STUDENT_PAGE_SIZE_OPTIONS.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                        {opt === 0 ? 'Tampilkan Semua' : `${opt} / halaman`}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {pageSize !== 0 && totalPages > 1 && (
+                            <div className="flex items-center gap-1.5">
+                                <button
+                                    type="button"
+                                    disabled={safeCurrentPage <= 1}
+                                    onClick={() =>
+                                        setCurrentPage((p) => Math.max(1, p - 1))
+                                    }
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
+                                >
+                                    <ChevronLeft size={14} />
+                                    Sebelumnya
+                                </button>
+
+                                <span className="px-2.5 py-1 font-mono font-semibold text-foreground">
+                                    Hal {safeCurrentPage} / {totalPages}
+                                </span>
+
+                                <button
+                                    type="button"
+                                    disabled={safeCurrentPage >= totalPages}
+                                    onClick={() =>
+                                        setCurrentPage((p) => Math.min(totalPages, p + 1))
+                                    }
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
+                                >
+                                    Berikutnya
+                                    <ChevronRight size={14} />
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
             </div>
+
+            {/* Modal Input Alasan Kegiatan Khusus */}
+            {showSpecialEventModal && (
+                <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+                    <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl space-y-4">
+                        <h3 className="text-base font-bold flex items-center gap-2">
+                            <Sparkles size={18} className="text-amber-500" />
+                            Buka Presensi Kegiatan Khusus
+                        </h3>
+                        <p className="text-xs text-muted-foreground">
+                            Presensi siswa pada hari libur tanggal{' '}
+                            <strong>{selectedDate}</strong> akan dibuka sementara untuk
+                            kegiatan khusus sekolah.
+                        </p>
+                        <div>
+                            <label className="text-xs font-semibold block mb-1">
+                                Nama Kegiatan / Alasan Pengecualian
+                            </label>
+                            <input
+                                type="text"
+                                value={specialEventInput}
+                                onChange={(e) => setSpecialEventInput(e.target.value)}
+                                placeholder="Contoh: Class Meeting / Kegiatan Pramuka / Studi Wisata"
+                                className="form-input w-full text-xs"
+                            />
+                        </div>
+                        <div className="flex items-center justify-end gap-2 pt-2">
+                            <button
+                                type="button"
+                                onClick={() => setShowSpecialEventModal(false)}
+                                className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-border hover:bg-muted cursor-pointer"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                disabled={!specialEventInput.trim() || holidayLock.isToggling}
+                                onClick={() => void handleConfirmActivateSpecialEvent()}
+                                className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50 cursor-pointer"
+                            >
+                                {holidayLock.isToggling ? 'Menyimpan...' : 'Aktifkan Presensi'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

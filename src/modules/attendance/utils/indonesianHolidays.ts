@@ -1,19 +1,24 @@
 // src/modules/attendance/utils/indonesianHolidays.ts
+import type {
+  HolidayCategoryType,
+  WorkDaysMode,
+} from '../types/attendance.types';
 
-export type WorkDaysMode = 'FIVE_DAYS' | 'SIX_DAYS';
+export type { WorkDaysMode, HolidayCategoryType };
 
 export interface HolidayRecord {
   id: string;
   schoolId: string | null;
   date: string; // Format YYYY-MM-DD
   name: string;
+  type?: HolidayCategoryType;
 }
 
 /**
  * Mengecek apakah suatu tanggal (YYYY-MM-DD) merupakan Tanggal Merah:
  * - Hari Minggu (selalu merah)
  * - Hari Sabtu (merah jika sekolah memilih mode FIVE_DAYS / 5 hari kerja)
- * - Hari Libur Nasional / Sekolah yang tercatat di database
+ * - Hari Libur Nasional / Cuti Bersama / Libur Sekolah yang tercatat di database
  */
 export function checkRedDateStatus(
   dateStr: string,

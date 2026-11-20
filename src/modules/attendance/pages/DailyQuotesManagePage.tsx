@@ -26,7 +26,6 @@ export interface DailyQuoteItem {
     createdAt?: string;
 }
 
-// Helper aman untuk mengambil pesan error dari tipe 'unknown' tanpa memakai 'any'
 function getErrorMessage(error: unknown, fallbackMessage: string): string {
     if (error instanceof Error && error.message) {
         return error.message;
@@ -60,6 +59,10 @@ export function DailyQuotesManagePage() {
     const [targetSchoolId, setTargetSchoolId] = useState<string>('GLOBAL');
     const [isActive, setIsActive] = useState<boolean>(true);
 
+    // State Modal Konfirmasi Hapus
+    const [deleteTarget, setDeleteTarget] = useState<DailyQuoteItem | null>(null);
+    const [isDeleting, setIsDeleting] = useState<boolean>(false);
+
     const [toast, setToast] = useState<{
         type: 'success' | 'error';
         message: string;
@@ -70,7 +73,6 @@ export function DailyQuotesManagePage() {
         setTimeout(() => setToast(null), 4000);
     };
 
-    // Muat daftar sekolah jika SUPER_ADMIN
     useEffect(() => {
         if (!isSuperAdmin) {
             if (school?.id) setTargetSchoolId(school.id);
@@ -86,7 +88,6 @@ export function DailyQuotesManagePage() {
             });
     }, [isSuperAdmin, school?.id]);
 
-    // Muat daftar Quotes dari Supabase
     const loadQuotes = useCallback(async () => {
         if (!canManage) return;
         setIsLoading(true);
@@ -191,7 +192,6 @@ export function DailyQuotesManagePage() {
     };
 
     const handleToggleActive = async (item: DailyQuoteItem) => {
-        // Admin sekolah tidak boleh mengubah quote Global milik Super Admin
         if (!isSuperAdmin && item.schoolId === null) {
             showToast('error', 'Quote Global hanya dapat diubah oleh Super Admin.');
             return;
@@ -217,26 +217,32 @@ export function DailyQuotesManagePage() {
         }
     };
 
-    const handleDelete = async (item: DailyQuoteItem) => {
+    const handleRequestDelete = (item: DailyQuoteItem) => {
         if (!isSuperAdmin && item.schoolId === null) {
             showToast('error', 'Quote Global hanya dapat dihapus oleh Super Admin.');
             return;
         }
+        setDeleteTarget(item);
+    };
 
-        if (!window.confirm('Yakin ingin menghapus kutipan ini?')) return;
-
+    const handleConfirmDelete = async () => {
+        if (!deleteTarget) return;
+        setIsDeleting(true);
         try {
             const { error } = await supabase
                 .from('daily_quotes')
                 .delete()
-                .eq('id', item.id);
+                .eq('id', deleteTarget.id);
 
             if (error) throw error;
             showToast('success', 'Kutipan berhasil dihapus.');
-            if (editingId === item.id) resetForm();
+            if (editingId === deleteTarget.id) resetForm();
+            setDeleteTarget(null);
             await loadQuotes();
         } catch (err: unknown) {
             showToast('error', getErrorMessage(err, 'Gagal menghapus kutipan.'));
+        } finally {
+            setIsDeleting(false);
         }
     };
 
@@ -265,7 +271,7 @@ export function DailyQuotesManagePage() {
                         Kelola Kata Hari Ini (Quotes)
                     </h1>
                     <p className="page-subtitle">
-                        Atur kata mutiara &amp; motivasi harian yang tampil pada aplikasi
+                        Atur kata mutiara & motivasi harian yang tampil pada aplikasi
                         presensi guru
                     </p>
                 </div>
@@ -424,7 +430,6 @@ export function DailyQuotesManagePage() {
                                             <div className="flex items-start justify-between gap-3">
                                                 <div className="space-y-1.5 min-w-0">
                                                     <div className="flex flex-wrap items-center gap-1.5">
-                                                        {/* Nomor Urut */}
                                                         <span className="inline-flex items-center justify-center min-w-6 px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300">
                                                             {index + 1}.
                                                         </span>
@@ -450,7 +455,7 @@ export function DailyQuotesManagePage() {
                                                     </div>
 
                                                     <p className="text-xs leading-relaxed italic">
-                                                        &ldquo;{item.quote}&rdquo;
+                                                        “{item.quote}”
                                                     </p>
                                                     {item.author && (
                                                         <p className="text-[11px] font-semibold opacity-70">
@@ -459,7 +464,6 @@ export function DailyQuotesManagePage() {
                                                     )}
                                                 </div>
 
-                                                {/* Tombol Aksi */}
                                                 {!lockedForAdmin && (
                                                     <div className="flex items-center gap-1 shrink-0">
                                                         <button
@@ -491,7 +495,7 @@ export function DailyQuotesManagePage() {
                                                         </button>
                                                         <button
                                                             type="button"
-                                                            onClick={() => handleDelete(item)}
+                                                            onClick={() => handleRequestDelete(item)}
                                                             className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
                                                             title="Hapus kutipan"
                                                         >
@@ -508,6 +512,51 @@ export function DailyQuotesManagePage() {
                     </div>
                 </div>
             </div>
+
+            {/* Modal Konfirmasi Hapus Quote */}
+            {deleteTarget && (
+                <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+                    onClick={() => !isDeleting && setDeleteTarget(null)}
+                >
+                    <div
+                        className="data-card max-w-sm w-full p-5 space-y-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-start gap-3">
+                            <div className="p-2.5 rounded-xl bg-red-500/15 text-red-500 shrink-0">
+                                <Trash2 size={20} />
+                            </div>
+                            <div>
+                                <h3 className="font-bold text-base">Hapus Kutipan?</h3>
+                                <p className="text-xs opacity-75 mt-1 leading-relaxed">
+                                    Kutipan “{deleteTarget.quote}” akan dihapus secara
+                                    permanen dari daftar Kata Hari Ini.
+                                </p>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-2 pt-2">
+                            <button
+                                type="button"
+                                className="btn-secondary text-xs"
+                                disabled={isDeleting}
+                                onClick={() => setDeleteTarget(null)}
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                disabled={isDeleting}
+                                onClick={() => void handleConfirmDelete()}
+                                className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition"
+                            >
+                                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

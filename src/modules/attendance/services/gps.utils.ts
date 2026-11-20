@@ -1,6 +1,6 @@
 // src/modules/attendance/services/gps.utils.ts
 /**
- * GPS, Timezone & Image Compression Utility
+ * GPS, Timezone & Image Compression Utility (Selaras Skema SQL v20.1)
  */
 
 export interface GpsPosition {
@@ -13,32 +13,56 @@ export interface GpsPosition {
 }
 
 /**
- * Mengambil tanggal lokal perangkat (WIB/WITA/WIT) dalam format 'YYYY-MM-DD'
- * Menghindari bug UTC antara jam 00:00 - 06:59 WIB
+ * Mengambil tanggal sesuai zona waktu sekolah (default 'Asia/Jakarta') dalam format 'YYYY-MM-DD'.
+ * Selaras dengan kolom otomatis "time" di tabel attendances PostgreSQL.
+ */
+export function getSchoolDateString(
+  date: Date = new Date(),
+  timeZone: string = 'Asia/Jakarta'
+): string {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    return formatter.format(date);
+  } catch {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+}
+
+/**
+ * Alias kompatibilitas untuk pengambilan tanggal lokal format 'YYYY-MM-DD'
  */
 export function getLocalDateString(date: Date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  return getSchoolDateString(date, 'Asia/Jakarta');
 }
 
 /**
- * Mengecek apakah waktu saat ini sudah melewati batas jam masuk (format 'HH:mm')
+ * Mengecek apakah waktu saat ini sudah melewati batas jam masuk + toleransi keterlambatan (menit)
  */
-export function isAfterDeadline(deadline: string = '07:30', now: Date = new Date()): boolean {
+export function isAfterDeadline(
+  deadline: string = '07:30',
+  now: Date = new Date(),
+  toleranceMinutes: number = 0
+): boolean {
   const [hourStr, minStr] = deadline.split(':');
-  const targetHour = Number(hourStr) || 7;
-  const targetMin = Number(minStr) || 30;
+  const baseHour = Number(hourStr) || 7;
+  const baseMin = Number(minStr) || 30;
 
-  const currentHour = now.getHours();
-  const currentMin = now.getMinutes();
+  const totalDeadlineMinutes = baseHour * 60 + baseMin + Math.max(0, toleranceMinutes);
+  const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
 
-  return currentHour > targetHour || (currentHour === targetHour && currentMin > targetMin);
+  return currentTotalMinutes > totalDeadlineMinutes;
 }
 
 /**
- * Kalkulasi jarak antara dua titik koordinat (Haversine formula)
+ * Kalkulasi jarak antara dua titik koordinat (Rumus Haversine)
  * @returns jarak dalam METER
  */
 export function calculateDistance(
@@ -47,29 +71,30 @@ export function calculateDistance(
   lat2: number,
   lon2: number
 ): number {
-  const R = 6371000; // Radius bumi dalam meter
+  const R = 6371000; // Radius bumi dalam meter (sama dengan calculate_haversine_meters di SQL)
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a =
     Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+    Math.cos(toRad(lat1)) *
+      Math.cos(toRad(lat2)) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
   const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
 /**
- * Deteksi heuristik Mock GPS (Best Effort di Browser)
- * Tidak memblokir speed === 0 karena perangkat Android/iOS nyata saat diam sering mengembalikan speed 0.
+ * Deteksi heuristik Mock GPS di Browser (selaras ambang batas RPC <= 1.0m)
  */
 export function detectMockGps(position: GeolocationPosition): boolean {
   const { coords } = position;
 
-  // Sinyal 1: Akurasi tidak masuk akal (<= 1 meter di perangkat mobile consumer)
-  if (coords.accuracy > 0 && coords.accuracy <= 1) return true;
+  if (coords.accuracy > 0 && coords.accuracy <= 1.0) {
+    return true;
+  }
 
-  // Sinyal 2: Koordinat terpotong persis <= 3 angka di belakang koma (tanda input koordinat manual)
   const latDecimals = coords.latitude.toString().split('.')[1]?.length ?? 0;
   const lngDecimals = coords.longitude.toString().split('.')[1]?.length ?? 0;
   if (latDecimals < 4 && lngDecimals < 4) {
@@ -80,14 +105,18 @@ export function detectMockGps(position: GeolocationPosition): boolean {
 }
 
 /**
- * Dapatkan posisi GPS dengan validasi akurasi & deteksi mock
+ * Mendapatkan posisi GPS tunggal dengan validasi akurasi & deteksi mock
  */
 export function getCurrentPosition(
   options?: PositionOptions
 ): Promise<GpsPosition> {
   return new Promise((resolve, reject) => {
     if (!navigator.geolocation) {
-      reject(new Error('Browser tidak mendukung GPS. Gunakan browser terbaru (Chrome/Safari).'));
+      reject(
+        new Error(
+          'Browser tidak mendukung GPS. Gunakan browser terbaru (Chrome/Safari).'
+        )
+      );
       return;
     }
 
@@ -120,13 +149,15 @@ export function getCurrentPosition(
         let message = 'Gagal mendapatkan lokasi GPS.';
         switch (error.code) {
           case error.PERMISSION_DENIED:
-            message = 'Izin GPS ditolak. Aktifkan izin lokasi (Location/GPS) di pengaturan browser atau HP Anda.';
+            message =
+              'Izin GPS ditolak. Aktifkan izin lokasi (Location/GPS) di pengaturan browser atau HP Anda.';
             break;
           case error.POSITION_UNAVAILABLE:
             message = 'Lokasi tidak tersedia. Pastikan GPS HP Anda menyala.';
             break;
           case error.TIMEOUT:
-            message = 'Waktu pencarian GPS habis. Coba lagi di tempat terbuka (luar ruangan).';
+            message =
+              'Waktu pencarian GPS habis. Coba lagi di tempat terbuka (luar ruangan).';
             break;
         }
         reject(new Error(message));
@@ -142,8 +173,8 @@ export function getCurrentPosition(
 }
 
 /**
- * Kompres foto selfie dari elemen <video> atau File menjadi JPEG ringan (~35-55 KB)
- * Hemat kuota Supabase Storage (1 GB bertahan > 2 tahun untuk 32 guru)
+ * Kompres foto selfie dari elemen <video> menjadi JPEG ringan (~35-60 KB)
+ * Aman di bawah batas 500 KB bucket 'attendance-selfies'
  */
 export async function compressSelfieFromVideo(
   videoElement: HTMLVideoElement,
@@ -179,4 +210,79 @@ export async function compressSelfieFromVideo(
       quality
     );
   });
+}
+
+/**
+ * Memvalidasi & mengompresi file lampiran izin/sakit (gambar dikompres, PDF dicek ukuran <= 2 MB)
+ * Selaras dengan batas bucket 'attendance-attachments' (2097152 bytes)
+ */
+export async function prepareAttachmentFile(file: File): Promise<{
+  blob: Blob;
+  extension: string;
+  contentType: string;
+}> {
+  const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+
+  if (file.type === 'application/pdf') {
+    if (file.size > MAX_BYTES) {
+      throw new Error('Ukuran file PDF maksimal 2 MB.');
+    }
+    return {
+      blob: file,
+      extension: 'pdf',
+      contentType: 'application/pdf',
+    };
+  }
+
+  if (!file.type.startsWith('image/')) {
+    throw new Error(
+      'Format lampiran tidak didukung. Gunakan foto (JPG/PNG/WEBP) atau PDF.'
+    );
+  }
+
+  const imageBitmap = await createImageBitmap(file);
+  const maxDimension = 1280;
+  const scale = Math.min(
+    1,
+    maxDimension / Math.max(imageBitmap.width, imageBitmap.height)
+  );
+  const targetWidth = Math.round(imageBitmap.width * scale);
+  const targetHeight = Math.round(imageBitmap.height * scale);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    imageBitmap.close();
+    throw new Error('Gagal memproses gambar lampiran.');
+  }
+
+  ctx.drawImage(imageBitmap, 0, 0, targetWidth, targetHeight);
+  imageBitmap.close();
+
+  const compressedBlob = await new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob) {
+          reject(new Error('Gagal mengompresi gambar lampiran.'));
+          return;
+        }
+        resolve(blob);
+      },
+      'image/jpeg',
+      0.78
+    );
+  });
+
+  if (compressedBlob.size > MAX_BYTES) {
+    throw new Error('Ukuran gambar lampiran setelah kompresi masih melebihi 2 MB.');
+  }
+
+  return {
+    blob: compressedBlob,
+    extension: 'jpg',
+    contentType: 'image/jpeg',
+  };
 }

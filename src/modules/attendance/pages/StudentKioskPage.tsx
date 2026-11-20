@@ -1,12 +1,11 @@
 // src/modules/attendance/pages/StudentKioskPage.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   CheckCircle,
   XCircle,
   Clock,
   Users,
-  Scan,
   RotateCcw,
   Wifi,
   WifiOff,
@@ -27,12 +26,14 @@ import { BarcodeScanner } from '../components/BarcodeScanner';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { AttendanceMap } from '@/components/map/AttendanceMap';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
+import { dispatchStudentAttendanceWhatsApp } from '../services/whatsappService';
 
 // ============================================================================
 // PARAMETER YANG BISA DISESUAIKAN
 // ============================================================================
 const MIN_MINUTES_BETWEEN_IN_AND_OUT = 15; // Jeda minimal (menit) agar double-scan pagi tidak dianggap pulang
 const KIOSK_RESET_DELAY_MS = 4000;        // Waktu reset layar otomatis setelah scan (milidetik)
+const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis
 const FALLBACK_STUDENT_START = '07:00';
 const FALLBACK_STUDENT_CHECKOUT_START = '11:30';
 const FALLBACK_STUDENT_END = '13:30';
@@ -68,18 +69,9 @@ interface StudentScheduleConfig {
   enableCheckOut: boolean;
 }
 
-interface WhatsAppNotificationPayload {
-  schoolId: string;
-  studentId: string;
-  studentName: string;
-  nisn: string;
-  className?: string;
-  event: 'CHECK_IN' | 'CHECK_OUT';
-  status: string;
-  timeFormatted: string;
-  date: string;
-}
-
+/**
+ * Menambahkan menit toleransi keterlambatan ke jam masuk standar (HH:mm).
+ */
 function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
   const [hStr, mStr] = startTime.split(':');
   const h = Number(hStr) || 7;
@@ -88,18 +80,6 @@ function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(
     total % 60
   ).padStart(2, '0')}`;
-}
-
-/**
- * HOOK SIAP PAKAI UNTUK INTEGRASI WHATSAPP GATEWAY ORANG TUA
- * Nanti cukup isi pemanggilan API WA Gateway (Fonnte / Wablas / Edge Function) di sini.
- */
-async function triggerParentWhatsAppNotification(
-  payload: WhatsAppNotificationPayload
-): Promise<void> {
-  // Contoh struktur data yang sudah siap dikirim ke backend / Edge Function WA Gateway:
-  // await supabase.functions.invoke('send-student-wa', { body: payload });
-  console.info('[WA-Gateway Ready] Payload notifikasi orang tua:', payload);
 }
 
 export function StudentKioskPage() {
@@ -134,6 +114,7 @@ export function StudentKioskPage() {
   });
 
   const [specialEventInput, setSpecialEventInput] = useState<string>('');
+  const [nowTick, setNowTick] = useState<Date>(() => new Date());
 
   const [kioskState, setKioskState] = useState<KioskState>('idle');
   const [scanMode, setScanMode] = useState<KioskScanMode>('AUTO');
@@ -157,9 +138,11 @@ export function StudentKioskPage() {
       time: string;
     }>
   >([]);
-  const [autoResetTimer, setAutoResetTimer] = useState<ReturnType<
-    typeof setTimeout
-  > | null>(null);
+
+  // Ref aman untuk timer & kunci anti double-scan (penting untuk APK Android & scanner cepat)
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const processingLockRef = useRef<boolean>(false);
 
   const [schoolCoords, setSchoolCoords] = useState<{
     latitude: number;
@@ -189,6 +172,24 @@ export function StudentKioskPage() {
   const isCheckOutWindowOpen =
     studentConfig.enableCheckOut &&
     isAfterDeadline(studentConfig.checkOutStartTime);
+
+  // Bersihkan seluruh timer saat komponen ditutup / pindah halaman
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+      if (processTimerRef.current) clearTimeout(processTimerRef.current);
+    };
+  }, []);
+
+  // Pembaruan jam layar Kiosk setiap 30 detik (hemat daya saat APK di-background)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!document.hidden) {
+        setNowTick(new Date());
+      }
+    }, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -291,16 +292,18 @@ export function StudentKioskPage() {
   }, [loadStats]);
 
   const resetToIdle = useCallback(() => {
-    if (autoResetTimer) clearTimeout(autoResetTimer);
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    if (processTimerRef.current) clearTimeout(processTimerRef.current);
+    processingLockRef.current = false;
     setKioskState('idle');
     setFoundStudent(null);
     setResultMessage('');
-  }, [autoResetTimer]);
+  }, []);
 
   const scheduleAutoReset = useCallback(
     (delayMs: number = KIOSK_RESET_DELAY_MS) => {
-      const t = setTimeout(resetToIdle, delayMs);
-      setAutoResetTimer(t);
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = setTimeout(resetToIdle, delayMs);
     },
     [resetToIdle]
   );
@@ -323,7 +326,10 @@ export function StudentKioskPage() {
   // Proses Pencatatan Datang (Check-In) atau Pulang (Check-Out)
   const processStudentScan = useCallback(
     async (student: FoundStudent) => {
-      if (!activeSchoolId) return;
+      if (!activeSchoolId) {
+        processingLockRef.current = false;
+        return;
+      }
 
       if (isHolidayLocked) {
         setResultMessage(
@@ -369,6 +375,8 @@ export function StudentKioskPage() {
           const lateNow = isAfterDeadline(studentDeadline);
           const status = lateNow ? 'TERLAMBAT' : 'HADIR';
 
+          // CATATAN: Kolom "time" tidak dikirim karena bertipe GENERATED ALWAYS
+          // di PostgreSQL (otomatis dihitung dari "checkInTime" zona Asia/Jakarta).
           const { error: insertErr } = await supabase
             .from('attendances')
             .insert({
@@ -377,8 +385,8 @@ export function StudentKioskPage() {
               type: 'SISWA',
               date: today,
               status,
-              time: nowIso,
               checkInTime: nowIso,
+              recordedBy: user?.id ?? null,
             });
 
           if (insertErr) throw insertErr;
@@ -405,16 +413,12 @@ export function StudentKioskPage() {
             ...prev.slice(0, 9),
           ]);
 
-          await triggerParentWhatsAppNotification({
-            schoolId: activeSchoolId,
+          // Kirim notifikasi WhatsApp secara non-blocking agar antrean Kiosk tetap cepat
+          void dispatchStudentAttendanceWhatsApp({
             studentId: student.id,
-            studentName: student.fullName,
-            nisn: student.nisn,
-            className: student.className,
-            event: 'CHECK_IN',
-            status,
+            eventType: 'CHECK_IN',
             timeFormatted: timeStr,
-            date: today,
+            status,
           });
 
           scheduleAutoReset();
@@ -518,21 +522,22 @@ export function StudentKioskPage() {
           ...prev.slice(0, 9),
         ]);
 
-        await triggerParentWhatsAppNotification({
-          schoolId: activeSchoolId,
+        // Kirim notifikasi WhatsApp pulang secara non-blocking
+        void dispatchStudentAttendanceWhatsApp({
           studentId: student.id,
-          studentName: student.fullName,
-          nisn: student.nisn,
-          className: student.className,
-          event: 'CHECK_OUT',
-          status: existingAtt.status,
+          eventType: 'CHECK_OUT',
           timeFormatted: timeStr,
-          date: today,
+          status: existingAtt.status,
         });
 
         scheduleAutoReset();
-      } catch {
-        setResultMessage('Gagal menyimpan absen. Periksa koneksi internet.');
+      } catch (err) {
+        console.error('Gagal menyimpan absen siswa:', err);
+        const detail =
+          err && typeof err === 'object' && 'message' in err
+            ? String((err as { message: string }).message)
+            : 'Periksa koneksi internet.';
+        setResultMessage(`Gagal menyimpan absen: ${detail}`);
         setKioskState('error');
         scheduleAutoReset();
       }
@@ -547,12 +552,13 @@ export function StudentKioskPage() {
       studentConfig.enableCheckOut,
       studentConfig.checkOutStartTime,
       scheduleAutoReset,
+      user?.id,
     ]
   );
 
   const handleScan = useCallback(
     async (code: string) => {
-      if (!activeSchoolId) return;
+      if (!activeSchoolId || processingLockRef.current) return;
 
       if (isHolidayLocked) {
         setResultMessage(
@@ -572,6 +578,7 @@ export function StudentKioskPage() {
         return;
       }
 
+      processingLockRef.current = true;
       setKioskState('scanning');
 
       try {
@@ -604,9 +611,16 @@ export function StudentKioskPage() {
         setFoundStudent(mappedStudent);
         setKioskState('found');
 
-        setTimeout(() => processStudentScan(mappedStudent), 900);
-      } catch {
-        setResultMessage('Terjadi kesalahan. Periksa koneksi internet.');
+        if (processTimerRef.current) clearTimeout(processTimerRef.current);
+        processTimerRef.current = setTimeout(
+          () => processStudentScan(mappedStudent),
+          STUDENT_PREVIEW_DELAY_MS
+        );
+      } catch (err) {
+        console.error('Gagal mencari data siswa:', err);
+        setResultMessage(
+          'Terjadi kesalahan saat mencari data siswa. Periksa koneksi internet.'
+        );
         setKioskState('error');
         scheduleAutoReset();
       }
@@ -621,11 +635,11 @@ export function StudentKioskPage() {
     ]
   );
 
-  const currentTime = new Date().toLocaleTimeString('id-ID', {
+  const currentTime = nowTick.toLocaleTimeString('id-ID', {
     hour: '2-digit',
     minute: '2-digit',
   });
-  const currentDate = new Date().toLocaleDateString('id-ID', {
+  const currentDate = nowTick.toLocaleDateString('id-ID', {
     weekday: 'long',
     year: 'numeric',
     month: 'long',
@@ -638,8 +652,24 @@ export function StudentKioskPage() {
     : school?.name ?? 'SekolahERP';
 
   return (
-    <div className="kiosk-page">
-      <div className="kiosk-header">
+    <div
+      className="kiosk-page"
+      style={{
+        minHeight: '100dvh',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      {/* CSS Responsif untuk Menyeimbangkan Peta & Kamera di Semua Ukuran Monitor */}
+      <style>{`
+        .kiosk-map-fill > div,
+        .kiosk-map-fill .leaflet-container {
+          height: 100% !important;
+          min-height: 185px !important;
+        }
+      `}</style>
+
+      <div className="kiosk-header" style={{ flexShrink: 0 }}>
         <div className="kiosk-school-info">
           <School size={28} className="kiosk-school-icon" />
           <div>
@@ -672,9 +702,24 @@ export function StudentKioskPage() {
         </div>
       </div>
 
-      <div className="kiosk-body">
-        <div className="kiosk-sidebar">
-          <div className="kiosk-stat-card">
+      <div
+        className="kiosk-body"
+        style={{
+          flex: 1,
+          alignItems: 'stretch',
+          paddingTop: '0.75rem',
+          paddingBottom: '0.85rem',
+        }}
+      >
+        <div
+          className="kiosk-sidebar"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '0.75rem',
+          }}
+        >
+          <div className="kiosk-stat-card" style={{ flexShrink: 0 }}>
             <div className="kiosk-stat-header">
               <Users size={20} />
               <span>Statistik Siswa Hari Ini</span>
@@ -702,12 +747,32 @@ export function StudentKioskPage() {
           </div>
 
           {schoolCoords && (
-            <div className="kiosk-stat-card" style={{ marginTop: '1rem' }}>
-              <div className="kiosk-stat-header" style={{ marginBottom: '10px' }}>
+            <div
+              className="kiosk-stat-card"
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                minHeight: '210px',
+              }}
+            >
+              <div
+                className="kiosk-stat-header"
+                style={{ marginBottom: '8px', flexShrink: 0 }}
+              >
                 <MapPin size={20} />
                 <span>Area Absensi Sekolah</span>
               </div>
-              <div style={{ borderRadius: '0.5rem', overflow: 'hidden' }}>
+              <div
+                className="kiosk-map-fill"
+                style={{
+                  flex: 1,
+                  borderRadius: '0.5rem',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
                 <AttendanceMap
                   schoolLat={schoolCoords.latitude}
                   schoolLng={schoolCoords.longitude}
@@ -720,11 +785,21 @@ export function StudentKioskPage() {
           )}
 
           {recentList.length > 0 && (
-            <div className="kiosk-recent" style={{ marginTop: '1rem' }}>
+            <div
+              className="kiosk-recent"
+              style={{
+                flexShrink: 0,
+                maxHeight: '135px',
+                overflowY: 'auto',
+              }}
+            >
               <h3 className="kiosk-recent-title">Aktivitas Terakhir</h3>
               <div className="kiosk-recent-list">
                 {recentList.map((item, i) => (
-                  <div key={i} className="kiosk-recent-item">
+                  <div
+                    key={`${item.name}-${item.time}-${i}`}
+                    className="kiosk-recent-item"
+                  >
                     <div className="kiosk-recent-info">
                       <span className="kiosk-recent-name">{item.name}</span>
                       <span className="kiosk-recent-time">
@@ -744,10 +819,20 @@ export function StudentKioskPage() {
           )}
         </div>
 
-        <div className="kiosk-main">
+        <div
+          className="kiosk-main"
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'flex-start',
+            paddingTop: '0.25rem',
+          }}
+        >
           {/* Banner Mode Kegiatan Khusus Aktif */}
           {isHoliday && isSpecialEventActive && (
-            <div className="mb-4 w-full max-w-xl p-3.5 rounded-2xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="mb-3 w-full max-w-xl p-3 rounded-2xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
               <div className="flex items-center gap-2">
                 <Sparkles size={16} className="text-emerald-500 shrink-0" />
                 <div>
@@ -773,47 +858,18 @@ export function StudentKioskPage() {
             </div>
           )}
 
-          {/* Pemilih Mode Scan Kiosk (Otomatis / Datang / Pulang) */}
-          {!isHolidayLocked && studentConfig.enableCheckOut && (
-            <div className="flex flex-wrap items-center justify-center gap-2 mb-4">
-              {(
-                [
-                  {
-                    id: 'AUTO',
-                    label: isCheckOutWindowOpen
-                      ? 'Mode Otomatis (Siap Pulang)'
-                      : 'Mode Otomatis (Datang)',
-                  },
-                  { id: 'CHECK_IN', label: 'Khusus Datang' },
-                  { id: 'CHECK_OUT', label: 'Khusus Pulang' },
-                ] as const
-              ).map((modeOpt) => (
-                <button
-                  key={modeOpt.id}
-                  type="button"
-                  onClick={() => setScanMode(modeOpt.id)}
-                  className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
-                    ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                    : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
-                    }`}
-                >
-                  {modeOpt.label}
-                </button>
-              ))}
-            </div>
-          )}
-
           <AnimatePresence mode="wait">
             {kioskState === 'idle' && (
               <motion.div
                 key="idle"
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 16 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="kiosk-idle-state"
+                exit={{ opacity: 0, y: -16 }}
+                className="kiosk-idle-state w-full max-w-xl mx-auto flex-1 min-h-0 flex flex-col items-center text-center"
+                style={{ marginTop: 0, paddingTop: 0 }}
               >
                 {isHolidayLocked ? (
-                  <div className="p-6 sm:p-7 rounded-2xl border border-red-500/40 bg-red-500/10 text-center space-y-4 max-w-lg w-full">
+                  <div className="p-6 sm:p-7 rounded-2xl border border-red-500/40 bg-red-500/10 text-center space-y-4 max-w-lg w-full my-auto">
                     <div className="w-16 h-16 rounded-2xl bg-red-500/20 text-red-500 flex items-center justify-center mx-auto">
                       <CalendarOff size={36} />
                     </div>
@@ -865,7 +921,7 @@ export function StudentKioskPage() {
                     )}
                   </div>
                 ) : !studentConfig.enableKiosk ? (
-                  <div className="p-6 rounded-2xl border border-amber-500/40 bg-amber-500/10 text-center space-y-2 max-w-md">
+                  <div className="p-6 rounded-2xl border border-amber-500/40 bg-amber-500/10 text-center space-y-2 max-w-md my-auto">
                     <AlertTriangle
                       size={44}
                       className="mx-auto text-amber-500"
@@ -879,41 +935,74 @@ export function StudentKioskPage() {
                     </p>
                   </div>
                 ) : (
-                  <>
-                    <div className="kiosk-scan-icon">
-                      <Scan size={80} />
-                      <div className="kiosk-scan-pulse" />
-                    </div>
-                    <h2 className="kiosk-idle-title">
+                  <div className="w-full flex-1 min-h-0 flex flex-col items-center">
+                    {/* Bar Tombol Mode Scan: Sejajar di tengah atas */}
+                    {studentConfig.enableCheckOut && (
+                      <div className="flex flex-wrap items-center justify-center gap-2 mb-2 shrink-0">
+                        {(
+                          [
+                            {
+                              id: 'AUTO',
+                              label: isCheckOutWindowOpen
+                                ? 'Mode Otomatis (Siap Pulang)'
+                                : 'Mode Otomatis (Datang)',
+                            },
+                            { id: 'CHECK_IN', label: 'Khusus Datang' },
+                            { id: 'CHECK_OUT', label: 'Khusus Pulang' },
+                          ] as const
+                        ).map((modeOpt) => (
+                          <button
+                            key={modeOpt.id}
+                            type="button"
+                            onClick={() => setScanMode(modeOpt.id)}
+                            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
+                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                              : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
+                              }`}
+                          >
+                            {modeOpt.label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    <h2 className="kiosk-idle-title text-xl sm:text-2xl leading-tight shrink-0">
                       {scanMode === 'CHECK_OUT'
                         ? 'Scan Kartu — Absen Pulang'
                         : isCheckOutWindowOpen && scanMode === 'AUTO'
                           ? 'Scan Kartu Pelajar (Datang / Pulang)'
                           : 'Scan Kartu Pelajar'}
                     </h2>
-                    <p className="kiosk-idle-subtitle">
-                      Tempelkan kartu pelajar ke scanner, atau ketik NISN/NIS
-                      secara manual
+                    <p className="kiosk-idle-subtitle text-xs mt-1 mb-2.5 shrink-0">
+                      Arahkan kartu ke kamera, gunakan scanner USB, atau ketik
+                      NISN/NIS
                     </p>
-                    <div className="kiosk-scanner-area">
+
+                    <div
+                      className="kiosk-scanner-area w-full"
+                      style={{ padding: '0.85rem', minHeight: 'auto' }}
+                    >
                       <BarcodeScanner
-                        onScan={handleScan}
-                        isActive={
-                          kioskState === 'idle' &&
-                          !isHolidayLocked &&
-                          !isCheckingHoliday &&
-                          studentConfig.enableKiosk
+                        onScanSuccess={(code) => {
+                          void handleScan(code);
+                        }}
+                        isPaused={
+                          kioskState !== 'idle' ||
+                          isHolidayLocked ||
+                          isCheckingHoliday ||
+                          !studentConfig.enableKiosk
                         }
                       />
                     </div>
+
                     {isLateNow && !isCheckOutWindowOpen && (
-                      <div className="kiosk-late-warning">
+                      <div className="kiosk-late-warning mt-2 shrink-0">
                         <Clock size={16} />
                         Waktu melebihi {studentDeadline} — Absen datang dicatat
                         TERLAMBAT
                       </div>
                     )}
-                  </>
+                  </div>
                 )}
               </motion.div>
             )}
@@ -924,7 +1013,7 @@ export function StudentKioskPage() {
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="kiosk-scanning-state"
+                className="kiosk-scanning-state my-auto"
               >
                 <div className="kiosk-spinner" />
                 <p className="kiosk-scanning-text">Memproses...</p>
@@ -937,7 +1026,7 @@ export function StudentKioskPage() {
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="kiosk-found-state"
+                className="kiosk-found-state my-auto"
               >
                 <div className="kiosk-student-avatar">
                   {foundStudent.photoUrl ? (
@@ -967,7 +1056,7 @@ export function StudentKioskPage() {
                 initial={{ scale: 0.5, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="kiosk-result-state success"
+                className="kiosk-result-state success my-auto"
               >
                 <motion.div
                   initial={{ scale: 0 }}
@@ -1002,7 +1091,7 @@ export function StudentKioskPage() {
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="kiosk-result-state already"
+                className="kiosk-result-state already my-auto"
               >
                 <LogIn size={80} />
                 <h2 className="kiosk-result-title">Informasi Presensi</h2>
@@ -1020,7 +1109,7 @@ export function StudentKioskPage() {
                 initial={{ scale: 0.8, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="kiosk-result-state error"
+                className="kiosk-result-state error my-auto"
               >
                 <XCircle size={80} />
                 <h2 className="kiosk-result-title">Gagal</h2>

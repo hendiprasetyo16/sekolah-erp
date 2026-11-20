@@ -3,17 +3,17 @@ import { calculateDistance } from './gps.utils';
 import { detectDevicePlatform } from '@/utils/devicePlatform';
 
 // ============================================================================
-// PARAMETER KEAMANAN YANG BISA KAMU SESUAIKAN
+// PARAMETER KEAMANAN YANG DAPAT DISESUAIKAN (SELARAS RPC SQL v20.1)
 // ============================================================================
 export const SECURITY_CONFIG = {
-  BLOCK_EMULATOR_SIGNATURES: true,     // true = tolak BlueStacks, Nox, LDPlayer, AVD, dll.
-  BLOCK_VIRTUAL_CAMERA: true,          // true = tolak OBS Virtual Camera, ManyCam, DroidCam (kecuali SUPER_ADMIN)
-  MAX_GPS_ACCURACY_METERS: 80,         // Batas maksimal toleransi meleset sinyal GPS (meter)
-  MIN_GPS_ACCURACY_METERS: 1.2,        // Di bawah 1.2m = indikasi kuat Fake GPS
-  GPS_SAMPLE_COUNT: 3,                 // Jumlah pengambilan sampel GPS beruntun
-  GPS_SAMPLE_TIMEOUT_MS: 12000,        // Batas waktu tunggu pengambilan sampel GPS (ms)
-  MAX_HUMAN_SPEED_MPS: 35,             // Kecepatan perpindahan maks antar sampel (~126 km/jam)
-};
+  BLOCK_EMULATOR_SIGNATURES: true, // Tolak BlueStacks, Nox, LDPlayer, AVD, dll.
+  BLOCK_VIRTUAL_CAMERA: true,      // Tolak OBS Virtual Camera, ManyCam, DroidCam (kecuali SUPER_ADMIN)
+  MAX_GPS_ACCURACY_METERS: 80,     // Batas maksimal meleset sinyal GPS (RPC server maks 85m)
+  MIN_GPS_ACCURACY_METERS: 1.0,    // <= 1.0m = indikasi kuat Fake GPS (sama dengan RPC server)
+  GPS_SAMPLE_COUNT: 3,             // Jumlah pengambilan sampel GPS beruntun
+  GPS_SAMPLE_TIMEOUT_MS: 12000,    // Batas waktu tunggu pengambilan sampel GPS (ms)
+  MAX_HUMAN_SPEED_MPS: 35,         // Kecepatan perpindahan maks antar sampel (~126 km/jam)
+} as const;
 
 export interface EnvironmentAuditResult {
   allowed: boolean;
@@ -33,12 +33,14 @@ export interface VerifiedGpsResult {
 
 /**
  * 1. Memeriksa apakah perangkat adalah Emulator Android, Browser Otomasi, atau Komputer
- * @param isSuperAdmin True jika sedang simulasi Super Admin (lolos semua pembatasan perangkat)
- * @param allowDesktopForTeacher True jika guru tersebut diberi izin oleh Admin absen via komputer
+ * @param isSuperAdmin True jika akun adalah SUPER_ADMIN (lolos semua pembatasan perangkat)
+ * @param allowDesktopForTeacher True jika guru diberi izin individu absen via komputer
+ * @param allowDesktopGlobal True jika sekolah mengaktifkan izin presensi komputer secara global
  */
 export function inspectDeviceEnvironment(
   isSuperAdmin: boolean = false,
-  allowDesktopForTeacher: boolean = false
+  allowDesktopForTeacher: boolean = false,
+  allowDesktopGlobal: boolean = false
 ): EnvironmentAuditResult {
   const flags: string[] = [];
   const platformInfo = detectDevicePlatform();
@@ -46,7 +48,7 @@ export function inspectDeviceEnvironment(
   const platform = navigator.platform || '';
   const maxTouchPoints = navigator.maxTouchPoints ?? 0;
   const isWebdriver = Boolean(
-    (navigator as unknown as { webdriver?: boolean }).webdriver
+    (navigator as Navigator & { webdriver?: boolean }).webdriver
   );
 
   // Deteksi GPU / WebGL Renderer (Emulator PC memakai SwiftShader / llvmpipe / virtual GPU)
@@ -77,7 +79,7 @@ export function inspectDeviceEnvironment(
     flags.push('AUTOMATED_WEBDRIVER');
   }
 
-  // Cek 2: Ciri khas Emulator Android (BlueStacks, Nox, LDPlayer, Genymotion, Android Studio)
+  // Cek 2: Ciri khas Emulator Android
   const emulatorKeywords = [
     'bluestacks',
     'nox',
@@ -105,7 +107,7 @@ export function inspectDeviceEnvironment(
     lowerRenderer.includes(kw)
   );
 
-  // Cek 3: UA mengaku HP Android/iPhone, tapi arsitektur prosesornya PC (x86_64 / Win32 / MacIntel)
+  // Cek 3: UA mengaku HP Android/iPhone, tetapi arsitektur prosesornya PC
   const claimsMobile = /android|iphone|ipad|ipod/i.test(lowerUa);
   const isPcArchitecture = /win32|win64|macintel|linux x86_64|linux i686/i.test(
     lowerPlatform
@@ -117,13 +119,15 @@ export function inspectDeviceEnvironment(
     flags.push('EMULATOR_OR_SPOOFED_DEVICE');
   }
 
-  // Cek 4: Akses dari Laptop / Komputer Desktop biasa
+  // Cek 4: Akses dari Laptop / Komputer Desktop
   if (platformInfo.isDesktop) {
     flags.push('DESKTOP_BROWSER');
   }
 
-  const telemetry = {
-    deviceType: platformInfo.deviceLabel,
+  // Format telemetri selaras dengan pengecekan p_device_telemetry->>'deviceType' di RPC SQL v20.1
+  const telemetry: Record<string, unknown> = {
+    deviceType: platformInfo.isDesktop ? 'DESKTOP' : 'MOBILE',
+    deviceLabel: platformInfo.deviceLabel,
     isAndroidApk: platformInfo.isAndroidApk,
     ua: ua.slice(0, 180),
     platform,
@@ -166,8 +170,8 @@ export function inspectDeviceEnvironment(
     };
   }
 
-  // Jika diakses lewat komputer, cek apakah guru tersebut diberi izin oleh Admin
-  if (platformInfo.isDesktop && !allowDesktopForTeacher) {
+  const canUseDesktop = allowDesktopForTeacher || allowDesktopGlobal;
+  if (platformInfo.isDesktop && !canUseDesktop) {
     return {
       allowed: false,
       blockReason:
@@ -188,8 +192,6 @@ export function inspectDeviceEnvironment(
 
 /**
  * 2. Memeriksa apakah kamera berasal dari perangkat fisik asli (bukan OBS / ManyCam / Virtual Cam)
- * @param stream Aliran video dari navigator.mediaDevices.getUserMedia
- * @param isSuperAdmin True jika akun adalah SUPER_ADMIN (kamera eksternal/virtual diizinkan untuk pengujian)
  */
 export function validateCameraStream(
   stream: MediaStream,
@@ -210,7 +212,6 @@ export function validateCameraStream(
 
   const label = track.label || '';
 
-  // SUPER_ADMIN memiliki akses penuh untuk pengujian dengan kamera eksternal maupun virtual
   if (isSuperAdmin) {
     return {
       valid: true,
@@ -220,7 +221,6 @@ export function validateCameraStream(
 
   const lowerLabel = label.toLowerCase();
 
-  // Daftar kata kunci kamera virtual yang diblokir untuk akun non-Super Admin
   const virtualCamKeywords = [
     'obs',
     'virtual',
@@ -407,11 +407,15 @@ export function acquireVerifiedGpsPosition(
         cleanup();
         if (err.code === 1) {
           reject(
-            new Error('Izin lokasi ditolak. Aktifkan izin lokasi pada browser Anda.')
+            new Error(
+              'Izin lokasi ditolak. Aktifkan izin lokasi pada browser Anda.'
+            )
           );
         } else {
           reject(
-            new Error('Gagal mendeteksi titik lokasi. Pastikan GPS/Wi-Fi perangkat aktif.')
+            new Error(
+              'Gagal mendeteksi titik lokasi. Pastikan GPS/Wi-Fi perangkat aktif.'
+            )
           );
         }
       },
