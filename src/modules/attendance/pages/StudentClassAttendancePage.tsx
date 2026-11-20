@@ -522,10 +522,10 @@ export function StudentClassAttendancePage() {
                     ? item.checkInTime || nowIso
                     : null;
 
+                // Kolom "time" adalah GENERATED ALWAYS di PostgreSQL sehingga tidak ikut dikirim
                 if (item.existingRecordId) {
                     const updatePayload: Record<string, string | null> = {
                         status: item.status,
-                        time: effectiveCheckIn,
                         checkInTime: effectiveCheckIn,
                         notes: item.notes.trim() || null,
                         recordedBy: user?.id ?? null,
@@ -542,7 +542,7 @@ export function StudentClassAttendancePage() {
                                 .from('attendances')
                                 .update({
                                     status: item.status,
-                                    time: effectiveCheckIn,
+                                    checkInTime: effectiveCheckIn,
                                     notes: item.notes.trim() || null,
                                 })
                                 .eq('id', item.existingRecordId);
@@ -558,7 +558,6 @@ export function StudentClassAttendancePage() {
                         type: 'SISWA',
                         date: selectedDate,
                         status: item.status,
-                        time: effectiveCheckIn,
                         checkInTime: effectiveCheckIn,
                         notes: item.notes.trim() || null,
                         recordedBy: user?.id ?? null,
@@ -578,7 +577,7 @@ export function StudentClassAttendancePage() {
                                     type: 'SISWA',
                                     date: selectedDate,
                                     status: item.status,
-                                    time: effectiveCheckIn,
+                                    checkInTime: effectiveCheckIn,
                                     notes: item.notes.trim() || null,
                                 });
                             if (fallbackInsErr) throw fallbackInsErr;
@@ -900,8 +899,8 @@ export function StudentClassAttendancePage() {
             {message && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${message.status === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {message.status === 'success' ? (
@@ -1135,8 +1134,8 @@ export function StudentClassAttendancePage() {
                                                                     )
                                                                 }
                                                                 className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer disabled:opacity-50 ${isSelected
-                                                                        ? opt.activeClass
-                                                                        : 'border-border bg-background hover:bg-muted text-foreground/80'
+                                                                    ? opt.activeClass
+                                                                    : 'border-border bg-background hover:bg-muted text-foreground/80'
                                                                     }`}
                                                             >
                                                                 <IconComp size={12} />

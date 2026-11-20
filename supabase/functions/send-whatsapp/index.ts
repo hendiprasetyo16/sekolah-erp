@@ -44,7 +44,7 @@ function jsonResponse(body: Record<string, unknown>, status = 200): Response {
  * Normalisasi nomor HP Indonesia ke format internasional 628xxx
  */
 function normalizeIndonesianPhone(raw: string): string {
-  const digits = raw.replace(/\D/g, '');
+  const digits = (raw || '').replace(/\D/g, '');
   if (digits.startsWith('0')) return '62' + digits.slice(1);
   if (digits.startsWith('8')) return '62' + digits;
   return digits;
@@ -54,7 +54,7 @@ function normalizeIndonesianPhone(raw: string): string {
  * Mengganti placeholder {variabel} pada template pesan WhatsApp
  */
 function renderTemplate(template: string, vars: Record<string, string>): string {
-  return template.replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? '-');
+  return (template || '').replace(/\{(\w+)\}/g, (_, key) => vars[key] ?? '-');
 }
 
 serve(async (req: Request): Promise<Response> => {
@@ -98,9 +98,39 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const body = (await req.json()) as SendWaPayload;
+    if (!body.schoolId) {
+      return jsonResponse({ error: 'Parameter schoolId wajib disertakan.' }, 400);
+    }
+    if (!body.recipientPhone || !body.recipientPhone.trim()) {
+      return jsonResponse(
+        { error: 'Parameter recipientPhone wajib disertakan.' },
+        400
+      );
+    }
+
     const adminClient = createClient(supabaseUrl, serviceRoleKey, {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+
+    // 2b. Validasi isolasi tenant pada tabel public.users
+    const { data: callerProfile, error: profError } = await adminClient
+      .from('users')
+      .select('schoolId, role, isActive')
+      .eq('id', user.id)
+      .single();
+
+    if (
+      profError ||
+      !callerProfile ||
+      !callerProfile.isActive ||
+      (callerProfile.role !== 'SUPER_ADMIN' &&
+        callerProfile.schoolId !== body.schoolId)
+    ) {
+      return jsonResponse(
+        { error: 'Forbidden: Anda tidak memiliki akses ke sekolah ini.' },
+        403
+      );
+    }
 
     // 3. Ambil konfigurasi WhatsApp Gateway sekolah dari database
     const { data: config, error: cfgError } = await adminClient
@@ -120,6 +150,13 @@ serve(async (req: Request): Promise<Response> => {
       return jsonResponse({
         skipped: true,
         reason: 'Integrasi WA sedang dinonaktifkan.',
+      });
+    }
+
+    if (!config.apiUrl || !config.apiToken) {
+      return jsonResponse({
+        skipped: true,
+        reason: 'API URL atau API Token WhatsApp Gateway belum diisi.',
       });
     }
 
@@ -143,14 +180,23 @@ serve(async (req: Request): Promise<Response> => {
 
     // 5. Susun nomor tujuan & isi pesan dari template
     const phone = normalizeIndonesianPhone(body.recipientPhone);
+    if (phone.length < 9) {
+      return jsonResponse({ error: 'Format nomor HP penerima tidak valid.' }, 400);
+    }
+
+    const defaultTemplateCheckIn =
+      'Yth. Orang Tua/Wali, ananda {nama_siswa} ({kelas}) tercatat {status} pada pukul {waktu} di {nama_sekolah}.';
+    const defaultTemplateCheckOut =
+      'Yth. Orang Tua/Wali, ananda {nama_siswa} ({kelas}) telah presensi PULANG pada pukul {waktu} di {nama_sekolah}.';
+
     const message =
       body.eventType === 'TEST'
         ? body.customTestMessage ||
           'Uji coba koneksi WhatsApp Gateway ERP Sekolah berhasil!'
         : renderTemplate(
             body.eventType === 'CHECK_OUT'
-              ? config.templateCheckOut
-              : config.templateCheckIn,
+              ? config.templateCheckOut || defaultTemplateCheckOut
+              : config.templateCheckIn || defaultTemplateCheckIn,
             {
               nama_siswa: body.variables?.nama_siswa || '-',
               kelas: body.variables?.kelas || '-',
