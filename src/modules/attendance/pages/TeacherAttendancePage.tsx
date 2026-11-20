@@ -40,6 +40,7 @@ import {
   Loader2,
   Smartphone,
   ArrowLeft,
+  Radio,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -49,16 +50,27 @@ import {
   type WorkDaysMode,
 } from '../utils/indonesianHolidays';
 import {
+  getJavaneseDateInfo,
+  getJavaneseMonthRangeLabel,
+} from '../utils/javaneseCalendar';
+import {
   inspectDeviceEnvironment,
   validateCameraStream,
   acquireVerifiedGpsPosition,
 } from '../services/antiCheat.service';
+import { getSchoolDateString } from '../services/gps.utils';
 import { detectDevicePlatform } from '@/utils/devicePlatform';
+import {
+  collectAttendanceTelemetry,
+  compressSelfieToJpeg,
+  stopMediaStreamTracks,
+} from '../utils/apkMediaUtils';
 
 // ============================================================================
 // PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
 // ============================================================================
 const TEACHER_DASHBOARD_ROUTE = '/dashboard'; // Rute Dashboard Guru jika diakses dari komputer
+const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta'; // Zona waktu standar sekolah (WIB)
 const FALLBACK_WORK_START_TIME = '07:30';      // Jam masuk cadangan jika belum diatur di profil sekolah
 const FALLBACK_WORK_END_TIME = '14:30';        // Jam pulang cadangan jika belum diatur di profil sekolah
 const CHECKOUT_TOLERANCE_MINUTES = 30;         // Toleransi waktu pulang (menit)
@@ -136,6 +148,7 @@ interface SchoolGeoAndSchedule {
   workDaysMode: WorkDaysMode;
   requireSelfieCheckIn: boolean;
   requireSelfieCheckOut: boolean;
+  timezone: string;
 }
 
 interface AttendanceRecord {
@@ -155,9 +168,9 @@ interface AttendanceRecord {
   notes?: string | null;
   leaveType?: string | null;
   attachmentUrl?: string | null;
+  deviceTelemetry?: Record<string, unknown> | null;
 }
 
-// Tipe baris mentah dari Supabase (menggantikan penggunaan tipe longgar)
 interface DailyQuoteDbRow {
   quote: string;
   author: string | null;
@@ -191,10 +204,11 @@ interface SchoolDbRow {
   workDaysMode?: string | null;
   requireSelfieCheckIn?: boolean | null;
   requireSelfieCheckOut?: boolean | null;
+  settings?: Record<string, unknown> | null;
 }
 
 // ============================================================================
-// FUNGSI BANTUAN (HELPER) ERROR, WAKTU, JARAK GPS, & VALIDASI
+// FUNGSI BANTUAN (HELPER) ERROR, WAKTU WIB, JARAK GPS, & KETERLAMBATAN
 // ============================================================================
 function extractErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && error.message) {
@@ -212,18 +226,62 @@ function extractErrorMessage(error: unknown, fallbackMessage: string): string {
   return fallbackMessage;
 }
 
-function getTodayLocal(dateObj: Date = new Date()): string {
-  const y = dateObj.getFullYear();
-  const m = String(dateObj.getMonth() + 1).padStart(2, '0');
-  const d = String(dateObj.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
+function getTimeStampTagInTimezone(
+  dateObj: Date = new Date(),
+  timeZone: string = DEFAULT_SCHOOL_TIMEZONE
+): string {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(dateObj);
+    const hh = parts.find((p) => p.type === 'hour')?.value ?? '00';
+    const mm = parts.find((p) => p.type === 'minute')?.value ?? '00';
+    const ss = parts.find((p) => p.type === 'second')?.value ?? '00';
+    return `${hh}${mm}${ss}`;
+  } catch {
+    const hh = String(dateObj.getHours()).padStart(2, '0');
+    const mm = String(dateObj.getMinutes()).padStart(2, '0');
+    const ss = String(dateObj.getSeconds()).padStart(2, '0');
+    return `${hh}${mm}${ss}`;
+  }
 }
 
-function getTimeStampTagLocal(dateObj: Date = new Date()): string {
-  const hh = String(dateObj.getHours()).padStart(2, '0');
-  const mm = String(dateObj.getMinutes()).padStart(2, '0');
-  const ss = String(dateObj.getSeconds()).padStart(2, '0');
-  return `${hh}${mm}${ss}`;
+function getClockPartsInTimezone(
+  dateObj: Date,
+  timeZone: string = DEFAULT_SCHOOL_TIMEZONE
+): { hours: string; minutes: string; seconds: string; totalMinutesFromMidnight: number } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).formatToParts(dateObj);
+    const hours = parts.find((p) => p.type === 'hour')?.value ?? '00';
+    const minutes = parts.find((p) => p.type === 'minute')?.value ?? '00';
+    const seconds = parts.find((p) => p.type === 'second')?.value ?? '00';
+    return {
+      hours,
+      minutes,
+      seconds,
+      totalMinutesFromMidnight: Number(hours) * 60 + Number(minutes),
+    };
+  } catch {
+    const h = dateObj.getHours();
+    const m = dateObj.getMinutes();
+    const s = dateObj.getSeconds();
+    return {
+      hours: String(h).padStart(2, '0'),
+      minutes: String(m).padStart(2, '0'),
+      seconds: String(s).padStart(2, '0'),
+      totalMinutesFromMidnight: h * 60 + m,
+    };
+  }
 }
 
 function sanitizeStorageSegment(rawText: string): string {
@@ -236,8 +294,7 @@ function sanitizeStorageSegment(rawText: string): string {
 
 function buildTeacherFolderName(teacher: TeacherProfile): string {
   const cleanName = sanitizeStorageSegment(teacher.fullName || 'Guru');
-  const rawIdentityNumber =
-    teacher.nik || teacher.nip || teacher.nuptk || '';
+  const rawIdentityNumber = teacher.nik || teacher.nip || teacher.nuptk || '';
   const cleanDigits = rawIdentityNumber.replace(/\D/g, '');
 
   if (cleanDigits.length > 0) {
@@ -282,6 +339,24 @@ function formatDeadlineWithTolerance(
   const finalH = String(Math.floor(totalMinutes / 60)).padStart(2, '0');
   const finalM = String(totalMinutes % 60).padStart(2, '0');
   return `${finalH}:${finalM}`;
+}
+
+/**
+ * Menghitung selisih menit keterlambatan otomatis berdasarkan jam masuk + toleransi
+ */
+function calculateLateMinutes(
+  targetDate: Date,
+  workStartTime: string,
+  toleranceMinutes: number,
+  timeZone: string = DEFAULT_SCHOOL_TIMEZONE
+): number {
+  const [hStr, mStr] = workStartTime.split(':');
+  const startH = Number.isFinite(Number(hStr)) ? Number(hStr) : 7;
+  const startM = Number.isFinite(Number(mStr)) ? Number(mStr) : 30;
+  const deadlineMinutes = startH * 60 + startM + Math.max(0, toleranceMinutes);
+
+  const { totalMinutesFromMidnight } = getClockPartsInTimezone(targetDate, timeZone);
+  return Math.max(0, totalMinutesFromMidnight - deadlineMinutes);
 }
 
 function formatDurationMinutes(totalMinutes: number): string {
@@ -372,7 +447,7 @@ export function TeacherAttendancePage() {
 
   const devicePlatform = useMemo(() => detectDevicePlatform(), []);
 
-  // State Pelacakan Keamanan & Anti-Cheat
+  // State Pelacakan Keamanan & Telemetri Perangkat
   const [securityState, setSecurityState] = useState<{
     isSuspectedMock: boolean;
     flags: string[];
@@ -411,6 +486,18 @@ export function TeacherAttendancePage() {
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
 
+  const schoolTimezone = schoolGeo?.timezone || DEFAULT_SCHOOL_TIMEZONE;
+  const todayStr = useMemo(
+    () => getSchoolDateString(now, schoolTimezone),
+    [now, schoolTimezone]
+  );
+
+  // Informasi Kalender Jawa & Pasaran untuk hari ini
+  const todayJavaneseInfo = useMemo(
+    () => getJavaneseDateInfo(todayStr),
+    [todayStr]
+  );
+
   // State Kata Hari Ini (Quotes)
   const [activeQuotes, setActiveQuotes] =
     useState<Array<{ quote: string; author?: string }>>(DEFAULT_DAILY_QUOTES);
@@ -424,7 +511,7 @@ export function TeacherAttendancePage() {
     new Date().getMonth()
   );
   const [selectedCalendarDate, setSelectedCalendarDate] = useState<string>(() =>
-    getTodayLocal()
+    getSchoolDateString(new Date(), DEFAULT_SCHOOL_TIMEZONE)
   );
   const [dbHolidaysMap, setDbHolidaysMap] = useState<Record<string, string>>({});
 
@@ -470,8 +557,12 @@ export function TeacherAttendancePage() {
 
   // State Formulir Izin / Dinas Luar / Sakit
   const [leaveCategory, setLeaveCategory] = useState<LeaveCategory>('DINAS_LUAR');
-  const [leaveStartDate, setLeaveStartDate] = useState<string>(getTodayLocal());
-  const [leaveEndDate, setLeaveEndDate] = useState<string>(getTodayLocal());
+  const [leaveStartDate, setLeaveStartDate] = useState<string>(() =>
+    getSchoolDateString(new Date(), DEFAULT_SCHOOL_TIMEZONE)
+  );
+  const [leaveEndDate, setLeaveEndDate] = useState<string>(() =>
+    getSchoolDateString(new Date(), DEFAULT_SCHOOL_TIMEZONE)
+  );
   const [leaveRefNumber, setLeaveRefNumber] = useState<string>('');
   const [leaveReason, setLeaveReason] = useState<string>('');
   const [leaveFile, setLeaveFile] = useState<File | null>(null);
@@ -489,6 +580,16 @@ export function TeacherAttendancePage() {
     setToast({ type, message });
     setTimeout(() => setToast(null), 5000);
   };
+
+  // ============================================================================
+  // PEMBERSIH OTOMATIS KAMERA SAAT KOMPONEN DITUTUP (ANTI CAMERA TRACK LEAK)
+  // ============================================================================
+  useEffect(() => {
+    return () => {
+      stopMediaStreamTracks(streamRef.current);
+      streamRef.current = null;
+    };
+  }, []);
 
   // ============================================================================
   // LOGIKA SEMBUNYIKAN / MUNCULKAN HEADER ATAS APLIKASI
@@ -589,8 +690,6 @@ export function TeacherAttendancePage() {
       setSidebarCollapsed(!sidebarCollapsed);
     }
   };
-
-  const todayStr = getTodayLocal(now);
 
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -724,6 +823,11 @@ export function TeacherAttendancePage() {
         .maybeSingle();
 
       const schData = schRaw as SchoolDbRow | null;
+      const resolvedTimezone =
+        typeof schData?.settings?.timezone === 'string' &&
+          schData.settings.timezone.trim()
+          ? schData.settings.timezone.trim()
+          : DEFAULT_SCHOOL_TIMEZONE;
 
       if (schData) {
         setSchoolGeo({
@@ -754,6 +858,7 @@ export function TeacherAttendancePage() {
             typeof schData.requireSelfieCheckOut === 'boolean'
               ? schData.requireSelfieCheckOut
               : FALLBACK_REQUIRE_SELFIE_CHECKOUT,
+          timezone: resolvedTimezone,
         });
       }
 
@@ -807,7 +912,9 @@ export function TeacherAttendancePage() {
       const records = (attList ?? []) as AttendanceRecord[];
       setHistoryRecords(records);
 
-      const foundToday = records.find((r) => r.date === todayStr) ?? null;
+      const currentSchoolDate = getSchoolDateString(new Date(), resolvedTimezone);
+      const foundToday =
+        records.find((r) => r.date === currentSchoolDate) ?? null;
       setTodayRecord(foundToday);
     } catch (err: unknown) {
       console.error(
@@ -825,7 +932,6 @@ export function TeacherAttendancePage() {
     simTeacherId,
     simTeachers,
     calendarYear,
-    todayStr,
   ]);
 
   useEffect(() => {
@@ -861,7 +967,31 @@ export function TeacherAttendancePage() {
     [effectiveWorkStartTime, effectiveToleranceMinutes]
   );
 
-  // Pelacakan GPS Live dengan Anti-Emulator & Multi-Sample Verification
+  // Kalkulasi Menit Keterlambatan (Real-time sebelum absen atau dari record yang sudah masuk)
+  const currentLateMinutes = useMemo(() => {
+    if (todayRecord?.checkInTime) {
+      return calculateLateMinutes(
+        new Date(todayRecord.checkInTime),
+        effectiveWorkStartTime,
+        effectiveToleranceMinutes,
+        schoolTimezone
+      );
+    }
+    return calculateLateMinutes(
+      now,
+      effectiveWorkStartTime,
+      effectiveToleranceMinutes,
+      schoolTimezone
+    );
+  }, [
+    todayRecord?.checkInTime,
+    now,
+    effectiveWorkStartTime,
+    effectiveToleranceMinutes,
+    schoolTimezone,
+  ]);
+
+  // Pelacakan GPS Live dengan Anti-Emulator & Telemetri Perangkat
   const requestGpsPosition = useCallback(async () => {
     setIsLocating(true);
     setGpsError(null);
@@ -886,6 +1016,7 @@ export function TeacherAttendancePage() {
         window.location.hostname === '127.0.0.1';
 
       const verifiedGps = await acquireVerifiedGpsPosition(isDev);
+      const apkTelemetry = collectAttendanceTelemetry(verifiedGps.accuracy);
 
       setUserCoords({
         lat: verifiedGps.latitude,
@@ -895,9 +1026,22 @@ export function TeacherAttendancePage() {
 
       setSecurityState({
         isSuspectedMock:
-          envAudit.isSuspectedMock || verifiedGps.isSuspectedMock,
-        flags: Array.from(new Set([...envAudit.flags, ...verifiedGps.flags])),
-        telemetry: envAudit.telemetry,
+          envAudit.isSuspectedMock ||
+          verifiedGps.isSuspectedMock ||
+          apkTelemetry.isSuspectedMock,
+        flags: Array.from(
+          new Set([
+            ...envAudit.flags,
+            ...verifiedGps.flags,
+            ...apkTelemetry.securityFlags,
+          ])
+        ),
+        telemetry: {
+          ...envAudit.telemetry,
+          ...apkTelemetry.deviceTelemetry,
+          gpsAccuracyMeters: Math.round(verifiedGps.accuracy),
+          javaneseDate: todayJavaneseInfo.fullFormattedDate,
+        },
       });
     } catch (err: unknown) {
       setUserCoords(null);
@@ -905,7 +1049,7 @@ export function TeacherAttendancePage() {
     } finally {
       setIsLocating(false);
     }
-  }, [isSuperAdmin, teacher?.allowDesktopAttendance]);
+  }, [isSuperAdmin, teacher?.allowDesktopAttendance, todayJavaneseInfo.fullFormattedDate]);
 
   useEffect(() => {
     if (activeView === 'peta' && !isDesktopBlockedForTeacher) {
@@ -1065,6 +1209,8 @@ export function TeacherAttendancePage() {
       return;
     }
 
+    stopMediaStreamTracks(streamRef.current);
+    streamRef.current = null;
     clearCapturedSelfie();
     setCameraModal({ open: true, mode });
 
@@ -1076,7 +1222,7 @@ export function TeacherAttendancePage() {
 
       const camCheck = validateCameraStream(stream, isSuperAdmin);
       if (!camCheck.valid) {
-        stream.getTracks().forEach((t) => t.stop());
+        stopMediaStreamTracks(stream);
         showToast('error', camCheck.reason ?? 'Kamera virtual tidak diizinkan.');
         setCameraModal({ open: false, mode });
         return;
@@ -1095,10 +1241,8 @@ export function TeacherAttendancePage() {
   };
 
   const closeCameraModal = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-    }
+    stopMediaStreamTracks(streamRef.current);
+    streamRef.current = null;
     clearCapturedSelfie();
     setCameraModal((prev) => ({ ...prev, open: false }));
   };
@@ -1125,27 +1269,25 @@ export function TeacherAttendancePage() {
     openCameraModal('CHECK_OUT');
   };
 
-  const handleTakeSnapshot = () => {
+  const handleTakeSnapshot = async () => {
     const video = videoRef.current;
     if (!video) return;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 640;
-    canvas.height = video.videoHeight || 640;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-    canvas.toBlob(
-      (blob) => {
-        if (blob) {
-          clearCapturedSelfie();
-          setCapturedBlob(blob);
-          setCapturedPreview(URL.createObjectURL(blob));
-        }
-      },
-      'image/jpeg',
-      0.82
-    );
+    try {
+      const compressedBlob = await compressSelfieToJpeg(video, {
+        maxWidth: 720,
+        maxBytes: 450 * 1024,
+        initialQuality: 0.82,
+      });
+
+      clearCapturedSelfie();
+      setCapturedBlob(compressedBlob);
+      setCapturedPreview(URL.createObjectURL(compressedBlob));
+    } catch (err: unknown) {
+      setCameraError(
+        extractErrorMessage(err, 'Gagal memproses foto selfie dari kamera.')
+      );
+    }
   };
 
   const handleFingerprintAction = () => {
@@ -1173,7 +1315,10 @@ export function TeacherAttendancePage() {
     }
 
     if (attendancePhase === 'ON_LEAVE') {
-      showToast('success', `Hari ini Anda tercatat ${todayRecord?.status}.`);
+      showToast(
+        'success',
+        `Hari ini Anda tercatat ${todayRecord?.status}.`
+      );
       return;
     }
 
@@ -1226,7 +1371,7 @@ export function TeacherAttendancePage() {
   };
 
   // ============================================================================
-  // SIMPAN CHECK-IN / CHECK-OUT VIA SERVER RPC ANTI-CURANG (+ AUTO CLEANUP FOTO)
+  // SIMPAN CHECK-IN / CHECK-OUT VIA SERVER RPC ANTI-CURANG (+ TELEMETRI LENGKAP)
   // ============================================================================
   const submitGpsAttendance = async (
     mode: 'CHECK_IN' | 'CHECK_OUT',
@@ -1245,14 +1390,13 @@ export function TeacherAttendancePage() {
     setIsSubmittingAttendance(true);
     setCameraError(null);
 
-    // Menyimpan path foto sementara agar bisa dihapus otomatis jika simpan database gagal
     let newlyUploadedPath: string | null = null;
 
     try {
       let finalUploadedPath: string | null = uploadedSelfiePath;
       const nowObj = new Date();
-      const currentDayStr = getTodayLocal(nowObj);
-      const timeTag = getTimeStampTagLocal(nowObj);
+      const currentDayStr = getSchoolDateString(nowObj, schoolTimezone);
+      const timeTag = getTimeStampTagInTimezone(nowObj, schoolTimezone);
 
       // 1. Unggah foto selfie jika diwajibkan
       if (selfieBlob && !finalUploadedPath) {
@@ -1275,7 +1419,32 @@ export function TeacherAttendancePage() {
         setUploadedSelfiePath(fileName);
       }
 
-      // 2. Panggil RPC Server (Jam Server + Radius Server + Validasi Izin Komputer)
+      // 2. Kumpulkan telemetri perangkat terbaru + perhitungan keterlambatan otomatis
+      const freshTelemetry = collectAttendanceTelemetry(userCoords.accuracy);
+      const lateMinutesAtSubmit =
+        mode === 'CHECK_IN'
+          ? calculateLateMinutes(
+            nowObj,
+            effectiveWorkStartTime,
+            effectiveToleranceMinutes,
+            schoolTimezone
+          )
+          : 0;
+
+      const combinedTelemetry: Record<string, unknown> = {
+        ...securityState.telemetry,
+        ...freshTelemetry.deviceTelemetry,
+        gpsAccuracyMeters: Math.round(userCoords.accuracy),
+        distanceMeters: Math.round(distanceMeters),
+        javaneseDate: todayJavaneseInfo.fullFormattedDate,
+        ...(mode === 'CHECK_IN' ? { lateMinutes: lateMinutesAtSubmit } : {}),
+      };
+
+      const combinedFlags = Array.from(
+        new Set([...securityState.flags, ...freshTelemetry.securityFlags])
+      );
+
+      // 3. Panggil RPC Server (Jam Server + Radius Server + Validasi Izin Komputer)
       const { data: rpcResult, error: rpcError } = await supabase.rpc(
         'submit_teacher_gps_attendance',
         {
@@ -1285,9 +1454,10 @@ export function TeacherAttendancePage() {
           p_accuracy: userCoords.accuracy,
           p_selfie_path: finalUploadedPath,
           p_early_reason: mode === 'CHECK_OUT' ? earlyCheckoutReason.trim() : null,
-          p_is_suspected_mock: securityState.isSuspectedMock,
-          p_security_flags: securityState.flags,
-          p_device_telemetry: securityState.telemetry,
+          p_is_suspected_mock:
+            securityState.isSuspectedMock || freshTelemetry.isSuspectedMock,
+          p_security_flags: combinedFlags,
+          p_device_telemetry: combinedTelemetry,
           p_sim_teacher_id: isSuperAdmin ? teacher.id : null,
           p_sim_school_id: isSuperAdmin ? activeSchoolId : null,
         }
@@ -1297,13 +1467,15 @@ export function TeacherAttendancePage() {
 
       if (mode === 'CHECK_IN') {
         const serverStatus = (rpcResult as { status?: string } | null)?.status;
+        const lateText =
+          lateMinutesAtSubmit > 0
+            ? ` (Terlambat ${formatDurationMinutes(lateMinutesAtSubmit)})`
+            : '';
         showToast(
           'success',
           serverStatus === 'TERLAMBAT'
-            ? effectiveToleranceMinutes > 0
-              ? `Check-In tercatat (Status: Terlambat — lewat batas toleransi ${effectiveDeadlineStr}).`
-              : `Check-In tercatat (Status: Terlambat — batas masuk ${effectiveWorkStartTime}).`
-            : 'Check-In Datang berhasil tercatat!'
+            ? `Check-In tercatat${lateText}.`
+            : 'Check-In Datang berhasil tercatat tepat waktu!'
         );
       } else {
         showToast('success', 'Check-Out Pulang berhasil tercatat!');
@@ -1315,7 +1487,6 @@ export function TeacherAttendancePage() {
       await loadTeacherAndAttendance();
       setActiveView('beranda');
     } catch (err: unknown) {
-      // Jika RPC gagal, hapus kembali foto yang baru terunggah agar Supabase Storage tetap bersih
       if (newlyUploadedPath) {
         await supabase.storage
           .from('attendance-selfies')
@@ -1365,7 +1536,7 @@ export function TeacherAttendancePage() {
         ? sanitizeStorageSegment(schoolGeo.name)
         : activeSchoolId;
       const teacherFolder = buildTeacherFolderName(teacher);
-      const timeTag = getTimeStampTagLocal();
+      const timeTag = getTimeStampTagInTimezone(new Date(), schoolTimezone);
       const storagePath = `${schoolFolder}/Surat_Izin_Dinas/${teacherFolder}_${leaveStartDate}_${timeTag}.${ext}`;
 
       const { error: upErr } = await supabase.storage
@@ -1444,14 +1615,16 @@ export function TeacherAttendancePage() {
   // Perhitungan Statistik Laporan
   const selectedMonthPrefix = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
   const selectedMonthLabel = `${NAMA_BULAN_ID[calendarMonth]} ${calendarYear}`;
+  const selectedJavaneseMonthRange = useMemo(
+    () => getJavaneseMonthRangeLabel(calendarYear, calendarMonth),
+    [calendarYear, calendarMonth]
+  );
 
   const reportStats = useMemo(() => {
     const filtered =
       reportScope === 'monthly'
         ? historyRecords.filter((r) => r.date.startsWith(selectedMonthPrefix))
-        : historyRecords.filter((r) =>
-          r.date.startsWith(String(calendarYear))
-        );
+        : historyRecords.filter((r) => r.date.startsWith(String(calendarYear)));
 
     const hadir = filtered.filter((r) => r.status === 'HADIR').length;
     const terlambat = filtered.filter((r) => r.status === 'TERLAMBAT').length;
@@ -1489,6 +1662,7 @@ export function TeacherAttendancePage() {
     const cells: Array<{
       dateStr: string | null;
       dayNum: number | null;
+      pasaranShort: string;
       isRedDate: boolean;
       holidayName: string | null;
       record?: AttendanceRecord;
@@ -1498,6 +1672,7 @@ export function TeacherAttendancePage() {
       cells.push({
         dateStr: null,
         dayNum: null,
+        pasaranShort: '',
         isRedDate: false,
         holidayName: null,
       });
@@ -1510,9 +1685,11 @@ export function TeacherAttendancePage() {
         dbHolidaysMap,
         effectiveWorkDaysMode
       );
+      const jvInfo = getJavaneseDateInfo(dateStr);
       cells.push({
         dateStr,
         dayNum: d,
+        pasaranShort: jvInfo.pasaran,
         isRedDate: redStatus.isRedDate,
         holidayName: redStatus.holidayName,
         record: recordsByDate.get(dateStr),
@@ -1554,16 +1731,17 @@ export function TeacherAttendancePage() {
       effectiveWorkDaysMode
     );
     const record = recordsByDate.get(selectedCalendarDate);
+    const jvInfo = getJavaneseDateInfo(selectedCalendarDate);
     const dateObj = new Date(`${selectedCalendarDate}T00:00:00`);
-    const label = dateObj.toLocaleDateString('id-ID', {
-      weekday: 'long',
+    const masehiPart = dateObj.toLocaleDateString('id-ID', {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
     });
     return {
       dateStr: selectedCalendarDate,
-      label,
+      label: `${jvInfo.hariPasaran}, ${masehiPart}`,
+      javaneseSubtitle: `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja (Tahun ${jvInfo.winduYearName})`,
       ...redStatus,
       record,
     };
@@ -1574,23 +1752,28 @@ export function TeacherAttendancePage() {
     recordsByDate,
   ]);
 
-  const formattedDateFull = now.toLocaleDateString('id-ID', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  });
+  const masehiDateOnly = useMemo(() => {
+    const [y, m, d] = todayStr.split('-').map(Number);
+    const monthName = NAMA_BULAN_ID[(m || 1) - 1] ?? '';
+    return `${d} ${monthName} ${y}`;
+  }, [todayStr]);
+
+  const formattedDateWithPasaran = `${todayJavaneseInfo.hariPasaran}, ${masehiDateOnly}`;
+  const javaneseDateBadge = `${todayJavaneseInfo.javaneseDay} ${todayJavaneseInfo.javaneseMonth} ${todayJavaneseInfo.javaneseYear} Ja`;
+
   const monthYearLabel = now.toLocaleDateString('id-ID', {
     month: 'long',
     year: 'numeric',
   });
-  const hoursStr = String(now.getHours()).padStart(2, '0');
-  const minutesStr = String(now.getMinutes()).padStart(2, '0');
-  const secondsStr = String(now.getSeconds()).padStart(2, '0');
+  const clockParts = getClockPartsInTimezone(now, schoolTimezone);
+  const hoursStr = clockParts.hours;
+  const minutesStr = clockParts.minutes;
+  const secondsStr = clockParts.seconds;
 
   const formatShortTime = (iso?: string | null) => {
     if (!iso) return '00:00';
     return new Date(iso).toLocaleTimeString('id-ID', {
+      timeZone: schoolTimezone,
       hour: '2-digit',
       minute: '2-digit',
     });
@@ -1657,9 +1840,7 @@ export function TeacherAttendancePage() {
           </div>
 
           <div className="space-y-1.5">
-            <h2 className="text-lg font-bold">
-              Presensi Terkunci di Komputer
-            </h2>
+            <h2 className="text-lg font-bold">Presensi Terkunci di Komputer</h2>
             <p className="text-xs opacity-75 leading-relaxed">
               Halo <strong>{teacher?.fullName}</strong>, akun Anda saat ini
               diatur untuk melakukan presensi melalui{' '}
@@ -1694,7 +1875,6 @@ export function TeacherAttendancePage() {
       className={`min-h-[calc(100vh-1rem)] pb-28 max-w-xl md:max-w-2xl mx-auto px-1 transition-all duration-300 ${!isTopHeaderVisible ? '-mt-2 sm:-mt-3' : 'mt-0'
         }`}
     >
-      {/* Aturan CSS untuk menyembunyikan header utama aplikasi secara mulus */}
       <style>{`
         body.attendance-hide-header header {
           max-height: 0px !important;
@@ -1715,7 +1895,7 @@ export function TeacherAttendancePage() {
         }
       `}</style>
 
-      {/* Notifikasi Melayang di Lapisan Paling Depan (z-60) */}
+      {/* Notifikasi Melayang */}
       <AnimatePresence>
         {toast && (
           <motion.div
@@ -1726,8 +1906,8 @@ export function TeacherAttendancePage() {
           >
             <div
               className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-400'
-                : 'bg-red-600 text-white border-red-400'
+                  ? 'bg-emerald-600 text-white border-emerald-400'
+                  : 'bg-red-600 text-white border-red-400'
                 }`}
             >
               <div className="flex items-center gap-2.5">
@@ -1865,9 +2045,12 @@ export function TeacherAttendancePage() {
                   <h1 className="text-xl font-bold tracking-tight leading-tight">
                     Selamat Datang!
                   </h1>
-                  <p className="text-xs text-blue-100/85 mt-0.5">
-                    {formattedDateFull}
+                  <p className="text-xs text-blue-100/95 font-medium mt-0.5">
+                    {formattedDateWithPasaran}
                   </p>
+                  <span className="inline-block mt-1 px-2 py-0.5 rounded-md bg-amber-300/20 border border-amber-200/30 text-[10px] font-semibold text-amber-200">
+                    {javaneseDateBadge}
+                  </span>
                 </div>
               </div>
 
@@ -2061,8 +2244,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2107,21 +2290,32 @@ export function TeacherAttendancePage() {
                     ? `Terkunci • ${todayRecord?.status}`
                     : hasCheckedIn
                       ? 'Terkunci • Sudah absen datang'
-                      : effectiveToleranceMinutes > 0
-                        ? `Batas toleransi ${effectiveDeadlineStr}`
-                        : 'Ketuk untuk absen datang'}
+                      : currentLateMinutes > 0
+                        ? `Terlambat ${formatDurationMinutes(currentLateMinutes)}`
+                        : effectiveToleranceMinutes > 0
+                          ? `Batas toleransi ${effectiveDeadlineStr}`
+                          : 'Ketuk untuk absen datang'}
                 </p>
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
-                      ? 'bg-emerald-400'
-                      : 'bg-amber-300 animate-pulse'
+                        ? todayRecord?.status === 'TERLAMBAT'
+                          ? 'bg-amber-400'
+                          : 'bg-emerald-400'
+                        : currentLateMinutes > 0
+                          ? 'bg-rose-400 animate-pulse'
+                          : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
                     {hasCheckedIn
-                      ? `Status: ${todayRecord?.status}`
-                      : 'Menunggu presensi datang'}
+                      ? todayRecord?.status === 'TERLAMBAT' &&
+                        currentLateMinutes > 0
+                        ? `Terlambat (${currentLateMinutes} mnt)`
+                        : `Status: ${todayRecord?.status}`
+                      : currentLateMinutes > 0
+                        ? `Lewat batas ${effectiveDeadlineStr}`
+                        : 'Menunggu presensi datang'}
                   </span>
                 </div>
               </div>
@@ -2136,8 +2330,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2184,13 +2378,13 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                      ? todayCheckOutTimingInfo.isEarly ||
-                        todayCheckOutTimingInfo.isOvertime
-                        ? 'bg-amber-200'
-                        : 'bg-emerald-300'
-                      : canCheckOut
-                        ? 'bg-red-400 animate-ping'
-                        : 'bg-amber-100/60'
+                        ? todayCheckOutTimingInfo.isEarly ||
+                          todayCheckOutTimingInfo.isOvertime
+                          ? 'bg-amber-200'
+                          : 'bg-emerald-300'
+                        : canCheckOut
+                          ? 'bg-red-400 animate-ping'
+                          : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
@@ -2212,7 +2406,7 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          TAMPILAN 2: PRESENSI PETA GPS + KATA HARI INI
+          TAMPILAN 2: PRESENSI PETA GPS + INDIKATOR RADIUS REAL-TIME + QUOTES
       ==================================================================== */}
       {activeView === 'peta' && (
         <motion.div
@@ -2243,8 +2437,8 @@ export function TeacherAttendancePage() {
                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
-                      ? 'bg-red-500/85 text-white'
-                      : 'bg-emerald-500/85 text-white'
+                        ? 'bg-red-500/85 text-white'
+                        : 'bg-emerald-500/85 text-white'
                       }`}
                   >
                     {attendancePhase === 'CHECK_OUT'
@@ -2255,8 +2449,8 @@ export function TeacherAttendancePage() {
                           ? 'Izin / Sakit'
                           : 'Check-In'}
                   </span>
-                  <span className="text-[11px] text-white/80">
-                    • {formattedDateFull}
+                  <span className="text-[11px] text-white/90 font-medium">
+                    • {formattedDateWithPasaran}
                   </span>
                 </div>
               </div>
@@ -2270,6 +2464,49 @@ export function TeacherAttendancePage() {
             >
               <LocateFixed size={19} className={isLocating ? 'animate-spin' : ''} />
             </button>
+          </div>
+
+          {/* INDIKATOR RADIUS GPS REAL-TIME SEBELUM SELFIE */}
+          <div
+            className={`rounded-2xl p-3 border flex items-center justify-between gap-2.5 text-xs shadow-sm ${isLocating || distanceMeters === null
+                ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-200'
+                : isWithinRadius
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                  : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+              }`}
+          >
+            <div className="flex items-center gap-2.5 min-w-0">
+              <Radio
+                size={18}
+                className={`shrink-0 ${isLocating || distanceMeters === null
+                    ? 'animate-pulse text-blue-500'
+                    : isWithinRadius
+                      ? 'text-emerald-500'
+                      : 'text-red-500'
+                  }`}
+              />
+              <div className="min-w-0">
+                <p className="font-bold truncate">
+                  {isLocating || distanceMeters === null
+                    ? 'Mengunci Sinyal Satelit GPS...'
+                    : isWithinRadius
+                      ? `Jarak ke Sekolah: ${formatDistanceLabel(distanceMeters)} — Dalam Radius ✅`
+                      : `Jarak ke Sekolah: ${formatDistanceLabel(distanceMeters)} — Di Luar Radius ❌`}
+                </p>
+                <p className="text-[10px] opacity-80">
+                  {userCoords
+                    ? `Akurasi GPS ±${Math.round(userCoords.accuracy)}m • Batas area ${schoolGeo?.radius ?? DEFAULT_RADIUS_METERS
+                    }m`
+                    : 'Pastikan GPS perangkat dalam keadaan aktif'}
+                </p>
+              </div>
+            </div>
+
+            {isWithinRadius && attendancePhase === 'CHECK_IN' && currentLateMinutes > 0 && (
+              <span className="px-2 py-1 rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[10px] font-bold shrink-0">
+                Terlambat {currentLateMinutes}m
+              </span>
+            )}
           </div>
 
           <div className="relative rounded-3xl overflow-hidden border border-slate-200 dark:border-white/15 shadow-xl bg-slate-900">
@@ -2401,8 +2638,8 @@ export function TeacherAttendancePage() {
               onClick={handleFingerprintAction}
               disabled={isSubmittingAttendance}
               className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
-                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
-                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                  ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <span className="text-sm flex items-center gap-1.5">
@@ -2474,8 +2711,8 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setLeaveCategory(item.value)}
                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                      ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                      : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                       }`}
                   >
                     {item.label}
@@ -2566,8 +2803,8 @@ export function TeacherAttendancePage() {
               </label>
               <label
                 className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                  ? 'border-emerald-500/70 bg-emerald-500/10'
-                  : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                    ? 'border-emerald-500/70 bg-emerald-500/10'
+                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
                   }`}
               >
                 {leaveFile ? (
@@ -2606,8 +2843,8 @@ export function TeacherAttendancePage() {
                 type="submit"
                 disabled={isSubmittingLeave || !teacher}
                 className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                  ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                  : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                   }`}
               >
                 {isSubmittingLeave ? (
@@ -2628,7 +2865,7 @@ export function TeacherAttendancePage() {
       )}
 
       {/* ====================================================================
-          TAMPILAN 4: LAPORAN & KALENDER TANGGAL MERAH
+          TAMPILAN 4: LAPORAN & KALENDER TANGGAL MERAH + PASARAN JAWA
       ==================================================================== */}
       {activeView === 'laporan' && (
         <motion.div
@@ -2662,8 +2899,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Bulan Ini
@@ -2672,8 +2909,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 Tahunan
@@ -2729,6 +2966,9 @@ export function TeacherAttendancePage() {
                 <CalendarDays size={18} className="text-primary" />
                 <div>
                   <h3 className="font-bold text-sm">{selectedMonthLabel}</h3>
+                  <p className="text-[10px] font-medium text-amber-600 dark:text-amber-300">
+                    {selectedJavaneseMonthRange}
+                  </p>
                   <p className="text-[10px] opacity-65">
                     Mode:{' '}
                     {effectiveWorkDaysMode === 'FIVE_DAYS'
@@ -2745,7 +2985,9 @@ export function TeacherAttendancePage() {
                     const d = new Date();
                     setCalendarYear(d.getFullYear());
                     setCalendarMonth(d.getMonth());
-                    setSelectedCalendarDate(getTodayLocal());
+                    setSelectedCalendarDate(
+                      getSchoolDateString(d, schoolTimezone)
+                    );
                   }}
                   className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-muted hover:bg-muted/80 transition"
                 >
@@ -2773,10 +3015,10 @@ export function TeacherAttendancePage() {
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
-                    ? 'text-red-500'
-                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : 'opacity-65'
+                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                        ? 'text-red-500'
+                        : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -2787,7 +3029,7 @@ export function TeacherAttendancePage() {
             <div className="grid grid-cols-7 gap-1.5">
               {calendarDaysGrid.map((cell, idx) => {
                 if (!cell.dateStr || !cell.dayNum) {
-                  return <div key={`empty-${idx}`} className="h-11" />;
+                  return <div key={`empty-${idx}`} className="h-12" />;
                 }
 
                 const isToday = cell.dateStr === todayStr;
@@ -2810,18 +3052,21 @@ export function TeacherAttendancePage() {
                     key={cell.dateStr}
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
-                    className={`h-11 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                      : isToday
-                        ? 'border-amber-400 font-bold'
-                        : 'border-transparent'
+                    className={`h-12 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
+                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                        : isToday
+                          ? 'border-amber-400 font-bold'
+                          : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
                       }`}
                   >
                     <span className="text-xs leading-none">{cell.dayNum}</span>
-                    <div className="mt-1.5 h-1.5 flex items-center justify-center gap-0.5">
+                    <span className="text-[8px] opacity-65 leading-none mt-0.5">
+                      {cell.pasaranShort}
+                    </span>
+                    <div className="mt-1 h-1.5 flex items-center justify-center gap-0.5">
                       {statusDotColor ? (
                         <span
                           className={`w-1.5 h-1.5 rounded-full ${statusDotColor}`}
@@ -2838,14 +3083,19 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                  ? 'bg-red-500/10 border-red-500/30'
-                  : 'bg-muted/40 border-border'
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-bold">{selectedDateInfo.label}</span>
+                  <div>
+                    <span className="font-bold block">{selectedDateInfo.label}</span>
+                    <span className="text-[10px] text-amber-600 dark:text-amber-300 font-medium">
+                      {selectedDateInfo.javaneseSubtitle}
+                    </span>
+                  </div>
                   {selectedDateInfo.isRedDate && (
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white">
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white shrink-0">
                       Tanggal Merah
                     </span>
                   )}
@@ -2919,6 +3169,19 @@ export function TeacherAttendancePage() {
                 const isEarlyLog = Boolean(
                   item.notes?.toLowerCase().includes('pulang lebih awal')
                 );
+                const itemJv = getJavaneseDateInfo(item.date);
+                const loggedLateMinutes =
+                  typeof item.deviceTelemetry?.lateMinutes === 'number'
+                    ? item.deviceTelemetry.lateMinutes
+                    : item.checkInTime && item.status === 'TERLAMBAT'
+                      ? calculateLateMinutes(
+                        new Date(item.checkInTime),
+                        effectiveWorkStartTime,
+                        effectiveToleranceMinutes,
+                        schoolTimezone
+                      )
+                      : 0;
+
                 return (
                   <div
                     key={item.id}
@@ -2926,9 +3189,16 @@ export function TeacherAttendancePage() {
                   >
                     <div className="min-w-0 space-y-1">
                       <div className="flex flex-wrap items-center gap-1.5">
-                        <span className="text-xs font-bold">{item.date}</span>
-                        {isEarlyLog && (
+                        <span className="text-xs font-bold">
+                          {item.date} ({itemJv.hariPasaran})
+                        </span>
+                        {loggedLateMinutes > 0 && (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300">
+                            Terlambat {loggedLateMinutes} mnt
+                          </span>
+                        )}
+                        {isEarlyLog && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-700 dark:text-rose-300">
                             Pulang Lebih Awal
                           </span>
                         )}
@@ -2947,12 +3217,12 @@ export function TeacherAttendancePage() {
                     </div>
                     <span
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                        : item.status === 'TERLAMBAT'
-                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                          : item.status === 'ALPA'
-                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                          : item.status === 'TERLAMBAT'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                            : item.status === 'ALPA'
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                              : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                         }`}
                     >
                       {item.status}
@@ -2977,8 +3247,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
@@ -2989,8 +3259,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
@@ -3021,8 +3291,8 @@ export function TeacherAttendancePage() {
               <Fingerprint
                 size={28}
                 className={`transition-transform duration-150 ${isFingerprintGlowing
-                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                  : ''
+                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                    : ''
                   }`}
               />
             </motion.button>
@@ -3032,8 +3302,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
@@ -3044,8 +3314,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
@@ -3233,8 +3503,8 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={handleTakeSnapshot}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                    ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                    : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                     }`}
                 >
                   <Camera size={18} className="shrink-0" />
@@ -3259,8 +3529,8 @@ export function TeacherAttendancePage() {
                     }
                     disabled={isSubmittingAttendance}
                     className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                       }`}
                   >
                     {isSubmittingAttendance ? (

@@ -13,6 +13,8 @@ import {
 import { StudentListPage } from '@/modules/students/pages/StudentListPage';
 import { StudentFormPage } from '@/modules/students/pages/StudentFormPage';
 import { StudentDetailPage } from '@/modules/students/pages/StudentDetailPage';
+// [BARU] Import halaman cetak kartu pelajar
+import { StudentCardPrintPage } from '@/modules/students/pages/StudentCardPrintPage';
 import { TeacherListPage } from '@/modules/teachers/pages/TeacherListPage';
 import TeacherFormPage from '@/modules/teachers/pages/TeacherFormPage';
 import TeacherDetailPage from '@/modules/teachers/pages/TeacherDetailPage';
@@ -222,6 +224,15 @@ export function AppRouter() {
             element={
               <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
                 <StudentFormPage />
+              </RoleRoute>
+            }
+          />
+          {/* [BARU] Rute Cetak Kartu Pelajar (Wajib di atas /students/:id) */}
+          <Route
+            path="/students/print-cards"
+            element={
+              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+                <StudentCardPrintPage />
               </RoleRoute>
             }
           />

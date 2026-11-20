@@ -27,6 +27,7 @@ import {
   UserCheck,
   ScanLine,
   Sparkles,
+  Barcode, // [BARU] Ikon untuk menu Kartu Pelajar
   X,
 } from 'lucide-react';
 
@@ -178,6 +179,13 @@ export function Sidebar() {
           label: t('sidebar.students'),
           icon: <Users size={17} />,
           href: '/students',
+          allowedRoles: ACADEMIC_STAFF_ROLES,
+        },
+        // [BARU] Menu Cetak Kartu Pelajar
+        {
+          label: locale === 'id' ? 'Kartu Pelajar' : 'Student Cards',
+          icon: <Barcode size={17} />,
+          href: '/students/print-cards',
           allowedRoles: ACADEMIC_STAFF_ROLES,
         },
         {

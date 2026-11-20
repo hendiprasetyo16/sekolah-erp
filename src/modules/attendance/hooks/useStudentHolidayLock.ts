@@ -6,7 +6,7 @@ import type { WorkDaysMode } from '../types/attendance.types';
 import { getSchoolDateString } from '../services/gps.utils';
 
 // ============================================================================
-// KONSTANTA & PARAMETER YANG DAPAT DISESUAIKAN (SELARAS RLS v20.1)
+// KONSTANTA & PARAMETER YANG DAPAT DISESUAIKAN (SELARAS RLS v20.2)
 // ============================================================================
 const ALLOWED_OVERRIDE_ROLES = [
   'SUPER_ADMIN',
@@ -74,7 +74,7 @@ export function useStudentHolidayLock(params?: {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isToggling, setIsToggling] = useState<boolean>(false);
 
-  // Evaluasi gabungan role utama & additionalRoles (v20.1)
+  // Evaluasi gabungan role utama & additionalRoles (v20.2)
   const userWithAdditionalRoles = user as
     | (typeof user & { additionalRoles?: string[] })
     | null;
@@ -142,12 +142,16 @@ export function useStudentHolidayLock(params?: {
         detectedHolidayName = 'Hari Sabtu (Libur 5 Hari Kerja)';
       }
 
-      // 3. Cek hari libur nasional / sekolah pada tanggal target
+      // 3. Cek hari libur (prioritaskan jadwal khusus sekolah, lalu libur nasional)
       if (!holidayRes.error && holidayRes.data && holidayRes.data.length > 0) {
-        const matched = holidayRes.data.find(
-          (row: { schoolId: string | null; name: string }) =>
-            row.schoolId === activeSchoolId || row.schoolId === null
-        );
+        const rows = holidayRes.data as Array<{
+          schoolId: string | null;
+          name: string;
+        }>;
+        const schoolSpecific = rows.find((r) => r.schoolId === activeSchoolId);
+        const globalHoliday = rows.find((r) => r.schoolId === null);
+        const matched = schoolSpecific ?? globalHoliday;
+
         if (matched) {
           detectedHolidayName = matched.name;
         }
@@ -212,6 +216,7 @@ export function useStudentHolidayLock(params?: {
           eventDate: activeDate,
           reason: cleanReason,
           isActive: true,
+          createdBy: user?.id ?? null,
         },
         {
           onConflict: 'schoolId,eventDate',

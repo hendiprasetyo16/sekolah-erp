@@ -19,7 +19,7 @@ export type WorkDaysMode = 'FIVE_DAYS' | 'SIX_DAYS';
 export type HolidayCategoryType = 'NASIONAL' | 'CUTI_BERSAMA' | 'SEKOLAH';
 
 /**
- * Representasi lengkap 1 baris tabel public.attendances (Skema SQL v20.1)
+ * Representasi lengkap 1 baris tabel public.attendances (Skema SQL v20.2)
  */
 export interface AttendanceRow {
   id: string;
@@ -85,9 +85,6 @@ export interface StudentAttendanceRecord extends AttendanceRow {
   student?: StudentAttendanceProfile | null;
 }
 
-/**
- * Alias kompatibilitas untuk komponen UI presensi siswa
- */
 export type StudentAttendance = StudentAttendanceRecord;
 
 /**
@@ -111,13 +108,10 @@ export interface TeacherAttendanceRecord extends AttendanceRow {
   teacher?: TeacherAttendanceProfile | null;
 }
 
-/**
- * Alias kompatibilitas untuk komponen UI presensi guru
- */
 export type TeacherAttendance = TeacherAttendanceRecord;
 
 /**
- * Satu baris lembar presensi kelas (gabungan daftar siswa aktif + status presensi tanggal tertentu)
+ * Satu baris lembar presensi kelas
  */
 export interface ClassStudentAttendanceRow {
   studentId: string;
@@ -134,7 +128,7 @@ export interface ClassStudentAttendanceRow {
 }
 
 /**
- * Pengaturan presensi & geofencing pada kolom tabel public.schools (Skema SQL v20.1)
+ * Pengaturan presensi & geofencing pada kolom tabel public.schools (Skema SQL v20.2)
  */
 export interface SchoolAttendanceSettings {
   id: string;
@@ -159,9 +153,6 @@ export interface SchoolAttendanceSettings {
   timezone: string;
 }
 
-/**
- * Struktur koordinat & konfigurasi presensi sekolah untuk komponen GPS & Kiosk
- */
 export interface SchoolCoordinates {
   latitude: number | null;
   longitude: number | null;
@@ -170,7 +161,7 @@ export interface SchoolCoordinates {
 }
 
 /**
- * Representasi baris tabel public.school_special_events (Skema SQL v20.1)
+ * Representasi baris tabel public.school_special_events
  */
 export interface SchoolSpecialEvent {
   id: string;
@@ -183,7 +174,7 @@ export interface SchoolSpecialEvent {
 }
 
 /**
- * Representasi baris tabel public.national_holidays (Skema SQL v20.1)
+ * Representasi baris tabel public.national_holidays
  */
 export interface NationalHolidayRow {
   id: string;
@@ -249,4 +240,58 @@ export interface GpsAttendanceRpcResponse {
   status?: AttendanceStatus;
   distance: number;
   serverTime: string;
+}
+
+// ============================================================================
+// TIPE DATA WHATSAPP GATEWAY (SKEMA SQL v20.2)
+// ============================================================================
+
+export type WaGatewayProvider = 'FONNTE' | 'WABLAS' | 'WOOWA' | 'CUSTOM';
+export type WaNotificationEventType = 'CHECK_IN' | 'CHECK_OUT' | 'TEST';
+export type WaNotificationStatus = 'SENT' | 'FAILED' | 'SKIPPED';
+
+export interface SchoolWaConfig {
+  id?: string;
+  schoolId: string;
+  isEnabled: boolean;
+  provider: WaGatewayProvider;
+  apiUrl: string;
+  apiToken: string;
+  senderNumber?: string | null;
+  customHeaders?: Record<string, string>;
+  notifyOnCheckIn: boolean;
+  notifyOnLate: boolean;
+  notifyOnCheckOut: boolean;
+  templateCheckIn: string;
+  templateCheckOut: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface WaNotificationLog {
+  id: string;
+  schoolId: string;
+  studentId: string | null;
+  recipientPhone: string;
+  eventType: WaNotificationEventType;
+  messageBody: string;
+  status: WaNotificationStatus;
+  providerResponse: Record<string, unknown> | null;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export interface StudentWaRecipientResult {
+  eligible: boolean;
+  reason?:
+    | 'UNAUTHORIZED'
+    | 'FORBIDDEN'
+    | 'STUDENT_NOT_FOUND'
+    | 'WA_DISABLED'
+    | 'NO_PHONE';
+  schoolId?: string;
+  phone?: string;
+  studentName?: string;
+  className?: string;
+  schoolName?: string;
 }

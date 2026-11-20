@@ -17,21 +17,26 @@ import {
     sendTestWhatsAppMessage,
     type SchoolWaConfig,
     WA_PROVIDER_PRESETS,
-    type WaProviderType,
+    type WaGatewayProvider,
 } from '../services/whatsappService';
 
 interface WhatsAppSettingsCardProps {
     schoolId: string;
 }
 
-export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ schoolId }) => {
+export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
+    schoolId,
+}) => {
     const [config, setConfig] = useState<SchoolWaConfig | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [showToken, setShowToken] = useState(false);
     const [testPhone, setTestPhone] = useState('');
-    const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [feedback, setFeedback] = useState<{
+        type: 'success' | 'error';
+        text: string;
+    } | null>(null);
 
     useEffect(() => {
         if (!schoolId) return;
@@ -47,7 +52,8 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                 if (active) {
                     setFeedback({
                         type: 'error',
-                        text: err?.message || 'Gagal memuat konfigurasi WhatsApp Gateway.',
+                        text:
+                            err?.message || 'Gagal memuat konfigurasi WhatsApp Gateway.',
                     });
                 }
             })
@@ -60,7 +66,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
         };
     }, [schoolId]);
 
-    const handleProviderChange = (provider: WaProviderType) => {
+    const handleProviderChange = (provider: WaGatewayProvider) => {
         if (!config) return;
         setConfig({
             ...config,
@@ -83,7 +89,10 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
         } catch (err: unknown) {
             setFeedback({
                 type: 'error',
-                text: err instanceof Error ? err.message : 'Gagal menyimpan pengaturan WhatsApp.',
+                text:
+                    err instanceof Error
+                        ? err.message
+                        : 'Gagal menyimpan pengaturan WhatsApp.',
             });
         } finally {
             setSaving(false);
@@ -110,7 +119,10 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
         } catch (err: unknown) {
             setFeedback({
                 type: 'error',
-                text: err instanceof Error ? err.message : 'Terjadi kesalahan saat menguji pengiriman pesan.',
+                text:
+                    err instanceof Error
+                        ? err.message
+                        : 'Terjadi kesalahan saat menguji pengiriman pesan.',
             });
         } finally {
             setTesting(false);
@@ -161,7 +173,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                     <input
                         type="checkbox"
                         checked={config.isEnabled}
-                        onChange={(e) => setConfig({ ...config, isEnabled: e.target.checked })}
+                        onChange={(e) =>
+                            setConfig({ ...config, isEnabled: e.target.checked })
+                        }
                         className="h-4 w-4 rounded border-border accent-emerald-600 cursor-pointer"
                     />
                     <span className="text-xs font-bold">
@@ -173,8 +187,8 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
             {feedback && (
                 <div
                     className={`flex items-center gap-2 rounded-xl p-3 text-xs font-medium border ${feedback.type === 'success'
-                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 border-emerald-500/40'
-                        : 'bg-red-500/15 text-red-700 dark:text-red-200 border-red-500/40'
+                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 border-emerald-500/40'
+                            : 'bg-red-500/15 text-red-700 dark:text-red-200 border-red-500/40'
                         }`}
                 >
                     {feedback.type === 'success' ? (
@@ -194,14 +208,18 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                     </label>
                     <select
                         value={config.provider}
-                        onChange={(e) => handleProviderChange(e.target.value as WaProviderType)}
+                        onChange={(e) =>
+                            handleProviderChange(e.target.value as WaGatewayProvider)
+                        }
                         className="form-input w-full text-xs"
                     >
-                        {(Object.keys(WA_PROVIDER_PRESETS) as WaProviderType[]).map((key) => (
-                            <option key={key} value={key}>
-                                {WA_PROVIDER_PRESETS[key].label}
-                            </option>
-                        ))}
+                        {(Object.keys(WA_PROVIDER_PRESETS) as WaGatewayProvider[]).map(
+                            (key) => (
+                                <option key={key} value={key}>
+                                    {WA_PROVIDER_PRESETS[key].label}
+                                </option>
+                            )
+                        )}
                     </select>
                 </div>
 
@@ -227,8 +245,13 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         <input
                             type={showToken ? 'text' : 'password'}
                             value={config.apiToken}
-                            onChange={(e) => setConfig({ ...config, apiToken: e.target.value })}
-                            placeholder={WA_PROVIDER_PRESETS[config.provider].tokenHint}
+                            onChange={(e) =>
+                                setConfig({ ...config, apiToken: e.target.value })
+                            }
+                            placeholder={
+                                WA_PROVIDER_PRESETS[config.provider]?.tokenHint ??
+                                'Masukkan API Token'
+                            }
                             className="form-input w-full pr-10 text-xs font-mono"
                         />
                         <button
@@ -237,7 +260,11 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
                             title={showToken ? 'Sembunyikan Token' : 'Tampilkan Token'}
                         >
-                            {showToken ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                            {showToken ? (
+                                <EyeOff className="h-4 w-4" />
+                            ) : (
+                                <Eye className="h-4 w-4" />
+                            )}
                         </button>
                     </div>
                 </div>
@@ -249,7 +276,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                     <input
                         type="text"
                         value={config.senderNumber || ''}
-                        onChange={(e) => setConfig({ ...config, senderNumber: e.target.value })}
+                        onChange={(e) =>
+                            setConfig({ ...config, senderNumber: e.target.value })
+                        }
                         placeholder="6281234567890"
                         className="form-input w-full text-xs font-mono"
                     />
@@ -266,7 +295,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         <input
                             type="checkbox"
                             checked={config.notifyOnCheckIn}
-                            onChange={(e) => setConfig({ ...config, notifyOnCheckIn: e.target.checked })}
+                            onChange={(e) =>
+                                setConfig({ ...config, notifyOnCheckIn: e.target.checked })
+                            }
                             className="rounded border-border accent-emerald-600 cursor-pointer"
                         />
                         Presensi Datang (Hadir)
@@ -275,7 +306,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         <input
                             type="checkbox"
                             checked={config.notifyOnLate}
-                            onChange={(e) => setConfig({ ...config, notifyOnLate: e.target.checked })}
+                            onChange={(e) =>
+                                setConfig({ ...config, notifyOnLate: e.target.checked })
+                            }
                             className="rounded border-border accent-emerald-600 cursor-pointer"
                         />
                         Presensi Datang (Terlambat)
@@ -284,7 +317,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         <input
                             type="checkbox"
                             checked={config.notifyOnCheckOut}
-                            onChange={(e) => setConfig({ ...config, notifyOnCheckOut: e.target.checked })}
+                            onChange={(e) =>
+                                setConfig({ ...config, notifyOnCheckOut: e.target.checked })
+                            }
                             className="rounded border-border accent-emerald-600 cursor-pointer"
                         />
                         Presensi Pulang
@@ -298,11 +333,26 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                     <Info className="h-4 w-4 shrink-0 text-blue-500 mt-0.5" />
                     <div>
                         Variabel otomatis yang tersedia:{' '}
-                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">{'{nama_siswa}'}</code>,{' '}
-                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">{'{kelas}'}</code>,{' '}
-                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">{'{waktu}'}</code>,{' '}
-                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">{'{status}'}</code>,{' '}
-                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">{'{nama_sekolah}'}</code>.
+                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">
+                            {'{nama_siswa}'}
+                        </code>
+                        ,{' '}
+                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">
+                            {'{kelas}'}
+                        </code>
+                        ,{' '}
+                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">
+                            {'{waktu}'}
+                        </code>
+                        ,{' '}
+                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">
+                            {'{status}'}
+                        </code>
+                        ,{' '}
+                        <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">
+                            {'{nama_sekolah}'}
+                        </code>
+                        .
                     </div>
                 </div>
 
@@ -314,7 +364,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         <textarea
                             rows={3}
                             value={config.templateCheckIn}
-                            onChange={(e) => setConfig({ ...config, templateCheckIn: e.target.value })}
+                            onChange={(e) =>
+                                setConfig({ ...config, templateCheckIn: e.target.value })
+                            }
                             className="form-input w-full text-xs leading-relaxed"
                         />
                     </div>
@@ -325,7 +377,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         <textarea
                             rows={3}
                             value={config.templateCheckOut}
-                            onChange={(e) => setConfig({ ...config, templateCheckOut: e.target.value })}
+                            onChange={(e) =>
+                                setConfig({ ...config, templateCheckOut: e.target.value })
+                            }
                             className="form-input w-full text-xs leading-relaxed"
                         />
                     </div>
@@ -348,7 +402,11 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                         onClick={handleTestSend}
                         className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
                     >
-                        {testing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5 text-blue-500" />}
+                        {testing ? (
+                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                            <Send className="h-3.5 w-3.5 text-blue-500" />
+                        )}
                         Tes Kirim WA
                     </button>
                 </div>
@@ -358,7 +416,11 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({ scho
                     disabled={saving || testing}
                     className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm shadow-emerald-600/20 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
                 >
-                    {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+                    {saving ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                        <Save className="h-4 w-4" />
+                    )}
                     Simpan Pengaturan WA
                 </button>
             </div>

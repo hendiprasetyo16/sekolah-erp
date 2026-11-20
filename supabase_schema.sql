@@ -1,16 +1,16 @@
 -- ============================================================================
--- ERP SEKOLAH v20 — HARDENED PRODUCTION FOUNDATION (CLEAN CONSOLIDATED)
+-- ERP SEKOLAH v20.2 — HARDENED PRODUCTION FOUNDATION (CLEAN / NO SEED)
 -- Versi: BERSIH / SCHEMA-ONLY (Tanpa Seed Data Sekolah, Super Admin & Admin)
--- Penyempurnaan & Perapian v20:
---   1. Konsolidasi penuh skema v19 + seluruh patch absensi GPS, selfie & mode desktop
---   2. Penyatuan kolom tambahan langsung ke definisi tabel (schools, teachers, attendances)
---   3. Penghapusan duplikasi fungsi & policy (attendances_manage & submit_teacher_gps_attendance)
---   4. Penambahan DROP FUNCTION idempoten untuk seluruh fungsi baru di Bagian 01
---   5. Penyeragaman SECURITY DEFINER, search_path (public, pg_temp), REVOKE/GRANT,
---      serta dukungan multi-role pada set_school_desktop_attendance_global
---   6. Siap untuk instalasi multi-tenant bersih (tanpa data sekolah/akun bawaan)
+-- Cakupan:
+--   1. Core Tenant, Akademik, Autentikasi Multi-Role & Audit Log
+--   2. Kepegawaian (PTK Dapodik) & Kesiswaan (Siswa, Orang Tua, PIP/Kesejahteraan)
+--   3. Presensi GPS Guru (Server-Side Haversine + Anti-Mock), Presensi Siswa & Kiosk
+--   4. Kalender Libur Nasional, Kegiatan Khusus Sekolah & Kutipan Harian
+--   5. WhatsApp Gateway Configs, Notification Logs & RPC Penerima WA Siswa (Hardened)
+--   6. Sarpras, Tata Usaha, Beasiswa, Keuangan (Anti-Overpayment) & Perpustakaan
+--   7. Row Level Security (RLS) Multi-Tenant + Storage Buckets & Policies
+--   8. Siap untuk instalasi multi-tenant bersih (tanpa data sekolah/akun bawaan)
 -- ============================================================================
-
 BEGIN;
 
 -- ============================================================================
@@ -37,13 +37,16 @@ DROP FUNCTION IF EXISTS public.sync_new_teacher_desktop_attendance() CASCADE;
 
 -- RPC & Business Logic Functions
 DROP FUNCTION IF EXISTS public.resolve_user_email(TEXT) CASCADE;
+DROP FUNCTION IF EXISTS public.get_student_wa_recipient(UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.set_active_academic_year(UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.set_active_semester(UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.erp_set_active_academic_year(UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.create_school_for_current_user(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) CASCADE;
 DROP FUNCTION IF EXISTS public.set_teacher_desktop_attendance(UUID, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS public.set_teacher_desktop_attendance(TEXT, BOOLEAN) CASCADE;
 DROP FUNCTION IF EXISTS public.set_school_desktop_attendance_global(UUID, BOOLEAN) CASCADE;
+DROP FUNCTION IF EXISTS public.set_school_desktop_attendance_global(TEXT, BOOLEAN) CASCADE;
 DROP FUNCTION IF EXISTS public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_students(JSONB) CASCADE;
 DROP FUNCTION IF EXISTS public.bulk_import_teachers(JSONB) CASCADE;
@@ -74,6 +77,8 @@ DROP FUNCTION IF EXISTS public.erp_has_school_access(UUID, BOOLEAN) CASCADE;
 
 -- Drop Tables (Urutan Dependensi Aman)
 DROP TABLE IF EXISTS
+    public.wa_notification_logs,
+    public.school_wa_configs,
     public.library_loans,
     public.library_books,
     public.payment_transactions,
@@ -84,6 +89,7 @@ DROP TABLE IF EXISTS
     public.inventory_transactions,
     public.inventory_items,
     public.daily_quotes,
+    public.school_special_events,
     public.national_holidays,
     public.schedule_entries,
     public.subjects,
@@ -130,6 +136,13 @@ CREATE TABLE public.schools (
     "requireSelfieCheckIn" BOOLEAN NOT NULL DEFAULT true,
     "requireSelfieCheckOut" BOOLEAN NOT NULL DEFAULT true,
     "allowDesktopAttendanceGlobal" BOOLEAN NOT NULL DEFAULT false,
+    "studentWorkStartTime" TEXT NOT NULL DEFAULT '07:00',
+    "studentLateToleranceMinutes" INTEGER NOT NULL DEFAULT 15,
+    "studentWorkEndTime" TEXT NOT NULL DEFAULT '14:00',
+    "studentCheckOutStartTime" TEXT NOT NULL DEFAULT '12:00',
+    "enableStudentKiosk" BOOLEAN NOT NULL DEFAULT true,
+    "enableStudentClassAttendance" BOOLEAN NOT NULL DEFAULT true,
+    "enableStudentCheckOut" BOOLEAN NOT NULL DEFAULT true,
     "settings" JSONB NOT NULL DEFAULT '{}'::jsonb,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -139,7 +152,11 @@ CREATE TABLE public.schools (
     CONSTRAINT schools_work_start_check CHECK ("workStartTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
     CONSTRAINT schools_work_end_check CHECK ("workEndTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
     CONSTRAINT schools_work_days_mode_check CHECK ("workDaysMode" IN ('FIVE_DAYS', 'SIX_DAYS')),
-    CONSTRAINT schools_late_tolerance_check CHECK ("lateToleranceMinutes" >= 0 AND "lateToleranceMinutes" <= 240)
+    CONSTRAINT schools_late_tolerance_check CHECK ("lateToleranceMinutes" >= 0 AND "lateToleranceMinutes" <= 240),
+    CONSTRAINT schools_student_work_start_check CHECK ("studentWorkStartTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
+    CONSTRAINT schools_student_work_end_check CHECK ("studentWorkEndTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
+    CONSTRAINT schools_student_checkout_start_check CHECK ("studentCheckOutStartTime" ~ '^([01][0-9]|2[0-3]):[0-5][0-9](:[0-5][0-9])?$'),
+    CONSTRAINT schools_student_late_tolerance_check CHECK ("studentLateToleranceMinutes" >= 0 AND "studentLateToleranceMinutes" <= 240)
 );
 
 CREATE UNIQUE INDEX schools_npsn_key ON public.schools ("npsn");
@@ -391,6 +408,7 @@ CREATE UNIQUE INDEX teachers_school_nip_key
 CREATE UNIQUE INDEX teachers_school_nik_key
     ON public.teachers ("schoolId", "nik") WHERE "nik" IS NOT NULL AND trim("nik") <> '';
 CREATE INDEX teachers_school_idx ON public.teachers ("schoolId");
+CREATE INDEX teachers_school_active_idx ON public.teachers ("schoolId", "isActive");
 CREATE INDEX teachers_name_idx ON public.teachers ("fullName");
 CREATE INDEX teachers_status_idx ON public.teachers ("schoolId", "status");
 CREATE INDEX teachers_certified_idx ON public.teachers ("schoolId", "isCertified");
@@ -499,6 +517,7 @@ CREATE UNIQUE INDEX students_school_nis_key
     ON public.students ("schoolId", "nis") WHERE "nis" IS NOT NULL AND trim("nis") <> '';
 CREATE UNIQUE INDEX students_school_nik_key ON public.students ("schoolId", "nik");
 CREATE INDEX students_school_idx ON public.students ("schoolId");
+CREATE INDEX students_school_status_idx ON public.students ("schoolId", "status");
 CREATE INDEX students_class_idx ON public.students ("classId");
 CREATE INDEX students_name_idx ON public.students ("fullName");
 
@@ -638,7 +657,7 @@ CREATE UNIQUE INDEX student_economics_student_key ON public.student_economics ("
 CREATE INDEX economics_school_idx ON public.student_economics ("schoolId");
 
 -- ============================================================================
--- 05. KEGIATAN BELAJAR, ABSENSI, KALENDER LIBUR & INFORMASI
+-- 05. KEGIATAN BELAJAR, PRESENSI, KALENDER LIBUR & INFORMASI
 -- ============================================================================
 CREATE TABLE public.attendances (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -657,6 +676,9 @@ CREATE TABLE public.attendances (
     "approvedAt" TIMESTAMPTZ,
     "recordedBy" UUID,
     "checkInTime" TIMESTAMPTZ,
+    "time" TEXT GENERATED ALWAYS AS (
+        COALESCE(left((("checkInTime" AT TIME ZONE 'Asia/Jakarta')::time)::text, 5), '')
+    ) STORED,
     "checkOutTime" TIMESTAMPTZ,
     "checkInLat" DOUBLE PRECISION,
     "checkInLng" DOUBLE PRECISION,
@@ -709,8 +731,10 @@ CREATE UNIQUE INDEX attendances_teacher_date_type_key
     ON public.attendances ("schoolId", "teacherId", "date", "type")
     WHERE "teacherId" IS NOT NULL;
 CREATE INDEX attendances_school_idx ON public.attendances ("schoolId");
+CREATE INDEX attendances_school_date_type_idx ON public.attendances ("schoolId", "date", "type");
 CREATE INDEX attendances_date_idx ON public.attendances ("date");
-CREATE INDEX attendances_teacher_idx ON public.attendances ("teacherId");
+CREATE INDEX attendances_student_idx ON public.attendances ("studentId") WHERE "studentId" IS NOT NULL;
+CREATE INDEX attendances_teacher_idx ON public.attendances ("teacherId") WHERE "teacherId" IS NOT NULL;
 CREATE INDEX attendances_type_idx ON public.attendances ("type");
 CREATE INDEX attendances_approval_idx ON public.attendances ("schoolId", "approvalStatus");
 
@@ -836,6 +860,28 @@ CREATE UNIQUE INDEX national_holidays_scope_date_name_key
 CREATE INDEX national_holidays_date_idx ON public.national_holidays ("date");
 CREATE INDEX national_holidays_school_date_idx ON public.national_holidays ("schoolId", "date");
 
+CREATE TABLE public.school_special_events (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "schoolId" UUID NOT NULL,
+    "eventDate" DATE NOT NULL,
+    "reason" TEXT NOT NULL,
+    "isActive" BOOLEAN NOT NULL DEFAULT true,
+    "createdBy" UUID,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT school_special_events_pkey PRIMARY KEY ("id"),
+    CONSTRAINT school_special_events_school_date_key UNIQUE ("schoolId", "eventDate"),
+    CONSTRAINT school_special_events_school_fkey
+        FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
+        ON DELETE CASCADE,
+    CONSTRAINT school_special_events_created_by_fkey
+        FOREIGN KEY ("createdBy") REFERENCES public.users("id")
+        ON DELETE SET NULL
+);
+
+CREATE INDEX school_special_events_school_date_idx
+    ON public.school_special_events ("schoolId", "eventDate");
+
 CREATE TABLE public.daily_quotes (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
     "schoolId" UUID,
@@ -857,7 +903,64 @@ CREATE TABLE public.daily_quotes (
 CREATE INDEX daily_quotes_school_active_idx ON public.daily_quotes ("schoolId", "isActive");
 
 -- ============================================================================
--- 06. SARPRAS, TATA USAHA & BEASISWA
+-- 06. WHATSAPP GATEWAY & LOG NOTIFIKASI PRESENSI
+-- ============================================================================
+CREATE TABLE public.school_wa_configs (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "schoolId" UUID NOT NULL,
+    "isEnabled" BOOLEAN NOT NULL DEFAULT false,
+    "provider" TEXT NOT NULL DEFAULT 'FONNTE',
+    "apiUrl" TEXT NOT NULL DEFAULT 'https://api.fonnte.com/send',
+    "apiToken" TEXT NOT NULL DEFAULT '',
+    "senderNumber" TEXT,
+    "customHeaders" JSONB NOT NULL DEFAULT '{}'::jsonb,
+    "notifyOnCheckIn" BOOLEAN NOT NULL DEFAULT true,
+    "notifyOnLate" BOOLEAN NOT NULL DEFAULT true,
+    "notifyOnCheckOut" BOOLEAN NOT NULL DEFAULT true,
+    "templateCheckIn" TEXT NOT NULL DEFAULT 'Assalamu''alaikum Bapak/Ibu, ananda *{nama_siswa}* ({kelas}) telah tiba di *{nama_sekolah}* pada pukul *{waktu}* WIB (Status: *{status}*). Terima kasih.',
+    "templateCheckOut" TEXT NOT NULL DEFAULT 'Assalamu''alaikum Bapak/Ibu, ananda *{nama_siswa}* ({kelas}) telah melakukan presensi pulang dari *{nama_sekolah}* pada pukul *{waktu}* WIB. Terima kasih.',
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT school_wa_configs_pkey PRIMARY KEY ("id"),
+    CONSTRAINT school_wa_configs_school_key UNIQUE ("schoolId"),
+    CONSTRAINT school_wa_configs_provider_check
+        CHECK ("provider" IN ('FONNTE', 'WABLAS', 'WOOWA', 'CUSTOM')),
+    CONSTRAINT school_wa_configs_school_fkey
+        FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
+        ON DELETE CASCADE
+);
+
+CREATE TABLE public.wa_notification_logs (
+    "id" UUID NOT NULL DEFAULT gen_random_uuid(),
+    "schoolId" UUID NOT NULL,
+    "studentId" UUID,
+    "recipientPhone" TEXT NOT NULL,
+    "eventType" TEXT NOT NULL,
+    "messageBody" TEXT NOT NULL,
+    "status" TEXT NOT NULL DEFAULT 'SENT',
+    "providerResponse" JSONB,
+    "errorMessage" TEXT,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT wa_notification_logs_pkey PRIMARY KEY ("id"),
+    CONSTRAINT wa_notification_logs_event_check
+        CHECK ("eventType" IN ('CHECK_IN', 'CHECK_OUT', 'TEST')),
+    CONSTRAINT wa_notification_logs_status_check
+        CHECK ("status" IN ('SENT', 'FAILED', 'SKIPPED')),
+    CONSTRAINT wa_notification_logs_school_fkey
+        FOREIGN KEY ("schoolId") REFERENCES public.schools("id")
+        ON DELETE CASCADE,
+    CONSTRAINT wa_notification_logs_student_fkey
+        FOREIGN KEY ("studentId") REFERENCES public.students("id")
+        ON DELETE SET NULL
+);
+
+CREATE INDEX wa_notification_logs_school_created_idx
+    ON public.wa_notification_logs ("schoolId", "createdAt" DESC);
+CREATE INDEX wa_notification_logs_student_idx
+    ON public.wa_notification_logs ("studentId") WHERE "studentId" IS NOT NULL;
+
+-- ============================================================================
+-- 07. SARPRAS, TATA USAHA & BEASISWA
 -- ============================================================================
 CREATE TABLE public.inventory_items (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -983,7 +1086,7 @@ CREATE INDEX scholarships_school_idx ON public.scholarship_records ("schoolId");
 CREATE INDEX scholarships_student_idx ON public.scholarship_records ("studentId");
 
 -- ============================================================================
--- 07. KEUANGAN SEKOLAH (FEE TEMPLATES, STUDENT BILLS, PAYMENT TRANSACTIONS)
+-- 08. KEUANGAN SEKOLAH (FEE TEMPLATES, STUDENT BILLS, PAYMENT TRANSACTIONS)
 -- ============================================================================
 CREATE TABLE public.fee_templates (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -1111,7 +1214,7 @@ CREATE INDEX payments_student_idx ON public.payment_transactions ("studentId");
 CREATE INDEX payments_date_idx ON public.payment_transactions ("paymentDate");
 
 -- ============================================================================
--- 08. PERPUSTAKAAN (LIBRARY BOOKS & LIBRARY LOANS)
+-- 09. PERPUSTAKAAN (LIBRARY BOOKS & LIBRARY LOANS)
 -- ============================================================================
 CREATE TABLE public.library_books (
     "id" UUID NOT NULL DEFAULT gen_random_uuid(),
@@ -1208,27 +1311,8 @@ CREATE INDEX library_loans_teacher_idx ON public.library_loans ("teacherId");
 CREATE INDEX library_loans_status_idx ON public.library_loans ("status");
 
 -- ============================================================================
--- 09. SECURITY, GEODESIC & MULTI-ROLE HELPER FUNCTIONS
+-- 10. SECURITY, GEODESIC & MULTI-ROLE HELPER FUNCTIONS (SECURITY DEFINER)
 -- ============================================================================
-CREATE OR REPLACE FUNCTION public.calculate_haversine_meters(
-    lat1 DOUBLE PRECISION,
-    lon1 DOUBLE PRECISION,
-    lat2 DOUBLE PRECISION,
-    lon2 DOUBLE PRECISION
-)
-RETURNS DOUBLE PRECISION
-LANGUAGE sql IMMUTABLE
-SET search_path = public, pg_temp
-AS $$
-    SELECT 6371000.0 * 2.0 * asin(
-        sqrt(
-            power(sin(radians(lat2 - lat1) / 2.0), 2) +
-            cos(radians(lat1)) * cos(radians(lat2)) *
-            power(sin(radians(lon2 - lon1) / 2.0), 2)
-        )
-    );
-$$;
-
 CREATE OR REPLACE FUNCTION public.get_user_school_id()
 RETURNS UUID
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -1253,15 +1337,25 @@ AS $$
     LIMIT 1;
 $$;
 
-CREATE OR REPLACE FUNCTION public.erp_current_user_school_id()
-RETURNS UUID LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
-AS $$ SELECT public.get_user_school_id(); $$;
+CREATE OR REPLACE FUNCTION public.calculate_haversine_meters(
+    lat1 DOUBLE PRECISION,
+    lon1 DOUBLE PRECISION,
+    lat2 DOUBLE PRECISION,
+    lon2 DOUBLE PRECISION
+)
+RETURNS DOUBLE PRECISION
+LANGUAGE sql IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+    SELECT 6371000.0 * 2.0 * asin(
+        sqrt(
+            power(sin(radians(lat2 - lat1) / 2.0), 2) +
+            cos(radians(lat1)) * cos(radians(lat2)) *
+            power(sin(radians(lon2 - lon1) / 2.0), 2)
+        )
+    );
+$$;
 
-CREATE OR REPLACE FUNCTION public.erp_current_user_role()
-RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
-AS $$ SELECT public.get_user_role(); $$;
-
--- Validasi folder storage milik sekolah user (mendukung format folder {schoolId} maupun {Nama_Sekolah})
 CREATE OR REPLACE FUNCTION public.is_own_school_storage_folder(p_folder TEXT)
 RETURNS BOOLEAN
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -1282,7 +1376,6 @@ AS $$
     );
 $$;
 
--- Pemetaan otomatis Tugas Tambahan Dapodik ke role sistem
 CREATE OR REPLACE FUNCTION public.map_tugas_tambahan_to_roles(p_tugas TEXT)
 RETURNS TEXT[]
 LANGUAGE plpgsql IMMUTABLE
@@ -1328,7 +1421,6 @@ BEGIN
 END;
 $$;
 
--- Mengambil SELURUH role aktif milik user (Role Utama + additionalRoles + Tugas Tambahan Dapodik)
 CREATE OR REPLACE FUNCTION public.get_user_all_roles()
 RETURNS TEXT[]
 LANGUAGE sql STABLE SECURITY DEFINER
@@ -1467,11 +1559,9 @@ AS $$
     ]::text[];
 $$;
 
-REVOKE ALL ON FUNCTION public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_user_school_id() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_user_role() FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.erp_current_user_school_id() FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.erp_current_user_role() FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.is_own_school_storage_folder(TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.map_tugas_tambahan_to_roles(TEXT) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.get_user_all_roles() FROM PUBLIC, anon;
@@ -1486,11 +1576,9 @@ REVOKE ALL ON FUNCTION public.current_user_can_manage_inventory() FROM PUBLIC, a
 REVOKE ALL ON FUNCTION public.current_user_can_manage_library() FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.current_user_can_manage_administration() FROM PUBLIC, anon;
 
-GRANT EXECUTE ON FUNCTION public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_school_id() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_role() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.erp_current_user_school_id() TO authenticated;
-GRANT EXECUTE ON FUNCTION public.erp_current_user_role() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.calculate_haversine_meters(DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.is_own_school_storage_folder(TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.map_tugas_tambahan_to_roles(TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.get_user_all_roles() TO authenticated;
@@ -1506,7 +1594,7 @@ GRANT EXECUTE ON FUNCTION public.current_user_can_manage_library() TO authentica
 GRANT EXECUTE ON FUNCTION public.current_user_can_manage_administration() TO authenticated;
 
 -- ============================================================================
--- 10. TRIGGERS: UPDATED_AT, SECURITY, APPROVAL, AUTH CLEANUP, STOK & KEUANGAN
+-- 11. TRIGGERS: UPDATED_AT, SECURITY, APPROVAL, DESKTOP SYNC, AUTH, STOK & BILL
 -- ============================================================================
 CREATE OR REPLACE FUNCTION public.update_updated_at_column()
 RETURNS TRIGGER
@@ -1526,9 +1614,9 @@ BEGIN
     FOREACH tbl IN ARRAY ARRAY[
         'schools','academic_years','semesters','users','teachers','classes',
         'students','student_parents','student_economics','attendances','subjects',
-        'schedule_entries','announcements','national_holidays','daily_quotes',
-        'inventory_items','administration_records','scholarship_records',
-        'fee_templates','student_bills','library_books','library_loans'
+        'schedule_entries','announcements','national_holidays','school_special_events',
+        'daily_quotes','school_wa_configs','inventory_items','administration_records',
+        'scholarship_records','fee_templates','student_bills','library_books','library_loans'
     ]
     LOOP
         EXECUTE format(
@@ -1539,7 +1627,7 @@ BEGIN
     END LOOP;
 END $trg$;
 
--- Sinkronisasi otomatis izin presensi komputer saat guru baru ditambahkan jika Saklar Global aktif
+-- Sinkronisasi otomatis izin presensi komputer saat guru baru ditambahkan jika saklar global sekolah aktif
 CREATE OR REPLACE FUNCTION public.sync_new_teacher_desktop_attendance()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1622,7 +1710,7 @@ CREATE TRIGGER users_security_fields
 BEFORE UPDATE ON public.users
 FOR EACH ROW EXECUTE FUNCTION public.protect_user_security_fields();
 
--- Proteksi status persetujuan izin/cuti/dinas pada tabel attendances
+-- Proteksi status persetujuan izin/sakit/cuti/dinas pada tabel attendances
 CREATE OR REPLACE FUNCTION public.protect_attendance_approval()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1726,7 +1814,7 @@ CREATE TRIGGER trg_delete_student_auth
 BEFORE DELETE ON public.students
 FOR EACH ROW EXECUTE FUNCTION public.auto_delete_auth_on_student_delete();
 
--- Sinkronisasi hapus akun Auth ketika Guru/PTK dihapus (Aman untuk Admin & Guru yang juga Wali Siswa)
+-- Sinkronisasi hapus akun Auth ketika Guru/PTK dihapus
 CREATE OR REPLACE FUNCTION public.auto_delete_auth_on_teacher_delete()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -1901,7 +1989,6 @@ CREATE TRIGGER payment_status_trigger
 AFTER INSERT OR UPDATE OR DELETE ON public.payment_transactions
 FOR EACH ROW EXECUTE FUNCTION public.payment_change_trigger();
 
--- Sinkronisasi otomatis status tagihan ketika totalAmount pada student_bills diubah
 CREATE OR REPLACE FUNCTION public.student_bill_amount_change_trigger()
 RETURNS TRIGGER
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2026,10 +2113,10 @@ BEFORE INSERT OR UPDATE OF "totalCopies" ON public.library_books
 FOR EACH ROW EXECUTE FUNCTION public.library_book_total_copies_trigger();
 
 -- ============================================================================
--- 11. RPC FUNCTIONS: LOGIN, TAHUN AJARAN, PRESENSI GPS/DESKTOP & IMPOR DAPODIK
+-- 12. RPC FUNCTIONS: LOGIN RESOLVER, WA RECIPIENT, ABSENSI GPS, AKADEMIK & IMPOR
 -- ============================================================================
 
--- 11A. Helper Sanitasi String & Boolean Dapodik
+-- 12A. Helper Sanitasi String & Boolean Dapodik
 CREATE OR REPLACE FUNCTION public.clean_dapodik_str(p_val TEXT)
 RETURNS TEXT
 LANGUAGE sql IMMUTABLE
@@ -2066,7 +2153,7 @@ REVOKE ALL ON FUNCTION public.parse_dapodik_bool(TEXT, BOOLEAN) FROM PUBLIC, ano
 GRANT EXECUTE ON FUNCTION public.clean_dapodik_str(TEXT) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.parse_dapodik_bool(TEXT, BOOLEAN) TO authenticated;
 
--- 11B. Resolve Email dari NUPTK / NIP / NIK / NISN / NIS
+-- 12B. Resolve Email dari NUPTK / NIP / NIK / NISN / NIS
 CREATE OR REPLACE FUNCTION public.resolve_user_email(identifier TEXT)
 RETURNS TEXT
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2204,7 +2291,439 @@ $$;
 REVOKE ALL ON FUNCTION public.resolve_user_email(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.resolve_user_email(TEXT) TO anon, authenticated;
 
--- 11C. Set Tahun Ajaran Aktif & Semester Aktif
+-- 12C. Ambil Target Nomor WhatsApp Orang Tua / Wali Siswa untuk Notifikasi Presensi
+CREATE OR REPLACE FUNCTION public.get_student_wa_recipient(p_student_id UUID)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_student RECORD;
+    v_wa_enabled BOOLEAN;
+    v_parent_phone TEXT;
+    v_final_phone TEXT;
+BEGIN
+    IF auth.uid() IS NULL OR NOT public.is_user_active() THEN
+        RETURN jsonb_build_object('eligible', false, 'reason', 'UNAUTHORIZED');
+    END IF;
+
+    IF NOT public.is_super_admin()
+       AND ((public.get_user_all_roles()) <@ ARRAY['ORANG_TUA', 'SISWA']::text[])
+    THEN
+        RETURN jsonb_build_object('eligible', false, 'reason', 'FORBIDDEN');
+    END IF;
+
+    SELECT
+        s."id",
+        s."schoolId",
+        s."fullName" AS "studentName",
+        s."phone" AS "studentPhone",
+        s."telepon" AS "studentTelepon",
+        COALESCE(c."name", '-') AS "className",
+        sc."name" AS "schoolName"
+    INTO v_student
+    FROM public.students s
+    JOIN public.schools sc ON sc."id" = s."schoolId"
+    LEFT JOIN public.classes c ON c."id" = s."classId"
+    WHERE s."id" = p_student_id
+    LIMIT 1;
+
+    IF v_student.id IS NULL THEN
+        RETURN jsonb_build_object('eligible', false, 'reason', 'STUDENT_NOT_FOUND');
+    END IF;
+
+    IF NOT public.is_super_admin() AND v_student."schoolId" IS DISTINCT FROM public.get_user_school_id() THEN
+        RETURN jsonb_build_object('eligible', false, 'reason', 'FORBIDDEN');
+    END IF;
+
+    SELECT "isEnabled" INTO v_wa_enabled
+    FROM public.school_wa_configs
+    WHERE "schoolId" = v_student."schoolId"
+    LIMIT 1;
+
+    IF COALESCE(v_wa_enabled, false) IS NOT TRUE THEN
+        RETURN jsonb_build_object('eligible', false, 'reason', 'WA_DISABLED');
+    END IF;
+
+    -- Prioritas nomor HP: Ayah -> Ibu -> Wali -> HP Siswa
+    SELECT trim(p."phone") INTO v_parent_phone
+    FROM public.student_parents p
+    WHERE p."studentId" = p_student_id
+      AND p."phone" IS NOT NULL
+      AND trim(p."phone") <> ''
+    ORDER BY
+        CASE upper(trim(p."relation"))
+            WHEN 'AYAH' THEN 1
+            WHEN 'IBU' THEN 2
+            WHEN 'WALI' THEN 3
+            ELSE 4
+        END ASC,
+        p."updatedAt" DESC
+    LIMIT 1;
+
+    v_final_phone := COALESCE(
+        NULLIF(v_parent_phone, ''),
+        NULLIF(trim(COALESCE(v_student."studentPhone", '')), ''),
+        NULLIF(trim(COALESCE(v_student."studentTelepon", '')), '')
+    );
+
+    IF v_final_phone IS NULL THEN
+        RETURN jsonb_build_object('eligible', false, 'reason', 'NO_PHONE');
+    END IF;
+
+    RETURN jsonb_build_object(
+        'eligible', true,
+        'schoolId', v_student."schoolId",
+        'phone', v_final_phone,
+        'studentName', v_student."studentName",
+        'className', v_student."className",
+        'schoolName', v_student."schoolName"
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.get_student_wa_recipient(UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.get_student_wa_recipient(UUID) TO authenticated;
+
+-- 12D. Kontrol Izin Presensi Komputer (Per Guru & Saklar Global Sekolah)
+CREATE OR REPLACE FUNCTION public.set_teacher_desktop_attendance(
+    p_teacher_id UUID,
+    p_allow BOOLEAN
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_is_super BOOLEAN := public.is_super_admin();
+    v_user_school UUID := public.get_user_school_id();
+    v_roles TEXT[] := public.get_user_all_roles();
+    v_target_school UUID;
+BEGIN
+    IF v_uid IS NULL OR NOT public.is_user_active() THEN
+        RAISE EXCEPTION 'Sesi login tidak valid atau akun tidak aktif.';
+    END IF;
+
+    SELECT "schoolId" INTO v_target_school
+    FROM public.teachers
+    WHERE "id" = p_teacher_id;
+
+    IF v_target_school IS NULL THEN
+        RAISE EXCEPTION 'Data guru tidak ditemukan.';
+    END IF;
+
+    IF NOT v_is_super THEN
+        IF v_target_school IS DISTINCT FROM v_user_school
+           OR NOT (v_roles && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        THEN
+            RAISE EXCEPTION 'Anda tidak memiliki hak akses untuk mengubah izin presensi komputer.';
+        END IF;
+    END IF;
+
+    UPDATE public.teachers
+    SET "allowDesktopAttendance" = COALESCE(p_allow, false),
+        "updatedAt" = now()
+    WHERE "id" = p_teacher_id;
+
+    RETURN true;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_teacher_desktop_attendance(UUID, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_teacher_desktop_attendance(UUID, BOOLEAN) TO authenticated;
+
+CREATE OR REPLACE FUNCTION public.set_school_desktop_attendance_global(
+    p_school_id UUID,
+    p_allow BOOLEAN
+)
+RETURNS VOID
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_is_super BOOLEAN := public.is_super_admin();
+    v_user_school UUID := public.get_user_school_id();
+    v_roles TEXT[] := public.get_user_all_roles();
+BEGIN
+    IF v_uid IS NULL OR NOT public.is_user_active() THEN
+        RAISE EXCEPTION 'Sesi pengguna tidak valid atau akun tidak aktif.';
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM public.schools WHERE "id" = p_school_id) THEN
+        RAISE EXCEPTION 'Data sekolah tidak ditemukan.';
+    END IF;
+
+    IF NOT v_is_super THEN
+        IF v_user_school IS DISTINCT FROM p_school_id
+           OR NOT (v_roles && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
+        THEN
+            RAISE EXCEPTION 'Anda tidak memiliki hak akses untuk mengubah pengaturan sekolah ini.';
+        END IF;
+    END IF;
+
+    UPDATE public.schools
+    SET "allowDesktopAttendanceGlobal" = COALESCE(p_allow, false),
+        "updatedAt" = now()
+    WHERE "id" = p_school_id;
+
+    UPDATE public.teachers
+    SET "allowDesktopAttendance" = COALESCE(p_allow, false),
+        "updatedAt" = now()
+    WHERE "schoolId" = p_school_id;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.set_school_desktop_attendance_global(UUID, BOOLEAN) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_school_desktop_attendance_global(UUID, BOOLEAN) TO authenticated;
+
+-- 12E. Presensi GPS Guru Server-Side (Anti Fake GPS, Anti Emulator, Server Clock & Desktop Guard)
+CREATE OR REPLACE FUNCTION public.submit_teacher_gps_attendance(
+    p_mode TEXT,
+    p_lat DOUBLE PRECISION,
+    p_lng DOUBLE PRECISION,
+    p_accuracy DOUBLE PRECISION,
+    p_selfie_path TEXT DEFAULT NULL,
+    p_early_reason TEXT DEFAULT NULL,
+    p_is_suspected_mock BOOLEAN DEFAULT false,
+    p_security_flags TEXT[] DEFAULT '{}'::text[],
+    p_device_telemetry JSONB DEFAULT '{}'::jsonb,
+    p_sim_teacher_id UUID DEFAULT NULL,
+    p_sim_school_id UUID DEFAULT NULL
+)
+RETURNS JSONB
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_uid UUID := auth.uid();
+    v_is_super BOOLEAN := public.is_super_admin();
+    v_school_id UUID;
+    v_teacher RECORD;
+    v_school RECORD;
+    v_timezone TEXT;
+    v_now_utc TIMESTAMPTZ := now();
+    v_now_local TIMESTAMP;
+    v_today DATE;
+    v_distance DOUBLE PRECISION;
+    v_existing RECORD;
+    v_start_parts TEXT[];
+    v_end_parts TEXT[];
+    v_deadline TIMESTAMP;
+    v_scheduled_end TIMESTAMP;
+    v_latest_ontime TIMESTAMP;
+    v_status TEXT;
+    v_diff_mins INTEGER;
+    v_notes TEXT;
+    v_clean_reason TEXT := trim(COALESCE(p_early_reason, ''));
+    v_flags TEXT[] := COALESCE(p_security_flags, '{}'::text[]);
+    v_is_desktop_request BOOLEAN := false;
+BEGIN
+    IF v_uid IS NULL OR NOT public.is_user_active() THEN
+        RAISE EXCEPTION 'Sesi login tidak valid. Silakan masuk kembali.';
+    END IF;
+
+    IF p_mode NOT IN ('CHECK_IN', 'CHECK_OUT') THEN
+        RAISE EXCEPTION 'Mode presensi tidak valid.';
+    END IF;
+
+    IF p_lat IS NULL OR p_lng IS NULL OR p_lat < -90 OR p_lat > 90 OR p_lng < -180 OR p_lng > 180 THEN
+        RAISE EXCEPTION 'Koordinat GPS tidak valid.';
+    END IF;
+
+    IF p_accuracy IS NULL OR p_accuracy <= 1.0 THEN
+        RAISE EXCEPTION 'Terdeteksi sinyal GPS tidak alami (akurasi <= 1m). Matikan aplikasi Fake GPS.';
+    END IF;
+
+    IF p_accuracy > 85.0 THEN
+        RAISE EXCEPTION 'Akurasi GPS terlalu lemah (±% meter). Bergeser ke area terbuka agar sinyal satelit stabil.', round(p_accuracy);
+    END IF;
+
+    IF v_is_super AND p_sim_school_id IS NOT NULL AND p_sim_teacher_id IS NOT NULL THEN
+        v_school_id := p_sim_school_id;
+        SELECT * INTO v_teacher FROM public.teachers
+        WHERE "id" = p_sim_teacher_id AND "schoolId" = v_school_id AND "isActive" = true;
+    ELSE
+        v_school_id := public.get_user_school_id();
+        SELECT * INTO v_teacher FROM public.teachers
+        WHERE "userId" = v_uid AND "schoolId" = v_school_id AND "isActive" = true
+        LIMIT 1;
+    END IF;
+
+    IF v_teacher.id IS NULL THEN
+        RAISE EXCEPTION 'Profil Guru/PTK Anda tidak ditemukan atau tidak aktif.';
+    END IF;
+
+    v_is_desktop_request := (v_flags @> ARRAY['DESKTOP_BROWSER']::text[])
+        OR COALESCE(p_device_telemetry->>'deviceType', '') = 'DESKTOP';
+
+    IF v_is_desktop_request AND NOT v_is_super AND NOT COALESCE(v_teacher."allowDesktopAttendance", false) THEN
+        RAISE EXCEPTION 'Akun Anda tidak diizinkan melakukan presensi melalui komputer/laptop. Silakan gunakan HP atau APK Android.';
+    END IF;
+
+    SELECT * INTO v_school FROM public.schools WHERE "id" = v_school_id;
+    IF v_school.latitude IS NULL OR v_school.longitude IS NULL THEN
+        RAISE EXCEPTION 'Titik koordinat sekolah belum diatur oleh Admin.';
+    END IF;
+
+    v_distance := public.calculate_haversine_meters(
+        p_lat, p_lng, v_school.latitude, v_school.longitude
+    );
+
+    IF v_distance > COALESCE(v_school."attendanceRadiusMeters", 200) THEN
+        RAISE EXCEPTION 'Posisi Anda berada di luar radius sekolah (% meter dari batas % meter).',
+            round(v_distance), COALESCE(v_school."attendanceRadiusMeters", 200);
+    END IF;
+
+    v_timezone := COALESCE(NULLIF(v_school.settings->>'timezone', ''), 'Asia/Jakarta');
+    v_now_local := v_now_utc AT TIME ZONE v_timezone;
+    v_today := v_now_local::date;
+
+    PERFORM pg_advisory_xact_lock(hashtextextended(v_teacher.id::text || '|' || v_today::text, 0));
+
+    SELECT * INTO v_existing
+    FROM public.attendances
+    WHERE "schoolId" = v_school_id
+      AND "teacherId" = v_teacher.id
+      AND "date" = v_today
+      AND "type" = 'GURU'
+    FOR UPDATE;
+
+    -- ==================== PROSES CHECK-IN ====================
+    IF p_mode = 'CHECK_IN' THEN
+        IF v_existing.id IS NOT NULL THEN
+            RAISE EXCEPTION 'Anda sudah memiliki catatan presensi hari ini (%).', v_existing.status;
+        END IF;
+
+        IF COALESCE(v_school."requireSelfieCheckIn", true) THEN
+            IF p_selfie_path IS NULL OR trim(p_selfie_path) = '' THEN
+                RAISE EXCEPTION 'Foto selfie wajib dilampirkan saat presensi datang.';
+            END IF;
+            IF NOT EXISTS (
+                SELECT 1 FROM storage.objects
+                WHERE bucket_id = 'attendance-selfies'
+                  AND name = p_selfie_path
+                  AND (v_is_super OR public.is_own_school_storage_folder((storage.foldername(name))[1]))
+            ) THEN
+                RAISE EXCEPTION 'Bukti foto selfie tidak ditemukan di server penyimpanan sekolah Anda.';
+            END IF;
+        END IF;
+
+        v_start_parts := string_to_array(COALESCE(v_school."workStartTime", '07:30'), ':');
+        v_deadline := date_trunc('day', v_now_local)
+            + make_interval(
+                hours => COALESCE(v_start_parts[1]::int, 7),
+                mins  => COALESCE(v_start_parts[2]::int, 30) + COALESCE(v_school."lateToleranceMinutes", 0),
+                secs  => 59
+            );
+
+        v_status := CASE WHEN v_now_local > v_deadline THEN 'TERLAMBAT' ELSE 'HADIR' END;
+
+        INSERT INTO public.attendances (
+            "schoolId", "teacherId", "type", "date", "status",
+            "checkInTime", "checkInLat", "checkInLng", "checkInDistance",
+            "checkInAccuracy", "isCheckInMock", "checkInSelfieUrl",
+            "securityFlags", "deviceTelemetry"
+        ) VALUES (
+            v_school_id, v_teacher.id, 'GURU', v_today, v_status,
+            v_now_utc, p_lat, p_lng, round(v_distance),
+            round(p_accuracy::numeric, 1), p_is_suspected_mock, p_selfie_path,
+            v_flags, p_device_telemetry
+        );
+
+        RETURN jsonb_build_object(
+            'success', true,
+            'mode', 'CHECK_IN',
+            'status', v_status,
+            'distance', round(v_distance),
+            'serverTime', to_char(v_now_local, 'HH24:MI:SS')
+        );
+    END IF;
+
+    -- ==================== PROSES CHECK-OUT ====================
+    IF v_existing.id IS NULL OR v_existing."checkInTime" IS NULL THEN
+        RAISE EXCEPTION 'Anda belum melakukan Check-In masuk hari ini.';
+    END IF;
+
+    IF v_existing."checkOutTime" IS NOT NULL THEN
+        RAISE EXCEPTION 'Anda sudah melakukan Check-Out pulang hari ini.';
+    END IF;
+
+    IF COALESCE(v_school."requireSelfieCheckOut", true) THEN
+        IF p_selfie_path IS NULL OR trim(p_selfie_path) = '' THEN
+            RAISE EXCEPTION 'Foto selfie wajib dilampirkan saat presensi pulang.';
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM storage.objects
+            WHERE bucket_id = 'attendance-selfies'
+              AND name = p_selfie_path
+              AND (v_is_super OR public.is_own_school_storage_folder((storage.foldername(name))[1]))
+        ) THEN
+            RAISE EXCEPTION 'Bukti foto selfie pulang tidak ditemukan di server penyimpanan sekolah Anda.';
+        END IF;
+    END IF;
+
+    v_end_parts := string_to_array(COALESCE(v_school."workEndTime", '14:30'), ':');
+    v_scheduled_end := date_trunc('day', v_now_local)
+        + make_interval(
+            hours => COALESCE(v_end_parts[1]::int, 14),
+            mins  => COALESCE(v_end_parts[2]::int, 30)
+        );
+    v_latest_ontime := v_scheduled_end + interval '30 minutes 59 seconds';
+
+    v_notes := v_existing.notes;
+
+    IF v_now_local < v_scheduled_end THEN
+        IF length(v_clean_reason) < 10 THEN
+            RAISE EXCEPTION 'Alasan pulang lebih awal wajib diisi minimal 10 karakter.';
+        END IF;
+        v_diff_mins := GREATEST(1, ceil(extract(epoch FROM (v_scheduled_end - v_now_local)) / 60.0)::int);
+        v_notes := concat_ws(' | ', v_notes,
+            format('[Pulang Lebih Awal] Pukul %s (jadwal %s, kurang %s menit) — Alasan: %s',
+                to_char(v_now_local, 'HH24:MI'),
+                COALESCE(v_school."workEndTime", '14:30'),
+                v_diff_mins,
+                v_clean_reason
+            )
+        );
+    ELSIF v_now_local > v_latest_ontime THEN
+        v_diff_mins := GREATEST(1, floor(extract(epoch FROM (v_now_local - v_scheduled_end)) / 60.0)::int);
+        v_notes := concat_ws(' | ', v_notes,
+            format('Pulang melewati jadwal pukul %s (jadwal %s, lewat %s menit)',
+                to_char(v_now_local, 'HH24:MI'),
+                COALESCE(v_school."workEndTime", '14:30'),
+                v_diff_mins
+            )
+        );
+    END IF;
+
+    UPDATE public.attendances
+    SET "checkOutTime"     = v_now_utc,
+        "checkOutLat"      = p_lat,
+        "checkOutLng"      = p_lng,
+        "checkOutDistance" = round(v_distance),
+        "checkOutAccuracy" = round(p_accuracy::numeric, 1),
+        "isCheckOutMock"   = p_is_suspected_mock,
+        "checkOutSelfieUrl"= COALESCE(p_selfie_path, "checkOutSelfieUrl"),
+        "notes"            = v_notes,
+        "securityFlags"    = ARRAY(SELECT DISTINCT unnest(COALESCE("securityFlags", '{}'::text[]) || v_flags)),
+        "deviceTelemetry"  = COALESCE("deviceTelemetry", '{}'::jsonb) || jsonb_build_object('checkOut', p_device_telemetry)
+    WHERE "id" = v_existing.id;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'mode', 'CHECK_OUT',
+        'distance', round(v_distance),
+        'serverTime', to_char(v_now_local, 'HH24:MI:SS')
+    );
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) TO authenticated;
+
+-- 12F. Set Tahun Ajaran Aktif + Sinkronisasi Otomatis Semester Aktif
 CREATE OR REPLACE FUNCTION public.set_active_academic_year(
     p_school_id UUID,
     p_academic_year_id UUID
@@ -2290,6 +2809,10 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.set_active_academic_year(UUID, UUID) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.set_active_academic_year(UUID, UUID) TO authenticated;
+
+-- 12G. Set Semester Aktif + Sinkronisasi Tahun Ajaran Induk
 CREATE OR REPLACE FUNCTION public.set_active_semester(
     p_school_id UUID,
     p_semester_id UUID
@@ -2355,12 +2878,10 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.set_active_academic_year(UUID, UUID) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.set_active_semester(UUID, UUID) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.set_active_academic_year(UUID, UUID) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.set_active_semester(UUID, UUID) TO authenticated;
 
--- 11D. Onboarding Sekolah Baru & Setup Tenant oleh SUPER_ADMIN
+-- 12H. Onboarding Sekolah Baru untuk Admin yang Belum Punya Sekolah
 CREATE OR REPLACE FUNCTION public.create_school_for_current_user(p_school JSONB)
 RETURNS SETOF public.schools
 LANGUAGE plpgsql SECURITY DEFINER
@@ -2409,6 +2930,10 @@ BEGIN
 END;
 $$;
 
+REVOKE ALL ON FUNCTION public.create_school_for_current_user(JSONB) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.create_school_for_current_user(JSONB) TO authenticated;
+
+-- 12I. Setup Tenant Baru oleh SUPER_ADMIN
 CREATE OR REPLACE FUNCTION public.setup_new_tenant(
     p_school_name TEXT,
     p_npsn TEXT,
@@ -2462,350 +2987,10 @@ BEGIN
 END;
 $$;
 
-REVOKE ALL ON FUNCTION public.create_school_for_current_user(JSONB) FROM PUBLIC, anon;
 REVOKE ALL ON FUNCTION public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.create_school_for_current_user(JSONB) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.setup_new_tenant(TEXT, TEXT, TEXT, INTEGER, INTEGER) TO authenticated;
 
--- 11E. Pengaturan Izin Presensi Komputer (Per Guru & Saklar Global Sekolah)
-CREATE OR REPLACE FUNCTION public.set_teacher_desktop_attendance(
-    p_teacher_id UUID,
-    p_allow BOOLEAN
-)
-RETURNS BOOLEAN
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-    v_uid UUID := auth.uid();
-    v_is_super BOOLEAN := public.is_super_admin();
-    v_user_school UUID := public.get_user_school_id();
-    v_roles TEXT[] := public.get_user_all_roles();
-    v_target_school UUID;
-BEGIN
-    IF v_uid IS NULL OR NOT public.is_user_active() THEN
-        RAISE EXCEPTION 'Sesi login tidak valid atau akun tidak aktif.';
-    END IF;
-
-    SELECT "schoolId" INTO v_target_school
-    FROM public.teachers
-    WHERE "id" = p_teacher_id;
-
-    IF v_target_school IS NULL THEN
-        RAISE EXCEPTION 'Data guru tidak ditemukan.';
-    END IF;
-
-    IF NOT v_is_super THEN
-        IF v_target_school IS DISTINCT FROM v_user_school
-           OR NOT (v_roles && ARRAY['ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR']::text[])
-        THEN
-            RAISE EXCEPTION 'Anda tidak memiliki hak akses untuk mengubah izin presensi komputer.';
-        END IF;
-    END IF;
-
-    UPDATE public.teachers
-    SET "allowDesktopAttendance" = COALESCE(p_allow, false),
-        "updatedAt" = now()
-    WHERE "id" = p_teacher_id;
-
-    RETURN true;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION public.set_school_desktop_attendance_global(
-    p_school_id UUID,
-    p_allow BOOLEAN
-)
-RETURNS VOID
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-    v_uid UUID := auth.uid();
-    v_is_super BOOLEAN := public.is_super_admin();
-    v_user_school UUID := public.get_user_school_id();
-    v_roles TEXT[] := public.get_user_all_roles();
-BEGIN
-    IF v_uid IS NULL OR NOT public.is_user_active() THEN
-        RAISE EXCEPTION 'Sesi pengguna tidak valid atau akun tidak aktif.';
-    END IF;
-
-    IF NOT v_is_super THEN
-        IF v_user_school IS DISTINCT FROM p_school_id
-           OR NOT ('ADMIN' = ANY(v_roles))
-        THEN
-            RAISE EXCEPTION 'Anda tidak memiliki hak akses untuk mengubah pengaturan sekolah ini.';
-        END IF;
-    END IF;
-
-    -- Simpan status saklar global pada profil sekolah
-    UPDATE public.schools
-    SET "allowDesktopAttendanceGlobal" = COALESCE(p_allow, false),
-        "updatedAt" = now()
-    WHERE "id" = p_school_id;
-
-    -- Terapkan status yang sama ke seluruh Guru/PTK pada sekolah tersebut
-    UPDATE public.teachers
-    SET "allowDesktopAttendance" = COALESCE(p_allow, false),
-        "updatedAt" = now()
-    WHERE "schoolId" = p_school_id;
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.set_teacher_desktop_attendance(UUID, BOOLEAN) FROM PUBLIC, anon;
-REVOKE ALL ON FUNCTION public.set_school_desktop_attendance_global(UUID, BOOLEAN) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.set_teacher_desktop_attendance(UUID, BOOLEAN) TO authenticated;
-GRANT EXECUTE ON FUNCTION public.set_school_desktop_attendance_global(UUID, BOOLEAN) TO authenticated;
-
--- 11F. Presensi GPS Guru (Anti Fake GPS, Validasi Jam Server, Radius, Selfie & Desktop Guard)
-CREATE OR REPLACE FUNCTION public.submit_teacher_gps_attendance(
-    p_mode TEXT,                                      -- 'CHECK_IN' atau 'CHECK_OUT'
-    p_lat DOUBLE PRECISION,
-    p_lng DOUBLE PRECISION,
-    p_accuracy DOUBLE PRECISION,
-    p_selfie_path TEXT DEFAULT NULL,
-    p_early_reason TEXT DEFAULT NULL,
-    p_is_suspected_mock BOOLEAN DEFAULT false,
-    p_security_flags TEXT[] DEFAULT '{}'::text[],
-    p_device_telemetry JSONB DEFAULT '{}'::jsonb,
-    p_sim_teacher_id UUID DEFAULT NULL,               -- Khusus simulasi SUPER_ADMIN
-    p_sim_school_id UUID DEFAULT NULL                 -- Khusus simulasi SUPER_ADMIN
-)
-RETURNS JSONB
-LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_temp
-AS $$
-DECLARE
-    v_uid UUID := auth.uid();
-    v_is_super BOOLEAN := public.is_super_admin();
-    v_school_id UUID;
-    v_teacher RECORD;
-    v_school RECORD;
-    v_timezone TEXT;
-    v_now_utc TIMESTAMPTZ := now();
-    v_now_local TIMESTAMP;
-    v_today DATE;
-    v_distance DOUBLE PRECISION;
-    v_existing RECORD;
-    v_start_parts TEXT[];
-    v_end_parts TEXT[];
-    v_deadline TIMESTAMP;
-    v_scheduled_end TIMESTAMP;
-    v_latest_ontime TIMESTAMP;
-    v_status TEXT;
-    v_diff_mins INTEGER;
-    v_notes TEXT;
-    v_clean_reason TEXT := trim(COALESCE(p_early_reason, ''));
-    v_flags TEXT[] := COALESCE(p_security_flags, '{}'::text[]);
-    v_is_desktop_request BOOLEAN := false;
-BEGIN
-    IF v_uid IS NULL THEN
-        RAISE EXCEPTION 'Sesi login tidak valid. Silakan masuk kembali.';
-    END IF;
-
-    IF p_mode NOT IN ('CHECK_IN', 'CHECK_OUT') THEN
-        RAISE EXCEPTION 'Mode presensi tidak valid.';
-    END IF;
-
-    -- Validasi koordinat & akurasi GPS dasar
-    IF p_lat IS NULL OR p_lng IS NULL OR p_lat < -90 OR p_lat > 90 OR p_lng < -180 OR p_lng > 180 THEN
-        RAISE EXCEPTION 'Koordinat GPS tidak valid.';
-    END IF;
-
-    IF p_accuracy IS NULL OR p_accuracy <= 1.0 THEN
-        RAISE EXCEPTION 'Terdeteksi sinyal GPS tidak alami (akurasi <= 1m). Matikan aplikasi Fake GPS.';
-    END IF;
-
-    IF p_accuracy > 85.0 THEN
-        RAISE EXCEPTION 'Akurasi GPS terlalu lemah (±% meter). Bergeser ke area terbuka agar sinyal satelit stabil.', round(p_accuracy);
-    END IF;
-
-    -- Tentukan sekolah & profil guru
-    IF v_is_super AND p_sim_school_id IS NOT NULL AND p_sim_teacher_id IS NOT NULL THEN
-        v_school_id := p_sim_school_id;
-        SELECT * INTO v_teacher FROM public.teachers
-        WHERE "id" = p_sim_teacher_id AND "schoolId" = v_school_id AND "isActive" = true;
-    ELSE
-        v_school_id := public.get_user_school_id();
-        SELECT * INTO v_teacher FROM public.teachers
-        WHERE "userId" = v_uid AND "schoolId" = v_school_id AND "isActive" = true
-        LIMIT 1;
-    END IF;
-
-    IF v_teacher.id IS NULL THEN
-        RAISE EXCEPTION 'Profil Guru/PTK Anda tidak ditemukan atau tidak aktif.';
-    END IF;
-
-    -- Validasi izin akses komputer di sisi server
-    v_is_desktop_request := (v_flags @> ARRAY['DESKTOP_BROWSER']::text[])
-        OR COALESCE(p_device_telemetry->>'deviceType', '') = 'DESKTOP';
-
-    IF v_is_desktop_request AND NOT v_is_super AND NOT COALESCE(v_teacher."allowDesktopAttendance", false) THEN
-        RAISE EXCEPTION 'Akun Anda tidak diizinkan melakukan presensi melalui komputer/laptop. Silakan gunakan HP atau APK Android.';
-    END IF;
-
-    -- Ambil pengaturan sekolah
-    SELECT * INTO v_school FROM public.schools WHERE "id" = v_school_id;
-    IF v_school.latitude IS NULL OR v_school.longitude IS NULL THEN
-        RAISE EXCEPTION 'Titik koordinat sekolah belum diatur oleh Admin.';
-    END IF;
-
-    -- Hitung jarak geodesic di sisi server
-    v_distance := public.calculate_haversine_meters(
-        p_lat, p_lng, v_school.latitude, v_school.longitude
-    );
-
-    IF v_distance > COALESCE(v_school."attendanceRadiusMeters", 100) THEN
-        RAISE EXCEPTION 'Posisi Anda berada di luar radius sekolah (% meter dari batas % meter).',
-            round(v_distance), COALESCE(v_school."attendanceRadiusMeters", 100);
-    END IF;
-
-    -- Gunakan jam server sesuai zona waktu sekolah (anti manipulasi jam HP)
-    v_timezone := COALESCE(NULLIF(v_school.settings->>'timezone', ''), 'Asia/Jakarta');
-    v_now_local := v_now_utc AT TIME ZONE v_timezone;
-    v_today := v_now_local::date;
-
-    -- Kunci transaksi per guru & tanggal untuk mencegah double submit
-    PERFORM pg_advisory_xact_lock(hashtextextended(v_teacher.id::text || '|' || v_today::text, 0));
-
-    SELECT * INTO v_existing
-    FROM public.attendances
-    WHERE "schoolId" = v_school_id
-      AND "teacherId" = v_teacher.id
-      AND "date" = v_today
-      AND "type" = 'GURU'
-    FOR UPDATE;
-
-    -- ==================== PROSES CHECK-IN ====================
-    IF p_mode = 'CHECK_IN' THEN
-        IF v_existing.id IS NOT NULL THEN
-            RAISE EXCEPTION 'Anda sudah memiliki catatan presensi hari ini (%).', v_existing.status;
-        END IF;
-
-        IF COALESCE(v_school."requireSelfieCheckIn", true) THEN
-            IF p_selfie_path IS NULL OR trim(p_selfie_path) = '' THEN
-                RAISE EXCEPTION 'Foto selfie wajib dilampirkan saat presensi datang.';
-            END IF;
-            IF NOT EXISTS (
-                SELECT 1 FROM storage.objects
-                WHERE bucket_id = 'attendance-selfies' AND name = p_selfie_path
-            ) THEN
-                RAISE EXCEPTION 'Bukti foto selfie tidak ditemukan di server penyimpanan.';
-            END IF;
-        END IF;
-
-        v_start_parts := string_to_array(COALESCE(v_school."workStartTime", '07:30'), ':');
-        v_deadline := date_trunc('day', v_now_local)
-            + make_interval(
-                hours => COALESCE(v_start_parts[1]::int, 7),
-                mins  => COALESCE(v_start_parts[2]::int, 30) + COALESCE(v_school."lateToleranceMinutes", 0),
-                secs  => 59
-            );
-
-        v_status := CASE WHEN v_now_local > v_deadline THEN 'TERLAMBAT' ELSE 'HADIR' END;
-
-        INSERT INTO public.attendances (
-            "schoolId", "teacherId", "type", "date", "status",
-            "checkInTime", "checkInLat", "checkInLng", "checkInDistance",
-            "checkInAccuracy", "isCheckInMock", "checkInSelfieUrl",
-            "securityFlags", "deviceTelemetry"
-        ) VALUES (
-            v_school_id, v_teacher.id, 'GURU', v_today, v_status,
-            v_now_utc, p_lat, p_lng, round(v_distance),
-            round(p_accuracy::numeric, 1), p_is_suspected_mock, p_selfie_path,
-            v_flags, p_device_telemetry
-        );
-
-        RETURN jsonb_build_object(
-            'success', true,
-            'mode', 'CHECK_IN',
-            'status', v_status,
-            'distance', round(v_distance),
-            'serverTime', to_char(v_now_local, 'HH24:MI:SS')
-        );
-    END IF;
-
-    -- ==================== PROSES CHECK-OUT ====================
-    IF v_existing.id IS NULL OR v_existing."checkInTime" IS NULL THEN
-        RAISE EXCEPTION 'Anda belum melakukan Check-In masuk hari ini.';
-    END IF;
-
-    IF v_existing."checkOutTime" IS NOT NULL THEN
-        RAISE EXCEPTION 'Anda sudah melakukan Check-Out pulang hari ini.';
-    END IF;
-
-    IF COALESCE(v_school."requireSelfieCheckOut", true) THEN
-        IF p_selfie_path IS NULL OR trim(p_selfie_path) = '' THEN
-            RAISE EXCEPTION 'Foto selfie wajib dilampirkan saat presensi pulang.';
-        END IF;
-        IF NOT EXISTS (
-            SELECT 1 FROM storage.objects
-            WHERE bucket_id = 'attendance-selfies' AND name = p_selfie_path
-        ) THEN
-            RAISE EXCEPTION 'Bukti foto selfie pulang tidak ditemukan di server penyimpanan.';
-        END IF;
-    END IF;
-
-    v_end_parts := string_to_array(COALESCE(v_school."workEndTime", '14:30'), ':');
-    v_scheduled_end := date_trunc('day', v_now_local)
-        + make_interval(
-            hours => COALESCE(v_end_parts[1]::int, 14),
-            mins  => COALESCE(v_end_parts[2]::int, 30)
-        );
-    v_latest_ontime := v_scheduled_end + interval '30 minutes 59 seconds';
-
-    v_notes := v_existing.notes;
-
-    IF v_now_local < v_scheduled_end THEN
-        IF length(v_clean_reason) < 10 THEN
-            RAISE EXCEPTION 'Alasan pulang lebih awal wajib diisi minimal 10 karakter.';
-        END IF;
-        v_diff_mins := GREATEST(1, ceil(extract(epoch FROM (v_scheduled_end - v_now_local)) / 60.0)::int);
-        v_notes := concat_ws(' | ', v_notes,
-            format('[Pulang Lebih Awal] Pukul %s (jadwal %s, kurang %s menit) — Alasan: %s',
-                to_char(v_now_local, 'HH24:MI'),
-                COALESCE(v_school."workEndTime", '14:30'),
-                v_diff_mins,
-                v_clean_reason
-            )
-        );
-    ELSIF v_now_local > v_latest_ontime THEN
-        v_diff_mins := GREATEST(1, floor(extract(epoch FROM (v_now_local - v_scheduled_end)) / 60.0)::int);
-        v_notes := concat_ws(' | ', v_notes,
-            format('Pulang melewati jadwal pukul %s (jadwal %s, lewat %s menit)',
-                to_char(v_now_local, 'HH24:MI'),
-                COALESCE(v_school."workEndTime", '14:30'),
-                v_diff_mins
-            )
-        );
-    END IF;
-
-    UPDATE public.attendances
-    SET "checkOutTime"      = v_now_utc,
-        "checkOutLat"       = p_lat,
-        "checkOutLng"       = p_lng,
-        "checkOutDistance"  = round(v_distance),
-        "checkOutAccuracy"  = round(p_accuracy::numeric, 1),
-        "isCheckOutMock"    = p_is_suspected_mock,
-        "checkOutSelfieUrl" = COALESCE(p_selfie_path, "checkOutSelfieUrl"),
-        "notes"             = v_notes,
-        "securityFlags"     = ARRAY(SELECT DISTINCT unnest(COALESCE("securityFlags", '{}'::text[]) || v_flags)),
-        "deviceTelemetry"   = COALESCE("deviceTelemetry", '{}'::jsonb) || jsonb_build_object('checkOut', p_device_telemetry)
-    WHERE "id" = v_existing.id;
-
-    RETURN jsonb_build_object(
-        'success', true,
-        'mode', 'CHECK_OUT',
-        'distance', round(v_distance),
-        'serverTime', to_char(v_now_local, 'HH24:MI:SS')
-    );
-END;
-$$;
-
-REVOKE ALL ON FUNCTION public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.submit_teacher_gps_attendance(TEXT, DOUBLE PRECISION, DOUBLE PRECISION, DOUBLE PRECISION, TEXT, TEXT, BOOLEAN, TEXT[], JSONB, UUID, UUID) TO authenticated;
-
--- 11G. Bulk Import Siswa Dapodik (UPSERT + Orang Tua + Kesejahteraan/PIP + Sanitasi)
+-- 12J. Bulk Import Siswa Dapodik (UPSERT + Orang Tua + Kesejahteraan/PIP + Sanitasi)
 CREATE OR REPLACE FUNCTION public.bulk_import_students(batch_data JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER
@@ -3235,7 +3420,7 @@ $$;
 REVOKE ALL ON FUNCTION public.bulk_import_students(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.bulk_import_students(JSONB) TO authenticated;
 
--- 11H. Bulk Import Guru & PTK Dapodik (UPSERT + Kolom Dapodik Lengkap + Sanitasi '-')
+-- 12K. Bulk Import Guru & PTK Dapodik (UPSERT + Kolom Dapodik Lengkap + Sanitasi '-')
 CREATE OR REPLACE FUNCTION public.bulk_import_teachers(batch_data JSONB)
 RETURNS JSONB
 LANGUAGE plpgsql SECURITY DEFINER
@@ -3670,7 +3855,7 @@ REVOKE ALL ON FUNCTION public.bulk_import_teachers(JSONB) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.bulk_import_teachers(JSONB) TO authenticated;
 
 -- ============================================================================
--- 12. ROW LEVEL SECURITY (RLS) — MULTI-TENANT & MULTI-ROLE (HARDENED + CACHED)
+-- 13. ROW LEVEL SECURITY (RLS) — MULTI-TENANT & MULTI-ROLE (HARDENED)
 -- ============================================================================
 ALTER TABLE public.schools ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.academic_years ENABLE ROW LEVEL SECURITY;
@@ -3689,7 +3874,10 @@ ALTER TABLE public.subjects ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.schedule_entries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.announcements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.national_holidays ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.school_special_events ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.daily_quotes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.school_wa_configs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.wa_notification_logs ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.inventory_transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.administration_records ENABLE ROW LEVEL SECURITY;
@@ -3761,7 +3949,7 @@ WITH CHECK (
     AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
--- Users (Mendukung Multi-Role, Onboarding Admin & Pembatasan Ketat Akun ADMIN/SUPER_ADMIN)
+-- Users
 CREATE POLICY users_select ON public.users FOR SELECT TO authenticated
 USING (
     (SELECT public.is_super_admin())
@@ -3812,7 +4000,7 @@ USING (
     )
 );
 
--- Teachers (Granular: INSERT/UPDATE oleh Manajemen/TU/Operator, DELETE khusus Pimpinan)
+-- Teachers
 CREATE POLICY teachers_select ON public.teachers FOR SELECT TO authenticated
 USING (
     (SELECT public.is_user_active())
@@ -3947,7 +4135,7 @@ CREATE POLICY economics_manage ON public.student_economics FOR ALL TO authentica
 USING ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
 WITH CHECK ((SELECT public.current_user_can_manage_students()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
--- Attendances (Presensi HADIR/TERLAMBAT guru wajib melewati RPC submit_teacher_gps_attendance)
+-- Attendances
 CREATE POLICY attendances_select ON public.attendances FOR SELECT TO authenticated
 USING (
     (SELECT public.is_user_active())
@@ -3970,7 +4158,7 @@ USING (
             ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
             OR (
                 "type" = 'SISWA'
-                AND ((SELECT public.get_user_all_roles()) && ARRAY['WALI_KELAS','GURU']::text[])
+                AND ((SELECT public.get_user_all_roles()) && ARRAY['WALI_KELAS','GURU','STAFF_TU']::text[])
             )
             OR (
                 "type" = 'GURU'
@@ -3993,7 +4181,7 @@ WITH CHECK (
             ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
             OR (
                 "type" = 'SISWA'
-                AND ((SELECT public.get_user_all_roles()) && ARRAY['WALI_KELAS','GURU']::text[])
+                AND ((SELECT public.get_user_all_roles()) && ARRAY['WALI_KELAS','GURU','STAFF_TU']::text[])
             )
             OR (
                 "type" = 'GURU'
@@ -4053,7 +4241,7 @@ WITH CHECK (
     AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
 );
 
--- National Holidays (Global "schoolId" IS NULL + Terisolasi Per Sekolah)
+-- National Holidays
 CREATE POLICY national_holidays_select ON public.national_holidays FOR SELECT TO authenticated
 USING (
     (SELECT public.is_user_active())
@@ -4082,7 +4270,30 @@ WITH CHECK (
     )
 );
 
--- Daily Quotes (Global "schoolId" IS NULL + Terisolasi Per Sekolah)
+-- School Special Events
+CREATE POLICY school_special_events_select ON public.school_special_events FOR SELECT TO authenticated
+USING (
+    (SELECT public.is_user_active())
+    AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id()))
+);
+
+CREATE POLICY school_special_events_manage ON public.school_special_events FOR ALL TO authenticated
+USING (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
+)
+WITH CHECK (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
+);
+
+-- Daily Quotes
 CREATE POLICY daily_quotes_select ON public.daily_quotes FOR SELECT TO authenticated
 USING (
     (SELECT public.is_user_active())
@@ -4108,6 +4319,59 @@ WITH CHECK (
         "schoolId" IS NOT NULL
         AND "schoolId" = (SELECT public.get_user_school_id())
         AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+    )
+);
+
+-- WhatsApp Gateway Configs & Notification Logs
+CREATE POLICY school_wa_configs_select ON public.school_wa_configs FOR SELECT TO authenticated
+USING (
+    (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            "schoolId" = (SELECT public.get_user_school_id())
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+        )
+    )
+);
+
+CREATE POLICY school_wa_configs_manage ON public.school_wa_configs FOR ALL TO authenticated
+USING (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+    )
+)
+WITH CHECK (
+    (SELECT public.is_super_admin())
+    OR (
+        "schoolId" = (SELECT public.get_user_school_id())
+        AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR']::text[])
+    )
+);
+
+CREATE POLICY wa_notification_logs_select ON public.wa_notification_logs FOR SELECT TO authenticated
+USING (
+    (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            "schoolId" = (SELECT public.get_user_school_id())
+            AND ((SELECT public.get_user_all_roles()) && ARRAY['ADMIN','KEPALA_SEKOLAH','OPERATOR','STAFF_TU']::text[])
+        )
+    )
+);
+
+CREATE POLICY wa_notification_logs_insert ON public.wa_notification_logs FOR INSERT TO authenticated
+WITH CHECK (
+    (SELECT public.is_user_active())
+    AND (
+        (SELECT public.is_super_admin())
+        OR (
+            "schoolId" = (SELECT public.get_user_school_id())
+            AND NOT ((SELECT public.get_user_all_roles()) <@ ARRAY['ORANG_TUA','SISWA']::text[])
+        )
     )
 );
 
@@ -4201,7 +4465,7 @@ CREATE POLICY payments_manage ON public.payment_transactions FOR ALL TO authenti
 USING ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())))
 WITH CHECK ((SELECT public.current_user_can_manage_finance()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
--- Library (Perpustakaan)
+-- Library
 CREATE POLICY library_books_select ON public.library_books FOR SELECT TO authenticated
 USING (
     (SELECT public.is_user_active())
@@ -4246,20 +4510,18 @@ CREATE POLICY audit_logs_insert ON public.audit_logs FOR INSERT TO authenticated
 WITH CHECK ((SELECT public.is_user_active()) AND ((SELECT public.is_super_admin()) OR "schoolId" = (SELECT public.get_user_school_id())));
 
 -- ============================================================================
--- 13. TABLE GRANTS
+-- 14. TABLE GRANTS
 -- ============================================================================
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon;
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO authenticated;
 REVOKE UPDATE, DELETE, TRUNCATE ON public.audit_logs FROM authenticated;
+REVOKE UPDATE, DELETE, TRUNCATE ON public.wa_notification_logs FROM authenticated;
 REVOKE ALL ON TABLE public.refresh_tokens FROM authenticated;
 
-COMMIT;
-
 -- ============================================================================
--- 14. STORAGE BUCKETS & RLS POLICIES (MULTI-FORMAT FOLDER ISOLATION)
--- Mendukung struktur folder {schoolId}/... maupun {Nama_Sekolah}/...
+-- 15. STORAGE BUCKETS & RLS POLICIES (MULTI-FORMAT FOLDER ISOLATION)
 -- ============================================================================
 INSERT INTO storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
 VALUES
@@ -4292,7 +4554,6 @@ DROP POLICY IF EXISTS "attendance_attachments_insert" ON storage.objects;
 DROP POLICY IF EXISTS "attendance_attachments_update" ON storage.objects;
 DROP POLICY IF EXISTS "attendance_attachments_delete" ON storage.objects;
 
--- Bucket 1: attendance-selfies
 CREATE POLICY "attendance_selfies_select"
 ON storage.objects FOR SELECT TO authenticated
 USING (
@@ -4344,7 +4605,6 @@ USING (
     )
 );
 
--- Bucket 2: attendance-attachments
 CREATE POLICY "attendance_attachments_select"
 ON storage.objects FOR SELECT TO authenticated
 USING (
@@ -4396,5 +4656,6 @@ USING (
     )
 );
 
+COMMIT;
 
 NOTIFY pgrst, 'reload schema';

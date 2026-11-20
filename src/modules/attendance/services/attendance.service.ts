@@ -11,12 +11,18 @@ import type {
   SchoolAttendanceSettings,
   SchoolCoordinates,
   SchoolSpecialEvent,
+  SchoolWaConfig,
   StudentAttendance,
+  StudentWaRecipientResult,
   SubmitTeacherGpsAttendanceParams,
   TeacherAttendance,
+  WaNotificationEventType,
+  WaNotificationLog,
+  WaNotificationStatus,
   WorkDaysMode,
 } from '../types/attendance.types';
 import { getSchoolDateString, isAfterDeadline } from './gps.utils';
+import { dispatchStudentAttendanceWhatsApp } from './whatsappService';
 
 // ============================================================================
 // PARAMETER KONFIGURASI LAYANAN PRESENSI
@@ -202,9 +208,22 @@ const ATTENDANCE_BASE_COLUMNS = `
   securityFlags, deviceTelemetry, createdAt, updatedAt
 `;
 
+function formatTimeInTimezone(date: Date, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(date);
+  } catch {
+    return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  }
+}
+
 export const attendanceService = {
   // ==========================================================================
-  // 1. KONFIGURASI SEKOLAH & PROFIL GURU (SELARAS KOLOM SQL v20.1)
+  // 1. KONFIGURASI SEKOLAH & PROFIL GURU (SELARAS KOLOM SQL v20.2)
   // ==========================================================================
 
   async getSchoolCoordinates(schoolId: string): Promise<SchoolCoordinates> {
@@ -267,7 +286,9 @@ export const attendanceService = {
 
   async updateSchoolAttendanceSettings(
     schoolId: string,
-    payload: Partial<Omit<SchoolAttendanceSettings, 'id' | 'name' | 'timezone'>>
+    payload: Partial<
+      Omit<SchoolAttendanceSettings, 'id' | 'name' | 'timezone'>
+    >
   ): Promise<void> {
     const { error } = await supabase
       .from('schools')
@@ -328,9 +349,6 @@ export const attendanceService = {
     return null;
   },
 
-  /**
-   * Mengatur izin presensi via komputer untuk 1 guru (memanggil RPC v20.1)
-   */
   async setTeacherDesktopAttendance(
     teacherId: string,
     allow: boolean
@@ -347,9 +365,6 @@ export const attendanceService = {
     return Boolean(data);
   },
 
-  /**
-   * Mengatur izin presensi via komputer secara global untuk 1 sekolah (memanggil RPC v20.1)
-   */
   async setSchoolDesktopAttendanceGlobal(
     schoolId: string,
     allow: boolean
@@ -390,7 +405,9 @@ export const attendanceService = {
     return filePath;
   },
 
-  async getSignedSelfieUrl(path: string | null | undefined): Promise<string | null> {
+  async getSignedSelfieUrl(
+    path: string | null | undefined
+  ): Promise<string | null> {
     if (!path) return null;
     if (path.startsWith('http://') || path.startsWith('https://')) return path;
 
@@ -410,7 +427,8 @@ export const attendanceService = {
     extension: string;
     contentType: string;
   }): Promise<string> {
-    const safeExt = params.extension.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'jpg';
+    const safeExt =
+      params.extension.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() || 'jpg';
     const filePath = `${params.schoolId}/${params.ownerId}/${params.date}_${Date.now()}.${safeExt}`;
 
     const { error: uploadError } = await supabase.storage
@@ -497,7 +515,7 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 4. PRESENSI SISWA (KIOSK & LEMBAR PRESENSI KELAS)
+  // 4. PRESENSI SISWA (KIOSK, LEMBAR PRESENSI KELAS & AUTO NOTIFIKASI WA)
   // ==========================================================================
 
   async studentCheckIn(payload: {
@@ -509,8 +527,9 @@ export const attendanceService = {
     recordedBy?: string;
   }) {
     const schoolCfg = await this.getSchoolCoordinates(payload.schoolId);
+    const now = new Date();
     const activeDate =
-      payload.date || getSchoolDateString(new Date(), schoolCfg.settings.timezone);
+      payload.date || getSchoolDateString(now, schoolCfg.settings.timezone);
 
     const { data: existing } = await supabase
       .from('attendances')
@@ -529,13 +548,13 @@ export const attendanceService = {
       };
     }
 
-    const now = new Date();
     const computedStatus: 'HADIR' | 'TERLAMBAT' =
       payload.status ??
       (isAfterDeadline(
         schoolCfg.settings.studentWorkStartTime,
         now,
-        schoolCfg.settings.studentLateToleranceMinutes
+        schoolCfg.settings.studentLateToleranceMinutes,
+        schoolCfg.settings.timezone
       )
         ? 'TERLAMBAT'
         : 'HADIR');
@@ -556,6 +575,19 @@ export const attendanceService = {
       .single();
 
     if (error) throw error;
+
+    // Kirim notifikasi WhatsApp secara non-blocking di latar belakang
+    const timeFormatted = formatTimeInTimezone(
+      now,
+      schoolCfg.settings.timezone
+    );
+    void dispatchStudentAttendanceWhatsApp({
+      studentId: payload.studentId,
+      eventType: 'CHECK_IN',
+      timeFormatted,
+      status: computedStatus,
+    });
+
     return {
       success: true,
       message:
@@ -572,8 +604,9 @@ export const attendanceService = {
     date?: string;
   }) {
     const schoolCfg = await this.getSchoolCoordinates(payload.schoolId);
+    const now = new Date();
     const activeDate =
-      payload.date || getSchoolDateString(new Date(), schoolCfg.settings.timezone);
+      payload.date || getSchoolDateString(now, schoolCfg.settings.timezone);
 
     const { data: existing, error: findErr } = await supabase
       .from('attendances')
@@ -601,13 +634,26 @@ export const attendanceService = {
 
     const { data, error } = await supabase
       .from('attendances')
-      .update({ checkOutTime: new Date().toISOString() })
+      .update({ checkOutTime: now.toISOString() })
       .eq('id', existing.id)
       .eq('schoolId', payload.schoolId)
       .select()
       .single();
 
     if (error) throw error;
+
+    // Kirim notifikasi WhatsApp kepulangan secara non-blocking
+    const timeFormatted = formatTimeInTimezone(
+      now,
+      schoolCfg.settings.timezone
+    );
+    void dispatchStudentAttendanceWhatsApp({
+      studentId: payload.studentId,
+      eventType: 'CHECK_OUT',
+      timeFormatted,
+      status: 'PULANG',
+    });
+
     return {
       success: true,
       message: 'Presensi pulang siswa berhasil dicatat.',
@@ -640,7 +686,8 @@ export const attendanceService = {
     if (attendancesRes.error) throw attendancesRes.error;
 
     const attendanceMap = new Map<string, StudentSheetAttendanceRow>();
-    const typedAttendances = (attendancesRes.data ?? []) as StudentSheetAttendanceRow[];
+    const typedAttendances = (attendancesRes.data ??
+      []) as StudentSheetAttendanceRow[];
     for (const att of typedAttendances) {
       if (att.studentId) attendanceMap.set(att.studentId, att);
     }
@@ -688,7 +735,10 @@ export const attendanceService = {
 
     if (fetchErr) throw fetchErr;
 
-    const existingMap = new Map<string, { id: string; checkInTime: string | null }>();
+    const existingMap = new Map<
+      string,
+      { id: string; checkInTime: string | null }
+    >();
     for (const row of existingRows ?? []) {
       if (row.studentId) existingMap.set(row.studentId, row);
     }
@@ -704,7 +754,8 @@ export const attendanceService = {
 
     for (const rec of payload.records) {
       const existing = existingMap.get(rec.studentId);
-      const isPresentStatus = rec.status === 'HADIR' || rec.status === 'TERLAMBAT';
+      const isPresentStatus =
+        rec.status === 'HADIR' || rec.status === 'TERLAMBAT';
 
       if (existing) {
         toUpdate.push({
@@ -872,13 +923,9 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 5. PRESENSI GPS GURU VIA SERVER RPC v20.1 & PENGAJUAN IZIN
+  // 5. PRESENSI GPS GURU VIA SERVER RPC v20.2 & PENGAJUAN IZIN
   // ==========================================================================
 
-  /**
-   * Memanggil RPC server-side `submit_teacher_gps_attendance` untuk CHECK_IN & CHECK_OUT.
-   * Server memvalidasi radius geofencing, jam server, selfie, dan izin komputer.
-   */
   async submitTeacherGpsAttendance(
     params: SubmitTeacherGpsAttendanceParams
   ): Promise<GpsAttendanceRpcResponse> {
@@ -903,9 +950,6 @@ export const attendanceService = {
     return data as GpsAttendanceRpcResponse;
   },
 
-  /**
-   * Wrapper Check-In Guru yang mendelegasikan langsung ke RPC server v20.1
-   */
   async teacherCheckIn(payload: {
     checkInLat: number;
     checkInLng: number;
@@ -916,7 +960,11 @@ export const attendanceService = {
     deviceTelemetry?: Record<string, unknown>;
     simTeacherId?: string | null;
     simSchoolId?: string | null;
-  }): Promise<{ success: boolean; message: string; data: GpsAttendanceRpcResponse }> {
+  }): Promise<{
+    success: boolean;
+    message: string;
+    data: GpsAttendanceRpcResponse;
+  }> {
     const result = await this.submitTeacherGpsAttendance({
       mode: 'CHECK_IN',
       lat: payload.checkInLat,
@@ -940,9 +988,6 @@ export const attendanceService = {
     };
   },
 
-  /**
-   * Wrapper Check-Out Guru yang mendelegasikan langsung ke RPC server v20.1
-   */
   async teacherCheckOut(payload: {
     checkOutLat: number;
     checkOutLng: number;
@@ -954,7 +999,11 @@ export const attendanceService = {
     deviceTelemetry?: Record<string, unknown>;
     simTeacherId?: string | null;
     simSchoolId?: string | null;
-  }): Promise<{ success: boolean; message: string; data: GpsAttendanceRpcResponse }> {
+  }): Promise<{
+    success: boolean;
+    message: string;
+    data: GpsAttendanceRpcResponse;
+  }> {
     const result = await this.submitTeacherGpsAttendance({
       mode: 'CHECK_OUT',
       lat: payload.checkOutLat,
@@ -976,11 +1025,6 @@ export const attendanceService = {
     };
   },
 
-  /**
-   * Pengajuan Izin / Sakit / Cuti / Dinas untuk Guru & PTK.
-   * Trigger `protect_attendance_approval` di PostgreSQL otomatis mengatur
-   * status persetujuan menjadi 'PENDING' jika diajukan oleh non-pimpinan.
-   */
   async teacherSubmitLeave(payload: {
     schoolId: string;
     teacherId: string;
@@ -1033,9 +1077,6 @@ export const attendanceService = {
     };
   },
 
-  /**
-   * Persetujuan atau penolakan pengajuan izin/cuti/dinas oleh Admin / Kepala Sekolah / Operator
-   */
   async approveOrRejectAttendance(params: {
     schoolId: string;
     attendanceId: string;
@@ -1163,7 +1204,11 @@ export const attendanceService = {
     return { data: mapped, total: count ?? 0 };
   },
 
-  async getTeacherTodayStatus(schoolId: string, teacherId: string, date: string) {
+  async getTeacherTodayStatus(
+    schoolId: string,
+    teacherId: string,
+    date: string
+  ) {
     const { data, error } = await supabase
       .from('attendances')
       .select(
@@ -1290,7 +1335,7 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 7. KELOLA HARI LIBUR & KEGIATAN KHUSUS SEKOLAH (v20.1)
+  // 7. KELOLA HARI LIBUR & KEGIATAN KHUSUS SEKOLAH
   // ==========================================================================
 
   async getNationalHolidays(
@@ -1302,7 +1347,9 @@ export const attendanceService = {
 
     const { data, error } = await supabase
       .from('national_holidays')
-      .select('id, schoolId, date, name, type, createdBy, createdAt, updatedAt')
+      .select(
+        'id, schoolId, date, name, type, createdBy, createdAt, updatedAt'
+      )
       .or(`schoolId.is.null,schoolId.eq.${schoolId}`)
       .gte('date', startDate)
       .lte('date', endDate)
@@ -1355,7 +1402,10 @@ export const attendanceService = {
     return toInsert.length;
   },
 
-  async deleteSchoolHoliday(schoolId: string, holidayId: string): Promise<void> {
+  async deleteSchoolHoliday(
+    schoolId: string,
+    holidayId: string
+  ): Promise<void> {
     const { error } = await supabase
       .from('national_holidays')
       .delete()
@@ -1387,9 +1437,45 @@ export const attendanceService = {
     return (data ?? []) as SchoolSpecialEvent[];
   },
 
-  /**
-   * Menghapus arsip catatan presensi lama (misalnya > 2 tahun) untuk menjaga performa database
-   */
+  async upsertSchoolSpecialEvent(payload: {
+    schoolId: string;
+    eventDate: string;
+    reason: string;
+    isActive?: boolean;
+    createdBy?: string;
+  }): Promise<SchoolSpecialEvent> {
+    const { data, error } = await supabase
+      .from('school_special_events')
+      .upsert(
+        {
+          schoolId: payload.schoolId,
+          eventDate: payload.eventDate,
+          reason: payload.reason.trim(),
+          isActive: payload.isActive ?? true,
+          createdBy: payload.createdBy ?? null,
+        },
+        { onConflict: 'schoolId,eventDate' }
+      )
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data as SchoolSpecialEvent;
+  },
+
+  async deleteSchoolSpecialEvent(
+    schoolId: string,
+    eventId: string
+  ): Promise<void> {
+    const { error } = await supabase
+      .from('school_special_events')
+      .delete()
+      .eq('id', eventId)
+      .eq('schoolId', schoolId);
+
+    if (error) throw error;
+  },
+
   async deleteArchivedAttendances(
     schoolId: string,
     beforeDateISO: string
@@ -1403,5 +1489,92 @@ export const attendanceService = {
 
     if (error) throw error;
     return data?.length ?? 0;
+  },
+
+  // ==========================================================================
+  // 8. WHATSAPP GATEWAY LOGS & KONFIGURASI (SKEMA SQL v20.2)
+  // ==========================================================================
+
+  async getSchoolWaConfig(schoolId: string): Promise<SchoolWaConfig | null> {
+    const { data, error } = await supabase
+      .from('school_wa_configs')
+      .select('*')
+      .eq('schoolId', schoolId)
+      .maybeSingle();
+
+    if (error) throw error;
+    return (data as SchoolWaConfig) ?? null;
+  },
+
+  async upsertSchoolWaConfig(
+    schoolId: string,
+    payload: Partial<
+      Omit<SchoolWaConfig, 'id' | 'schoolId' | 'createdAt' | 'updatedAt'>
+    >
+  ): Promise<SchoolWaConfig> {
+    const { data, error } = await supabase
+      .from('school_wa_configs')
+      .upsert(
+        {
+          schoolId,
+          ...payload,
+        },
+        { onConflict: 'schoolId' }
+      )
+      .select()
+      .single();
+
+    if (error) throw error;
+    return data as SchoolWaConfig;
+  },
+
+  async getStudentWaRecipient(
+    studentId: string
+  ): Promise<StudentWaRecipientResult> {
+    const { data, error } = await supabase.rpc('get_student_wa_recipient', {
+      p_student_id: studentId,
+    });
+
+    if (error) throw error;
+    return data as StudentWaRecipientResult;
+  },
+
+  async logWaNotification(payload: {
+    schoolId: string;
+    studentId?: string | null;
+    recipientPhone: string;
+    eventType: WaNotificationEventType;
+    messageBody: string;
+    status: WaNotificationStatus;
+    providerResponse?: Record<string, unknown> | null;
+    errorMessage?: string | null;
+  }): Promise<void> {
+    const { error } = await supabase.from('wa_notification_logs').insert({
+      schoolId: payload.schoolId,
+      studentId: payload.studentId ?? null,
+      recipientPhone: payload.recipientPhone,
+      eventType: payload.eventType,
+      messageBody: payload.messageBody,
+      status: payload.status,
+      providerResponse: payload.providerResponse ?? null,
+      errorMessage: payload.errorMessage ?? null,
+    });
+
+    if (error) throw error;
+  },
+
+  async getWaNotificationLogs(params: {
+    schoolId: string;
+    limit?: number;
+  }): Promise<WaNotificationLog[]> {
+    const { data, error } = await supabase
+      .from('wa_notification_logs')
+      .select('*')
+      .eq('schoolId', params.schoolId)
+      .order('createdAt', { ascending: false })
+      .limit(params.limit ?? 50);
+
+    if (error) throw error;
+    return (data ?? []) as WaNotificationLog[];
   },
 };

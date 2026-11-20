@@ -12,6 +12,7 @@ import {
   RefreshCw,
   MapPin,
   Shield,
+  ShieldAlert,
   Camera,
   X,
   FlaskConical,
@@ -26,10 +27,13 @@ import {
   LogIn,
   LogOut,
   Search,
+  Smartphone,
+  CalendarDays,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
+import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type {
   StudentAttendance,
@@ -64,13 +68,18 @@ type StudentSortKey =
   | 'time'
   | 'checkOutTime';
 
-// Memperluas tipe TeacherAttendance agar mencakup kolom Check-Out GPS & Selfie
-type TeacherAttendanceWithCheckOut = TeacherAttendance & {
+// Memperluas tipe TeacherAttendance tanpa bentrok dengan tipe securityFlags & deviceTelemetry
+type TeacherAttendanceWithCheckOut = Omit<
+  TeacherAttendance,
+  'deviceTelemetry' | 'securityFlags'
+> & {
   checkOutSelfieUrl?: string | null;
   checkOutDistance?: number | null;
   checkOutLat?: number | null;
   checkOutLng?: number | null;
   attachmentUrl?: string | null;
+  deviceTelemetry?: Record<string, unknown> | null;
+  securityFlags?: string[] | null;
 };
 
 // Memperluas tipe StudentAttendance agar mencakup kolom Jam Masuk & Jam Pulang
@@ -86,6 +95,8 @@ interface AttendanceExtraCols {
   checkOutDistance?: number | null;
   checkOutSelfieUrl?: string | null;
   attachmentUrl?: string | null;
+  deviceTelemetry?: Record<string, unknown> | null;
+  securityFlags?: string[] | null;
 }
 
 interface StudentAttendanceExtraCols {
@@ -117,6 +128,21 @@ const STATUS_LABELS: Record<string, string> = {
   ALPA: 'Alpa',
   BELUM_ABSEN: 'Belum Absen',
 };
+
+const NAMA_BULAN_ID = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
 
 // Normalisasi status agar variasi penulisan ALPHA tetap terbaca sebagai ALPA
 function normalizeStatusKey(status?: string | null): string {
@@ -176,6 +202,36 @@ function isEarlyCheckoutNote(notes?: string | null): boolean {
   return lower.includes('pulang awal') || lower.includes('pulang lebih awal');
 }
 
+/**
+ * Mengambil menit keterlambatan yang tercatat pada telemetri (jika ada)
+ */
+function extractLateMinutesFromTelemetry(
+  telemetry?: Record<string, unknown> | null
+): number {
+  if (!telemetry || typeof telemetry !== 'object') return 0;
+  const raw = telemetry.lateMinutes;
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) {
+    return Math.round(raw);
+  }
+  return 0;
+}
+
+/**
+ * Memformat tanggal YYYY-MM-DD menjadi label Masehi + Kalender Jawa lengkap
+ */
+function formatFullDateWithJavanese(dateStr: string): {
+  masehiWithPasaran: string;
+  javaneseCalendarLabel: string;
+} {
+  const jv = getJavaneseDateInfo(dateStr);
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const monthName = NAMA_BULAN_ID[(m || 1) - 1] ?? '';
+  return {
+    masehiWithPasaran: `${jv.hariPasaran}, ${d || 1} ${monthName} ${y || ''}`,
+    javaneseCalendarLabel: `${jv.javaneseDay} ${jv.javaneseMonth} ${jv.javaneseYear} Ja (${jv.winduYearName})`,
+  };
+}
+
 export function AttendanceDashboardPage() {
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -201,8 +257,15 @@ export function AttendanceDashboardPage() {
   const [classes, setClasses] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
   const [studentStatusFilter, setStudentStatusFilter] = useState<string>('ALL');
+  const [teacherStatusFilter, setTeacherStatusFilter] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Label Kalender Masehi + Pasaran Jawa untuk tanggal terpilih
+  const selectedDateDisplay = useMemo(
+    () => formatFullDateWithJavanese(selectedDate),
+    [selectedDate]
+  );
 
   // State Pengurutan (Sorting) Tabel Guru & Siswa
   const [teacherSort, setTeacherSort] = useState<{
@@ -226,7 +289,7 @@ export function AttendanceDashboardPage() {
     setTimeout(() => setToast(null), 4500);
   };
 
-  // State Modal Pratinjau Foto Selfie Guru (Datang & Pulang)
+  // State Modal Pratinjau Foto Selfie Guru (Datang, Pulang, & Telemetri Perangkat)
   const [selfieModal, setSelfieModal] = useState<{
     teacherName: string;
     status: string;
@@ -235,6 +298,9 @@ export function AttendanceDashboardPage() {
     checkInDistance?: number | null;
     checkOutDistance?: number | null;
     notes?: string | null;
+    deviceTelemetry?: Record<string, unknown> | null;
+    securityFlags?: string[] | null;
+    isMock?: boolean;
     hasCheckInPhoto: boolean;
     hasCheckOutPhoto: boolean;
     checkInImageUrl: string | null;
@@ -343,21 +409,48 @@ export function AttendanceDashboardPage() {
 
       if (enrichedTeachers.length > 0) {
         const ids = enrichedTeachers.map((t) => t.id);
-        const { data: extraCols, error: extraErr } = await supabase
+
+        // Ambil kolom tambahan + telemetri perangkat (dengan fallback aman)
+        let extraRows: AttendanceExtraCols[] | null = null;
+        const primaryRes = await supabase
           .from('attendances')
           .select(
-            'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
+            'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl, deviceTelemetry, securityFlags'
           )
           .in('id', ids);
 
-        if (!extraErr && extraCols) {
-          const typedExtraCols = extraCols as AttendanceExtraCols[];
-          const extraMap = new Map(
-            typedExtraCols.map((row) => [row.id, row])
-          );
+        if (!primaryRes.error && primaryRes.data) {
+          extraRows = primaryRes.data as AttendanceExtraCols[];
+        } else {
+          const fallbackRes = await supabase
+            .from('attendances')
+            .select(
+              'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
+            )
+            .in('id', ids);
+          if (!fallbackRes.error && fallbackRes.data) {
+            extraRows = fallbackRes.data as AttendanceExtraCols[];
+          }
+        }
+
+        if (extraRows) {
+          const extraMap = new Map(extraRows.map((row) => [row.id, row]));
           enrichedTeachers = enrichedTeachers.map((item) => {
             const extra = extraMap.get(item.id);
-            return extra ? { ...item, ...extra } : item;
+            if (!extra) return item;
+            return {
+              ...item,
+              checkOutLat: extra.checkOutLat ?? null,
+              checkOutLng: extra.checkOutLng ?? null,
+              checkOutDistance: extra.checkOutDistance ?? null,
+              checkOutSelfieUrl: extra.checkOutSelfieUrl ?? null,
+              attachmentUrl: extra.attachmentUrl ?? null,
+              deviceTelemetry:
+                extra.deviceTelemetry ?? item.deviceTelemetry ?? null,
+              securityFlags: Array.isArray(extra.securityFlags)
+                ? extra.securityFlags
+                : item.securityFlags ?? [],
+            };
           });
         }
       }
@@ -376,7 +469,7 @@ export function AttendanceDashboardPage() {
     loadData();
   }, [loadData]);
 
-  // Buka Modal Pratinjau Foto Selfie Guru
+  // Buka Modal Pratinjau Foto Selfie Guru + Telemetri Perangkat
   const handlePreviewSelfie = async (record: TeacherAttendanceWithCheckOut) => {
     const hasCheckInPhoto = Boolean(record.checkInSelfieUrl);
     const hasCheckOutPhoto = Boolean(record.checkOutSelfieUrl);
@@ -390,6 +483,9 @@ export function AttendanceDashboardPage() {
       checkInDistance: record.checkInDistance,
       checkOutDistance: record.checkOutDistance,
       notes: record.notes,
+      deviceTelemetry: record.deviceTelemetry ?? null,
+      securityFlags: record.securityFlags ?? [],
+      isMock: Boolean(record.isCheckInMock),
       hasCheckInPhoto,
       hasCheckOutPhoto,
       checkInImageUrl: null,
@@ -466,6 +562,26 @@ export function AttendanceDashboardPage() {
         .length,
     };
   }, [studentRecords, selectedClassId]);
+
+  // Hitung statistik status guru
+  const teacherStatusCounts = useMemo(() => {
+    return {
+      ALL: teacherRecords.length,
+      HADIR: teacherRecords.filter(
+        (r) => normalizeStatusKey(r.status) === 'HADIR'
+      ).length,
+      TERLAMBAT: teacherRecords.filter(
+        (r) => normalizeStatusKey(r.status) === 'TERLAMBAT'
+      ).length,
+      IZIN: teacherRecords.filter((r) => normalizeStatusKey(r.status) === 'IZIN')
+        .length,
+      SAKIT: teacherRecords.filter(
+        (r) => normalizeStatusKey(r.status) === 'SAKIT'
+      ).length,
+      ALPA: teacherRecords.filter((r) => normalizeStatusKey(r.status) === 'ALPA')
+        .length,
+    };
+  }, [teacherRecords]);
 
   // Filter & Urutkan Data Siswa
   const filteredStudents = useMemo(() => {
@@ -546,6 +662,12 @@ export function AttendanceDashboardPage() {
   // Filter & Urutkan Data Guru
   const filteredTeachers = useMemo(() => {
     const filtered = teacherRecords.filter((r) => {
+      const normalizedStatus = normalizeStatusKey(r.status);
+      const matchesStatus =
+        teacherStatusFilter === 'ALL' ||
+        normalizedStatus === teacherStatusFilter;
+      if (!matchesStatus) return false;
+
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
       return (
@@ -600,7 +722,7 @@ export function AttendanceDashboardPage() {
           return 0;
       }
     });
-  }, [teacherRecords, searchQuery, teacherSort]);
+  }, [teacherRecords, teacherStatusFilter, searchQuery, teacherSort]);
 
   // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat
   const handleConfirmDeleteSingle = async () => {
@@ -753,7 +875,8 @@ export function AttendanceDashboardPage() {
       let fetchFilesQuery = supabase
         .from('attendances')
         .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
-        .lt('date', cutoffDate);
+        .lt('date', cutoffDate)
+        .limit(10000);
 
       if (purgeScope === 'CURRENT_SCHOOL' && activeSchoolId) {
         fetchFilesQuery = fetchFilesQuery.eq('schoolId', activeSchoolId);
@@ -818,34 +941,40 @@ export function AttendanceDashboardPage() {
     });
   };
 
-  // Render Kolom Keterangan Guru dengan Penanda Khusus "Pulang Awal"
-  const renderTeacherNotes = (notes?: string | null) => {
-    if (!notes || !notes.trim()) {
+  // Render Kolom Keterangan Guru dengan Penanda Khusus "Pulang Awal" & Menit Terlambat
+  const renderTeacherNotes = (record: TeacherAttendanceWithCheckOut) => {
+    const notes = record.notes;
+    const lateMinutes = extractLateMinutesFromTelemetry(record.deviceTelemetry);
+    const hasEarlyNote = isEarlyCheckoutNote(notes);
+
+    if ((!notes || !notes.trim()) && lateMinutes === 0) {
       return <span className="text-xs opacity-40">-</span>;
     }
 
-    if (isEarlyCheckoutNote(notes)) {
-      return (
-        <div className="flex flex-col items-start gap-1 max-w-60">
+    return (
+      <div className="flex flex-col items-start gap-1 max-w-60">
+        {lateMinutes > 0 && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/35">
+            <Clock size={11} />
+            Terlambat {lateMinutes} menit
+          </span>
+        )}
+        {hasEarlyNote && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/35">
             <AlertTriangle size={11} />
             Pulang Awal
           </span>
-          <span className="text-xs text-foreground/90 leading-snug">
+        )}
+        {notes && notes.trim() && (
+          <span className="text-xs text-foreground/85 leading-snug">
             {notes}
           </span>
-        </div>
-      );
-    }
-
-    return (
-      <span className="text-xs text-foreground/80 leading-snug block max-w-60">
-        {notes}
-      </span>
+        )}
+      </div>
     );
   };
 
-  // Ekspor Laporan CSV (Kompatibel dengan Microsoft Excel)
+  // Ekspor Laporan CSV (Kompatibel dengan Microsoft Excel + Kalender Jawa)
   const handleExportCsv = () => {
     const escapeCsv = (val: unknown) => {
       const str = String(val ?? '-').replace(/"/g, '""');
@@ -859,10 +988,13 @@ export function AttendanceDashboardPage() {
         [
           'No',
           'Tanggal',
+          'Hari & Pasaran',
+          'Penanggalan Jawa',
           'Nama Guru / PTK',
           'NIP',
           'NUPTK',
           'Status',
+          'Keterlambatan (Menit)',
           'Check-In',
           'Check-Out',
           'Jarak Datang (m)',
@@ -876,14 +1008,19 @@ export function AttendanceDashboardPage() {
 
       filteredTeachers.forEach((r, idx) => {
         const st = normalizeStatusKey(r.status);
+        const jvInfo = getJavaneseDateInfo(r.date);
+        const lateMins = extractLateMinutesFromTelemetry(r.deviceTelemetry);
         lines.push(
           [
             idx + 1,
             r.date,
+            jvInfo.hariPasaran,
+            `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja`,
             r.teacher?.fullName ?? '-',
             r.teacher?.nip ?? '-',
             r.teacher?.nuptk ?? '-',
             STATUS_LABELS[st] ?? st,
+            lateMins > 0 ? lateMins : 0,
             formatTime(r.checkInTime),
             formatTime(r.checkOutTime),
             r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
@@ -900,6 +1037,8 @@ export function AttendanceDashboardPage() {
         [
           'No',
           'Tanggal',
+          'Hari & Pasaran',
+          'Penanggalan Jawa',
           'Nama Siswa',
           'NISN',
           'Kelas',
@@ -915,10 +1054,13 @@ export function AttendanceDashboardPage() {
 
       filteredStudents.forEach((r, idx) => {
         const st = normalizeStatusKey(r.status);
+        const jvInfo = getJavaneseDateInfo(r.date);
         lines.push(
           [
             idx + 1,
             r.date,
+            jvInfo.hariPasaran,
+            `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja`,
             r.student?.fullName ?? '-',
             r.student?.nisn ?? '-',
             r.student?.classes?.name ?? '-',
@@ -958,8 +1100,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1008,19 +1150,30 @@ export function AttendanceDashboardPage() {
               title={`Kelola & hapus arsip absensi yang berumur lebih dari ${ARCHIVE_RETENTION_YEARS} tahun`}
             >
               <ArchiveX size={15} />
-              <span>Arsip {'>'} {ARCHIVE_RETENTION_YEARS} Tahun</span>
+              <span>
+                Arsip {'>'} {ARCHIVE_RETENTION_YEARS} Tahun
+              </span>
             </button>
           </div>
         </div>
       )}
 
-      {/* Page Header */}
+      {/* Page Header + Kalender Jawa */}
       <div className="page-header">
         <div>
           <h1 className="page-title">Dashboard Absensi</h1>
           <p className="page-subtitle">
             Monitor kehadiran harian siswa dan guru secara real-time
           </p>
+          <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary font-semibold">
+              <CalendarDays size={13} />
+              {selectedDateDisplay.masehiWithPasaran}
+            </span>
+            <span className="inline-flex items-center px-2.5 py-0.5 rounded-lg bg-amber-500/15 text-amber-700 dark:text-amber-300 font-semibold">
+              {selectedDateDisplay.javaneseCalendarLabel}
+            </span>
+          </div>
         </div>
         <div className="page-header-actions">
           <input
@@ -1170,6 +1323,7 @@ export function AttendanceDashboardPage() {
               setActiveTab(tab);
               setSearchQuery('');
               setStudentStatusFilter('ALL');
+              setTeacherStatusFilter('ALL');
             }}
           >
             {tab === 'overview' && <Calendar size={16} />}
@@ -1184,7 +1338,7 @@ export function AttendanceDashboardPage() {
         ))}
       </div>
 
-      {/* Toolbar Pencarian (Flex Input Wrapper Anti-Tumpuk), Filter Kelas, & Filter Status */}
+      {/* Toolbar Pencarian, Filter Kelas, & Filter Status (Siswa & Guru) */}
       {activeTab !== 'overview' && (
         <div className="table-toolbar flex flex-col gap-3">
           <div className="flex flex-wrap items-center gap-3 w-full">
@@ -1233,68 +1387,99 @@ export function AttendanceDashboardPage() {
             )}
           </div>
 
-          {activeTab === 'students' && (
-            <div className="flex flex-wrap items-center gap-1.5">
-              {(
-                [
-                  { key: 'ALL', label: 'Semua', count: studentStatusCounts.ALL },
-                  {
-                    key: 'HADIR',
-                    label: 'Hadir',
-                    count: studentStatusCounts.HADIR,
-                  },
-                  {
-                    key: 'TERLAMBAT',
-                    label: 'Terlambat',
-                    count: studentStatusCounts.TERLAMBAT,
-                  },
-                  {
-                    key: 'IZIN',
-                    label: 'Izin',
-                    count: studentStatusCounts.IZIN,
-                  },
-                  {
-                    key: 'SAKIT',
-                    label: 'Sakit',
-                    count: studentStatusCounts.SAKIT,
-                  },
-                  {
-                    key: 'ALPA',
-                    label: 'Alpa',
-                    count: studentStatusCounts.ALPA,
-                  },
-                ] as const
-              ).map((pill) => {
-                const isSelected = studentStatusFilter === pill.key;
-                const badgeColor =
-                  pill.key === 'ALL'
-                    ? '#10B981'
-                    : STATUS_COLORS[pill.key] ?? '#6B7280';
+          {/* Filter Pills Status (Berfungsi untuk Tab Siswa maupun Tab Guru) */}
+          <div className="flex flex-wrap items-center gap-1.5">
+            {(
+              [
+                {
+                  key: 'ALL',
+                  label: 'Semua',
+                  count:
+                    activeTab === 'students'
+                      ? studentStatusCounts.ALL
+                      : teacherStatusCounts.ALL,
+                },
+                {
+                  key: 'HADIR',
+                  label: 'Hadir',
+                  count:
+                    activeTab === 'students'
+                      ? studentStatusCounts.HADIR
+                      : teacherStatusCounts.HADIR,
+                },
+                {
+                  key: 'TERLAMBAT',
+                  label: 'Terlambat',
+                  count:
+                    activeTab === 'students'
+                      ? studentStatusCounts.TERLAMBAT
+                      : teacherStatusCounts.TERLAMBAT,
+                },
+                {
+                  key: 'IZIN',
+                  label: 'Izin',
+                  count:
+                    activeTab === 'students'
+                      ? studentStatusCounts.IZIN
+                      : teacherStatusCounts.IZIN,
+                },
+                {
+                  key: 'SAKIT',
+                  label: 'Sakit',
+                  count:
+                    activeTab === 'students'
+                      ? studentStatusCounts.SAKIT
+                      : teacherStatusCounts.SAKIT,
+                },
+                {
+                  key: 'ALPA',
+                  label: 'Alpa',
+                  count:
+                    activeTab === 'students'
+                      ? studentStatusCounts.ALPA
+                      : teacherStatusCounts.ALPA,
+                },
+              ] as const
+            ).map((pill) => {
+              const currentFilter =
+                activeTab === 'students'
+                  ? studentStatusFilter
+                  : teacherStatusFilter;
+              const isSelected = currentFilter === pill.key;
+              const badgeColor =
+                pill.key === 'ALL'
+                  ? '#10B981'
+                  : STATUS_COLORS[pill.key] ?? '#6B7280';
 
-                return (
-                  <button
-                    key={pill.key}
-                    type="button"
-                    onClick={() => setStudentStatusFilter(pill.key)}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
+              return (
+                <button
+                  key={pill.key}
+                  type="button"
+                  onClick={() => {
+                    if (activeTab === 'students') {
+                      setStudentStatusFilter(pill.key);
+                    } else {
+                      setTeacherStatusFilter(pill.key);
+                    }
+                  }}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
                       ? 'text-white shadow-xs'
                       : 'bg-card/60 border-border opacity-75 hover:opacity-100'
-                      }`}
-                    style={
-                      isSelected
-                        ? {
-                          backgroundColor: badgeColor,
-                          borderColor: badgeColor,
-                        }
-                        : undefined
-                    }
-                  >
-                    {pill.label} ({pill.count})
-                  </button>
-                );
-              })}
-            </div>
-          )}
+                    }`}
+                  style={
+                    isSelected
+                      ? {
+                        backgroundColor: badgeColor,
+                        borderColor: badgeColor,
+                      }
+                      : undefined
+                  }
+                >
+                  {pill.label} ({pill.count})
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -1563,7 +1748,7 @@ export function AttendanceDashboardPage() {
             ) : filteredTeachers.length === 0 ? (
               <div className="table-empty">
                 <AlertCircle size={40} className="opacity-30" />
-                <p>Belum ada data absensi guru untuk tanggal ini</p>
+                <p>Belum ada data absensi guru untuk tanggal/filter ini</p>
               </div>
             ) : (
               <div className="table-wrapper">
@@ -1741,7 +1926,7 @@ export function AttendanceDashboardPage() {
                                     type="button"
                                     onClick={() => handlePreviewSelfie(record)}
                                     className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-primary/15 text-primary hover:bg-primary/25 transition"
-                                    title="Lihat foto selfie datang"
+                                    title="Lihat foto selfie datang & telemetri perangkat"
                                   >
                                     <Camera size={12} />
                                     <span>Foto Datang</span>
@@ -1752,7 +1937,7 @@ export function AttendanceDashboardPage() {
                                     type="button"
                                     onClick={() => handlePreviewSelfie(record)}
                                     className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 transition"
-                                    title="Lihat foto selfie pulang"
+                                    title="Lihat foto selfie pulang & telemetri perangkat"
                                   >
                                     <Camera size={12} />
                                     <span>Foto Pulang</span>
@@ -1764,7 +1949,7 @@ export function AttendanceDashboardPage() {
                             )}
                           </td>
 
-                          <td>{renderTeacherNotes(record.notes)}</td>
+                          <td>{renderTeacherNotes(record)}</td>
 
                           {isSuperAdmin && (
                             <td className="text-center">
@@ -1916,8 +2101,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Sekolah Terpilih Saja
@@ -1926,8 +2111,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Semua Sekolah
@@ -1986,7 +2171,7 @@ export function AttendanceDashboardPage() {
       </AnimatePresence>
 
       {/* ====================================================================
-          MODAL PRATINJAU FOTO SELFIE GURU (DATANG & PULANG)
+          MODAL PRATINJAU FOTO SELFIE GURU (DATANG, PULANG & TELEMETRI PERANGKAT)
       ==================================================================== */}
       <AnimatePresence>
         {selfieModal && (
@@ -2001,9 +2186,9 @@ export function AttendanceDashboardPage() {
               initial={{ scale: 0.92, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
-              className={`data-card w-full p-5 relative ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                ? 'max-w-2xl'
-                : 'max-w-md'
+              className={`data-card w-full p-5 relative max-h-[90vh] overflow-y-auto ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
+                  ? 'max-w-2xl'
+                  : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -2013,7 +2198,7 @@ export function AttendanceDashboardPage() {
                     {selfieModal.teacherName}
                   </h3>
                   <p className="text-xs opacity-70">
-                    Dokumentasi Selfie Presensi Harian
+                    Dokumentasi Selfie & Audit Telemetri Presensi
                   </p>
                 </div>
                 <button
@@ -2033,8 +2218,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                    ? 'grid-cols-1 sm:grid-cols-2'
-                    : 'grid-cols-1'
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -2101,11 +2286,102 @@ export function AttendanceDashboardPage() {
                 </div>
               )}
 
+              {/* PANEL DETAIL TELEMETRI PERANGKAT & VALIDASI KEAMANAN */}
+              {(selfieModal.deviceTelemetry ||
+                (selfieModal.securityFlags &&
+                  selfieModal.securityFlags.length > 0)) && (
+                  <div className="mt-3 p-3.5 rounded-xl border border-border bg-muted/40 text-xs space-y-2">
+                    <div className="flex items-center justify-between font-bold text-foreground">
+                      <span className="inline-flex items-center gap-1.5">
+                        <Smartphone size={14} className="text-primary" />
+                        Telemetri Perangkat & GPS
+                      </span>
+                      {selfieModal.isMock ||
+                        (selfieModal.securityFlags &&
+                          selfieModal.securityFlags.length > 0) ? (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-500/15 text-red-600 dark:text-red-300">
+                          <ShieldAlert size={12} /> Perlu Audit
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-300">
+                          <Shield size={12} /> Terverifikasi
+                        </span>
+                      )}
+                    </div>
+
+                    {selfieModal.deviceTelemetry && (
+                      <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] opacity-85">
+                        {typeof selfieModal.deviceTelemetry.appMode ===
+                          'string' && (
+                            <div>
+                              <span className="opacity-65">Mode Aplikasi: </span>
+                              <strong>{selfieModal.deviceTelemetry.appMode}</strong>
+                            </div>
+                          )}
+                        {typeof selfieModal.deviceTelemetry.platform ===
+                          'string' && (
+                            <div>
+                              <span className="opacity-65">Platform: </span>
+                              <strong>
+                                {selfieModal.deviceTelemetry.platform}
+                              </strong>
+                            </div>
+                          )}
+                        {typeof selfieModal.deviceTelemetry
+                          .gpsAccuracyMeters === 'number' && (
+                            <div>
+                              <span className="opacity-65">Akurasi GPS: </span>
+                              <strong>
+                                ±{selfieModal.deviceTelemetry.gpsAccuracyMeters}m
+                              </strong>
+                            </div>
+                          )}
+                        {extractLateMinutesFromTelemetry(
+                          selfieModal.deviceTelemetry
+                        ) > 0 && (
+                            <div className="text-amber-600 dark:text-amber-300">
+                              <span className="opacity-75">Keterlambatan: </span>
+                              <strong>
+                                {extractLateMinutesFromTelemetry(
+                                  selfieModal.deviceTelemetry
+                                )}{' '}
+                                menit
+                              </strong>
+                            </div>
+                          )}
+                        {typeof selfieModal.deviceTelemetry.javaneseDate ===
+                          'string' && (
+                            <div className="col-span-2">
+                              <span className="opacity-65">Penanggalan Jawa: </span>
+                              <strong>
+                                {selfieModal.deviceTelemetry.javaneseDate}
+                              </strong>
+                            </div>
+                          )}
+                      </div>
+                    )}
+
+                    {selfieModal.securityFlags &&
+                      selfieModal.securityFlags.length > 0 && (
+                        <div className="pt-1.5 border-t border-border/60 flex flex-wrap gap-1">
+                          {selfieModal.securityFlags.map((flag) => (
+                            <span
+                              key={flag}
+                              className="px-2 py-0.5 rounded-md text-[10px] font-mono bg-red-500/15 text-red-600 dark:text-red-300"
+                            >
+                              {flag}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                  </div>
+                )}
+
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                    : 'bg-muted/50 border-border'
+                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                      : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />

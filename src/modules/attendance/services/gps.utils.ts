@@ -1,6 +1,6 @@
 // src/modules/attendance/services/gps.utils.ts
 /**
- * GPS, Timezone & Image Compression Utility (Selaras Skema SQL v20.1)
+ * GPS, Timezone & Image Compression Utility (Selaras Skema SQL v20.2)
  */
 
 export interface GpsPosition {
@@ -14,7 +14,6 @@ export interface GpsPosition {
 
 /**
  * Mengambil tanggal sesuai zona waktu sekolah (default 'Asia/Jakarta') dalam format 'YYYY-MM-DD'.
- * Selaras dengan kolom otomatis "time" di tabel attendances PostgreSQL.
  */
 export function getSchoolDateString(
   date: Date = new Date(),
@@ -44,21 +43,177 @@ export function getLocalDateString(date: Date = new Date()): string {
 }
 
 /**
- * Mengecek apakah waktu saat ini sudah melewati batas jam masuk + toleransi keterlambatan (menit)
+ * Mengecek apakah waktu saat ini sudah melewati batas jam masuk + toleransi (menit)
+ * sesuai zona waktu sekolah (default 'Asia/Jakarta').
  */
 export function isAfterDeadline(
   deadline: string = '07:30',
   now: Date = new Date(),
-  toleranceMinutes: number = 0
+  toleranceMinutes: number = 0,
+  timeZone: string = 'Asia/Jakarta'
 ): boolean {
   const [hourStr, minStr] = deadline.split(':');
-  const baseHour = Number(hourStr) || 7;
-  const baseMin = Number(minStr) || 30;
+  const parsedHour = Number(hourStr);
+  const parsedMin = Number(minStr);
+  const baseHour = Number.isFinite(parsedHour) ? parsedHour : 7;
+  const baseMin = Number.isFinite(parsedMin) ? parsedMin : 30;
 
-  const totalDeadlineMinutes = baseHour * 60 + baseMin + Math.max(0, toleranceMinutes);
-  const currentTotalMinutes = now.getHours() * 60 + now.getMinutes();
+  const totalDeadlineMinutes =
+    baseHour * 60 + baseMin + Math.max(0, toleranceMinutes);
+
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).formatToParts(now);
+
+  const curHour = Number(
+    parts.find((p) => p.type === 'hour')?.value ?? now.getHours()
+  );
+  const curMin = Number(
+    parts.find((p) => p.type === 'minute')?.value ?? now.getMinutes()
+  );
+  const currentTotalMinutes = curHour * 60 + curMin;
 
   return currentTotalMinutes > totalDeadlineMinutes;
+}
+
+/**
+ * Kompres foto selfie dari <video> dengan efek mirror horizontal,
+ * batas ukuran < 450 KB (aman untuk bucket 500 KB), dan pembersihan memori WebView APK.
+ */
+export async function compressSelfieFromVideo(
+  videoElement: HTMLVideoElement,
+  maxWidth: number = 720,
+  initialQuality: number = 0.78,
+  maxBytes: number = 450 * 1024
+): Promise<Blob> {
+  const canvas = document.createElement('canvas');
+  const ratio =
+    (videoElement.videoHeight || 480) / (videoElement.videoWidth || 640);
+  const width = Math.min(videoElement.videoWidth || maxWidth, maxWidth);
+  const height = Math.round(width * ratio);
+
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Gagal memproses gambar kamera.');
+
+  try {
+    // Mirror horizontal agar hasil selfie natural seperti cermin
+    ctx.translate(width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(videoElement, 0, 0, width, height);
+
+    const toBlobWithQuality = (q: number) =>
+      new Promise<Blob>((resolve, reject) => {
+        canvas.toBlob(
+          (blob) =>
+            blob
+              ? resolve(blob)
+              : reject(new Error('Gagal mengompresi foto selfie.')),
+          'image/jpeg',
+          q
+        );
+      });
+
+    let quality = initialQuality;
+    let resultBlob = await toBlobWithQuality(quality);
+
+    while (resultBlob.size > maxBytes && quality > 0.35) {
+      quality = Math.max(0.35, quality - 0.12);
+      resultBlob = await toBlobWithQuality(quality);
+    }
+
+    return resultBlob;
+  } finally {
+    // Bebaskan buffer memori canvas agar WebView Android APK tidak bocor memori
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+}
+
+/**
+ * Memvalidasi & mengompresi file lampiran izin/sakit (gambar dikompres, PDF dicek ukuran <= 2 MB)
+ */
+export async function prepareAttachmentFile(file: File): Promise<{
+  blob: Blob;
+  extension: string;
+  contentType: string;
+}> {
+  const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+
+  if (file.type === 'application/pdf') {
+    if (file.size > MAX_BYTES) {
+      throw new Error('Ukuran file PDF maksimal 2 MB.');
+    }
+    return {
+      blob: file,
+      extension: 'pdf',
+      contentType: 'application/pdf',
+    };
+  }
+
+  if (!file.type.startsWith('image/')) {
+    throw new Error(
+      'Format lampiran tidak didukung. Gunakan foto (JPG/PNG/WEBP) atau PDF.'
+    );
+  }
+
+  const imageBitmap = await createImageBitmap(file);
+  const maxDimension = 1280;
+  const scale = Math.min(
+    1,
+    maxDimension / Math.max(imageBitmap.width, imageBitmap.height)
+  );
+  const targetWidth = Math.round(imageBitmap.width * scale);
+  const targetHeight = Math.round(imageBitmap.height * scale);
+
+  const canvas = document.createElement('canvas');
+  canvas.width = targetWidth;
+  canvas.height = targetHeight;
+
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    imageBitmap.close();
+    throw new Error('Gagal memproses gambar lampiran.');
+  }
+
+  try {
+    ctx.drawImage(imageBitmap, 0, 0, targetWidth, targetHeight);
+    imageBitmap.close();
+
+    const compressedBlob = await new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) {
+            reject(new Error('Gagal mengompresi gambar lampiran.'));
+            return;
+          }
+          resolve(blob);
+        },
+        'image/jpeg',
+        0.78
+      );
+    });
+
+    if (compressedBlob.size > MAX_BYTES) {
+      throw new Error(
+        'Ukuran gambar lampiran setelah kompresi masih melebihi 2 MB.'
+      );
+    }
+
+    return {
+      blob: compressedBlob,
+      extension: 'jpg',
+      contentType: 'image/jpeg',
+    };
+  } finally {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
 }
 
 /**
@@ -71,7 +226,7 @@ export function calculateDistance(
   lat2: number,
   lon2: number
 ): number {
-  const R = 6371000; // Radius bumi dalam meter (sama dengan calculate_haversine_meters di SQL)
+  const R = 6371000; // Radius bumi dalam meter (selaras dengan RPC SQL)
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
@@ -170,119 +325,4 @@ export function getCurrentPosition(
       }
     );
   });
-}
-
-/**
- * Kompres foto selfie dari elemen <video> menjadi JPEG ringan (~35-60 KB)
- * Aman di bawah batas 500 KB bucket 'attendance-selfies'
- */
-export async function compressSelfieFromVideo(
-  videoElement: HTMLVideoElement,
-  maxWidth: number = 640,
-  quality: number = 0.65
-): Promise<Blob> {
-  const canvas = document.createElement('canvas');
-  const ratio = videoElement.videoHeight / (videoElement.videoWidth || 1);
-  const width = Math.min(videoElement.videoWidth || maxWidth, maxWidth);
-  const height = Math.round(width * (ratio || 0.75));
-
-  canvas.width = width;
-  canvas.height = height;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) throw new Error('Gagal memproses gambar kamera.');
-
-  // Mirror horizontal agar hasil selfie natural seperti cermin
-  ctx.translate(width, 0);
-  ctx.scale(-1, 1);
-  ctx.drawImage(videoElement, 0, 0, width, height);
-
-  return new Promise((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error('Gagal mengompresi foto selfie.'));
-          return;
-        }
-        resolve(blob);
-      },
-      'image/jpeg',
-      quality
-    );
-  });
-}
-
-/**
- * Memvalidasi & mengompresi file lampiran izin/sakit (gambar dikompres, PDF dicek ukuran <= 2 MB)
- * Selaras dengan batas bucket 'attendance-attachments' (2097152 bytes)
- */
-export async function prepareAttachmentFile(file: File): Promise<{
-  blob: Blob;
-  extension: string;
-  contentType: string;
-}> {
-  const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
-
-  if (file.type === 'application/pdf') {
-    if (file.size > MAX_BYTES) {
-      throw new Error('Ukuran file PDF maksimal 2 MB.');
-    }
-    return {
-      blob: file,
-      extension: 'pdf',
-      contentType: 'application/pdf',
-    };
-  }
-
-  if (!file.type.startsWith('image/')) {
-    throw new Error(
-      'Format lampiran tidak didukung. Gunakan foto (JPG/PNG/WEBP) atau PDF.'
-    );
-  }
-
-  const imageBitmap = await createImageBitmap(file);
-  const maxDimension = 1280;
-  const scale = Math.min(
-    1,
-    maxDimension / Math.max(imageBitmap.width, imageBitmap.height)
-  );
-  const targetWidth = Math.round(imageBitmap.width * scale);
-  const targetHeight = Math.round(imageBitmap.height * scale);
-
-  const canvas = document.createElement('canvas');
-  canvas.width = targetWidth;
-  canvas.height = targetHeight;
-
-  const ctx = canvas.getContext('2d');
-  if (!ctx) {
-    imageBitmap.close();
-    throw new Error('Gagal memproses gambar lampiran.');
-  }
-
-  ctx.drawImage(imageBitmap, 0, 0, targetWidth, targetHeight);
-  imageBitmap.close();
-
-  const compressedBlob = await new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob(
-      (blob) => {
-        if (!blob) {
-          reject(new Error('Gagal mengompresi gambar lampiran.'));
-          return;
-        }
-        resolve(blob);
-      },
-      'image/jpeg',
-      0.78
-    );
-  });
-
-  if (compressedBlob.size > MAX_BYTES) {
-    throw new Error('Ukuran gambar lampiran setelah kompresi masih melebihi 2 MB.');
-  }
-
-  return {
-    blob: compressedBlob,
-    extension: 'jpg',
-    contentType: 'image/jpeg',
-  };
 }

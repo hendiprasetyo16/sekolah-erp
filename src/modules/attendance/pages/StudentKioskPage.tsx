@@ -18,10 +18,15 @@ import {
   Unlock,
   Sparkles,
   CalendarOff,
+  CloudOff,
+  CloudUpload,
+  RefreshCw,
+  CalendarDays,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
-import { getLocalDateString, isAfterDeadline } from '../services/gps.utils';
+import { getSchoolDateString, isAfterDeadline } from '../services/gps.utils';
+import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { BarcodeScanner } from '../components/BarcodeScanner';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { AttendanceMap } from '@/components/map/AttendanceMap';
@@ -33,11 +38,15 @@ import { dispatchStudentAttendanceWhatsApp } from '../services/whatsappService';
 // ============================================================================
 const MIN_MINUTES_BETWEEN_IN_AND_OUT = 15; // Jeda minimal (menit) agar double-scan pagi tidak dianggap pulang
 const KIOSK_RESET_DELAY_MS = 4000;        // Waktu reset layar otomatis setelah scan (milidetik)
-const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis
+const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis (milidetik)
+const CLOCK_TICK_INTERVAL_MS = 30000;     // Interval pembaruan jam & tanggal layar Kiosk (milidetik)
 const FALLBACK_STUDENT_START = '07:00';
 const FALLBACK_STUDENT_CHECKOUT_START = '11:30';
 const FALLBACK_STUDENT_END = '13:30';
+const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';
 const DEFAULT_KIOSK_SPECIAL_EVENT = 'Kegiatan Khusus Sekolah';
+const OFFLINE_QUEUE_STORAGE_PREFIX = 'sekolaherp_kiosk_offline_queue_';
+const STUDENT_CACHE_STORAGE_PREFIX = 'sekolaherp_kiosk_student_cache_';
 
 type KioskState = 'idle' | 'scanning' | 'found' | 'success' | 'already' | 'error';
 type KioskScanMode = 'AUTO' | 'CHECK_IN' | 'CHECK_OUT';
@@ -69,6 +78,21 @@ interface StudentScheduleConfig {
   enableCheckOut: boolean;
 }
 
+interface OfflineKioskQueueItem {
+  queueId: string;
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  nisn: string;
+  className?: string;
+  date: string;
+  timestampIso: string;
+  timeFormatted: string;
+  scanMode: KioskScanMode;
+  status: 'HADIR' | 'TERLAMBAT';
+  recordedBy: string | null;
+}
+
 /**
  * Menambahkan menit toleransi keterlambatan ke jam masuk standar (HH:mm).
  */
@@ -80,6 +104,66 @@ function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(
     total % 60
   ).padStart(2, '0')}`;
+}
+
+/**
+ * Membaca daftar antrean absensi offline dari memori lokal perangkat (localStorage).
+ */
+function readOfflineQueue(schoolId: string): OfflineKioskQueueItem[] {
+  if (!schoolId) return [];
+  try {
+    const raw = localStorage.getItem(`${OFFLINE_QUEUE_STORAGE_PREFIX}${schoolId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Menyimpan daftar antrean absensi offline ke memori lokal perangkat (localStorage).
+ */
+function writeOfflineQueue(schoolId: string, items: OfflineKioskQueueItem[]) {
+  if (!schoolId) return;
+  try {
+    localStorage.setItem(
+      `${OFFLINE_QUEUE_STORAGE_PREFIX}${schoolId}`,
+      JSON.stringify(items)
+    );
+  } catch (err) {
+    console.warn('[KioskOfflineQueue] Gagal menyimpan antrean ke localStorage:', err);
+  }
+}
+
+/**
+ * Membaca daftar siswa dari cache lokal agar kartu tetap dikenali saat internet mati.
+ */
+function readStudentDirectoryCache(schoolId: string): FoundStudent[] {
+  if (!schoolId) return [];
+  try {
+    const raw = localStorage.getItem(`${STUDENT_CACHE_STORAGE_PREFIX}${schoolId}`);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Menyimpan daftar siswa aktif sekolah ke cache lokal perangkat.
+ */
+function writeStudentDirectoryCache(schoolId: string, students: FoundStudent[]) {
+  if (!schoolId) return;
+  try {
+    localStorage.setItem(
+      `${STUDENT_CACHE_STORAGE_PREFIX}${schoolId}`,
+      JSON.stringify(students)
+    );
+  } catch (err) {
+    console.warn('[KioskStudentCache] Gagal menyimpan cache siswa:', err);
+  }
 }
 
 export function StudentKioskPage() {
@@ -94,7 +178,16 @@ export function StudentKioskPage() {
     ? simSchoolId || school?.id || ''
     : school?.id || '';
 
-  const today = getLocalDateString();
+  const [nowTick, setNowTick] = useState<Date>(() => new Date());
+  const [schoolTimezone, setSchoolTimezone] = useState<string>(
+    DEFAULT_SCHOOL_TIMEZONE
+  );
+
+  // Tanggal aktif selalu mengikuti zona waktu sekolah & otomatis berganti saat tengah malam
+  const today = useMemo(
+    () => getSchoolDateString(nowTick, schoolTimezone),
+    [nowTick, schoolTimezone]
+  );
 
   // Hook terpusat pengunci hari libur & mode kegiatan khusus
   const {
@@ -114,13 +207,13 @@ export function StudentKioskPage() {
   });
 
   const [specialEventInput, setSpecialEventInput] = useState<string>('');
-  const [nowTick, setNowTick] = useState<Date>(() => new Date());
 
   const [kioskState, setKioskState] = useState<KioskState>('idle');
   const [scanMode, setScanMode] = useState<KioskScanMode>('AUTO');
   const [lastActionType, setLastActionType] = useState<'CHECK_IN' | 'CHECK_OUT'>(
     'CHECK_IN'
   );
+  const [lastSavedOffline, setLastSavedOffline] = useState<boolean>(false);
   const [foundStudent, setFoundStudent] = useState<FoundStudent | null>(null);
   const [resultMessage, setResultMessage] = useState('');
   const [todayStats, setTodayStats] = useState({
@@ -130,12 +223,15 @@ export function StudentKioskPage() {
     total: 0,
   });
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  const [offlineQueue, setOfflineQueue] = useState<OfflineKioskQueueItem[]>([]);
+  const [isSyncingQueue, setIsSyncingQueue] = useState<boolean>(false);
   const [recentList, setRecentList] = useState<
     Array<{
       name: string;
       status: string;
       action: 'DATANG' | 'PULANG';
       time: string;
+      isOfflineQueued?: boolean;
     }>
   >([]);
 
@@ -143,6 +239,7 @@ export function StudentKioskPage() {
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processingLockRef = useRef<boolean>(false);
+  const syncLockRef = useRef<boolean>(false);
 
   const [schoolCoords, setSchoolCoords] = useState<{
     latitude: number;
@@ -168,10 +265,23 @@ export function StudentKioskPage() {
     [studentConfig.workStartTime, studentConfig.lateToleranceMinutes]
   );
 
-  const isLateNow = isAfterDeadline(studentDeadline);
+  const isLateNow = isAfterDeadline(
+    studentConfig.workStartTime,
+    nowTick,
+    studentConfig.lateToleranceMinutes,
+    schoolTimezone
+  );
   const isCheckOutWindowOpen =
     studentConfig.enableCheckOut &&
-    isAfterDeadline(studentConfig.checkOutStartTime);
+    isAfterDeadline(
+      studentConfig.checkOutStartTime,
+      nowTick,
+      0,
+      schoolTimezone
+    );
+
+  // Kalender Jawa & Pasaran real-time selaras tanggal sekolah
+  const javaneseInfo = useMemo(() => getJavaneseDateInfo(today), [today]);
 
   // Bersihkan seluruh timer saat komponen ditutup / pindah halaman
   useEffect(() => {
@@ -187,7 +297,7 @@ export function StudentKioskPage() {
       if (!document.hidden) {
         setNowTick(new Date());
       }
-    }, 30000);
+    }, CLOCK_TICK_INTERVAL_MS);
     return () => clearInterval(interval);
   }, []);
 
@@ -203,20 +313,52 @@ export function StudentKioskPage() {
       .catch(console.error);
   }, [isSuperAdmin, school?.id]);
 
+  // Muat antrean offline yang tersimpan untuk sekolah aktif
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, []);
+    if (!activeSchoolId) {
+      setOfflineQueue([]);
+      return;
+    }
+    setOfflineQueue(readOfflineQueue(activeSchoolId));
+  }, [activeSchoolId]);
+
+  // Sinkronkan cache direktori siswa AKTIF ke localStorage saat online
+  const refreshStudentDirectoryCache = useCallback(async () => {
+    if (!activeSchoolId || !navigator.onLine) return;
+    try {
+      const { data, error } = await supabase
+        .from('students')
+        .select('id, fullName, nisn, nis, photoUrl, classes(name)')
+        .eq('schoolId', activeSchoolId)
+        .eq('status', 'AKTIF')
+        .limit(2500);
+
+      if (error || !data) return;
+
+      const mapped: FoundStudent[] = (data as StudentLookupResult[]).map((s) => ({
+        id: s.id,
+        fullName: s.fullName,
+        nisn: s.nisn,
+        nis: s.nis ?? undefined,
+        photoUrl: s.photoUrl ?? undefined,
+        className: Array.isArray(s.classes)
+          ? s.classes[0]?.name
+          : s.classes?.name,
+      }));
+
+      writeStudentDirectoryCache(activeSchoolId, mapped);
+    } catch {
+      // Abaikan jika gagal memperbarui cache sementara
+    }
+  }, [activeSchoolId]);
+
+  useEffect(() => {
+    refreshStudentDirectoryCache();
+  }, [refreshStudentDirectoryCache]);
 
   // Muat statistik siswa hari ini (termasuk jumlah yang sudah pulang)
   const loadStats = useCallback(async () => {
-    if (!activeSchoolId) return;
+    if (!activeSchoolId || !navigator.onLine) return;
     try {
       const [summary, checkedOutRes] = await Promise.all([
         attendanceService.getSummary(activeSchoolId, today),
@@ -240,7 +382,146 @@ export function StudentKioskPage() {
     }
   }, [activeSchoolId, today]);
 
-  // Muat koordinat sekolah + jadwal khusus siswa dari tabel schools
+  // Sinkronisasi Antrean Offline ke Supabase secara berurutan
+  const syncOfflineQueue = useCallback(async () => {
+    if (!activeSchoolId || !navigator.onLine || syncLockRef.current) return;
+
+    const currentQueue = readOfflineQueue(activeSchoolId);
+    if (currentQueue.length === 0) return;
+
+    syncLockRef.current = true;
+    setIsSyncingQueue(true);
+
+    let remaining = [...currentQueue];
+    let syncedCount = 0;
+
+    try {
+      // Urutkan kronologis agar Check-In selalu diproses lebih dulu sebelum Check-Out
+      const sortedQueue = [...currentQueue].sort((a, b) =>
+        a.timestampIso.localeCompare(b.timestampIso)
+      );
+
+      for (const item of sortedQueue) {
+        if (!navigator.onLine) break;
+
+        try {
+          const { data: existingAtt, error: fetchErr } = await supabase
+            .from('attendances')
+            .select('id, status, time, checkInTime, checkOutTime')
+            .eq('schoolId', item.schoolId)
+            .eq('studentId', item.studentId)
+            .eq('date', item.date)
+            .eq('type', 'SISWA')
+            .maybeSingle();
+
+          if (fetchErr) throw fetchErr;
+
+          if (!existingAtt) {
+            if (item.scanMode !== 'CHECK_OUT') {
+              const { error: insertErr } = await supabase
+                .from('attendances')
+                .insert({
+                  schoolId: item.schoolId,
+                  studentId: item.studentId,
+                  type: 'SISWA',
+                  date: item.date,
+                  status: item.status,
+                  checkInTime: item.timestampIso,
+                  recordedBy: item.recordedBy,
+                });
+
+              if (insertErr) throw insertErr;
+
+              void dispatchStudentAttendanceWhatsApp({
+                studentId: item.studentId,
+                eventType: 'CHECK_IN',
+                timeFormatted: item.timeFormatted,
+                status: item.status,
+              });
+            }
+          } else if (
+            !existingAtt.checkOutTime &&
+            !['IZIN', 'SAKIT'].includes(existingAtt.status) &&
+            studentConfig.enableCheckOut &&
+            item.scanMode !== 'CHECK_IN'
+          ) {
+            const recordedInIso = existingAtt.checkInTime || existingAtt.time;
+            const diffMinutes = recordedInIso
+              ? Math.floor(
+                (new Date(item.timestampIso).getTime() -
+                  new Date(recordedInIso).getTime()) /
+                60000
+              )
+              : 999;
+
+            if (
+              item.scanMode === 'CHECK_OUT' ||
+              diffMinutes >= MIN_MINUTES_BETWEEN_IN_AND_OUT
+            ) {
+              const { error: updateErr } = await supabase
+                .from('attendances')
+                .update({ checkOutTime: item.timestampIso })
+                .eq('id', existingAtt.id);
+
+              if (updateErr) throw updateErr;
+
+              void dispatchStudentAttendanceWhatsApp({
+                studentId: item.studentId,
+                eventType: 'CHECK_OUT',
+                timeFormatted: item.timeFormatted,
+                status: existingAtt.status,
+              });
+            }
+          }
+
+          // Hapus item yang sudah berhasil diproses dari antrean lokal
+          remaining = remaining.filter((q) => q.queueId !== item.queueId);
+          writeOfflineQueue(activeSchoolId, remaining);
+          setOfflineQueue(remaining);
+          syncedCount += 1;
+        } catch (itemErr) {
+          console.warn(
+            '[KioskOfflineSync] Item gagal disinkronkan, akan dicoba lagi:',
+            itemErr
+          );
+          break;
+        }
+      }
+
+      if (syncedCount > 0) {
+        await loadStats();
+      }
+    } finally {
+      syncLockRef.current = false;
+      setIsSyncingQueue(false);
+    }
+  }, [activeSchoolId, studentConfig.enableCheckOut, loadStats]);
+
+  // Pantau status koneksi Online/Offline & otomatis kirim antrean saat kembali Online
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      void refreshStudentDirectoryCache();
+      void syncOfflineQueue();
+    };
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [refreshStudentDirectoryCache, syncOfflineQueue]);
+
+  // Jalankan sinkronisasi otomatis saat membuka Kiosk dalam keadaan online dan masih ada sisa antrean
+  useEffect(() => {
+    if (isOnline && activeSchoolId && offlineQueue.length > 0) {
+      void syncOfflineQueue();
+    }
+  }, [isOnline, activeSchoolId, offlineQueue.length, syncOfflineQueue]);
+
+  // Muat koordinat sekolah, zona waktu, & jadwal khusus siswa dari tabel schools
   useEffect(() => {
     if (!activeSchoolId) return;
 
@@ -256,35 +537,31 @@ export function StudentKioskPage() {
         } else {
           setSchoolCoords(null);
         }
+
+        if (coords?.settings) {
+          const cfg = coords.settings;
+          setSchoolTimezone(cfg.timezone || DEFAULT_SCHOOL_TIMEZONE);
+          setStudentConfig({
+            workStartTime: cfg.studentWorkStartTime || FALLBACK_STUDENT_START,
+            lateToleranceMinutes: Math.max(
+              0,
+              Number(cfg.studentLateToleranceMinutes) || 0
+            ),
+            workEndTime: cfg.studentWorkEndTime || FALLBACK_STUDENT_END,
+            checkOutStartTime:
+              cfg.studentCheckOutStartTime || FALLBACK_STUDENT_CHECKOUT_START,
+            enableKiosk:
+              typeof cfg.enableStudentKiosk === 'boolean'
+                ? cfg.enableStudentKiosk
+                : true,
+            enableCheckOut:
+              typeof cfg.enableStudentCheckOut === 'boolean'
+                ? cfg.enableStudentCheckOut
+                : true,
+          });
+        }
       })
       .catch(console.error);
-
-    supabase
-      .from('schools')
-      .select('*')
-      .eq('id', activeSchoolId)
-      .maybeSingle()
-      .then(({ data }) => {
-        if (!data) return;
-        setStudentConfig({
-          workStartTime: data.studentWorkStartTime || FALLBACK_STUDENT_START,
-          lateToleranceMinutes: Math.max(
-            0,
-            Number(data.studentLateToleranceMinutes) || 0
-          ),
-          workEndTime: data.studentWorkEndTime || FALLBACK_STUDENT_END,
-          checkOutStartTime:
-            data.studentCheckOutStartTime || FALLBACK_STUDENT_CHECKOUT_START,
-          enableKiosk:
-            typeof data.enableStudentKiosk === 'boolean'
-              ? data.enableStudentKiosk
-              : true,
-          enableCheckOut:
-            typeof data.enableStudentCheckOut === 'boolean'
-              ? data.enableStudentCheckOut
-              : true,
-        });
-      });
   }, [activeSchoolId]);
 
   useEffect(() => {
@@ -298,6 +575,7 @@ export function StudentKioskPage() {
     setKioskState('idle');
     setFoundStudent(null);
     setResultMessage('');
+    setLastSavedOffline(false);
   }, []);
 
   const scheduleAutoReset = useCallback(
@@ -323,6 +601,105 @@ export function StudentKioskPage() {
     }
   };
 
+  // Simpan presensi siswa ke Antrean Offline (localStorage) saat internet mati / timeout
+  const enqueueOfflineScan = useCallback(
+    (student: FoundStudent, now: Date, timeStr: string) => {
+      const existingTodayItems = readOfflineQueue(activeSchoolId).filter(
+        (q) => q.studentId === student.id && q.date === today
+      );
+
+      // Cegah double-scan beruntun di antrean offline dalam rentang jeda minimal
+      if (existingTodayItems.length > 0) {
+        const lastQueued = existingTodayItems[existingTodayItems.length - 1];
+        const diffMins = Math.floor(
+          (now.getTime() - new Date(lastQueued.timestampIso).getTime()) / 60000
+        );
+
+        if (
+          scanMode === 'CHECK_IN' ||
+          existingTodayItems.length >= 2 ||
+          diffMins < MIN_MINUTES_BETWEEN_IN_AND_OUT
+        ) {
+          setResultMessage(
+            `${student.fullName} sudah tercatat di antrean offline pukul ${lastQueued.timeFormatted}.`
+          );
+          setKioskState('already');
+          scheduleAutoReset();
+          return;
+        }
+      }
+
+      const isCheckOutAction =
+        scanMode === 'CHECK_OUT' ||
+        (scanMode === 'AUTO' && existingTodayItems.length === 1);
+
+      const lateNow = isAfterDeadline(
+        studentConfig.workStartTime,
+        now,
+        studentConfig.lateToleranceMinutes,
+        schoolTimezone
+      );
+      const status: 'HADIR' | 'TERLAMBAT' = lateNow ? 'TERLAMBAT' : 'HADIR';
+
+      const newItem: OfflineKioskQueueItem = {
+        queueId: `${student.id}_${now.getTime()}`,
+        schoolId: activeSchoolId,
+        studentId: student.id,
+        studentName: student.fullName,
+        nisn: student.nisn,
+        className: student.className,
+        date: today,
+        timestampIso: now.toISOString(),
+        timeFormatted: timeStr,
+        scanMode: isCheckOutAction ? 'CHECK_OUT' : scanMode,
+        status,
+        recordedBy: user?.id ?? null,
+      };
+
+      const updatedQueue = [...readOfflineQueue(activeSchoolId), newItem];
+      writeOfflineQueue(activeSchoolId, updatedQueue);
+      setOfflineQueue(updatedQueue);
+
+      setLastSavedOffline(true);
+      setLastActionType(isCheckOutAction ? 'CHECK_OUT' : 'CHECK_IN');
+      setResultMessage(
+        `${student.fullName} — Tersimpan di ANTREAN OFFLINE (${isCheckOutAction ? 'PULANG' : status
+        }) pukul ${timeStr}`
+      );
+      setKioskState('success');
+
+      setTodayStats((prev) => ({
+        ...prev,
+        present: !isCheckOutAction && !lateNow ? prev.present + 1 : prev.present,
+        late: !isCheckOutAction && lateNow ? prev.late + 1 : prev.late,
+        checkedOut: isCheckOutAction ? prev.checkedOut + 1 : prev.checkedOut,
+      }));
+
+      setRecentList((prev) => [
+        {
+          name: student.fullName,
+          status: isCheckOutAction ? 'PULANG' : status,
+          action: isCheckOutAction ? 'PULANG' : 'DATANG',
+          time: timeStr,
+          isOfflineQueued: true,
+        },
+        ...prev.slice(0, 9),
+      ]);
+
+      scheduleAutoReset();
+    },
+    [
+      activeSchoolId,
+      today,
+      scanMode,
+      studentConfig.workStartTime,
+      studentConfig.lateToleranceMinutes,
+      schoolTimezone,
+      user?.id,
+      scheduleAutoReset,
+    ]
+  );
+
   // Proses Pencatatan Datang (Check-In) atau Pulang (Check-Out)
   const processStudentScan = useCallback(
     async (student: FoundStudent) => {
@@ -340,13 +717,19 @@ export function StudentKioskPage() {
         return;
       }
 
-      try {
-        const now = new Date();
-        const nowIso = now.toISOString();
-        const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
-          now.getMinutes()
-        ).padStart(2, '0')}`;
+      const now = new Date();
+      const nowIso = now.toISOString();
+      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
+        now.getMinutes()
+      ).padStart(2, '0')}`;
 
+      // Jika sedang offline, langsung masuk ke Antrean Offline lokal
+      if (!navigator.onLine) {
+        enqueueOfflineScan(student, now, timeStr);
+        return;
+      }
+
+      try {
         // Cek apakah siswa sudah punya data absensi hari ini
         const { data: existingAtt, error: fetchErr } = await supabase
           .from('attendances')
@@ -372,11 +755,14 @@ export function StudentKioskPage() {
             return;
           }
 
-          const lateNow = isAfterDeadline(studentDeadline);
+          const lateNow = isAfterDeadline(
+            studentConfig.workStartTime,
+            now,
+            studentConfig.lateToleranceMinutes,
+            schoolTimezone
+          );
           const status = lateNow ? 'TERLAMBAT' : 'HADIR';
 
-          // CATATAN: Kolom "time" tidak dikirim karena bertipe GENERATED ALWAYS
-          // di PostgreSQL (otomatis dihitung dari "checkInTime" zona Asia/Jakarta).
           const { error: insertErr } = await supabase
             .from('attendances')
             .insert({
@@ -391,6 +777,7 @@ export function StudentKioskPage() {
 
           if (insertErr) throw insertErr;
 
+          setLastSavedOffline(false);
           setLastActionType('CHECK_IN');
           setResultMessage(
             `${student.fullName} — ABSEN DATANG (${status}) pukul ${timeStr}`
@@ -413,7 +800,6 @@ export function StudentKioskPage() {
             ...prev.slice(0, 9),
           ]);
 
-          // Kirim notifikasi WhatsApp secara non-blocking agar antrean Kiosk tetap cepat
           void dispatchStudentAttendanceWhatsApp({
             studentId: student.id,
             eventType: 'CHECK_IN',
@@ -450,7 +836,6 @@ export function StudentKioskPage() {
           return;
         }
 
-        // Jika fitur absen pulang dimatikan atau operator mengunci mode khusus DATANG
         if (!studentConfig.enableCheckOut || scanMode === 'CHECK_IN') {
           setResultMessage(`${student.fullName} sudah absen datang hari ini.`);
           setKioskState('already');
@@ -458,7 +843,6 @@ export function StudentKioskPage() {
           return;
         }
 
-        // Pengaman Double-Scan: Cek apakah sudah masuk waktu buka absen pulang
         const recordedInIso = existingAtt.checkInTime || existingAtt.time;
         const minutesSinceCheckIn = recordedInIso
           ? Math.floor(
@@ -467,7 +851,10 @@ export function StudentKioskPage() {
           : 999;
 
         const isPastCheckOutOpen = isAfterDeadline(
-          studentConfig.checkOutStartTime
+          studentConfig.checkOutStartTime,
+          now,
+          0,
+          schoolTimezone
         );
 
         if (
@@ -501,6 +888,7 @@ export function StudentKioskPage() {
 
         if (updateErr) throw updateErr;
 
+        setLastSavedOffline(false);
         setLastActionType('CHECK_OUT');
         setResultMessage(
           `${student.fullName} — ABSEN PULANG tercatat pukul ${timeStr}`
@@ -522,7 +910,6 @@ export function StudentKioskPage() {
           ...prev.slice(0, 9),
         ]);
 
-        // Kirim notifikasi WhatsApp pulang secara non-blocking
         void dispatchStudentAttendanceWhatsApp({
           studentId: student.id,
           eventType: 'CHECK_OUT',
@@ -532,14 +919,12 @@ export function StudentKioskPage() {
 
         scheduleAutoReset();
       } catch (err) {
-        console.error('Gagal menyimpan absen siswa:', err);
-        const detail =
-          err && typeof err === 'object' && 'message' in err
-            ? String((err as { message: string }).message)
-            : 'Periksa koneksi internet.';
-        setResultMessage(`Gagal menyimpan absen: ${detail}`);
-        setKioskState('error');
-        scheduleAutoReset();
+        // Fallback otomatis ke Antrean Offline jika terjadi kegagalan jaringan tiba-tiba
+        console.warn(
+          '[Kiosk] Gagal mengirim langsung, mengalihkan ke antrean offline:',
+          err
+        );
+        enqueueOfflineScan(student, now, timeStr);
       }
     },
     [
@@ -548,10 +933,13 @@ export function StudentKioskPage() {
       holidayName,
       today,
       scanMode,
-      studentDeadline,
+      studentConfig.workStartTime,
+      studentConfig.lateToleranceMinutes,
       studentConfig.enableCheckOut,
       studentConfig.checkOutStartTime,
+      schoolTimezone,
       scheduleAutoReset,
+      enqueueOfflineScan,
       user?.id,
     ]
   );
@@ -578,48 +966,78 @@ export function StudentKioskPage() {
         return;
       }
 
+      const cleanCode = code.trim();
+      if (!cleanCode) return;
+
       processingLockRef.current = true;
       setKioskState('scanning');
 
-      try {
-        const student = await attendanceService.findStudentByNisOrNisn(
-          activeSchoolId,
-          code.trim()
+      // Helper pencarian siswa dari cache lokal saat offline
+      const lookupFromLocalCache = (): FoundStudent | undefined => {
+        const cachedList = readStudentDirectoryCache(activeSchoolId);
+        return cachedList.find(
+          (s) =>
+            s.nisn?.trim() === cleanCode ||
+            (s.nis && s.nis.trim() === cleanCode)
         );
+      };
 
-        if (!student) {
-          setResultMessage(`Siswa dengan NISN/NIS "${code}" tidak ditemukan.`);
+      try {
+        let mappedStudent: FoundStudent | null = null;
+
+        if (navigator.onLine) {
+          try {
+            const student = await attendanceService.findStudentByNisOrNisn(
+              activeSchoolId,
+              cleanCode
+            );
+
+            if (student) {
+              const typedStudent = student as StudentLookupResult;
+              const resolvedClassName = Array.isArray(typedStudent.classes)
+                ? typedStudent.classes[0]?.name
+                : typedStudent.classes?.name;
+
+              mappedStudent = {
+                id: typedStudent.id,
+                fullName: typedStudent.fullName,
+                nisn: typedStudent.nisn,
+                nis: typedStudent.nis ?? undefined,
+                photoUrl: typedStudent.photoUrl ?? undefined,
+                className: resolvedClassName,
+              };
+            }
+          } catch {
+            // Jika jaringan putus di tengah pencarian, cari lewat cache lokal
+            mappedStudent = lookupFromLocalCache() ?? null;
+          }
+        } else {
+          mappedStudent = lookupFromLocalCache() ?? null;
+        }
+
+        if (!mappedStudent) {
+          setResultMessage(
+            navigator.onLine
+              ? `Siswa dengan NISN/NIS "${cleanCode}" tidak ditemukan.`
+              : `Mode Offline: NISN/NIS "${cleanCode}" belum ada di cache perangkat. Hubungkan internet sekali untuk memuat daftar siswa.`
+          );
           setKioskState('error');
           scheduleAutoReset();
           return;
         }
-
-        const typedStudent = student as StudentLookupResult;
-        const resolvedClassName = Array.isArray(typedStudent.classes)
-          ? typedStudent.classes[0]?.name
-          : typedStudent.classes?.name;
-
-        const mappedStudent: FoundStudent = {
-          id: typedStudent.id,
-          fullName: typedStudent.fullName,
-          nisn: typedStudent.nisn,
-          nis: typedStudent.nis ?? undefined,
-          photoUrl: typedStudent.photoUrl ?? undefined,
-          className: resolvedClassName,
-        };
 
         setFoundStudent(mappedStudent);
         setKioskState('found');
 
         if (processTimerRef.current) clearTimeout(processTimerRef.current);
         processTimerRef.current = setTimeout(
-          () => processStudentScan(mappedStudent),
+          () => processStudentScan(mappedStudent as FoundStudent),
           STUDENT_PREVIEW_DELAY_MS
         );
       } catch (err) {
         console.error('Gagal mencari data siswa:', err);
         setResultMessage(
-          'Terjadi kesalahan saat mencari data siswa. Periksa koneksi internet.'
+          'Terjadi kesalahan saat memproses kartu pelajar. Silakan ulangi.'
         );
         setKioskState('error');
         scheduleAutoReset();
@@ -678,8 +1096,19 @@ export function StudentKioskPage() {
               {currentDate} • Masuk {studentConfig.workStartTime} • Pulang{' '}
               {studentConfig.workEndTime}
             </p>
+            <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
+                <CalendarDays size={12} />
+                {javaneseInfo.hariPasaran}
+              </span>
+              <span className="inline-flex items-center px-2 py-0.5 rounded-md bg-amber-500/15 text-amber-700 dark:text-amber-300 font-semibold">
+                {javaneseInfo.javaneseDay} {javaneseInfo.javaneseMonth}{' '}
+                {javaneseInfo.javaneseYear} Ja
+              </span>
+            </div>
           </div>
         </div>
+
         <div className="kiosk-header-right">
           {isSuperAdmin && simSchools.length > 0 && (
             <select
@@ -694,6 +1123,33 @@ export function StudentKioskPage() {
               ))}
             </select>
           )}
+
+          {/* Indikator & Tombol Sinkronisasi Antrean Offline */}
+          {offlineQueue.length > 0 && (
+            <button
+              type="button"
+              disabled={!isOnline || isSyncingQueue}
+              onClick={() => void syncOfflineQueue()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-700 dark:text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 transition cursor-pointer disabled:opacity-60"
+              title={
+                isOnline
+                  ? 'Klik untuk mengirim antrean offline ke server sekarang'
+                  : 'Menunggu koneksi internet untuk mengirim antrean'
+              }
+            >
+              {isSyncingQueue ? (
+                <RefreshCw size={14} className="spin" />
+              ) : (
+                <CloudUpload size={14} />
+              )}
+              <span>
+                {isSyncingQueue
+                  ? 'Mengirim...'
+                  : `Antrean Offline (${offlineQueue.length})`}
+              </span>
+            </button>
+          )}
+
           <div className="kiosk-clock">{currentTime}</div>
           <div className={`kiosk-online-badge ${isOnline ? 'online' : 'offline'}`}>
             {isOnline ? <Wifi size={14} /> : <WifiOff size={14} />}
@@ -701,6 +1157,25 @@ export function StudentKioskPage() {
           </div>
         </div>
       </div>
+
+      {/* Banner Informasi Mode Antrean Offline */}
+      {!isOnline && (
+        <div className="mx-4 mt-2.5 p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2">
+            <CloudOff size={16} className="shrink-0 text-amber-500" />
+            <span>
+              <strong>Mode Antrean Offline Aktif:</strong> Siswa tetap bisa
+              memindai kartu pelajar. Data tersimpan aman di perangkat dan
+              otomatis terkirim begitu internet kembali menyala.
+            </span>
+          </div>
+          {offlineQueue.length > 0 && (
+            <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/25 font-bold shrink-0">
+              {offlineQueue.length} menunggu
+            </span>
+          )}
+        </div>
+      )}
 
       <div
         className="kiosk-body"
@@ -801,7 +1276,14 @@ export function StudentKioskPage() {
                     className="kiosk-recent-item"
                   >
                     <div className="kiosk-recent-info">
-                      <span className="kiosk-recent-name">{item.name}</span>
+                      <span className="kiosk-recent-name">
+                        {item.name}{' '}
+                        {item.isOfflineQueued && (
+                          <span className="text-[10px] font-bold text-amber-500">
+                            (Antrean)
+                          </span>
+                        )}
+                      </span>
                       <span className="kiosk-recent-time">
                         {item.action} • {item.time}
                       </span>
@@ -916,7 +1398,7 @@ export function StudentKioskPage() {
                       <p className="text-[11px] opacity-70 pt-2 border-t border-red-500/20">
                         Untuk membuka kunci karena kegiatan khusus, silakan
                         Guru, Wali Kelas, atau Admin masuk (login) terlebih
-                        dahulu atau aktifkan melalui menu Absensi Kelas.
+                        dahulu.
                       </p>
                     )}
                   </div>
@@ -1063,20 +1545,26 @@ export function StudentKioskPage() {
                   animate={{ scale: 1 }}
                   transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
                 >
-                  {lastActionType === 'CHECK_OUT' ? (
+                  {lastSavedOffline ? (
+                    <CloudUpload size={100} />
+                  ) : lastActionType === 'CHECK_OUT' ? (
                     <LogOut size={100} />
                   ) : (
                     <CheckCircle size={100} />
                   )}
                 </motion.div>
                 <h2 className="kiosk-result-title">
-                  {lastActionType === 'CHECK_OUT'
-                    ? 'Absen Pulang Berhasil!'
-                    : 'Absen Datang Berhasil!'}
+                  {lastSavedOffline
+                    ? 'Tersimpan di Antrean Offline!'
+                    : lastActionType === 'CHECK_OUT'
+                      ? 'Absen Pulang Berhasil!'
+                      : 'Absen Datang Berhasil!'}
                 </h2>
                 <p className="kiosk-result-message">{resultMessage}</p>
                 <p className="kiosk-result-hint">
-                  Layar akan kembali otomatis...
+                  {lastSavedOffline
+                    ? 'Otomatis terkirim ke server saat koneksi internet kembali aktif...'
+                    : 'Layar akan kembali otomatis...'}
                 </p>
                 <button className="btn-outline-kiosk" onClick={resetToIdle}>
                   <RotateCcw size={16} />

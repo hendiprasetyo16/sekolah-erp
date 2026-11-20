@@ -1,4 +1,4 @@
-// src/modules/attendance/utils/excelHolidayParser.ts
+// src/modules/attendance/utils/excelHolidayParser.ts (Bagian Validasi Tanggal)
 import type { HolidayCategoryType } from '../types/attendance.types';
 
 export interface ParsedHolidayRow {
@@ -10,16 +10,48 @@ export interface ParsedHolidayRow {
 type ZipXmlEntries = Record<string, string>;
 
 /**
- * Mengonversi serial number tanggal Excel (epoch 1899-12-30) ke YYYY-MM-DD
+ * Memastikan kombinasi tahun, bulan, dan tanggal benar-benar ada di kalender
+ * (contoh: menolak 2026-02-30 atau bulan > 12)
+ */
+function buildValidatedYMD(yearNum: number, monthNum: number, dayNum: number): string | null {
+  if (
+    !Number.isInteger(yearNum) ||
+    !Number.isInteger(monthNum) ||
+    !Number.isInteger(dayNum) ||
+    yearNum < 2000 ||
+    yearNum > 2100 ||
+    monthNum < 1 ||
+    monthNum > 12 ||
+    dayNum < 1 ||
+    dayNum > 31
+  ) {
+    return null;
+  }
+
+  const checkDate = new Date(Date.UTC(yearNum, monthNum - 1, dayNum));
+  if (
+    checkDate.getUTCFullYear() !== yearNum ||
+    checkDate.getUTCMonth() !== monthNum - 1 ||
+    checkDate.getUTCDate() !== dayNum
+  ) {
+    return null;
+  }
+
+  return `${yearNum}-${String(monthNum).padStart(2, '0')}-${String(dayNum).padStart(2, '0')}`;
+}
+
+/**
+ * Mengonversi serial number tanggal Excel (epoch 1899-12-30) ke format YYYY-MM-DD
  */
 function excelSerialToYMD(serial: number): string | null {
   if (!Number.isFinite(serial) || serial < 20000 || serial > 90000) return null;
   const utcMs = Date.UTC(1899, 11, 30) + Math.floor(serial) * 86400000;
   const d = new Date(utcMs);
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
+  return buildValidatedYMD(
+    d.getUTCFullYear(),
+    d.getUTCMonth() + 1,
+    d.getUTCDate()
+  );
 }
 
 /**
@@ -34,14 +66,14 @@ export function normalizeHolidayDate(raw: string): string | null {
   const isoMatch = cleaned.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
   if (isoMatch) {
     const [, y, m, d] = isoMatch;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    return buildValidatedYMD(Number(y), Number(m), Number(d));
   }
 
   // 2. Format DD/MM/YYYY atau DD-MM-YYYY (umum di Excel Indonesia)
   const idMatch = cleaned.match(/^(\d{1,2})[-/](\d{1,2})[-/](\d{4})$/);
   if (idMatch) {
     const [, d, m, y] = idMatch;
-    return `${y}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
+    return buildValidatedYMD(Number(y), Number(m), Number(d));
   }
 
   // 3. Serial Number Tanggal Excel (misal: 46251)
@@ -53,7 +85,7 @@ export function normalizeHolidayDate(raw: string): string | null {
 }
 
 /**
- * Menormalisasi kategori hari libur agar selaras dengan constraint SQL v20.1
+ * Menormalisasi kategori hari libur agar selaras dengan constraint SQL v20.2
  */
 function normalizeHolidayCategory(
   rawCategory: string,
@@ -139,7 +171,9 @@ async function extractZipEntries(buffer: ArrayBuffer): Promise<ZipXmlEntries> {
         const decompressedStream = new Blob([compressedSlice])
           .stream()
           .pipeThrough(new DecompressionStream('deflate-raw'));
-        const decompressedBuf = await new Response(decompressedStream).arrayBuffer();
+        const decompressedBuf = await new Response(
+          decompressedStream
+        ).arrayBuffer();
         files[fileName] = decoder.decode(decompressedBuf);
       }
     }
@@ -233,7 +267,7 @@ export async function parseHolidaySpreadsheetFile(
     );
   }
 
-  // Konversi baris menjadi objek tanggal, keterangan & kategori (otomatis melewati baris header)
+  // Konversi baris menjadi objek tanggal, keterangan & kategori (melewati baris header)
   const parsed: ParsedHolidayRow[] = [];
   for (const cols of rowsMatrix) {
     const rawDate = cols[0] ?? '';
@@ -267,12 +301,24 @@ export function downloadHolidayExcelTemplate(year: number): void {
     [`${year}-12-25`, 'Hari Raya Natal', 'NASIONAL'],
   ];
 
-  const escapeXml = (str: string) =>
-    str
-      .replace(/&/g, '&')
-      .replace(/</g, '<')
-      .replace(/>/g, '>')
-      .replace(/"/g, '"');
+  // Menggunakan \u0026 agar entitas XML aman saat di-copy dari markdown/browser
+  const escapeXml = (str: string): string =>
+    str.replace(/[&<>"']/g, (ch) => {
+      switch (ch) {
+        case '&':
+          return '\u0026amp;';
+        case '<':
+          return '\u0026lt;';
+        case '>':
+          return '\u0026gt;';
+        case '"':
+          return '\u0026quot;';
+        case "'":
+          return '\u0026apos;';
+        default:
+          return ch;
+      }
+    });
 
   const sheetRowsXml = sampleRows
     .map(

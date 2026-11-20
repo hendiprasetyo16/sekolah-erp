@@ -3,16 +3,16 @@ import { calculateDistance } from './gps.utils';
 import { detectDevicePlatform } from '@/utils/devicePlatform';
 
 // ============================================================================
-// PARAMETER KEAMANAN YANG DAPAT DISESUAIKAN (SELARAS RPC SQL v20.1)
+// PARAMETER KEAMANAN YANG DAPAT DISESUAIKAN (SELARAS RPC SQL v20.2)
 // ============================================================================
 export const SECURITY_CONFIG = {
   BLOCK_EMULATOR_SIGNATURES: true, // Tolak BlueStacks, Nox, LDPlayer, AVD, dll.
-  BLOCK_VIRTUAL_CAMERA: true,      // Tolak OBS Virtual Camera, ManyCam, DroidCam (kecuali SUPER_ADMIN)
-  MAX_GPS_ACCURACY_METERS: 80,     // Batas maksimal meleset sinyal GPS (RPC server maks 85m)
-  MIN_GPS_ACCURACY_METERS: 1.0,    // <= 1.0m = indikasi kuat Fake GPS (sama dengan RPC server)
-  GPS_SAMPLE_COUNT: 3,             // Jumlah pengambilan sampel GPS beruntun
-  GPS_SAMPLE_TIMEOUT_MS: 12000,    // Batas waktu tunggu pengambilan sampel GPS (ms)
-  MAX_HUMAN_SPEED_MPS: 35,         // Kecepatan perpindahan maks antar sampel (~126 km/jam)
+  BLOCK_VIRTUAL_CAMERA: true, // Tolak OBS Virtual Camera, ManyCam, DroidCam (kecuali SUPER_ADMIN)
+  MAX_GPS_ACCURACY_METERS: 80, // Batas maksimal meleset sinyal GPS (RPC server maks 85m)
+  MIN_GPS_ACCURACY_METERS: 1.0, // <= 1.0m = indikasi kuat Fake GPS (sama dengan RPC server)
+  GPS_SAMPLE_COUNT: 3, // Jumlah pengambilan sampel GPS beruntun
+  GPS_SAMPLE_TIMEOUT_MS: 12000, // Batas waktu tunggu pengambilan sampel GPS (ms)
+  MAX_HUMAN_SPEED_MPS: 35, // Kecepatan perpindahan maks antar sampel (~126 km/jam)
 } as const;
 
 export interface EnvironmentAuditResult {
@@ -33,9 +33,6 @@ export interface VerifiedGpsResult {
 
 /**
  * 1. Memeriksa apakah perangkat adalah Emulator Android, Browser Otomasi, atau Komputer
- * @param isSuperAdmin True jika akun adalah SUPER_ADMIN (lolos semua pembatasan perangkat)
- * @param allowDesktopForTeacher True jika guru diberi izin individu absen via komputer
- * @param allowDesktopGlobal True jika sekolah mengaktifkan izin presensi komputer secara global
  */
 export function inspectDeviceEnvironment(
   isSuperAdmin: boolean = false,
@@ -119,16 +116,32 @@ export function inspectDeviceEnvironment(
     flags.push('EMULATOR_OR_SPOOFED_DEVICE');
   }
 
-  // Cek 4: Akses dari Laptop / Komputer Desktop
+  // Cek 4: Akses dari Android APK (Capacitor) atau Laptop / Komputer Desktop
+  const isCapacitorNative =
+    typeof window !== 'undefined' &&
+    Boolean(
+      (
+        window as unknown as {
+          Capacitor?: { isNativePlatform?: () => boolean };
+        }
+      ).Capacitor?.isNativePlatform?.()
+    );
+
+  const isAndroidApk = isCapacitorNative || platformInfo.isAndroidApk;
+
+  if (isAndroidApk) {
+    flags.push('ANDROID_APK');
+  }
+
   if (platformInfo.isDesktop) {
     flags.push('DESKTOP_BROWSER');
   }
 
-  // Format telemetri selaras dengan pengecekan p_device_telemetry->>'deviceType' di RPC SQL v20.1
+  // Format telemetri selaras dengan pengecekan p_device_telemetry->>'deviceType' di RPC SQL v20.2
   const telemetry: Record<string, unknown> = {
     deviceType: platformInfo.isDesktop ? 'DESKTOP' : 'MOBILE',
     deviceLabel: platformInfo.deviceLabel,
-    isAndroidApk: platformInfo.isAndroidApk,
+    isAndroidApk,
     ua: ua.slice(0, 180),
     platform,
     maxTouchPoints,

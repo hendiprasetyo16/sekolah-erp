@@ -1,25 +1,15 @@
 // src/modules/attendance/services/whatsappService.ts
 import { supabase } from '@/services/supabase.client';
+import type {
+  SchoolWaConfig,
+  StudentWaRecipientResult,
+  WaGatewayProvider,
+} from '../types/attendance.types';
 
-export type WaProviderType = 'FONNTE' | 'WABLAS' | 'WOOWA' | 'CUSTOM';
-
-export interface SchoolWaConfig {
-  schoolId: string;
-  isEnabled: boolean;
-  provider: WaProviderType;
-  apiUrl: string;
-  apiToken: string;
-  senderNumber?: string | null;
-  customHeaders?: Record<string, string>;
-  notifyOnCheckIn: boolean;
-  notifyOnLate: boolean;
-  notifyOnCheckOut: boolean;
-  templateCheckIn: string;
-  templateCheckOut: string;
-}
+export type { SchoolWaConfig, WaGatewayProvider };
 
 export const WA_PROVIDER_PRESETS: Record<
-  WaProviderType,
+  WaGatewayProvider,
   { label: string; defaultUrl: string; tokenHint: string }
 > = {
   FONNTE: {
@@ -44,7 +34,9 @@ export const WA_PROVIDER_PRESETS: Record<
   },
 };
 
-export async function getSchoolWaConfig(schoolId: string): Promise<SchoolWaConfig> {
+export async function getSchoolWaConfig(
+  schoolId: string
+): Promise<SchoolWaConfig> {
   const { data, error } = await supabase
     .from('school_wa_configs')
     .select('*')
@@ -75,7 +67,9 @@ export async function getSchoolWaConfig(schoolId: string): Promise<SchoolWaConfi
   };
 }
 
-export async function saveSchoolWaConfig(config: SchoolWaConfig): Promise<void> {
+export async function saveSchoolWaConfig(
+  config: SchoolWaConfig
+): Promise<void> {
   const { error } = await supabase.from('school_wa_configs').upsert(
     {
       schoolId: config.schoolId,
@@ -108,10 +102,14 @@ export async function dispatchStudentAttendanceWhatsApp(params: {
   status: string;
 }): Promise<void> {
   try {
-    const { data: target, error: rpcError } = await supabase.rpc('get_student_wa_recipient', {
-      p_student_id: params.studentId,
-    });
+    const { data, error: rpcError } = await supabase.rpc(
+      'get_student_wa_recipient',
+      {
+        p_student_id: params.studentId,
+      }
+    );
 
+    const target = data as StudentWaRecipientResult | null;
     if (rpcError || !target?.eligible) return;
 
     await supabase.functions.invoke('send-whatsapp', {
