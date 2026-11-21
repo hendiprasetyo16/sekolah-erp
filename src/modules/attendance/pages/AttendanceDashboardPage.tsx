@@ -29,6 +29,9 @@ import {
   Search,
   Smartphone,
   CalendarDays,
+  Sparkles,
+  CalendarOff,
+  Unlock,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
@@ -36,6 +39,7 @@ import { getLocalDateString } from '../services/gps.utils';
 import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
+import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 import type {
   StudentAttendance,
   TeacherAttendance,
@@ -49,6 +53,7 @@ const ARCHIVE_RETENTION_YEARS = 2; // Batas umur arsip absensi dalam tahun (defa
 const STORAGE_BUCKET_NAME = 'attendance-selfies'; // Bucket penyimpanan foto selfie
 const ATTACHMENT_BUCKET_NAME = 'attendance-attachments'; // Bucket penyimpanan surat izin/dinas
 const STORAGE_DELETE_BATCH_SIZE = 100; // Jumlah maksimal file yang dihapus per gelombang
+const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah'; // Keterangan otomatis saat presensi hari libur diaktifkan
 
 type ActiveTab = 'overview' | 'students' | 'teachers';
 type SortDirection = 'asc' | 'desc';
@@ -161,7 +166,7 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
     typeof error === 'object' &&
     error !== null &&
     'message' in error &&
-    typeof (error as { message: unknown }).message === 'string'
+    typeof (error as { message?: unknown }).message === 'string'
   ) {
     return (error as { message: string }).message;
   }
@@ -268,6 +273,31 @@ export function AttendanceDashboardPage() {
   const [teacherStatusFilter, setTeacherStatusFilter] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Status hari libur & mode kegiatan khusus pada tanggal rekap terpilih
+  const holidayLock = useStudentHolidayLock({
+    schoolId: activeSchoolId,
+    targetDate: selectedDate,
+  });
+
+  const isSpecialEventMode = Boolean(
+    holidayLock.isHoliday && holidayLock.isSpecialEventActive
+  );
+  const specialEventNote = useMemo(() => {
+    const reason = (holidayLock.specialEventReason ?? '').trim();
+    return reason || DEFAULT_SPECIAL_EVENT_NOTE;
+  }, [holidayLock.specialEventReason]);
+
+  // Resolver keterangan: tampilkan catatan tersimpan, atau otomatis fallback ke nama kegiatan khusus jika hari libur diaktifkan
+  const resolveEffectiveNote = useCallback(
+    (rawNotes?: string | null): string | null => {
+      const trimmed = (rawNotes ?? '').trim();
+      if (trimmed) return trimmed;
+      if (isSpecialEventMode) return specialEventNote;
+      return null;
+    },
+    [isSpecialEventMode, specialEventNote]
+  );
 
   // Label Kalender Masehi + Pasaran Jawa untuk tanggal terpilih
   const selectedDateDisplay = useMemo(
@@ -549,7 +579,7 @@ export function AttendanceDashboardPage() {
       checkOutTime: record.checkOutTime,
       checkInDistance: record.checkInDistance,
       checkOutDistance: record.checkOutDistance,
-      notes: record.notes,
+      notes: resolveEffectiveNote(record.notes),
       deviceTelemetry: record.deviceTelemetry ?? null,
       securityFlags: record.securityFlags ?? [],
       isMock: Boolean(record.isCheckInMock),
@@ -659,11 +689,13 @@ export function AttendanceDashboardPage() {
       const matchesStatus =
         studentStatusFilter === 'ALL' ||
         normalizedStatus === studentStatusFilter;
+      const effectiveNote = resolveEffectiveNote(r.notes) ?? '';
       const matchesSearch =
         !searchQuery.trim() ||
         r.student?.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
         r.student?.nisn?.includes(searchQuery.trim()) ||
-        (r.student?.nis && r.student.nis.includes(searchQuery.trim()));
+        (r.student?.nis && r.student.nis.includes(searchQuery.trim())) ||
+        effectiveNote.toLowerCase().includes(searchQuery.toLowerCase());
       return matchesClass && matchesStatus && matchesSearch;
     });
 
@@ -724,6 +756,7 @@ export function AttendanceDashboardPage() {
     studentStatusFilter,
     searchQuery,
     studentSort,
+    resolveEffectiveNote,
   ]);
 
   // Filter & Urutkan Data Guru
@@ -737,11 +770,12 @@ export function AttendanceDashboardPage() {
 
       if (!searchQuery.trim()) return true;
       const q = searchQuery.toLowerCase();
+      const effectiveNote = resolveEffectiveNote(r.notes) ?? '';
       return (
         r.teacher?.fullName?.toLowerCase().includes(q) ||
         r.teacher?.nip?.includes(searchQuery.trim()) ||
         r.teacher?.nuptk?.includes(searchQuery.trim()) ||
-        r.notes?.toLowerCase().includes(q)
+        effectiveNote.toLowerCase().includes(q)
       );
     });
 
@@ -789,7 +823,13 @@ export function AttendanceDashboardPage() {
           return 0;
       }
     });
-  }, [teacherRecords, teacherStatusFilter, searchQuery, teacherSort]);
+  }, [
+    teacherRecords,
+    teacherStatusFilter,
+    searchQuery,
+    teacherSort,
+    resolveEffectiveNote,
+  ]);
 
   // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat (SUPER_ADMIN & ADMIN)
   const handleConfirmDeleteSingle = async () => {
@@ -1010,13 +1050,37 @@ export function AttendanceDashboardPage() {
     });
   };
 
-  // Render Kolom Keterangan Guru dengan Penanda Khusus "Pulang Awal" & Menit Terlambat
-  const renderTeacherNotes = (record: TeacherAttendanceWithCheckOut) => {
-    const notes = record.notes;
-    const lateMinutes = extractLateMinutesFromTelemetry(record.deviceTelemetry);
-    const hasEarlyNote = isEarlyCheckoutNote(notes);
+  // Render Kolom Keterangan Siswa dengan dukungan otomatis Mode Kegiatan Khusus
+  const renderStudentNotes = (record: StudentAttendanceWithCheckOut) => {
+    const effectiveNote = resolveEffectiveNote(record.notes);
+    if (!effectiveNote) {
+      return <span className="text-xs opacity-40">-</span>;
+    }
 
-    if ((!notes || !notes.trim()) && lateMinutes === 0) {
+    const isHolidayEventTag =
+      isSpecialEventMode && effectiveNote === specialEventNote;
+
+    if (isHolidayEventTag) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+          <Sparkles size={11} />
+          {effectiveNote}
+        </span>
+      );
+    }
+
+    return <span className="text-sm opacity-80">{effectiveNote}</span>;
+  };
+
+  // Render Kolom Keterangan Guru dengan Penanda Khusus "Pulang Awal", Menit Terlambat, & Kegiatan Khusus
+  const renderTeacherNotes = (record: TeacherAttendanceWithCheckOut) => {
+    const effectiveNote = resolveEffectiveNote(record.notes);
+    const lateMinutes = extractLateMinutesFromTelemetry(record.deviceTelemetry);
+    const hasEarlyNote = isEarlyCheckoutNote(effectiveNote);
+    const isHolidayEventTag =
+      isSpecialEventMode && effectiveNote === specialEventNote;
+
+    if (!effectiveNote && lateMinutes === 0) {
       return <span className="text-xs opacity-40">-</span>;
     }
 
@@ -1034,16 +1098,22 @@ export function AttendanceDashboardPage() {
             Pulang Awal
           </span>
         )}
-        {notes && notes.trim() && (
-          <span className="text-xs text-foreground/85 leading-snug">
-            {notes}
-          </span>
-        )}
+        {effectiveNote &&
+          (isHolidayEventTag ? (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30">
+              <Sparkles size={11} />
+              {effectiveNote}
+            </span>
+          ) : (
+            <span className="text-xs text-foreground/85 leading-snug">
+              {effectiveNote}
+            </span>
+          ))}
       </div>
     );
   };
 
-  // Ekspor Laporan CSV (Kompatibel dengan Microsoft Excel + Kalender Jawa)
+  // Ekspor Laporan CSV (Kompatibel dengan Microsoft Excel + Kalender Jawa + Keterangan Kegiatan Khusus)
   const handleExportCsv = () => {
     const escapeCsv = (val: unknown) => {
       const str = String(val ?? '-').replace(/"/g, '""');
@@ -1095,7 +1165,7 @@ export function AttendanceDashboardPage() {
             r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
             r.checkOutDistance != null ? Math.round(r.checkOutDistance) : '-',
             r.checkInTime ? (r.isCheckInMock ? 'Palsu' : 'Valid') : '-',
-            r.notes ?? '-',
+            resolveEffectiveNote(r.notes) ?? '-',
           ]
             .map(escapeCsv)
             .join(',')
@@ -1137,7 +1207,7 @@ export function AttendanceDashboardPage() {
             formatTime(r.checkInTime || r.time),
             formatTime(r.checkOutTime),
             r.recordedBy ? 'Wali Kelas / Admin' : 'Kiosk / Mandiri',
-            r.notes ?? '-',
+            resolveEffectiveNote(r.notes) ?? '-',
           ]
             .map(escapeCsv)
             .join(',')
@@ -1169,8 +1239,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1281,6 +1351,29 @@ export function AttendanceDashboardPage() {
           </button>
         </div>
       </div>
+
+      {/* Banner Status Hari Libur / Mode Kegiatan Khusus */}
+      {isSpecialEventMode ? (
+        <div className="mb-4 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 flex items-center gap-2.5 text-xs">
+          <Unlock size={16} className="text-emerald-600 shrink-0" />
+          <span>
+            <strong>Mode Kegiatan Khusus Aktif:</strong> {specialEventNote}{' '}
+            (Pengecualian hari libur {holidayLock.holidayName ?? 'Kalender'} —
+            otomatis ditampilkan pada kolom Keterangan)
+          </span>
+        </div>
+      ) : (
+        holidayLock.isHoliday && (
+          <div className="mb-4 p-3.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 flex items-center gap-2.5 text-xs">
+            <CalendarOff size={16} className="text-amber-600 shrink-0" />
+            <span>
+              <strong>Hari Libur:</strong>{' '}
+              {holidayLock.holidayName ?? 'Libur Kalender'} (Presensi siswa
+              dikunci otomatis pada tanggal ini)
+            </span>
+          </div>
+        )
+      )}
 
       {/* Summary Cards */}
       {summary && (
@@ -1423,7 +1516,7 @@ export function AttendanceDashboardPage() {
                 type="text"
                 placeholder={
                   activeTab === 'students'
-                    ? 'Cari nama siswa, NISN, atau NIS...'
+                    ? 'Cari nama siswa, NISN, NIS, atau keterangan...'
                     : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
                 }
                 value={searchQuery}
@@ -1534,8 +1627,8 @@ export function AttendanceDashboardPage() {
                     }
                   }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
-                      ? 'text-white shadow-xs'
-                      : 'bg-card/60 border-border opacity-75 hover:opacity-100'
+                    ? 'text-white shadow-xs'
+                    : 'bg-card/60 border-border opacity-75 hover:opacity-100'
                     }`}
                   style={
                     isSelected
@@ -1778,9 +1871,7 @@ export function AttendanceDashboardPage() {
                               ? 'Admin/Wali Kelas'
                               : 'Kiosk/Mandiri'}
                           </td>
-                          <td className="text-sm opacity-75">
-                            {record.notes ?? '-'}
-                          </td>
+                          <td>{renderStudentNotes(record)}</td>
                           {canDeleteRecord && (
                             <td className="text-center">
                               <button
@@ -2174,8 +2265,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Sekolah Terpilih Saja
@@ -2184,8 +2275,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       Semua Sekolah
@@ -2260,8 +2351,8 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative max-h-[90vh] overflow-y-auto ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                  ? 'max-w-2xl'
-                  : 'max-w-md'
+                ? 'max-w-2xl'
+                : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -2291,8 +2382,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                      ? 'grid-cols-1 sm:grid-cols-2'
-                      : 'grid-cols-1'
+                    ? 'grid-cols-1 sm:grid-cols-2'
+                    : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -2453,8 +2544,8 @@ export function AttendanceDashboardPage() {
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                      : 'bg-muted/50 border-border'
+                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                    : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />
