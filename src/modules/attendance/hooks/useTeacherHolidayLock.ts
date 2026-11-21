@@ -134,7 +134,7 @@ export function useTeacherHolidayLock({
    */
   const enableTeacherSpecialEvent = async (
     title: string,
-    userId?: string | null
+    _userId?: string | null
   ) => {
     if (!schoolId) return;
     const cleanTitle = title.trim() || 'Kegiatan Khusus Guru';
@@ -145,7 +145,6 @@ export function useTeacherHolidayLock({
       title: cleanTitle,
       target_type: 'GURU',
       is_active: true,
-      created_by: userId ?? null,
     });
 
     if (error) {
