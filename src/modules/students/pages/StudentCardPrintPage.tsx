@@ -25,15 +25,24 @@ import { normalizeStudentSchoolId } from '../services/student.service';
 import { encodeCode128B } from '../utils/code128Barcode';
 
 // ============================================================================
-// PARAMETER UKURAN KARTU & MARGIN CETAK (MUDAH DISESUAIKAN)
+// PARAMETER UKURAN KARTU & POSISI KONTEN (MUDAH DISESUAIKAN)
 // ============================================================================
 const CARD_WIDTH_MM = 85.6; // Lebar standar kartu ATM / CR80 (mm)
 const CARD_HEIGHT_MM = 54; // Tinggi standar kartu ATM / CR80 (mm)
-const PRINT_GRID_WIDTH_MM = 178; // Lebar total 2 kolom kartu + jarak tengah (mm)
+const CARD_GAP_X_MM = 5; // Jarak mendatar antar kartu kiri & kanan (mm)
+const CARD_GAP_Y_MM = 5.5; // Jarak tegak antar baris kartu (mm)
+const PRINT_GRID_WIDTH_MM = CARD_WIDTH_MM * 2 + CARD_GAP_X_MM; // Total lebar 2 kartu (176.2mm)
 const BARCODE_HEIGHT_PX = 27; // Tinggi batang barcode di dalam kartu (px)
 const CARDS_PER_A4_SHEET = 8; // 2 kolom x 4 baris per lembar A4
-const PRINT_MARGIN_VERTICAL_MM = 14; // Jarak aman atas & bawah kertas A4 (mm)
-const PRINT_MARGIN_HORIZONTAL_MM = 12; // Jarak aman kiri & kanan kertas A4 (mm)
+
+// Parameter Geser Isi Kartu (Bingkai Foto 3x4, Nama, NISN, Kelas, Jenis Kelamin)
+const CARD_PROFILE_OFFSET_LEFT_MM = 8; // Geser blok foto & teks ke kanan di dalam kartu (mm)
+const CARD_PROFILE_OFFSET_RIGHT_MM = 3.5; // Jarak aman dari tepi kanan kartu (mm)
+
+// Parameter Geser Posisi Cetak di Kertas A4 (mm)
+const PRINT_PAGE_MARGIN_MM = 6; // Margin dasar halaman A4 (mm)
+const PRINT_OFFSET_LEFT_MM = 12; // Geser blok seluruh kartu ke kanan pada kertas A4 (mm)
+const PRINT_OFFSET_TOP_MM = 4; // Jarak blok kartu dari tepi atas kertas A4 (mm)
 
 interface PrintableStudent {
     id: string;
@@ -205,7 +214,7 @@ function StudentIdCardBox({
                 }`}
         >
             {/* 1. HEADER KARTU SEKOLAH */}
-            <div className="bg-linear-to-r from-emerald-700 via-emerald-600 to-teal-600 text-white px-3 py-1.5 border-b-2 border-amber-400 flex items-center justify-between gap-2 shrink-0">
+            <div className="bg-linear-to-r from-emerald-700 via-emerald-600 to-teal-600 text-white px-3.5 py-1.5 border-b-2 border-amber-400 flex items-center justify-between gap-2 shrink-0">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                     <div className="w-6 h-6 rounded-md bg-white text-emerald-700 flex items-center justify-center overflow-hidden shrink-0">
                         {schoolInfo.logoUrl ? (
@@ -247,8 +256,14 @@ function StudentIdCardBox({
                 </div>
             </div>
 
-            {/* 2. ISI PROFIL SISWA (FOTO 3x4 PROPORSIONAL + IDENTITAS TERSTRUKTUR) */}
-            <div className="flex items-center gap-3 px-3.5 py-2 flex-1 min-h-0">
+            {/* 2. ISI PROFIL SISWA (DIGESER KE KANAN AGAR SEIMBANG DI TENGAH KARTU) */}
+            <div
+                style={{
+                    paddingLeft: `${CARD_PROFILE_OFFSET_LEFT_MM}mm`,
+                    paddingRight: `${CARD_PROFILE_OFFSET_RIGHT_MM}mm`,
+                }}
+                className="flex items-center gap-3.5 py-2 flex-1 min-h-0"
+            >
                 {/* Bingkai Pas Foto 3x4 */}
                 <div className="w-13.5 h-17.5 rounded-lg border border-slate-300 bg-linear-to-b from-slate-50 to-slate-100 overflow-hidden flex flex-col items-center justify-center shrink-0">
                     {student.photoUrl ? (
@@ -567,11 +582,11 @@ export function StudentCardPrintPage() {
 
     return (
         <div className="space-y-5 max-w-6xl mx-auto">
-            {/* CSS Khusus Cetak: Menetralkan body flex & memusatkan grid 178mm di kertas A4 */}
+            {/* CSS Khusus Cetak: Geser posisi eksplisit ke kanan agar kartu & bingkai foto utuh */}
             <style>{`
         @page {
           size: A4 portrait;
-          margin: ${PRINT_MARGIN_VERTICAL_MM}mm ${PRINT_MARGIN_HORIZONTAL_MM}mm;
+          margin: ${PRINT_PAGE_MARGIN_MM}mm;
         }
         @media screen {
           #print-mount-root {
@@ -598,18 +613,22 @@ export function StudentCardPrintPage() {
           }
           #print-mount-root {
             display: block !important;
+            box-sizing: border-box !important;
             width: 100% !important;
             margin: 0 !important;
-            padding: 2mm 0 0 0 !important;
+            padding: 0 !important;
             background: #FFFFFF !important;
           }
           #print-cards-grid {
             display: flex !important;
             flex-wrap: wrap !important;
-            justify-content: space-between !important;
-            row-gap: 6mm !important;
+            justify-content: flex-start !important;
+            column-gap: ${CARD_GAP_X_MM}mm !important;
+            row-gap: ${CARD_GAP_Y_MM}mm !important;
             width: ${PRINT_GRID_WIDTH_MM}mm !important;
-            margin: 0 auto !important;
+            margin-top: ${PRINT_OFFSET_TOP_MM}mm !important;
+            margin-left: ${PRINT_OFFSET_LEFT_MM}mm !important;
+            margin-right: 0 !important;
             padding: 0 !important;
           }
           .student-id-card-item {

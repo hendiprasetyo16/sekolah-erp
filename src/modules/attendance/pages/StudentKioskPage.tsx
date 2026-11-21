@@ -22,6 +22,8 @@ import {
   CloudUpload,
   RefreshCw,
   CalendarDays,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
@@ -40,6 +42,9 @@ const MIN_MINUTES_BETWEEN_IN_AND_OUT = 15; // Jeda minimal (menit) agar double-s
 const KIOSK_RESET_DELAY_MS = 4000;        // Waktu reset layar otomatis setelah scan (milidetik)
 const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis (milidetik)
 const CLOCK_TICK_INTERVAL_MS = 30000;     // Interval pembaruan jam & tanggal layar Kiosk (milidetik)
+const DEFAULT_KIOSK_SOUND_VOLUME = 0.5;   // Volume awal efek suara Kiosk (0.5 = 50%, rentang 0.0 - 1.0)
+const KIOSK_SOUND_PREF_KEY = 'sekolaherp_kiosk_sound_enabled';
+const KIOSK_SOUND_VOLUME_KEY = 'sekolaherp_kiosk_sound_volume';
 const FALLBACK_STUDENT_START = '07:00';
 const FALLBACK_STUDENT_CHECKOUT_START = '11:30';
 const FALLBACK_STUDENT_END = '13:30';
@@ -50,6 +55,7 @@ const STUDENT_CACHE_STORAGE_PREFIX = 'sekolaherp_kiosk_student_cache_';
 
 type KioskState = 'idle' | 'scanning' | 'found' | 'success' | 'already' | 'error';
 type KioskScanMode = 'AUTO' | 'CHECK_IN' | 'CHECK_OUT';
+type KioskSoundType = 'checkin' | 'checkout' | 'already' | 'error';
 
 interface FoundStudent {
   id: string;
@@ -91,6 +97,91 @@ interface OfflineKioskQueueItem {
   scanMode: KioskScanMode;
   status: 'HADIR' | 'TERLAMBAT';
   recordedBy: string | null;
+}
+
+// ============================================================================
+// GENERATOR EFEK SUARA KIOSK (WEB AUDIO API — BERFUNGSI ONLINE MAUPUN OFFLINE)
+// ============================================================================
+let sharedAudioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  const AudioCtxClass =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext })
+      .webkitAudioContext;
+  if (!AudioCtxClass) return null;
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new AudioCtxClass();
+  }
+  if (sharedAudioCtx.state === 'suspended') {
+    void sharedAudioCtx.resume().catch(() => { });
+  }
+  return sharedAudioCtx;
+}
+
+function playToneStep(
+  ctx: AudioContext,
+  frequency: number,
+  startOffsetSec: number,
+  durationSec: number,
+  waveType: OscillatorType = 'sine',
+  peakVolume: number = DEFAULT_KIOSK_SOUND_VOLUME
+) {
+  if (peakVolume <= 0.005) return;
+
+  const osc = ctx.createOscillator();
+  const gain = ctx.createGain();
+
+  osc.type = waveType;
+  osc.frequency.setValueAtTime(frequency, ctx.currentTime + startOffsetSec);
+
+  const startAt = ctx.currentTime + startOffsetSec;
+  const endAt = startAt + durationSec;
+  // Batasi gain maksimal 0.85 agar suara speaker tetap jernih dan tidak pecah
+  const safeGain = Math.min(0.85, Math.max(0.01, peakVolume * 0.85));
+
+  gain.gain.setValueAtTime(0.0001, startAt);
+  gain.gain.exponentialRampToValueAtTime(safeGain, startAt + 0.015);
+  gain.gain.exponentialRampToValueAtTime(0.0001, endAt);
+
+  osc.connect(gain);
+  gain.connect(ctx.destination);
+
+  osc.start(startAt);
+  osc.stop(endAt + 0.02);
+}
+
+function playKioskFeedbackSound(
+  type: KioskSoundType,
+  volume: number = DEFAULT_KIOSK_SOUND_VOLUME
+) {
+  try {
+    if (volume <= 0) return;
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    if (type === 'checkin') {
+      // Nada naik 2 ketuk (Do -> Sol): Absen Datang Berhasil
+      playToneStep(ctx, 523.25, 0, 0.13, 'sine', volume);
+      playToneStep(ctx, 783.99, 0.12, 0.22, 'sine', volume);
+    } else if (type === 'checkout') {
+      // Nada naik 3 ketuk (Mi -> Sol -> Do tinggi): Absen Pulang Berhasil
+      playToneStep(ctx, 659.25, 0, 0.1, 'sine', volume);
+      playToneStep(ctx, 783.99, 0.1, 0.1, 'sine', volume);
+      playToneStep(ctx, 1046.5, 0.2, 0.24, 'sine', volume);
+    } else if (type === 'already') {
+      // Nada ganda netral: Sudah Absen / Informasi
+      playToneStep(ctx, 466.16, 0, 0.11, 'triangle', volume);
+      playToneStep(ctx, 466.16, 0.15, 0.14, 'triangle', volume);
+    } else {
+      // Nada rendah peringatan: Gagal / Tidak Ditemukan
+      playToneStep(ctx, 230, 0, 0.16, 'sawtooth', volume * 0.75);
+      playToneStep(ctx, 175, 0.16, 0.24, 'sawtooth', volume * 0.75);
+    }
+  } catch {
+    // Abaikan jika perangkat tidak mendukung audio
+  }
 }
 
 /**
@@ -182,6 +273,87 @@ export function StudentKioskPage() {
   const [schoolTimezone, setSchoolTimezone] = useState<string>(
     DEFAULT_SCHOOL_TIMEZONE
   );
+
+  // Preferensi Efek Suara & Tingkat Volume Kiosk (0.0 - 1.0)
+  const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem(KIOSK_SOUND_PREF_KEY);
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+
+  const [soundVolume, setSoundVolume] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem(KIOSK_SOUND_VOLUME_KEY);
+      if (saved === null) return DEFAULT_KIOSK_SOUND_VOLUME;
+      const parsed = Number(saved);
+      return Number.isFinite(parsed)
+        ? Math.min(1, Math.max(0, parsed))
+        : DEFAULT_KIOSK_SOUND_VOLUME;
+    } catch {
+      return DEFAULT_KIOSK_SOUND_VOLUME;
+    }
+  });
+
+  const triggerSound = useCallback(
+    (type: KioskSoundType) => {
+      if (!soundEnabled || soundVolume <= 0) return;
+      playKioskFeedbackSound(type, soundVolume);
+    },
+    [soundEnabled, soundVolume]
+  );
+
+  const toggleSound = () => {
+    setSoundEnabled((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem(KIOSK_SOUND_PREF_KEY, String(next));
+      } catch {
+        // Abaikan error storage
+      }
+      if (next) {
+        const testVol = soundVolume > 0 ? soundVolume : DEFAULT_KIOSK_SOUND_VOLUME;
+        if (soundVolume <= 0) {
+          setSoundVolume(testVol);
+          try {
+            localStorage.setItem(KIOSK_SOUND_VOLUME_KEY, String(testVol));
+          } catch {
+            // Abaikan error storage
+          }
+        }
+        playKioskFeedbackSound('checkin', testVol);
+      }
+      return next;
+    });
+  };
+
+  const handleVolumeChange = (percentValue: number) => {
+    const normalized = Math.min(1, Math.max(0, percentValue / 100));
+    setSoundVolume(normalized);
+    const shouldEnable = normalized > 0;
+    setSoundEnabled(shouldEnable);
+    try {
+      localStorage.setItem(KIOSK_SOUND_VOLUME_KEY, String(normalized));
+      localStorage.setItem(KIOSK_SOUND_PREF_KEY, String(shouldEnable));
+    } catch {
+      // Abaikan error storage
+    }
+  };
+
+  // Buka kunci AudioContext pada interaksi layar pertama agar tidak diblokir browser
+  useEffect(() => {
+    const unlockAudio = () => {
+      getAudioContext();
+    };
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
+    window.addEventListener('keydown', unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
+  }, []);
 
   // Tanggal aktif selalu mengikuti zona waktu sekolah & otomatis berganti saat tengah malam
   const today = useMemo(
@@ -594,7 +766,9 @@ export function StudentKioskPage() {
         specialEventInput.trim() || DEFAULT_KIOSK_SPECIAL_EVENT
       );
       setSpecialEventInput('');
+      triggerSound('checkin');
     } catch {
+      triggerSound('error');
       setResultMessage('Gagal mengaktifkan mode kegiatan khusus.');
       setKioskState('error');
       scheduleAutoReset();
@@ -620,6 +794,7 @@ export function StudentKioskPage() {
           existingTodayItems.length >= 2 ||
           diffMins < MIN_MINUTES_BETWEEN_IN_AND_OUT
         ) {
+          triggerSound('already');
           setResultMessage(
             `${student.fullName} sudah tercatat di antrean offline pukul ${lastQueued.timeFormatted}.`
           );
@@ -660,6 +835,7 @@ export function StudentKioskPage() {
       writeOfflineQueue(activeSchoolId, updatedQueue);
       setOfflineQueue(updatedQueue);
 
+      triggerSound(isCheckOutAction ? 'checkout' : 'checkin');
       setLastSavedOffline(true);
       setLastActionType(isCheckOutAction ? 'CHECK_OUT' : 'CHECK_IN');
       setResultMessage(
@@ -696,6 +872,7 @@ export function StudentKioskPage() {
       studentConfig.lateToleranceMinutes,
       schoolTimezone,
       user?.id,
+      triggerSound,
       scheduleAutoReset,
     ]
   );
@@ -709,6 +886,7 @@ export function StudentKioskPage() {
       }
 
       if (isHolidayLocked) {
+        triggerSound('error');
         setResultMessage(
           `Kiosk terkunci karena ${holidayName || 'Hari Libur'}.`
         );
@@ -747,6 +925,7 @@ export function StudentKioskPage() {
         // ==================================================================
         if (!existingAtt) {
           if (scanMode === 'CHECK_OUT') {
+            triggerSound('error');
             setResultMessage(
               `${student.fullName} belum tercatat absen datang hari ini.`
             );
@@ -777,6 +956,7 @@ export function StudentKioskPage() {
 
           if (insertErr) throw insertErr;
 
+          triggerSound('checkin');
           setLastSavedOffline(false);
           setLastActionType('CHECK_IN');
           setResultMessage(
@@ -815,6 +995,7 @@ export function StudentKioskPage() {
         // SKENARIO 2: SISWA SUDAH PUNYA CATATAN HARI INI
         // ==================================================================
         if (['IZIN', 'SAKIT'].includes(existingAtt.status)) {
+          triggerSound('already');
           setResultMessage(
             `${student.fullName} tercatat ${existingAtt.status} hari ini.`
           );
@@ -828,6 +1009,7 @@ export function StudentKioskPage() {
             'id-ID',
             { hour: '2-digit', minute: '2-digit' }
           );
+          triggerSound('already');
           setResultMessage(
             `${student.fullName} sudah absen datang & pulang (pukul ${outTime}) hari ini.`
           );
@@ -837,6 +1019,7 @@ export function StudentKioskPage() {
         }
 
         if (!studentConfig.enableCheckOut || scanMode === 'CHECK_IN') {
+          triggerSound('already');
           setResultMessage(`${student.fullName} sudah absen datang hari ini.`);
           setKioskState('already');
           scheduleAutoReset();
@@ -868,6 +1051,7 @@ export function StudentKioskPage() {
               minute: '2-digit',
             })
             : '-';
+          triggerSound('already');
           setResultMessage(
             `${student.fullName} sudah absen datang pukul ${inTimeLabel}. Absen pulang dibuka mulai pukul ${studentConfig.checkOutStartTime}.`
           );
@@ -888,6 +1072,7 @@ export function StudentKioskPage() {
 
         if (updateErr) throw updateErr;
 
+        triggerSound('checkout');
         setLastSavedOffline(false);
         setLastActionType('CHECK_OUT');
         setResultMessage(
@@ -938,6 +1123,7 @@ export function StudentKioskPage() {
       studentConfig.enableCheckOut,
       studentConfig.checkOutStartTime,
       schoolTimezone,
+      triggerSound,
       scheduleAutoReset,
       enqueueOfflineScan,
       user?.id,
@@ -949,6 +1135,7 @@ export function StudentKioskPage() {
       if (!activeSchoolId || processingLockRef.current) return;
 
       if (isHolidayLocked) {
+        triggerSound('error');
         setResultMessage(
           `Kiosk terkunci karena ${holidayName || 'Hari Libur'}.`
         );
@@ -958,6 +1145,7 @@ export function StudentKioskPage() {
       }
 
       if (!studentConfig.enableKiosk) {
+        triggerSound('error');
         setResultMessage(
           'Mode Kiosk Siswa sedang dinonaktifkan oleh Admin Sekolah.'
         );
@@ -1016,6 +1204,7 @@ export function StudentKioskPage() {
         }
 
         if (!mappedStudent) {
+          triggerSound('error');
           setResultMessage(
             navigator.onLine
               ? `Siswa dengan NISN/NIS "${cleanCode}" tidak ditemukan.`
@@ -1036,6 +1225,7 @@ export function StudentKioskPage() {
         );
       } catch (err) {
         console.error('Gagal mencari data siswa:', err);
+        triggerSound('error');
         setResultMessage(
           'Terjadi kesalahan saat memproses kartu pelajar. Silakan ulangi.'
         );
@@ -1048,6 +1238,7 @@ export function StudentKioskPage() {
       isHolidayLocked,
       holidayName,
       studentConfig.enableKiosk,
+      triggerSound,
       processStudentScan,
       scheduleAutoReset,
     ]
@@ -1068,6 +1259,8 @@ export function StudentKioskPage() {
     ? simSchools.find((s) => s.id === activeSchoolId)?.name ??
     'Mode Simulasi Kiosk'
     : school?.name ?? 'SekolahERP';
+
+  const volumePercent = Math.round((soundEnabled ? soundVolume : 0) * 100);
 
   return (
     <div
@@ -1149,6 +1342,58 @@ export function StudentKioskPage() {
               </span>
             </button>
           )}
+
+          {/* Kontrol Suara & Penggeser Volume (0% - 100%) */}
+          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-xl border border-border bg-card/80">
+            <button
+              type="button"
+              onClick={toggleSound}
+              className={`inline-flex items-center gap-1 text-xs font-bold transition cursor-pointer ${soundEnabled && soundVolume > 0
+                  ? 'text-emerald-600 dark:text-emerald-300'
+                  : 'text-muted-foreground hover:text-foreground'
+                }`}
+              title={
+                soundEnabled && soundVolume > 0
+                  ? 'Klik untuk membisukan suara'
+                  : 'Klik untuk mengaktifkan suara'
+              }
+            >
+              {soundEnabled && soundVolume > 0 ? (
+                <Volume2 size={15} />
+              ) : (
+                <VolumeX size={15} />
+              )}
+              <span className="hidden md:inline">
+                {soundEnabled && soundVolume > 0 ? 'Suara' : 'Bisu'}
+              </span>
+            </button>
+
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={volumePercent}
+              onChange={(e) => handleVolumeChange(Number(e.target.value))}
+              onMouseUp={() => {
+                if (soundEnabled && soundVolume > 0) {
+                  playKioskFeedbackSound('checkin', soundVolume);
+                }
+              }}
+              onTouchEnd={() => {
+                if (soundEnabled && soundVolume > 0) {
+                  playKioskFeedbackSound('checkin', soundVolume);
+                }
+              }}
+              aria-label="Volume Suara Kiosk"
+              title={`Volume Suara: ${volumePercent}%`}
+              className="w-16 sm:w-20 h-1.5 accent-emerald-600 cursor-pointer"
+            />
+
+            <span className="text-[11px] font-mono font-bold text-muted-foreground w-8 text-right select-none">
+              {volumePercent}%
+            </span>
+          </div>
 
           <div className="kiosk-clock">{currentTime}</div>
           <div className={`kiosk-online-badge ${isOnline ? 'online' : 'offline'}`}>
@@ -1438,8 +1683,8 @@ export function StudentKioskPage() {
                             type="button"
                             onClick={() => setScanMode(modeOpt.id)}
                             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
-                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                              : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
+                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                                : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
                               }`}
                           >
                             {modeOpt.label}
