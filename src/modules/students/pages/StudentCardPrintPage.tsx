@@ -1,5 +1,5 @@
 // src/modules/students/pages/StudentCardPrintPage.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, memo } from 'react';
 import { createPortal } from 'react-dom';
 import { Link } from 'react-router-dom';
 import {
@@ -18,6 +18,8 @@ import {
     FileSpreadsheet,
     Info,
     User,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -43,6 +45,10 @@ const CARD_PROFILE_OFFSET_RIGHT_MM = 3.5; // Jarak aman dari tepi kanan kartu (m
 const PRINT_PAGE_MARGIN_MM = 6; // Margin dasar halaman A4 (mm)
 const PRINT_OFFSET_LEFT_MM = 12; // Geser blok seluruh kartu ke kanan pada kertas A4 (mm)
 const PRINT_OFFSET_TOP_MM = 4; // Jarak blok kartu dari tepi atas kertas A4 (mm)
+
+// Parameter Pagination Pratinjau Layar (Agar ringan saat membuka kelas besar)
+const DEFAULT_PREVIEW_PAGE_SIZE = 24;
+const PREVIEW_PAGE_SIZE_OPTIONS = [12, 24, 48, 0] as const; // 0 = Tampilkan Semua
 
 interface PrintableStudent {
     id: string;
@@ -120,18 +126,30 @@ function formatGenderLabel(gender: string | null): string | null {
 }
 
 /**
- * Komponen SVG Barcode Code 128B dengan tepi tajam (crispEdges) untuk hasil cetak optimal.
+ * Komponen SVG Barcode Code 128B menggunakan 1 elemen <path> tunggal
+ * agar lebih ringan dirender di browser namun tetap tajam saat dicetak.
  */
-function StudentBarcodeSvg({
+const StudentBarcodeSvg = memo(function StudentBarcodeSvg({
     codeValue,
     height = BARCODE_HEIGHT_PX,
 }: {
     codeValue: string;
     height?: number;
 }) {
-    const encoded = useMemo(() => encodeCode128B(codeValue), [codeValue]);
+    const barcodeData = useMemo(() => {
+        const encoded = encodeCode128B(codeValue);
+        if (!encoded) return null;
+        const pathD = encoded.bars
+            .map((bar) => `M${bar.x} 0h${bar.width}v${height}h-${bar.width}Z`)
+            .join('');
+        return {
+            totalModules: encoded.totalModules,
+            value: encoded.value,
+            pathD,
+        };
+    }, [codeValue, height]);
 
-    if (!encoded) {
+    if (!barcodeData) {
         return (
             <div className="text-[9px] text-red-600 font-semibold py-1">
                 NISN/NIS tidak valid untuk barcode
@@ -142,42 +160,33 @@ function StudentBarcodeSvg({
     return (
         <div className="flex flex-col items-center w-full">
             <svg
-                viewBox={`0 0 ${encoded.totalModules} ${height}`}
+                viewBox={`0 0 ${barcodeData.totalModules} ${height}`}
                 preserveAspectRatio="none"
                 shapeRendering="crispEdges"
                 className="w-full max-w-53.75 bg-white"
                 style={{ height: `${height}px` }}
-                aria-label={`Barcode ${encoded.value}`}
+                aria-label={`Barcode ${barcodeData.value}`}
             >
                 <rect
                     x={0}
                     y={0}
-                    width={encoded.totalModules}
+                    width={barcodeData.totalModules}
                     height={height}
                     fill="#FFFFFF"
                 />
-                {encoded.bars.map((bar, idx) => (
-                    <rect
-                        key={`${bar.x}-${idx}`}
-                        x={bar.x}
-                        y={0}
-                        width={bar.width}
-                        height={height}
-                        fill="#000000"
-                    />
-                ))}
+                <path d={barcodeData.pathD} fill="#000000" />
             </svg>
             <span className="text-[9.5px] font-mono font-bold tracking-[0.22em] text-slate-900 mt-1 leading-none">
-                {encoded.value}
+                {barcodeData.value}
             </span>
         </div>
     );
-}
+});
 
 /**
- * Komponen Desain 1 Kartu Pelajar (Digunakan untuk pratinjau layar & hasil cetak A4)
+ * Komponen Desain 1 Kartu Pelajar (Dibungkus memo agar klik centang tidak merender ulang semua kartu)
  */
-function StudentIdCardBox({
+const StudentIdCardBox = memo(function StudentIdCardBox({
     student,
     schoolInfo,
     academicYearLabel,
@@ -205,12 +214,12 @@ function StudentIdCardBox({
                 height: `${CARD_HEIGHT_MM}mm`,
             }}
             className={`student-id-card-item relative rounded-xl bg-white text-slate-900 overflow-hidden flex flex-col justify-between select-none ${isPrintMode
-                ? 'border border-dashed border-slate-400 shadow-none'
-                : !scanCode
-                    ? 'border-2 border-red-300 opacity-65 cursor-not-allowed shadow-sm'
-                    : isSelected
-                        ? 'border-2 border-emerald-600 ring-2 ring-emerald-500/20 cursor-pointer shadow-sm transition'
-                        : 'border-2 border-slate-300 opacity-50 cursor-pointer shadow-sm transition'
+                    ? 'border border-dashed border-slate-400 shadow-none'
+                    : !scanCode
+                        ? 'border-2 border-red-300 opacity-65 cursor-not-allowed shadow-sm'
+                        : isSelected
+                            ? 'border-2 border-emerald-600 ring-2 ring-emerald-500/20 cursor-pointer shadow-sm transition'
+                            : 'border-2 border-slate-300 opacity-50 cursor-pointer shadow-sm transition'
                 }`}
         >
             {/* 1. HEADER KARTU SEKOLAH */}
@@ -221,6 +230,7 @@ function StudentIdCardBox({
                             <img
                                 src={schoolInfo.logoUrl}
                                 alt={schoolInfo.name}
+                                loading="lazy"
                                 className="w-full h-full object-contain p-0.5"
                             />
                         ) : (
@@ -270,6 +280,7 @@ function StudentIdCardBox({
                         <img
                             src={student.photoUrl}
                             alt={student.fullName}
+                            loading="lazy"
                             className="w-full h-full object-cover"
                         />
                     ) : (
@@ -321,7 +332,7 @@ function StudentIdCardBox({
             </div>
         </div>
     );
-}
+});
 
 export function StudentCardPrintPage() {
     const { user, school } = useAuthStore();
@@ -347,6 +358,7 @@ export function StudentCardPrintPage() {
 
     const [activeAcademicYearName, setActiveAcademicYearName] = useState<string>('');
     const [classesList, setClassesList] = useState<Array<{ id: string; name: string }>>([]);
+    const [isClassesReady, setIsClassesReady] = useState<boolean>(false);
     const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
     const [selectedStatus, setSelectedStatus] = useState<string>('AKTIF');
     const [searchQuery, setSearchQuery] = useState<string>('');
@@ -354,6 +366,24 @@ export function StudentCardPrintPage() {
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+    // State Pagination Pratinjau & Mode Cetak
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const [pageSize, setPageSize] = useState<number>(DEFAULT_PREVIEW_PAGE_SIZE);
+    const [isPrinting, setIsPrinting] = useState<boolean>(false);
+
+    // Pantau dialog print browser agar portal cetak hanya dirender saat mencetak
+    useEffect(() => {
+        const handleBeforePrint = () => setIsPrinting(true);
+        const handleAfterPrint = () => setIsPrinting(false);
+
+        window.addEventListener('beforeprint', handleBeforePrint);
+        window.addEventListener('afterprint', handleAfterPrint);
+        return () => {
+            window.removeEventListener('beforeprint', handleBeforePrint);
+            window.removeEventListener('afterprint', handleAfterPrint);
+        };
+    }, []);
 
     // 1. Pastikan schoolId terdeteksi dengan aman (baik dari store maupun profil Supabase)
     useEffect(() => {
@@ -394,65 +424,74 @@ export function StudentCardPrintPage() {
     useEffect(() => {
         if (!activeSchoolId) return;
         let mounted = true;
+        setIsClassesReady(false);
 
         async function loadSchoolAndClasses() {
-            const [{ data: schoolRow }, { data: activeYear }, { data: classRows }] =
-                await Promise.all([
-                    supabase
-                        .from('schools')
-                        .select('name, address, logoUrl')
-                        .eq('id', activeSchoolId)
-                        .maybeSingle(),
-                    supabase
-                        .from('academic_years')
-                        .select('id, name')
-                        .eq('schoolId', activeSchoolId)
-                        .eq('isActive', true)
-                        .maybeSingle(),
-                    supabase
-                        .from('classes')
-                        .select('id, name, gradeLevel, academicYearId')
-                        .eq('schoolId', activeSchoolId)
-                        .order('gradeLevel', { ascending: true })
-                        .order('name', { ascending: true }),
-                ]);
+            try {
+                const [{ data: schoolRow }, { data: activeYear }, { data: classRows }] =
+                    await Promise.all([
+                        supabase
+                            .from('schools')
+                            .select('name, address, logoUrl')
+                            .eq('id', activeSchoolId)
+                            .maybeSingle(),
+                        supabase
+                            .from('academic_years')
+                            .select('id, name')
+                            .eq('schoolId', activeSchoolId)
+                            .eq('isActive', true)
+                            .maybeSingle(),
+                        supabase
+                            .from('classes')
+                            .select('id, name, gradeLevel, academicYearId')
+                            .eq('schoolId', activeSchoolId)
+                            .order('gradeLevel', { ascending: true })
+                            .order('name', { ascending: true }),
+                    ]);
 
-            if (!mounted) return;
+                if (!mounted) return;
 
-            if (schoolRow) {
-                setSchoolInfo({
-                    name: schoolRow.name || schoolMeta?.name || 'KARTU PRESENSI SISWA',
-                    address: schoolRow.address ?? schoolMeta?.address ?? null,
-                    logoUrl: schoolRow.logoUrl ?? schoolMeta?.logoUrl ?? null,
-                });
-            }
+                if (schoolRow) {
+                    setSchoolInfo((prev) => ({
+                        name: schoolRow.name || prev.name || 'KARTU PRESENSI SISWA',
+                        address: schoolRow.address ?? prev.address ?? null,
+                        logoUrl: schoolRow.logoUrl ?? prev.logoUrl ?? null,
+                    }));
+                }
 
-            if (activeYear?.name) {
-                const rawYearName = String(activeYear.name).trim();
-                setActiveAcademicYearName(
-                    rawYearName.toUpperCase().startsWith('TA')
-                        ? rawYearName
-                        : `TA ${rawYearName}`
+                if (activeYear?.name) {
+                    const rawYearName = String(activeYear.name).trim();
+                    setActiveAcademicYearName(
+                        rawYearName.toUpperCase().startsWith('TA')
+                            ? rawYearName
+                            : `TA ${rawYearName}`
+                    );
+                }
+
+                const allClasses = (classRows ?? []) as ClassOption[];
+                const activeClasses = activeYear?.id
+                    ? allClasses.filter((c) => c.academicYearId === activeYear.id)
+                    : allClasses;
+
+                const finalClasses = (activeClasses.length > 0 ? activeClasses : allClasses).map(
+                    (c) => ({
+                        id: c.id,
+                        name: c.name,
+                    })
                 );
-            }
 
-            const allClasses = (classRows ?? []) as ClassOption[];
-            const activeClasses = activeYear?.id
-                ? allClasses.filter((c) => c.academicYearId === activeYear.id)
-                : allClasses;
-
-            const finalClasses = (activeClasses.length > 0 ? activeClasses : allClasses).map((c) => ({
-                id: c.id,
-                name: c.name,
-            }));
-
-            setClassesList(finalClasses);
-            if (finalClasses.length > 0) {
-                setSelectedClassId((prev) =>
-                    prev === 'ALL' || !finalClasses.some((c) => c.id === prev)
-                        ? finalClasses[0].id
-                        : prev
-                );
+                setClassesList(finalClasses);
+                if (finalClasses.length > 0) {
+                    setSelectedClassId((prev) =>
+                        prev === 'ALL' || !finalClasses.some((c) => c.id === prev)
+                            ? finalClasses[0].id
+                            : prev
+                    );
+                }
+            } finally {
+                if (mounted) {
+                    setIsClassesReady(true);
+                }
             }
         }
 
@@ -460,13 +499,14 @@ export function StudentCardPrintPage() {
         return () => {
             mounted = false;
         };
-    }, [activeSchoolId, schoolMeta?.address, schoolMeta?.logoUrl, schoolMeta?.name]);
+    }, [activeSchoolId]);
 
-    // 3. Muat data siswa berdasarkan kelas & status
+    // 3. Muat data siswa 1x setelah daftar kelas siap
     const loadStudents = useCallback(async () => {
-        if (!activeSchoolId) return;
+        if (!activeSchoolId || !isClassesReady) return;
         setIsLoading(true);
         setErrorMsg(null);
+        setCurrentPage(1);
 
         try {
             let query = supabase
@@ -519,7 +559,7 @@ export function StudentCardPrintPage() {
         } finally {
             setIsLoading(false);
         }
-    }, [activeSchoolId, selectedClassId, selectedStatus]);
+    }, [activeSchoolId, isClassesReady, selectedClassId, selectedStatus]);
 
     useEffect(() => {
         void loadStudents();
@@ -536,6 +576,32 @@ export function StudentCardPrintPage() {
         );
     }, [students, searchQuery]);
 
+    // Kalkulasi Pagination Pratinjau Layar
+    const effectivePageSize =
+        pageSize === 0 ? filteredStudents.length || 1 : pageSize;
+    const totalPages =
+        pageSize === 0
+            ? 1
+            : Math.max(1, Math.ceil(filteredStudents.length / effectivePageSize));
+    const safeCurrentPage = Math.min(currentPage, totalPages);
+
+    const paginatedPreviewStudents = useMemo(() => {
+        if (pageSize === 0) return filteredStudents;
+        const startIdx = (safeCurrentPage - 1) * pageSize;
+        return filteredStudents.slice(startIdx, startIdx + pageSize);
+    }, [filteredStudents, pageSize, safeCurrentPage]);
+
+    const startItemNumber =
+        filteredStudents.length === 0
+            ? 0
+            : pageSize === 0
+                ? 1
+                : (safeCurrentPage - 1) * pageSize + 1;
+    const endItemNumber =
+        pageSize === 0
+            ? filteredStudents.length
+            : Math.min(safeCurrentPage * pageSize, filteredStudents.length);
+
     const cardsToPrint = useMemo(
         () => filteredStudents.filter((s) => selectedIds.has(s.id)),
         [filteredStudents, selectedIds]
@@ -546,14 +612,14 @@ export function StudentCardPrintPage() {
         Math.ceil(cardsToPrint.length / CARDS_PER_A4_SHEET)
     );
 
-    const toggleStudentSelection = (id: string) => {
+    const toggleStudentSelection = useCallback((id: string) => {
         setSelectedIds((prev) => {
             const next = new Set(prev);
             if (next.has(id)) next.delete(id);
             else next.add(id);
             return next;
         });
-    };
+    }, []);
 
     const handleSelectAllFiltered = () => {
         const printableFiltered = filteredStudents.filter((s) => Boolean(resolveScanCode(s)));
@@ -577,8 +643,16 @@ export function StudentCardPrintPage() {
     };
 
     const handlePrint = () => {
-        window.print();
+        if (cardsToPrint.length === 0) return;
+        setIsPrinting(true);
+        requestAnimationFrame(() => {
+            setTimeout(() => {
+                window.print();
+            }, 60);
+        });
     };
+
+    const showLoadingState = isLoading || (Boolean(activeSchoolId) && !isClassesReady);
 
     return (
         <div className="space-y-5 max-w-6xl mx-auto">
@@ -727,14 +801,20 @@ export function StudentCardPrintPage() {
                             <input
                                 type="text"
                                 value={searchQuery}
-                                onChange={(e) => setSearchQuery(e.target.value)}
+                                onChange={(e) => {
+                                    setSearchQuery(e.target.value);
+                                    setCurrentPage(1);
+                                }}
                                 placeholder="Ketik nama siswa atau nomor NISN..."
                                 className="w-full min-w-0 bg-transparent text-xs focus:outline-none"
                             />
                             {searchQuery && (
                                 <button
                                     type="button"
-                                    onClick={() => setSearchQuery('')}
+                                    onClick={() => {
+                                        setSearchQuery('');
+                                        setCurrentPage(1);
+                                    }}
                                     className="text-muted-foreground hover:text-foreground"
                                 >
                                     <X size={14} />
@@ -781,8 +861,8 @@ export function StudentCardPrintPage() {
                 </div>
             )}
 
-            {/* Area Pratinjau di Layar */}
-            {isLoading ? (
+            {/* Area Pratinjau di Layar + Pagination */}
+            {showLoadingState ? (
                 <div className="py-16 text-center text-xs opacity-70 flex items-center justify-center gap-2">
                     <Loader2 size={18} className="animate-spin text-emerald-600" />
                     Memuat data siswa...
@@ -792,24 +872,85 @@ export function StudentCardPrintPage() {
                     Tidak ada data siswa pada kelas/filter ini.
                 </div>
             ) : (
-                <div className="rounded-2xl border border-border bg-muted/30 p-5 sm:p-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 place-items-center">
-                        {filteredStudents.map((student) => (
-                            <StudentIdCardBox
-                                key={student.id}
-                                student={student}
-                                schoolInfo={schoolInfo}
-                                academicYearLabel={activeAcademicYearName}
-                                isSelected={selectedIds.has(student.id)}
-                                onToggleSelect={toggleStudentSelection}
-                            />
-                        ))}
+                <div className="rounded-2xl border border-border bg-muted/30 overflow-hidden">
+                    <div className="p-5 sm:p-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 place-items-center">
+                            {paginatedPreviewStudents.map((student) => (
+                                <StudentIdCardBox
+                                    key={student.id}
+                                    student={student}
+                                    schoolInfo={schoolInfo}
+                                    academicYearLabel={activeAcademicYearName}
+                                    isSelected={selectedIds.has(student.id)}
+                                    onToggleSelect={toggleStudentSelection}
+                                />
+                            ))}
+                        </div>
+                    </div>
+
+                    {/* Footer Kontrol Pagination Pratinjau */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5 border-t border-border bg-card text-xs">
+                        <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
+                            <span>
+                                Pratinjau <strong>{startItemNumber}</strong>–
+                                <strong>{endItemNumber}</strong> dari{' '}
+                                <strong>{filteredStudents.length}</strong> kartu
+                            </span>
+                            <select
+                                value={pageSize}
+                                onChange={(e) => {
+                                    setPageSize(Number(e.target.value));
+                                    setCurrentPage(1);
+                                }}
+                                aria-label="Jumlah kartu pratinjau per halaman"
+                                className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground focus:outline-none focus:border-emerald-500"
+                            >
+                                {PREVIEW_PAGE_SIZE_OPTIONS.map((opt) => (
+                                    <option key={opt} value={opt}>
+                                        {opt === 0
+                                            ? 'Tampilkan Semua'
+                                            : `${opt} kartu / halaman`}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        {pageSize !== 0 && totalPages > 1 && (
+                            <div className="flex items-center gap-1.5">
+                                <button
+                                    type="button"
+                                    disabled={safeCurrentPage <= 1}
+                                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
+                                >
+                                    <ChevronLeft size={14} />
+                                    Sebelumnya
+                                </button>
+
+                                <span className="px-2.5 py-1 font-mono font-semibold text-foreground">
+                                    Hal {safeCurrentPage} / {totalPages}
+                                </span>
+
+                                <button
+                                    type="button"
+                                    disabled={safeCurrentPage >= totalPages}
+                                    onClick={() =>
+                                        setCurrentPage((p) => Math.min(totalPages, p + 1))
+                                    }
+                                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
+                                >
+                                    Berikutnya
+                                    <ChevronRight size={14} />
+                                </button>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}
 
-            {/* Wadah Cetak Khusus (Dirender langsung di document.body via Portal) */}
+            {/* Wadah Cetak Khusus (Hanya dirender saat mode cetak aktif agar ringan di layar) */}
             {typeof document !== 'undefined' &&
+                isPrinting &&
                 cardsToPrint.length > 0 &&
                 createPortal(
                     <div id="print-mount-root">
