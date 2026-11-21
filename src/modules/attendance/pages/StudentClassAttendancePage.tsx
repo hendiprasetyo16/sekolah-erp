@@ -209,7 +209,13 @@ function isMissingColumnError(err: unknown): boolean {
 export function StudentClassAttendancePage() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-    // Peran yang diizinkan menghapus catatan presensi siswa (bisa ditambah 'WALI_KELAS' bila perlu)
+    // Peran pimpinan & admin selalu mendapat akses penuh ke semua kelas
+    const isPrivilegedRole =
+        user?.role === 'SUPER_ADMIN' ||
+        user?.role === 'ADMIN' ||
+        user?.role === 'KEPALA_SEKOLAH';
+
+    // Peran yang diizinkan menghapus catatan presensi siswa
     const canDeleteAttendance =
         user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
@@ -222,6 +228,14 @@ export function StudentClassAttendancePage() {
         : school?.id || user?.schoolId || '';
 
     const teacherScope = useTeacherScope(activeSchoolId);
+
+    // Pembatasan kelas hanya berlaku untuk Wali Kelas SD non-admin
+    const isHomeroomRestricted =
+        !isPrivilegedRole && Boolean(teacherScope.isElementaryHomeroomRestricted);
+    const homeroomClassKey = useMemo(
+        () => teacherScope.homeroomClassIds.map((id) => String(id)).join(','),
+        [teacherScope.homeroomClassIds]
+    );
 
     const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString);
     const [classesList, setClassesList] = useState<
@@ -310,6 +324,9 @@ export function StudentClassAttendancePage() {
 
     const loadClassesAndConfig = useCallback(async () => {
         if (!activeSchoolId) return;
+        // Untuk guru non-admin, tunggu scope guru selesai dimuat agar daftar kelas akurat
+        if (!isPrivilegedRole && teacherScope.isLoading) return;
+
         setIsLoadingClasses(true);
         try {
             const [classesRes, schoolRes] = await Promise.all([
@@ -333,20 +350,25 @@ export function StudentClassAttendancePage() {
                 name: string;
             }>;
 
-            // Jika Wali Kelas di jenjang SD, tampilkan hanya kelas walinya
-            // (Guru Mapel memiliki homeroomClassIds kosong sehingga melihat semua kelas)
-            if (teacherScope.isElementaryHomeroomRestricted) {
+            // Hanya saring kelas jika user adalah Wali Kelas jenjang SD (bukan Admin/Super Admin)
+            if (isHomeroomRestricted) {
+                const allowedSet = new Set(
+                    homeroomClassKey ? homeroomClassKey.split(',') : []
+                );
                 loadedClasses = loadedClasses.filter((cls) =>
-                    teacherScope.homeroomClassIds.includes(String(cls.id))
+                    allowedSet.has(String(cls.id))
                 );
             }
 
             setClassesList(loadedClasses);
 
             if (loadedClasses.length > 0) {
-                setSelectedClassId((prev) =>
-                    loadedClasses.some((c) => c.id === prev) ? prev : loadedClasses[0].id
-                );
+                setSelectedClassId((prev) => {
+                    if (!isHomeroomRestricted && prev === 'ALL') return 'ALL';
+                    return loadedClasses.some((c) => c.id === prev)
+                        ? prev
+                        : loadedClasses[0].id;
+                });
             } else {
                 setSelectedClassId('');
             }
@@ -371,19 +393,22 @@ export function StudentClassAttendancePage() {
         }
     }, [
         activeSchoolId,
-        teacherScope.isElementaryHomeroomRestricted,
-        teacherScope.homeroomClassIds,
+        isPrivilegedRole,
+        teacherScope.isLoading,
+        isHomeroomRestricted,
+        homeroomClassKey,
     ]);
 
     useEffect(() => {
         void loadClassesAndConfig();
     }, [loadClassesAndConfig]);
 
-    const selectedClassName = useMemo(
-        () =>
-            classesList.find((c) => c.id === selectedClassId)?.name ?? 'Terpilih',
-        [classesList, selectedClassId]
-    );
+    const selectedClassName = useMemo(() => {
+        if (selectedClassId === 'ALL') return 'Semua Kelas';
+        return (
+            classesList.find((c) => c.id === selectedClassId)?.name ?? 'Terpilih'
+        );
+    }, [classesList, selectedClassId]);
 
     const loadClassStudentsAndAttendance = useCallback(async () => {
         if (!activeSchoolId || !selectedClassId || !selectedDate) {
@@ -396,12 +421,22 @@ export function StudentClassAttendancePage() {
         setCurrentPage(1);
 
         try {
-            const { data: studentsData, error: studentsErr } = await supabase
+            let studentsQuery = supabase
                 .from('students')
                 .select('id, fullName, nisn, nis, classId, gender, classes(name)')
                 .eq('schoolId', activeSchoolId)
-                .eq('classId', selectedClassId)
                 .order('fullName', { ascending: true });
+
+            if (selectedClassId !== 'ALL') {
+                studentsQuery = studentsQuery.eq('classId', selectedClassId);
+            } else if (isHomeroomRestricted && homeroomClassKey) {
+                studentsQuery = studentsQuery.in(
+                    'classId',
+                    homeroomClassKey.split(',')
+                );
+            }
+
+            const { data: studentsData, error: studentsErr } = await studentsQuery;
 
             if (studentsErr) throw studentsErr;
 
@@ -479,7 +514,14 @@ export function StudentClassAttendancePage() {
         } finally {
             setIsLoadingRows(false);
         }
-    }, [activeSchoolId, selectedClassId, selectedClassName, selectedDate]);
+    }, [
+        activeSchoolId,
+        selectedClassId,
+        selectedClassName,
+        selectedDate,
+        isHomeroomRestricted,
+        homeroomClassKey,
+    ]);
 
     useEffect(() => {
         void loadClassStudentsAndAttendance();
@@ -1052,11 +1094,16 @@ export function StudentClassAttendancePage() {
                         {classesList.length === 0 ? (
                             <option value="">Belum ada data kelas</option>
                         ) : (
-                            classesList.map((cls) => (
-                                <option key={cls.id} value={cls.id}>
-                                    Kelas {cls.name}
-                                </option>
-                            ))
+                            <>
+                                {!isHomeroomRestricted && (
+                                    <option value="ALL">Semua Kelas</option>
+                                )}
+                                {classesList.map((cls) => (
+                                    <option key={cls.id} value={cls.id}>
+                                        Kelas {cls.name}
+                                    </option>
+                                ))}
+                            </>
                         )}
                     </select>
                 </div>
@@ -1177,7 +1224,7 @@ export function StudentClassAttendancePage() {
                                     >
                                         <div className="inline-flex items-center gap-2">
                                             <Loader2 size={16} className="animate-spin" />
-                                            Memuat daftar siswa kelas {selectedClassName}...
+                                            Memuat daftar siswa {selectedClassName}...
                                         </div>
                                     </td>
                                 </tr>
@@ -1221,6 +1268,11 @@ export function StudentClassAttendancePage() {
                                                     {row.fullName}
                                                 </div>
                                                 <div className="text-[11px] opacity-65 font-mono">
+                                                    {selectedClassId === 'ALL' && (
+                                                        <span className="font-sans font-semibold text-emerald-700 dark:text-emerald-300 mr-1.5">
+                                                            [Kelas {row.className}]
+                                                        </span>
+                                                    )}
                                                     {row.nisn
                                                         ? `NISN: ${row.nisn}`
                                                         : row.nis
