@@ -13,15 +13,31 @@ import {
     ChevronUp,
     ChevronLeft,
     ChevronRight,
+    Briefcase,
+    BadgeCheck,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 
 // ============================================================================
-// PARAMETER KONFIGURASI TAMPILAN & PAGINATION
+// PARAMETER KONFIGURASI TAMPILAN, BADGE & PAGINATION
 // ============================================================================
 const DEFAULT_LIST_EXPANDED = true;
 const DEFAULT_TEACHER_PAGE_SIZE = 10;
 const TEACHER_PAGE_SIZE_OPTIONS = [10, 20, 50] as const;
+
+// Tampilkan badge status keaktifan (misal: Aktif / Non-Aktif) selain status kepegawaian
+const SHOW_ACTIVE_STATUS_BADGE = true;
+
+// Kata kunci jabatan/tugas tambahan yang diberi warna sorotan khusus
+const HIGHLIGHT_DUTY_KEYWORDS = [
+    'kepala sekolah',
+    'wakil kepala',
+    'wakasek',
+    'bendahara',
+    'operator',
+    'kepala lab',
+    'kepala perpustakaan',
+] as const;
 
 // ============================================================================
 // TIPE DATA STRICT (TANPA `any`)
@@ -30,6 +46,9 @@ export interface TeacherDesktopAccessItem {
     id: string;
     fullName: string;
     nip: string | null;
+    additionalDuties: string[];
+    employmentStatus: string | null;
+    activeStatus: string | null;
     allowDesktopAttendance: boolean;
 }
 
@@ -44,15 +63,13 @@ interface FeedbackState {
     text: string;
 }
 
-interface RawTeacherRow {
-    id: string;
-    fullName: string | null;
-    nip: string | null;
-    allowDesktopAttendance: boolean | null;
-}
-
 interface RawSchoolDesktopRow {
     allowDesktopAttendanceGlobal: boolean | null;
+}
+
+interface RawUserRoleRow {
+    id: string;
+    role: string | null;
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {
@@ -84,8 +101,128 @@ function isMissingColumnError(error: unknown): boolean {
 }
 
 /**
+ * Mengubah nilai mentah (string dipisah koma atau array) menjadi daftar string bersih.
+ */
+function parseDutyValues(raw: unknown): string[] {
+    if (!raw) return [];
+    if (Array.isArray(raw)) {
+        return raw
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0 && item !== '-');
+    }
+    if (typeof raw === 'string') {
+        const trimmed = raw.trim();
+        if (!trimmed || trimmed === '-') return [];
+        return trimmed
+            .split(/[,;|]+/)
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0 && part !== '-');
+    }
+    return [];
+}
+
+/**
+ * Mengekstrak daftar tugas tambahan / jabatan dari berbagai kemungkinan nama kolom tabel `teachers`
+ * serta menyelaraskannya dengan peran sistem (misal KEPALA_SEKOLAH).
+ */
+function extractAdditionalDuties(
+    row: Record<string, unknown>,
+    linkedUserRole?: string | null
+): string[] {
+    const candidateKeys = [
+        'additionalDuty',
+        'additionalDuties',
+        'tugasTambahan',
+        'tugas_tambahan',
+        'position',
+        'jabatan',
+        'ptkType',
+        'jenisPtk',
+        'jenis_ptk',
+    ];
+
+    const collected: string[] = [];
+
+    // Jika akun user terhubung memiliki role KEPALA_SEKOLAH, pastikan muncul di urutan pertama
+    if (linkedUserRole === 'KEPALA_SEKOLAH') {
+        collected.push('Kepala Sekolah');
+    }
+
+    for (const key of candidateKeys) {
+        const parsed = parseDutyValues(row[key]);
+        for (const duty of parsed) {
+            const alreadyExists = collected.some(
+                (existing) => existing.toLowerCase() === duty.toLowerCase()
+            );
+            if (!alreadyExists) {
+                collected.push(duty);
+            }
+        }
+    }
+
+    return collected;
+}
+
+/**
+ * Mengekstrak status kepegawaian (PNS, PPPK, GTY, GTT, Honorer, dll.)
+ * dan status keaktifan (Aktif / Non-Aktif) dari baris data guru.
+ */
+function extractTeacherStatuses(row: Record<string, unknown>): {
+    employmentStatus: string | null;
+    activeStatus: string | null;
+} {
+    const employmentKeys = [
+        'employmentStatus',
+        'statusKepegawaian',
+        'status_kepegawaian',
+        'ptkStatus',
+        'teacherStatus',
+    ];
+
+    let employmentStatus: string | null = null;
+    for (const key of employmentKeys) {
+        const val = row[key];
+        if (typeof val === 'string' && val.trim().length > 0 && val.trim() !== '-') {
+            employmentStatus = val.trim();
+            break;
+        }
+    }
+
+    let activeStatus: string | null = null;
+    const rawStatus = row.status ?? row.activeStatus ?? row.statusAktif;
+    if (typeof rawStatus === 'string' && rawStatus.trim().length > 0) {
+        const upper = rawStatus.trim().toUpperCase();
+        if (upper === 'ACTIVE' || upper === 'AKTIF') {
+            activeStatus = 'Aktif';
+        } else if (
+            upper === 'INACTIVE' ||
+            upper === 'NONAKTIF' ||
+            upper === 'NON_AKTIF' ||
+            upper === 'NON-AKTIF'
+        ) {
+            activeStatus = 'Non-Aktif';
+        } else {
+            activeStatus = rawStatus.trim();
+        }
+    } else if (typeof row.isActive === 'boolean') {
+        activeStatus = row.isActive ? 'Aktif' : 'Non-Aktif';
+    } else if (typeof row.is_active === 'boolean') {
+        activeStatus = row.is_active ? 'Aktif' : 'Non-Aktif';
+    }
+
+    return { employmentStatus, activeStatus };
+}
+
+function isHighlightedDuty(duty: string): boolean {
+    const lower = duty.toLowerCase();
+    return HIGHLIGHT_DUTY_KEYWORDS.some((keyword) => lower.includes(keyword));
+}
+
+/**
  * Kartu Pengaturan Izin Presensi via Komputer / Laptop (Desktop)
- * Mendukung Saklar Global sekolah, Saklar Individual per Guru/PTK, serta Pagination.
+ * Mendukung Saklar Global sekolah, Saklar Individual per Guru/PTK,
+ * informasi Tugas Tambahan & Status Guru, serta Pagination.
  */
 export function TeacherDesktopAccessCard({
     schoolId,
@@ -117,10 +254,10 @@ export function TeacherDesktopAccessCard({
         setFeedback(null);
 
         try {
-            const [teachersRes, schoolRes] = await Promise.all([
+            const [teachersRes, schoolRes, usersRes] = await Promise.all([
                 supabase
                     .from('teachers')
-                    .select('id, fullName, nip, allowDesktopAttendance')
+                    .select('*')
                     .eq('schoolId', schoolId)
                     .order('fullName', { ascending: true }),
                 supabase
@@ -128,6 +265,10 @@ export function TeacherDesktopAccessCard({
                     .select('allowDesktopAttendanceGlobal')
                     .eq('id', schoolId)
                     .maybeSingle(),
+                supabase
+                    .from('users')
+                    .select('id, role')
+                    .eq('schoolId', schoolId),
             ]);
 
             if (teachersRes.error) throw teachersRes.error;
@@ -135,16 +276,54 @@ export function TeacherDesktopAccessCard({
                 throw schoolRes.error;
             }
 
-            const rawTeachers = (teachersRes.data ?? []) as RawTeacherRow[];
-            const mapped: TeacherDesktopAccessItem[] = rawTeachers.map((row) => ({
-                id: String(row.id),
-                fullName:
-                    row.fullName && row.fullName.trim().length > 0
+            // Peta opsional userId -> role (misal mendeteksi KEPALA_SEKOLAH secara otomatis)
+            const userRoleMap = new Map<string, string>();
+            if (!usersRes.error && Array.isArray(usersRes.data)) {
+                for (const u of usersRes.data as RawUserRoleRow[]) {
+                    if (u.id && u.role) {
+                        userRoleMap.set(String(u.id), String(u.role));
+                    }
+                }
+            }
+
+            const rawTeachers = (teachersRes.data ?? []) as Record<
+                string,
+                unknown
+            >[];
+
+            const mapped: TeacherDesktopAccessItem[] = rawTeachers.map((row) => {
+                const rawName =
+                    typeof row.fullName === 'string'
                         ? row.fullName
-                        : 'Tanpa Nama',
-                nip: row.nip && row.nip.trim().length > 0 ? row.nip : null,
-                allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
-            }));
+                        : typeof row.name === 'string'
+                            ? row.name
+                            : '';
+                const rawNip = typeof row.nip === 'string' ? row.nip.trim() : '';
+                const linkedUserId =
+                    typeof row.userId === 'string'
+                        ? row.userId
+                        : typeof row.user_id === 'string'
+                            ? row.user_id
+                            : null;
+                const linkedRole = linkedUserId
+                    ? userRoleMap.get(String(linkedUserId)) ?? null
+                    : null;
+
+                const additionalDuties = extractAdditionalDuties(row, linkedRole);
+                const { employmentStatus, activeStatus } =
+                    extractTeacherStatuses(row);
+
+                return {
+                    id: String(row.id ?? ''),
+                    fullName:
+                        rawName.trim().length > 0 ? rawName.trim() : 'Tanpa Nama',
+                    nip: rawNip.length > 0 ? rawNip : null,
+                    additionalDuties,
+                    employmentStatus,
+                    activeStatus,
+                    allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
+                };
+            });
 
             setTeachersList(mapped);
             setCurrentPage(1);
@@ -315,7 +494,19 @@ export function TeacherDesktopAccessCard({
             if (!keyword) return true;
             const matchName = t.fullName.toLowerCase().includes(keyword);
             const matchNip = (t.nip ?? '').toLowerCase().includes(keyword);
-            return matchName || matchNip;
+            const matchDuty = t.additionalDuties.some((d) =>
+                d.toLowerCase().includes(keyword)
+            );
+            const matchEmployment = (t.employmentStatus ?? '')
+                .toLowerCase()
+                .includes(keyword);
+            const matchActive = (t.activeStatus ?? '')
+                .toLowerCase()
+                .includes(keyword);
+
+            return (
+                matchName || matchNip || matchDuty || matchEmployment || matchActive
+            );
         });
     }, [teachersList, searchQuery, filterMode]);
 
@@ -409,15 +600,15 @@ export function TeacherDesktopAccessCard({
                     }
                 }}
                 className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-center justify-between gap-4 select-none active:scale-[0.99] ${allowDesktopGlobal
-                        ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
-                        : 'border-border bg-muted/25 hover:bg-muted/40'
+                    ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
+                    : 'border-border bg-muted/25 hover:bg-muted/40'
                     } ${isUpdatingGlobal ? 'opacity-70 pointer-events-none' : ''}`}
             >
                 <div className="flex items-start gap-3">
                     <div
                         className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${allowDesktopGlobal
-                                ? 'bg-blue-600 text-white'
-                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                             }`}
                     >
                         {isUpdatingGlobal ? (
@@ -435,8 +626,8 @@ export function TeacherDesktopAccessCard({
                             </span>
                             <span
                                 className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${allowDesktopGlobal
-                                        ? 'bg-blue-600 text-white'
-                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                                    ? 'bg-blue-600 text-white'
+                                    : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
                                     }`}
                             >
                                 {allowDesktopGlobal
@@ -454,8 +645,8 @@ export function TeacherDesktopAccessCard({
 
                 <span
                     className={`w-12 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${allowDesktopGlobal
-                            ? 'bg-blue-600'
-                            : 'bg-slate-300 dark:bg-slate-600'
+                        ? 'bg-blue-600'
+                        : 'bg-slate-300 dark:bg-slate-600'
                         }`}
                 >
                     <span
@@ -468,8 +659,8 @@ export function TeacherDesktopAccessCard({
             {feedback && (
                 <div
                     className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${feedback.status === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {feedback.status === 'success' ? (
@@ -498,7 +689,7 @@ export function TeacherDesktopAccessCard({
                                     setSearchQuery(e.target.value);
                                     setCurrentPage(1);
                                 }}
-                                placeholder="Cari nama Guru/PTK atau NIP..."
+                                placeholder="Cari nama Guru/PTK, NIP, jabatan/tugas tambahan, atau status..."
                                 className="w-full min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                             />
                         </div>
@@ -511,8 +702,8 @@ export function TeacherDesktopAccessCard({
                                     setCurrentPage(1);
                                 }}
                                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${filterMode === 'ALL'
-                                        ? 'bg-card text-foreground shadow-2xs'
-                                        : 'text-muted-foreground hover:text-foreground'
+                                    ? 'bg-card text-foreground shadow-2xs'
+                                    : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
                                 Semua ({teachersList.length})
@@ -524,8 +715,8 @@ export function TeacherDesktopAccessCard({
                                     setCurrentPage(1);
                                 }}
                                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${filterMode === 'ALLOWED'
-                                        ? 'bg-card text-blue-600 dark:text-blue-300 shadow-2xs'
-                                        : 'text-muted-foreground hover:text-foreground'
+                                    ? 'bg-card text-blue-600 dark:text-blue-300 shadow-2xs'
+                                    : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
                                 Boleh Komputer ({allowedCount})
@@ -537,8 +728,8 @@ export function TeacherDesktopAccessCard({
                                     setCurrentPage(1);
                                 }}
                                 className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${filterMode === 'BLOCKED'
-                                        ? 'bg-card text-foreground shadow-2xs'
-                                        : 'text-muted-foreground hover:text-foreground'
+                                    ? 'bg-card text-foreground shadow-2xs'
+                                    : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
                                 Wajib HP ({teachersList.length - allowedCount})
@@ -564,30 +755,77 @@ export function TeacherDesktopAccessCard({
                                     const rowNumber =
                                         (safeCurrentPage - 1) * pageSize + idx + 1;
                                     const isBusyRow = Boolean(updatingTeacherIds[teacher.id]);
+                                    const isInactive =
+                                        teacher.activeStatus?.toLowerCase() === 'non-aktif';
+
                                     return (
                                         <div
                                             key={teacher.id}
-                                            className="px-3.5 py-2.5 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
+                                            className="px-3.5 py-3 flex items-center justify-between gap-3 hover:bg-muted/30 transition text-xs"
                                         >
-                                            <div className="flex items-center gap-2.5 min-w-0">
-                                                <span className="w-7 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0">
+                                            <div className="flex items-start gap-2.5 min-w-0">
+                                                <span className="w-7 text-center font-mono text-[11px] font-bold text-muted-foreground shrink-0 pt-0.5">
                                                     {rowNumber}.
                                                 </span>
-                                                <div className="min-w-0">
-                                                    <p className="font-semibold truncate text-foreground">
-                                                        {teacher.fullName}
-                                                    </p>
-                                                    <p className="text-[11px] text-muted-foreground font-mono truncate">
-                                                        {teacher.nip ? `NIP: ${teacher.nip}` : 'Tanpa NIP'}
-                                                    </p>
+                                                <div className="min-w-0 space-y-1">
+                                                    {/* Baris Nama + Status Kepegawaian & Keaktifan */}
+                                                    <div className="flex flex-wrap items-center gap-1.5">
+                                                        <p className="font-semibold text-foreground">
+                                                            {teacher.fullName}
+                                                        </p>
+
+                                                        {teacher.employmentStatus && (
+                                                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-indigo-500/12 text-indigo-700 dark:text-indigo-300 border border-indigo-500/25">
+                                                                <BadgeCheck size={10} />
+                                                                {teacher.employmentStatus}
+                                                            </span>
+                                                        )}
+
+                                                        {SHOW_ACTIVE_STATUS_BADGE &&
+                                                            teacher.activeStatus && (
+                                                                <span
+                                                                    className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border ${isInactive
+                                                                        ? 'bg-red-500/12 text-red-700 dark:text-red-300 border-red-500/25'
+                                                                        : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
+                                                                        }`}
+                                                                >
+                                                                    {teacher.activeStatus}
+                                                                </span>
+                                                            )}
+                                                    </div>
+
+                                                    {/* Baris NIP & Lencana Tugas Tambahan / Jabatan */}
+                                                    <div className="flex flex-wrap items-center gap-1.5">
+                                                        <span className="text-[11px] text-muted-foreground font-mono">
+                                                            {teacher.nip
+                                                                ? `NIP: ${teacher.nip}`
+                                                                : 'Tanpa NIP'}
+                                                        </span>
+
+                                                        {teacher.additionalDuties.map((duty) => {
+                                                            const highlighted = isHighlightedDuty(duty);
+                                                            return (
+                                                                <span
+                                                                    key={duty}
+                                                                    className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-semibold border ${highlighted
+                                                                        ? 'bg-amber-500/15 text-amber-800 dark:text-amber-200 border-amber-500/35'
+                                                                        : 'bg-muted text-foreground/80 border-border'
+                                                                        }`}
+                                                                >
+                                                                    <Briefcase size={10} className="shrink-0" />
+                                                                    {duty}
+                                                                </span>
+                                                            );
+                                                        })}
+                                                    </div>
                                                 </div>
                                             </div>
 
                                             <div className="flex items-center gap-3 shrink-0">
                                                 <span
                                                     className={`hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold ${teacher.allowDesktopAttendance
-                                                            ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
-                                                            : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
+                                                        ? 'bg-blue-500/15 text-blue-700 dark:text-blue-300'
+                                                        : 'bg-slate-500/15 text-slate-600 dark:text-slate-300'
                                                         }`}
                                                 >
                                                     {teacher.allowDesktopAttendance ? (
@@ -611,14 +849,14 @@ export function TeacherDesktopAccessCard({
                                                         void handleToggleSingleTeacher(teacher)
                                                     }
                                                     className={`w-11 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center cursor-pointer disabled:opacity-50 ${teacher.allowDesktopAttendance
-                                                            ? 'bg-blue-600'
-                                                            : 'bg-slate-300 dark:bg-slate-600'
+                                                        ? 'bg-blue-600'
+                                                        : 'bg-slate-300 dark:bg-slate-600'
                                                         }`}
                                                 >
                                                     <span
                                                         className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform flex items-center justify-center ${teacher.allowDesktopAttendance
-                                                                ? 'translate-x-5'
-                                                                : 'translate-x-0'
+                                                            ? 'translate-x-5'
+                                                            : 'translate-x-0'
                                                             }`}
                                                     >
                                                         {isBusyRow && (
