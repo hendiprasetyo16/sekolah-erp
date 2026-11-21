@@ -1,4 +1,12 @@
-// src/modules/attendance/hooks/useStudentHolidayLock.ts
+// ============================================================================
+// FILE: src/modules/attendance/hooks/useStudentHolidayLock.ts
+// FUNGSI UTAMA: PENGATURAN LOCK (PENGUNCI) PRESENSI HARI LIBUR & HARI MINGGU/SABTU
+//               SERTA PEMBUKAAN KUNCI SEMENTARA UNTUK KEGIATAN KHUSUS SEKOLAH
+// DIGUNAKAN DI:
+//   1. Halaman Kiosk Siswa (StudentKioskPage.tsx)
+//   2. Halaman Presensi Siswa per Kelas (StudentClassAttendancePage.tsx)
+// ============================================================================
+
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -6,8 +14,13 @@ import type { WorkDaysMode } from '../types/attendance.types';
 import { getSchoolDateString } from '../services/gps.utils';
 
 // ============================================================================
-// KONSTANTA & PARAMETER YANG DAPAT DISESUAIKAN (SELARAS RLS v20.2)
+// KONSTANTA & PARAMETER PENGATURAN LOCK HARI LIBUR (MUDAH DISESUAIKAN)
 // ============================================================================
+
+/**
+ * Daftar peran (role) pengguna yang diizinkan membuka/menutup kunci hari libur
+ * untuk kegiatan khusus sekolah.
+ */
 const ALLOWED_OVERRIDE_ROLES = [
   'SUPER_ADMIN',
   'ADMIN',
@@ -16,55 +29,88 @@ const ALLOWED_OVERRIDE_ROLES = [
   'STAFF_TU',
 ] as const;
 
+/** Teks alasan bawaan jika admin tidak mengetik nama kegiatan khusus */
 const DEFAULT_EVENT_REASON = 'Kegiatan Khusus Sekolah';
+
+/** Awalan kunci penyimpanan lokal (cadangan jika internet terputus sementara) */
 const OVERRIDE_LOCAL_STORAGE_PREFIX = 'sekolah_erp_special_event';
 
+/**
+ * Struktur data status penguncian hari libur yang dikembalikan oleh hook ini.
+ */
 export interface StudentHolidayLockState {
-  /** Apakah presensi siswa saat ini terkunci karena hari libur */
+  /** TRUE jika presensi siswa sedang terkunci (Hari Libur & tidak ada Kegiatan Khusus) */
   isLocked: boolean;
-  /** Apakah tanggal target sebenarnya adalah hari libur / akhir pekan */
+  /** TRUE jika tanggal yang dipilih termasuk hari libur / akhir pekan */
   isHoliday: boolean;
-  /** Nama hari libur (misal: "Hari Minggu" atau "Idul Fitri") */
+  /** Keterangan nama hari libur (contoh: "Hari Sabtu (Libur 5 Hari Kerja)") */
   holidayName: string;
-  /** Apakah mode kegiatan khusus sedang diaktifkan untuk tanggal ini */
+  /** TRUE jika admin membuka kunci sementara untuk kegiatan khusus */
   isSpecialEventActive: boolean;
-  /** Keterangan kegiatan khusus yang sedang berlangsung */
+  /** Nama/alasan kegiatan khusus yang sedang aktif */
   specialEventReason: string;
-  /** Apakah user yang login berhak mengaktifkan/menonaktifkan mode kegiatan khusus */
+  /** TRUE jika akun yang sedang login berhak membuka/menutup kunci hari libur */
   canManageOverride: boolean;
-  /** Status loading pengecekan jadwal libur */
+  /** TRUE saat sistem sedang mengecek kalender libur ke database */
   isLoading: boolean;
-  /** Status loading saat menyimpan perubahan kunci */
+  /** TRUE saat sistem sedang menyimpan perubahan buka/tutup kunci */
   isToggling: boolean;
-  /** Fungsi untuk membuka kunci presensi (aktifkan kegiatan khusus) */
+  /** Fungsi untuk membuka kunci hari libur (aktifkan presensi kegiatan khusus) */
   activateSpecialEvent: (reason?: string) => Promise<void>;
-  /** Fungsi untuk mengunci kembali presensi hari libur */
+  /** Fungsi untuk mengunci kembali presensi pada hari libur */
   deactivateSpecialEvent: () => Promise<void>;
-  /** Memuat ulang status libur & override */
+  /** Fungsi untuk memuat ulang status penguncian hari libur */
   refreshLockState: () => Promise<void>;
 }
 
 /**
- * Mengambil tanggal hari ini dalam zona waktu sekolah (default WIB / Asia/Jakarta)
+ * Mengambil tanggal hari ini dalam format YYYY-MM-DD sesuai zona waktu sekolah.
  */
 export function getTodayLocalISO(timeZone: string = 'Asia/Jakarta'): string {
   return getSchoolDateString(new Date(), timeZone);
 }
 
+/**
+ * Membuat kunci penyimpanan lokal unik per sekolah dan per tanggal.
+ */
 function getLocalOverrideKey(schoolId: string, dateISO: string): string {
   return `${OVERRIDE_LOCAL_STORAGE_PREFIX}_${schoolId}_${dateISO}`;
 }
 
 /**
- * Hook terpusat untuk mengecek status hari libur siswa dan mengelola
- * pembukaan kunci sementara ("Mode Kegiatan Khusus") via tabel `school_special_events`.
+ * Mendeteksi apakah error dari Supabase disebabkan oleh nama kolom yang
+ * belum tersedia di schema cache (misalnya kolom opsional `createdBy`).
+ */
+function isMissingColumnError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const rec = err as Record<string, unknown>;
+  const code = typeof rec.code === 'string' ? rec.code : '';
+  const message =
+    typeof rec.message === 'string' ? rec.message.toLowerCase() : '';
+
+  return (
+    code === 'PGRST204' ||
+    code === '42703' ||
+    message.includes('schema cache') ||
+    (message.includes('column') && message.includes('does not exist'))
+  );
+}
+
+/**
+ * Hook Pengaturan Lock Hari Libur Siswa:
+ * - Mengunci presensi otomatis pada hari Minggu, Sabtu (mode 5 hari kerja),
+ *   dan tanggal merah / libur kalender.
+ * - Menyediakan fitur "Buka Presensi Kegiatan Khusus" bagi Admin / Super Admin.
  */
 export function useStudentHolidayLock(params?: {
   schoolId?: string;
   targetDate?: string;
 }): StudentHolidayLockState {
   const { user, school } = useAuthStore();
-  const activeSchoolId = params?.schoolId || school?.id || '';
+
+  // Gunakan schoolId dari parameter (penting untuk simulasi Super Admin),
+  // atau fallback ke sekolah milik user yang sedang login.
+  const activeSchoolId = params?.schoolId || school?.id || user?.schoolId || '';
   const activeDate = params?.targetDate || getTodayLocalISO();
 
   const [isHoliday, setIsHoliday] = useState<boolean>(false);
@@ -74,7 +120,7 @@ export function useStudentHolidayLock(params?: {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isToggling, setIsToggling] = useState<boolean>(false);
 
-  // Evaluasi gabungan role utama & additionalRoles (v20.2)
+  // Gabungkan role utama dan role tambahan user untuk mengecek hak akses buka kunci
   const userWithAdditionalRoles = user as
     | (typeof user & { additionalRoles?: string[] })
     | null;
@@ -86,10 +132,13 @@ export function useStudentHolidayLock(params?: {
       : []),
   ];
 
-  const canManageOverride = allUserRoles.some((r) =>
-    (ALLOWED_OVERRIDE_ROLES as readonly string[]).includes(r)
+  const canManageOverride = allUserRoles.some((role) =>
+    (ALLOWED_OVERRIDE_ROLES as readonly string[]).includes(role)
   );
 
+  /**
+   * Memeriksa status hari libur & status pembukaan kunci kegiatan khusus.
+   */
   const refreshLockState = useCallback(async () => {
     if (!activeSchoolId || activeDate.length !== 10) {
       setIsHoliday(false);
@@ -102,7 +151,7 @@ export function useStudentHolidayLock(params?: {
 
     setIsLoading(true);
     try {
-      // 1. Ambil pengaturan hari kerja sekolah & status kegiatan khusus secara paralel
+      // 1. Ambil pengaturan hari kerja sekolah, daftar libur, & kegiatan khusus sekaligus
       const [schoolRes, holidayRes, specialEventRes] = await Promise.all([
         supabase
           .from('schools')
@@ -126,14 +175,14 @@ export function useStudentHolidayLock(params?: {
       const workDaysMode: WorkDaysMode =
         schoolRes.data?.workDaysMode === 'FIVE_DAYS' ? 'FIVE_DAYS' : 'SIX_DAYS';
 
-      // 2. Cek akhir pekan (Minggu selalu libur; Sabtu libur jika FIVE_DAYS)
+      // 2. Cek apakah tanggal target adalah akhir pekan (Minggu atau Sabtu 5 hari kerja)
       const [yStr, mStr, dStr] = activeDate.split('-');
       const localDateObj = new Date(
         Number(yStr),
         Number(mStr) - 1,
         Number(dStr)
       );
-      const dayOfWeek = localDateObj.getDay();
+      const dayOfWeek = localDateObj.getDay(); // 0 = Minggu, 6 = Sabtu
 
       let detectedHolidayName = '';
       if (dayOfWeek === 0) {
@@ -142,7 +191,8 @@ export function useStudentHolidayLock(params?: {
         detectedHolidayName = 'Hari Sabtu (Libur 5 Hari Kerja)';
       }
 
-      // 3. Cek hari libur (prioritaskan jadwal khusus sekolah, lalu libur nasional)
+      // 3. Cek tanggal merah / libur di tabel national_holidays
+      //    (Prioritaskan jadwal khusus sekolah, lalu libur nasional umum)
       if (!holidayRes.error && holidayRes.data && holidayRes.data.length > 0) {
         const rows = holidayRes.data as Array<{
           schoolId: string | null;
@@ -161,7 +211,7 @@ export function useStudentHolidayLock(params?: {
       setIsHoliday(holidayFound);
       setHolidayName(detectedHolidayName);
 
-      // 4. Cek status kegiatan khusus dari tabel public.school_special_events
+      // 4. Cek apakah Mode Kegiatan Khusus (pembuka kunci) sedang aktif
       let overrideActive = false;
       let overrideText = '';
 
@@ -171,7 +221,7 @@ export function useStudentHolidayLock(params?: {
           ? String(specialEventRes.data.reason || '').trim() || DEFAULT_EVENT_REASON
           : '';
       } else if (specialEventRes.error) {
-        // Cadangan pembacaan lokal hanya jika jaringan terputus
+        // Cadangan pembacaan dari memori browser jika offline
         try {
           const savedLocal = localStorage.getItem(
             getLocalOverrideKey(activeSchoolId, activeDate)
@@ -187,51 +237,97 @@ export function useStudentHolidayLock(params?: {
             }
           }
         } catch {
-          // Abaikan error storage
+          // Abaikan error localStorage
         }
       }
 
       setIsSpecialEventActive(overrideActive);
       setSpecialEventReason(overrideText);
     } catch (err: unknown) {
-      console.error('Gagal memeriksa status hari libur siswa:', err);
+      console.error('Gagal memeriksa status pengaturan lock hari libur:', err);
     } finally {
       setIsLoading(false);
     }
   }, [activeSchoolId, activeDate]);
 
   useEffect(() => {
-    refreshLockState();
+    void refreshLockState();
   }, [refreshLockState]);
 
+  /**
+   * Membuka kunci presensi pada hari libur (mengaktifkan Mode Kegiatan Khusus).
+   */
   const activateSpecialEvent = async (reason?: string) => {
-    if (!activeSchoolId || !canManageOverride) return;
+    if (!activeSchoolId) {
+      throw new Error('Sekolah aktif belum terpilih.');
+    }
+    if (!canManageOverride) {
+      throw new Error('Akun Anda tidak memiliki izin membuka kunci hari libur.');
+    }
+
     const cleanReason = (reason ?? '').trim() || DEFAULT_EVENT_REASON;
-
     setIsToggling(true);
+
     try {
-      const { error } = await supabase.from('school_special_events').upsert(
-        {
-          schoolId: activeSchoolId,
-          eventDate: activeDate,
-          reason: cleanReason,
-          isActive: true,
-          createdBy: user?.id ?? null,
-        },
-        {
-          onConflict: 'schoolId,eventDate',
+      // Cek apakah data pengecualian untuk sekolah & tanggal ini sudah pernah dibuat
+      const { data: existingEvent, error: checkErr } = await supabase
+        .from('school_special_events')
+        .select('id')
+        .eq('schoolId', activeSchoolId)
+        .eq('eventDate', activeDate)
+        .maybeSingle();
+
+      if (checkErr) throw checkErr;
+
+      if (existingEvent?.id) {
+        // Perbarui baris yang sudah ada
+        const { error: updateErr } = await supabase
+          .from('school_special_events')
+          .update({
+            reason: cleanReason,
+            isActive: true,
+          })
+          .eq('id', existingEvent.id);
+
+        if (updateErr) throw updateErr;
+      } else {
+        // Buat baris baru (coba dengan createdBy, otomatis fallback jika kolom tidak ada)
+        const { error: insertWithCreatorErr } = await supabase
+          .from('school_special_events')
+          .insert({
+            schoolId: activeSchoolId,
+            eventDate: activeDate,
+            reason: cleanReason,
+            isActive: true,
+            createdBy: user?.id ?? null,
+          });
+
+        if (insertWithCreatorErr) {
+          if (isMissingColumnError(insertWithCreatorErr)) {
+            const { error: fallbackInsertErr } = await supabase
+              .from('school_special_events')
+              .insert({
+                schoolId: activeSchoolId,
+                eventDate: activeDate,
+                reason: cleanReason,
+                isActive: true,
+              });
+
+            if (fallbackInsertErr) throw fallbackInsertErr;
+          } else {
+            throw insertWithCreatorErr;
+          }
         }
-      );
+      }
 
-      if (error) throw error;
-
+      // Simpan salinan status ke memori lokal browser
       try {
         localStorage.setItem(
           getLocalOverrideKey(activeSchoolId, activeDate),
           JSON.stringify({ active: true, reason: cleanReason })
         );
       } catch {
-        // Abaikan jika storage penuh
+        // Abaikan jika kapasitas penyimpanan browser penuh
       }
 
       setIsSpecialEventActive(true);
@@ -241,8 +337,16 @@ export function useStudentHolidayLock(params?: {
     }
   };
 
+  /**
+   * Mengunci kembali presensi hari libur (menonaktifkan Mode Kegiatan Khusus).
+   */
   const deactivateSpecialEvent = async () => {
-    if (!activeSchoolId || !canManageOverride) return;
+    if (!activeSchoolId) {
+      throw new Error('Sekolah aktif belum terpilih.');
+    }
+    if (!canManageOverride) {
+      throw new Error('Akun Anda tidak memiliki izin mengunci kembali hari libur.');
+    }
 
     setIsToggling(true);
     try {
@@ -259,7 +363,7 @@ export function useStudentHolidayLock(params?: {
           getLocalOverrideKey(activeSchoolId, activeDate)
         );
       } catch {
-        // Abaikan
+        // Abaikan error localStorage
       }
 
       setIsSpecialEventActive(false);
@@ -269,6 +373,7 @@ export function useStudentHolidayLock(params?: {
     }
   };
 
+  // Presensi terkunci HANYA JIKA hari ini libur DAN tidak ada kegiatan khusus yang aktif
   const isLocked = isHoliday && !isSpecialEventActive;
 
   return {

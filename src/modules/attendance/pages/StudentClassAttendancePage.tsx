@@ -22,6 +22,8 @@ import {
     X,
     ChevronLeft,
     ChevronRight,
+    Trash2,
+    AlertTriangle,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -88,6 +90,7 @@ const STATUS_OPTIONS: {
     label: string;
     short: string;
     activeClass: string;
+    badgeClass: string;
     icon: typeof CheckCircle2;
 }[] = [
         {
@@ -96,6 +99,8 @@ const STATUS_OPTIONS: {
             short: 'H',
             activeClass:
                 'bg-emerald-600 text-white border-emerald-600 shadow-2xs ring-1 ring-emerald-600/30',
+            badgeClass:
+                'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30',
             icon: CheckCircle2,
         },
         {
@@ -104,6 +109,8 @@ const STATUS_OPTIONS: {
             short: 'T',
             activeClass:
                 'bg-amber-500 text-white border-amber-500 shadow-2xs ring-1 ring-amber-500/30',
+            badgeClass:
+                'bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30',
             icon: Clock,
         },
         {
@@ -112,6 +119,8 @@ const STATUS_OPTIONS: {
             short: 'I',
             activeClass:
                 'bg-blue-600 text-white border-blue-600 shadow-2xs ring-1 ring-blue-600/30',
+            badgeClass:
+                'bg-blue-500/15 text-blue-700 dark:text-blue-300 border-blue-500/30',
             icon: FileText,
         },
         {
@@ -120,6 +129,8 @@ const STATUS_OPTIONS: {
             short: 'S',
             activeClass:
                 'bg-purple-600 text-white border-purple-600 shadow-2xs ring-1 ring-purple-600/30',
+            badgeClass:
+                'bg-purple-500/15 text-purple-700 dark:text-purple-300 border-purple-500/30',
             icon: AlertCircle,
         },
         {
@@ -128,6 +139,8 @@ const STATUS_OPTIONS: {
             short: 'A',
             activeClass:
                 'bg-red-600 text-white border-red-600 shadow-2xs ring-1 ring-red-600/30',
+            badgeClass:
+                'bg-red-500/15 text-red-700 dark:text-red-300 border-red-500/30',
             icon: XCircle,
         },
     ];
@@ -195,6 +208,9 @@ function isMissingColumnError(err: unknown): boolean {
 export function StudentClassAttendancePage() {
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+    // Peran yang diizinkan menghapus catatan presensi siswa (bisa ditambah 'WALI_KELAS' bila perlu)
+    const canDeleteAttendance =
+        user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
     const [simSchools, setSimSchools] = useState<
         Array<{ id: string; name: string; npsn: string }>
@@ -220,6 +236,11 @@ export function StudentClassAttendancePage() {
     const [isLoadingRows, setIsLoadingRows] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState<boolean>(false);
     const [checkingOutId, setCheckingOutId] = useState<string | null>(null);
+
+    // State Modal Konfirmasi Hapus Presensi Siswa
+    const [deleteTarget, setDeleteTarget] = useState<StudentRowItem | null>(null);
+    const [isDeletingRecord, setIsDeletingRecord] = useState<boolean>(false);
+
     const [message, setMessage] = useState<MessageBanner | null>(null);
 
     const [enableClassAttendance, setEnableClassAttendance] =
@@ -253,6 +274,25 @@ export function StudentClassAttendancePage() {
         holidayLock.specialEventReason,
     ]);
 
+    // Tutup modal hapus dengan tombol Escape pada keyboard
+    useEffect(() => {
+        if (!deleteTarget) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape' && !isDeletingRecord) {
+                setDeleteTarget(null);
+            }
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [deleteTarget, isDeletingRecord]);
+
+    // Sinkronkan sekolah aktif secara instan saat Super Admin menekan "Ganti Sekolah"
+    useEffect(() => {
+        if (isSuperAdmin && school?.id) {
+            setSimSchoolId(school.id);
+        }
+    }, [isSuperAdmin, school?.id]);
+
     useEffect(() => {
         if (!isSuperAdmin) return;
         attendanceService
@@ -260,7 +300,7 @@ export function StudentClassAttendancePage() {
             .then((list) => {
                 setSimSchools(list);
                 if (school?.id) setSimSchoolId(school.id);
-                else if (list.length > 0) setSimSchoolId(list[0].id);
+                else if (list.length > 0) setSimSchoolId((prev) => prev || list[0].id);
             })
             .catch(console.error);
     }, [isSuperAdmin, school?.id]);
@@ -559,7 +599,7 @@ export function StudentClassAttendancePage() {
                         date: selectedDate,
                         status: item.status,
                         checkInTime: effectiveCheckIn,
-                        notes: item.notes.trim() || null,
+                        notes: item.notes?.trim() ? item.notes.trim() : null,
                         recordedBy: user?.id ?? null,
                     };
 
@@ -648,6 +688,46 @@ export function StudentClassAttendancePage() {
             });
         } finally {
             setCheckingOutId(null);
+        }
+    };
+
+    // Eksekusi hapus catatan presensi siswa dari Modal Konfirmasi
+    const handleConfirmDeleteRecord = async () => {
+        if (
+            !deleteTarget?.existingRecordId ||
+            !canDeleteAttendance ||
+            !activeSchoolId
+        ) {
+            return;
+        }
+
+        setIsDeletingRecord(true);
+        setMessage(null);
+
+        try {
+            const { error } = await supabase
+                .from('attendances')
+                .delete()
+                .eq('id', deleteTarget.existingRecordId)
+                .eq('schoolId', activeSchoolId);
+
+            if (error) throw error;
+
+            const deletedName = deleteTarget.fullName;
+            setDeleteTarget(null);
+            await loadClassStudentsAndAttendance();
+            setMessage({
+                status: 'success',
+                text: `Catatan presensi ${deletedName} pada ${selectedDate} berhasil dihapus.`,
+            });
+        } catch (err: unknown) {
+            const { message: errMsg } = getErrorInfo(err);
+            setMessage({
+                status: 'error',
+                text: `Gagal menghapus data presensi: ${errMsg}`,
+            });
+        } finally {
+            setIsDeletingRecord(false);
         }
     };
 
@@ -752,6 +832,17 @@ export function StudentClassAttendancePage() {
             dirtyCount,
         };
     }, [rows]);
+
+    const tableColSpan =
+        5 + (enableStudentCheckOut ? 1 : 0) + (canDeleteAttendance ? 1 : 0);
+
+    const deleteTargetStatusOption = useMemo(
+        () =>
+            deleteTarget?.status
+                ? STATUS_OPTIONS.find((opt) => opt.value === deleteTarget.status) ?? null
+                : null,
+        [deleteTarget]
+    );
 
     return (
         <div className="space-y-5 max-w-6xl mx-auto">
@@ -899,8 +990,8 @@ export function StudentClassAttendancePage() {
             {message && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${message.status === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {message.status === 'success' ? (
@@ -1054,13 +1145,18 @@ export function StudentClassAttendancePage() {
                                 <th className="py-3 px-3 font-semibold min-w-40">
                                     Keterangan
                                 </th>
+                                {canDeleteAttendance && (
+                                    <th className="py-3 px-3 text-center font-semibold w-24">
+                                        Aksi
+                                    </th>
+                                )}
                             </tr>
                         </thead>
                         <tbody>
                             {isLoadingRows ? (
                                 <tr>
                                     <td
-                                        colSpan={enableStudentCheckOut ? 6 : 5}
+                                        colSpan={tableColSpan}
                                         className="py-12 text-center opacity-70"
                                     >
                                         <div className="inline-flex items-center gap-2">
@@ -1072,7 +1168,7 @@ export function StudentClassAttendancePage() {
                             ) : paginatedRows.length === 0 ? (
                                 <tr>
                                     <td
-                                        colSpan={enableStudentCheckOut ? 6 : 5}
+                                        colSpan={tableColSpan}
                                         className="py-12 text-center opacity-65"
                                     >
                                         {classesList.length === 0
@@ -1134,8 +1230,8 @@ export function StudentClassAttendancePage() {
                                                                     )
                                                                 }
                                                                 className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer disabled:opacity-50 ${isSelected
-                                                                    ? opt.activeClass
-                                                                    : 'border-border bg-background hover:bg-muted text-foreground/80'
+                                                                        ? opt.activeClass
+                                                                        : 'border-border bg-background hover:bg-muted text-foreground/80'
                                                                     }`}
                                                             >
                                                                 <IconComp size={12} />
@@ -1194,6 +1290,24 @@ export function StudentClassAttendancePage() {
                                                     className="form-input w-full text-[11px] py-1 px-2"
                                                 />
                                             </td>
+
+                                            {canDeleteAttendance && (
+                                                <td className="py-2.5 px-3 text-center">
+                                                    {row.existingRecordId ? (
+                                                        <button
+                                                            type="button"
+                                                            onClick={() => setDeleteTarget(row)}
+                                                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-red-600 dark:text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all cursor-pointer"
+                                                            title="Hapus catatan presensi tersimpan (Super Admin / Admin)"
+                                                        >
+                                                            <Trash2 size={12} />
+                                                            <span>Hapus</span>
+                                                        </button>
+                                                    ) : (
+                                                        <span className="text-[11px] opacity-30">-</span>
+                                                    )}
+                                                </td>
+                                            )}
                                         </tr>
                                     );
                                 })
@@ -1233,9 +1347,7 @@ export function StudentClassAttendancePage() {
                                 <button
                                     type="button"
                                     disabled={safeCurrentPage <= 1}
-                                    onClick={() =>
-                                        setCurrentPage((p) => Math.max(1, p - 1))
-                                    }
+                                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                 >
                                     <ChevronLeft size={14} />
@@ -1262,6 +1374,104 @@ export function StudentClassAttendancePage() {
                     </div>
                 )}
             </div>
+
+            {/* Modal Konfirmasi Modern Hapus Catatan Presensi Siswa */}
+            {deleteTarget && canDeleteAttendance && (
+                <div
+                    className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+                    onClick={() => !isDeletingRecord && setDeleteTarget(null)}
+                >
+                    <div
+                        className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-2xl space-y-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3">
+                                <div className="p-2.5 rounded-xl bg-red-500/15 text-red-600 dark:text-red-400 border border-red-500/25 shrink-0">
+                                    <AlertTriangle size={20} />
+                                </div>
+                                <div>
+                                    <h3 className="text-base font-bold text-foreground">
+                                        Hapus Catatan Presensi?
+                                    </h3>
+                                    <p className="text-xs text-muted-foreground mt-0.5">
+                                        Status kehadiran siswa akan direset menjadi Belum Diabsen.
+                                    </p>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                disabled={isDeletingRecord}
+                                onClick={() => setDeleteTarget(null)}
+                                className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition cursor-pointer disabled:opacity-40"
+                                aria-label="Tutup dialog"
+                            >
+                                <X size={16} />
+                            </button>
+                        </div>
+
+                        {/* Kartu Ringkasan Data Siswa yang Akan Dihapus */}
+                        <div className="p-3.5 rounded-xl border border-border bg-muted/40 space-y-2 text-xs">
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Nama Siswa</span>
+                                <span className="font-bold text-foreground text-right">
+                                    {deleteTarget.fullName}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Kelas / NISN</span>
+                                <span className="font-mono text-foreground">
+                                    {deleteTarget.className}
+                                    {deleteTarget.nisn ? ` • ${deleteTarget.nisn}` : ''}
+                                </span>
+                            </div>
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="text-muted-foreground">Tanggal</span>
+                                <span className="font-mono font-semibold text-foreground">
+                                    {selectedDate}
+                                </span>
+                            </div>
+                            {deleteTargetStatusOption && (
+                                <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/60">
+                                    <span className="text-muted-foreground">
+                                        Status Tersimpan
+                                    </span>
+                                    <span
+                                        className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${deleteTargetStatusOption.badgeClass}`}
+                                    >
+                                        <deleteTargetStatusOption.icon size={11} />
+                                        {deleteTargetStatusOption.label}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="flex items-center justify-end gap-2 pt-1">
+                            <button
+                                type="button"
+                                disabled={isDeletingRecord}
+                                onClick={() => setDeleteTarget(null)}
+                                className="px-4 py-2 rounded-xl text-xs font-semibold border border-border bg-background hover:bg-muted text-foreground transition cursor-pointer disabled:opacity-40"
+                            >
+                                Batal
+                            </button>
+                            <button
+                                type="button"
+                                disabled={isDeletingRecord}
+                                onClick={() => void handleConfirmDeleteRecord()}
+                                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white shadow-sm transition cursor-pointer disabled:opacity-50"
+                            >
+                                {isDeletingRecord ? (
+                                    <Loader2 size={14} className="animate-spin" />
+                                ) : (
+                                    <Trash2 size={14} />
+                                )}
+                                {isDeletingRecord ? 'Menghapus...' : 'Ya, Hapus Data'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Modal Input Alasan Kegiatan Khusus */}
             {showSpecialEventModal && (

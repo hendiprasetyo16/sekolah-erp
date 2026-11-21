@@ -235,6 +235,9 @@ function formatFullDateWithJavanese(dateStr: string): {
 export function AttendanceDashboardPage() {
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
+  // Peran yang diizinkan menghapus baris data presensi satuan (bisa ditambah 'WALI_KELAS' bila perlu)
+  const canDeleteRecord =
+    user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
 
   // State Simulasi Sekolah (Khusus SUPER_ADMIN)
   const [simSchools, setSimSchools] = useState<
@@ -284,10 +287,13 @@ export function AttendanceDashboardPage() {
     message: string;
   } | null>(null);
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 4500);
-  };
+  const showToast = useCallback(
+    (type: 'success' | 'error', message: string) => {
+      setToast({ type, message });
+      setTimeout(() => setToast(null), 4500);
+    },
+    []
+  );
 
   // State Modal Pratinjau Foto Selfie Guru (Datang, Pulang, & Telemetri Perangkat)
   const [selfieModal, setSelfieModal] = useState<{
@@ -308,7 +314,7 @@ export function AttendanceDashboardPage() {
     isLoading: boolean;
   } | null>(null);
 
-  // State Modal Hapus Satuan & Pembersihan Arsip > 2 Tahun (Khusus SUPER_ADMIN)
+  // State Modal Hapus Satuan & Pembersihan Arsip > 2 Tahun
   const [deleteTarget, setDeleteTarget] = useState<{
     id: string;
     name: string;
@@ -331,7 +337,14 @@ export function AttendanceDashboardPage() {
     []
   );
 
-  // 1. Jika SUPER_ADMIN, muat daftar sekolah
+  // 1a. Sinkronkan sekolah aktif secara instan ketika tombol "Ganti Sekolah" di header diklik
+  useEffect(() => {
+    if (isSuperAdmin && school?.id) {
+      setSimSchoolId(school.id);
+    }
+  }, [isSuperAdmin, school?.id]);
+
+  // 1b. Jika SUPER_ADMIN, muat daftar sekolah
   useEffect(() => {
     if (!isSuperAdmin) return;
     attendanceService
@@ -339,7 +352,7 @@ export function AttendanceDashboardPage() {
       .then((list) => {
         setSimSchools(list);
         if (school?.id) setSimSchoolId(school.id);
-        else if (list.length > 0) setSimSchoolId(list[0].id);
+        else if (list.length > 0) setSimSchoolId((prev) => prev || list[0].id);
       })
       .catch(console.error);
   }, [isSuperAdmin, school?.id]);
@@ -359,12 +372,12 @@ export function AttendanceDashboardPage() {
       });
   }, [activeSchoolId]);
 
-  // 3. Muat Ringkasan & Data Absensi Siswa + Guru
+  // 3. Muat Ringkasan & Data Absensi Siswa + Guru secara independen (Promise.allSettled)
   const loadData = useCallback(async () => {
     if (!activeSchoolId) return;
     setIsLoading(true);
     try {
-      const [sum, students, teachers] = await Promise.all([
+      const [sumRes, studentsRes, teachersRes] = await Promise.allSettled([
         attendanceService.getSummary(activeSchoolId, selectedDate),
         attendanceService.getStudentAttendances({
           schoolId: activeSchoolId,
@@ -378,8 +391,41 @@ export function AttendanceDashboardPage() {
         }),
       ]);
 
-      let enrichedStudents = students.data as StudentAttendanceWithCheckOut[];
-      let enrichedTeachers = teachers.data as TeacherAttendanceWithCheckOut[];
+      if (sumRes.status === 'fulfilled') {
+        setSummary(sumRes.value);
+      } else {
+        console.error(
+          '[AttendanceDashboard] Gagal memuat ringkasan:',
+          sumRes.reason
+        );
+      }
+
+      let enrichedStudents: StudentAttendanceWithCheckOut[] =
+        studentsRes.status === 'fulfilled'
+          ? (studentsRes.value.data as StudentAttendanceWithCheckOut[])
+          : [];
+
+      if (studentsRes.status === 'rejected') {
+        showToast(
+          'error',
+          getErrorMessage(
+            studentsRes.reason,
+            'Gagal memuat rekap absensi siswa.'
+          )
+        );
+      }
+
+      let enrichedTeachers: TeacherAttendanceWithCheckOut[] =
+        teachersRes.status === 'fulfilled'
+          ? (teachersRes.value.data as TeacherAttendanceWithCheckOut[])
+          : [];
+
+      if (teachersRes.status === 'rejected') {
+        console.error(
+          '[AttendanceDashboard] Gagal memuat absensi guru:',
+          teachersRes.reason
+        );
+      }
 
       if (enrichedStudents.length > 0) {
         const studentAttIds = enrichedStudents.map((s) => s.id);
@@ -455,7 +501,6 @@ export function AttendanceDashboardPage() {
         }
       }
 
-      setSummary(sum);
       setStudentRecords(enrichedStudents);
       setTeacherRecords(enrichedTeachers);
     } catch (err: unknown) {
@@ -463,7 +508,7 @@ export function AttendanceDashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeSchoolId, selectedDate]);
+  }, [activeSchoolId, selectedDate, showToast]);
 
   useEffect(() => {
     loadData();
@@ -724,15 +769,16 @@ export function AttendanceDashboardPage() {
     });
   }, [teacherRecords, teacherStatusFilter, searchQuery, teacherSort]);
 
-  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat
+  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat (SUPER_ADMIN & ADMIN)
   const handleConfirmDeleteSingle = async () => {
-    if (!deleteTarget || !isSuperAdmin) return;
+    if (!deleteTarget || !canDeleteRecord || !activeSchoolId) return;
     setIsDeletingRow(true);
     try {
       const { data: latestRow } = await supabase
         .from('attendances')
         .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
         .eq('id', deleteTarget.id)
+        .eq('schoolId', activeSchoolId)
         .maybeSingle();
 
       const typedLatestRow = latestRow as AttendanceFileRow | null;
@@ -756,13 +802,14 @@ export function AttendanceDashboardPage() {
       const { error } = await supabase
         .from('attendances')
         .delete()
-        .eq('id', deleteTarget.id);
+        .eq('id', deleteTarget.id)
+        .eq('schoolId', activeSchoolId);
 
       if (error) throw error;
 
       showToast(
         'success',
-        `Data absensi ${deleteTarget.name} (${deleteTarget.date}) beserta galeri fotonya berhasil dihapus.`
+        `Data absensi ${deleteTarget.name} (${deleteTarget.date}) beserta lampirannya berhasil dihapus.`
       );
       setDeleteTarget(null);
       await loadData();
@@ -771,7 +818,7 @@ export function AttendanceDashboardPage() {
         'error',
         getErrorMessage(
           err,
-          'Gagal menghapus data. Pastikan kebijakan RLS DELETE untuk SUPER_ADMIN sudah aktif.'
+          'Gagal menghapus data. Pastikan kebijakan RLS DELETE untuk Super Admin / Admin sudah aktif.'
         )
       );
     } finally {
@@ -805,7 +852,7 @@ export function AttendanceDashboardPage() {
         setIsCheckingOldRecords(false);
       }
     },
-    [isSuperAdmin, cutoffDate, activeSchoolId]
+    [isSuperAdmin, cutoffDate, activeSchoolId, showToast]
   );
 
   useEffect(() => {
@@ -1658,7 +1705,7 @@ export function AttendanceDashboardPage() {
                       </th>
                       <th>Dicatat Oleh</th>
                       <th>Keterangan</th>
-                      {isSuperAdmin && <th className="text-center">Aksi</th>}
+                      {canDeleteRecord && <th className="text-center">Aksi</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1708,7 +1755,7 @@ export function AttendanceDashboardPage() {
                           <td className="text-sm opacity-75">
                             {record.notes ?? '-'}
                           </td>
-                          {isSuperAdmin && (
+                          {canDeleteRecord && (
                             <td className="text-center">
                               <button
                                 type="button"
@@ -1722,7 +1769,7 @@ export function AttendanceDashboardPage() {
                                   })
                                 }
                                 className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                title="Hapus data absensi ini (Super Admin)"
+                                title="Hapus data absensi ini (Super Admin / Admin)"
                               >
                                 <Trash2 size={15} />
                               </button>
@@ -1819,7 +1866,7 @@ export function AttendanceDashboardPage() {
                       <th>GPS Valid</th>
                       <th>Foto Selfie</th>
                       <th>Keterangan & Log</th>
-                      {isSuperAdmin && <th className="text-center">Aksi</th>}
+                      {canDeleteRecord && <th className="text-center">Aksi</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -1951,7 +1998,7 @@ export function AttendanceDashboardPage() {
 
                           <td>{renderTeacherNotes(record)}</td>
 
-                          {isSuperAdmin && (
+                          {canDeleteRecord && (
                             <td className="text-center">
                               <button
                                 type="button"
@@ -1971,7 +2018,7 @@ export function AttendanceDashboardPage() {
                                   })
                                 }
                                 className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                title="Hapus data absensi beserta foto datang & pulang (Super Admin)"
+                                title="Hapus data absensi beserta foto datang & pulang (Super Admin / Admin)"
                               >
                                 <Trash2 size={15} />
                               </button>
@@ -1989,10 +2036,10 @@ export function AttendanceDashboardPage() {
       </div>
 
       {/* ====================================================================
-          MODAL KONFIRMASI HAPUS SATUAN (KHUSUS SUPER_ADMIN)
+          MODAL KONFIRMASI HAPUS SATUAN (SUPER_ADMIN & ADMIN)
       ==================================================================== */}
       <AnimatePresence>
-        {deleteTarget && isSuperAdmin && (
+        {deleteTarget && canDeleteRecord && (
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

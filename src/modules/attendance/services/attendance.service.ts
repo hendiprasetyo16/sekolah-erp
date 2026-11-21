@@ -114,32 +114,32 @@ interface StudentAttendanceQueryRow {
   teacherId: string | null;
   type: 'SISWA';
   date: string;
-  endDate: string | null;
+  endDate?: string | null;
   status: AttendanceStatus;
-  leaveType: string | null;
-  notes: string | null;
-  attachmentUrl: string | null;
-  approvalStatus: AttendanceApprovalStatus;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  recordedBy: string | null;
-  checkInTime: string | null;
-  time: string;
-  checkOutTime: string | null;
-  checkInLat: number | null;
-  checkInLng: number | null;
-  checkInDistance: number | null;
-  checkInAccuracy: number | null;
-  isCheckInMock: boolean | null;
-  checkInSelfieUrl: string | null;
-  checkOutLat: number | null;
-  checkOutLng: number | null;
-  checkOutDistance: number | null;
-  checkOutAccuracy: number | null;
-  isCheckOutMock: boolean | null;
-  checkOutSelfieUrl: string | null;
-  securityFlags: string[] | null;
-  deviceTelemetry: Record<string, unknown> | null;
+  leaveType?: string | null;
+  notes?: string | null;
+  attachmentUrl?: string | null;
+  approvalStatus?: AttendanceApprovalStatus;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  recordedBy?: string | null;
+  checkInTime?: string | null;
+  time?: string;
+  checkOutTime?: string | null;
+  checkInLat?: number | null;
+  checkInLng?: number | null;
+  checkInDistance?: number | null;
+  checkInAccuracy?: number | null;
+  isCheckInMock?: boolean | null;
+  checkInSelfieUrl?: string | null;
+  checkOutLat?: number | null;
+  checkOutLng?: number | null;
+  checkOutDistance?: number | null;
+  checkOutAccuracy?: number | null;
+  isCheckOutMock?: boolean | null;
+  checkOutSelfieUrl?: string | null;
+  securityFlags?: string[] | null;
+  deviceTelemetry?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
   students?: StudentJoinObject | StudentJoinObject[] | null;
@@ -162,32 +162,32 @@ interface TeacherAttendanceQueryRow {
   teacherId: string | null;
   type: 'GURU';
   date: string;
-  endDate: string | null;
+  endDate?: string | null;
   status: AttendanceStatus;
-  leaveType: string | null;
-  notes: string | null;
-  attachmentUrl: string | null;
-  approvalStatus: AttendanceApprovalStatus;
-  approvedBy: string | null;
-  approvedAt: string | null;
-  recordedBy: string | null;
-  checkInTime: string | null;
-  time: string;
-  checkOutTime: string | null;
-  checkInLat: number | null;
-  checkInLng: number | null;
-  checkInDistance: number | null;
-  checkInAccuracy: number | null;
-  isCheckInMock: boolean | null;
-  checkInSelfieUrl: string | null;
-  checkOutLat: number | null;
-  checkOutLng: number | null;
-  checkOutDistance: number | null;
-  checkOutAccuracy: number | null;
-  isCheckOutMock: boolean | null;
-  checkOutSelfieUrl: string | null;
-  securityFlags: string[] | null;
-  deviceTelemetry: Record<string, unknown> | null;
+  leaveType?: string | null;
+  notes?: string | null;
+  attachmentUrl?: string | null;
+  approvalStatus?: AttendanceApprovalStatus;
+  approvedBy?: string | null;
+  approvedAt?: string | null;
+  recordedBy?: string | null;
+  checkInTime?: string | null;
+  time?: string;
+  checkOutTime?: string | null;
+  checkInLat?: number | null;
+  checkInLng?: number | null;
+  checkInDistance?: number | null;
+  checkInAccuracy?: number | null;
+  isCheckInMock?: boolean | null;
+  checkInSelfieUrl?: string | null;
+  checkOutLat?: number | null;
+  checkOutLng?: number | null;
+  checkOutDistance?: number | null;
+  checkOutAccuracy?: number | null;
+  isCheckOutMock?: boolean | null;
+  checkOutSelfieUrl?: string | null;
+  securityFlags?: string[] | null;
+  deviceTelemetry?: Record<string, unknown> | null;
   createdAt: string;
   updatedAt: string;
   teachers?: TeacherJoinObject | TeacherJoinObject[] | null;
@@ -196,7 +196,7 @@ interface TeacherAttendanceQueryRow {
 interface SummaryAttendanceRow {
   type: string;
   status: string;
-  approvalStatus: string;
+  approvalStatus?: string | null;
 }
 
 const ATTENDANCE_BASE_COLUMNS = `
@@ -206,6 +206,12 @@ const ATTENDANCE_BASE_COLUMNS = `
   checkInLat, checkInLng, checkInDistance, checkInAccuracy, isCheckInMock, checkInSelfieUrl,
   checkOutLat, checkOutLng, checkOutDistance, checkOutAccuracy, isCheckOutMock, checkOutSelfieUrl,
   securityFlags, deviceTelemetry, createdAt, updatedAt
+`;
+
+// Kolom cadangan minimal jika sebagian kolom telemetri belum ada di tabel attendances
+const ATTENDANCE_FALLBACK_COLUMNS = `
+  id, schoolId, studentId, teacherId, type, date, status,
+  notes, recordedBy, checkInTime, time, checkOutTime, createdAt, updatedAt
 `;
 
 function formatTimeInTimezone(date: Date, timeZone: string): string {
@@ -827,31 +833,45 @@ export const attendanceService = {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    let query = supabase
-      .from('attendances')
-      .select(
-        `
-        ${ATTENDANCE_BASE_COLUMNS},
-        students!inner(id, fullName, nisn, nis, gender, photoUrl, classId,
-          classes(id, name, gradeLevel, major)
+    // Gunakan left join students(...) saat tanpa filter classId agar data presensi
+    // tidak hilang jika relasi profil siswa dibatasi RLS
+    const studentRelation = classId ? 'students!inner' : 'students';
+
+    const buildQuery = (columns: string) => {
+      let q = supabase
+        .from('attendances')
+        .select(
+          `
+          ${columns},
+          ${studentRelation}(id, fullName, nisn, nis, gender, photoUrl, classId,
+            classes(id, name, gradeLevel, major)
+          )
+        `,
+          { count: 'exact' }
         )
-      `,
-        { count: 'exact' }
-      )
-      .eq('schoolId', schoolId)
-      .eq('type', 'SISWA')
-      .range(from, to)
-      .order('createdAt', { ascending: false });
+        .eq('schoolId', schoolId)
+        .eq('type', 'SISWA')
+        .range(from, to)
+        .order('createdAt', { ascending: false });
 
-    if (date) query = query.eq('date', date);
-    if (studentId) query = query.eq('studentId', studentId);
-    if (status) query = query.eq('status', status);
-    if (classId) query = query.eq('students.classId', classId);
+      if (date) q = q.eq('date', date);
+      if (studentId) q = q.eq('studentId', studentId);
+      if (status) q = q.eq('status', status);
+      if (classId) q = q.eq('students.classId', classId);
+      return q;
+    };
 
-    const { data, error, count } = await query;
-    if (error) throw error;
+    let { data, error, count } = await buildQuery(ATTENDANCE_BASE_COLUMNS);
 
-    const typedRows = (data ?? []) as StudentAttendanceQueryRow[];
+    if (error) {
+      const fallbackRes = await buildQuery(ATTENDANCE_FALLBACK_COLUMNS);
+      if (fallbackRes.error) throw fallbackRes.error;
+      data = fallbackRes.data;
+      count = fallbackRes.count;
+    }
+
+    // Konversi melalui unknown agar TypeScript tidak menolak ParserError dari string select dinamis
+    const typedRows = (data ?? []) as unknown as StudentAttendanceQueryRow[];
     const mapped: StudentAttendance[] = typedRows.map((row) => {
       const studentObj = Array.isArray(row.students)
         ? row.students[0]
@@ -869,32 +889,32 @@ export const attendanceService = {
         teacherId: null,
         type: 'SISWA',
         date: row.date,
-        endDate: row.endDate,
+        endDate: row.endDate ?? null,
         status: row.status,
-        leaveType: row.leaveType,
-        notes: row.notes,
-        attachmentUrl: row.attachmentUrl,
-        approvalStatus: row.approvalStatus,
-        approvedBy: row.approvedBy,
-        approvedAt: row.approvedAt,
-        recordedBy: row.recordedBy,
-        checkInTime: row.checkInTime,
+        leaveType: row.leaveType ?? null,
+        notes: row.notes ?? null,
+        attachmentUrl: row.attachmentUrl ?? null,
+        approvalStatus: row.approvalStatus ?? 'APPROVED',
+        approvedBy: row.approvedBy ?? null,
+        approvedAt: row.approvedAt ?? null,
+        recordedBy: row.recordedBy ?? null,
+        checkInTime: row.checkInTime ?? null,
         time: row.time ?? '',
-        checkOutTime: row.checkOutTime,
-        checkInLat: row.checkInLat,
-        checkInLng: row.checkInLng,
-        checkInDistance: row.checkInDistance,
-        checkInAccuracy: row.checkInAccuracy,
-        isCheckInMock: row.isCheckInMock,
-        checkInSelfieUrl: row.checkInSelfieUrl,
-        checkOutLat: row.checkOutLat,
-        checkOutLng: row.checkOutLng,
-        checkOutDistance: row.checkOutDistance,
-        checkOutAccuracy: row.checkOutAccuracy,
-        isCheckOutMock: row.isCheckOutMock,
-        checkOutSelfieUrl: row.checkOutSelfieUrl,
+        checkOutTime: row.checkOutTime ?? null,
+        checkInLat: row.checkInLat ?? null,
+        checkInLng: row.checkInLng ?? null,
+        checkInDistance: row.checkInDistance ?? null,
+        checkInAccuracy: row.checkInAccuracy ?? null,
+        isCheckInMock: row.isCheckInMock ?? null,
+        checkInSelfieUrl: row.checkInSelfieUrl ?? null,
+        checkOutLat: row.checkOutLat ?? null,
+        checkOutLng: row.checkOutLng ?? null,
+        checkOutDistance: row.checkOutDistance ?? null,
+        checkOutAccuracy: row.checkOutAccuracy ?? null,
+        isCheckOutMock: row.isCheckOutMock ?? null,
+        checkOutSelfieUrl: row.checkOutSelfieUrl ?? null,
         securityFlags: row.securityFlags ?? [],
-        deviceTelemetry: row.deviceTelemetry,
+        deviceTelemetry: row.deviceTelemetry ?? null,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         student: studentObj
@@ -1124,29 +1144,41 @@ export const attendanceService = {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    let query = supabase
-      .from('attendances')
-      .select(
-        `
-        ${ATTENDANCE_BASE_COLUMNS},
-        teachers!inner(id, fullName, nip, nuptk, position, photoUrl, allowDesktopAttendance)
-      `,
-        { count: 'exact' }
-      )
-      .eq('schoolId', schoolId)
-      .eq('type', 'GURU')
-      .range(from, to)
-      .order('createdAt', { ascending: false });
+    // Gunakan left join teachers(...) agar data presensi guru tetap muncul
+    // meskipun relasi tabel teachers dibatasi RLS
+    const buildQuery = (columns: string) => {
+      let q = supabase
+        .from('attendances')
+        .select(
+          `
+          ${columns},
+          teachers(id, fullName, nip, nuptk, position, photoUrl, allowDesktopAttendance)
+        `,
+          { count: 'exact' }
+        )
+        .eq('schoolId', schoolId)
+        .eq('type', 'GURU')
+        .range(from, to)
+        .order('createdAt', { ascending: false });
 
-    if (date) query = query.eq('date', date);
-    if (teacherId) query = query.eq('teacherId', teacherId);
-    if (status) query = query.eq('status', status);
-    if (approvalStatus) query = query.eq('approvalStatus', approvalStatus);
+      if (date) q = q.eq('date', date);
+      if (teacherId) q = q.eq('teacherId', teacherId);
+      if (status) q = q.eq('status', status);
+      if (approvalStatus) q = q.eq('approvalStatus', approvalStatus);
+      return q;
+    };
 
-    const { data, error, count } = await query;
-    if (error) throw error;
+    let { data, error, count } = await buildQuery(ATTENDANCE_BASE_COLUMNS);
 
-    const typedRows = (data ?? []) as TeacherAttendanceQueryRow[];
+    if (error) {
+      const fallbackRes = await buildQuery(ATTENDANCE_FALLBACK_COLUMNS);
+      if (fallbackRes.error) throw fallbackRes.error;
+      data = fallbackRes.data;
+      count = fallbackRes.count;
+    }
+
+    // Konversi melalui unknown agar TypeScript tidak menolak ParserError dari string select dinamis
+    const typedRows = (data ?? []) as unknown as TeacherAttendanceQueryRow[];
     const mapped: TeacherAttendance[] = typedRows.map((row) => {
       const teacherObj = Array.isArray(row.teachers)
         ? row.teachers[0]
@@ -1159,32 +1191,32 @@ export const attendanceService = {
         teacherId: row.teacherId,
         type: 'GURU',
         date: row.date,
-        endDate: row.endDate,
+        endDate: row.endDate ?? null,
         status: row.status,
-        leaveType: row.leaveType,
-        notes: row.notes,
-        attachmentUrl: row.attachmentUrl,
-        approvalStatus: row.approvalStatus,
-        approvedBy: row.approvedBy,
-        approvedAt: row.approvedAt,
-        recordedBy: row.recordedBy,
-        checkInTime: row.checkInTime,
+        leaveType: row.leaveType ?? null,
+        notes: row.notes ?? null,
+        attachmentUrl: row.attachmentUrl ?? null,
+        approvalStatus: row.approvalStatus ?? 'APPROVED',
+        approvedBy: row.approvedBy ?? null,
+        approvedAt: row.approvedAt ?? null,
+        recordedBy: row.recordedBy ?? null,
+        checkInTime: row.checkInTime ?? null,
         time: row.time ?? '',
-        checkOutTime: row.checkOutTime,
-        checkInLat: row.checkInLat,
-        checkInLng: row.checkInLng,
-        checkInDistance: row.checkInDistance,
-        checkInAccuracy: row.checkInAccuracy,
-        isCheckInMock: row.isCheckInMock,
-        checkInSelfieUrl: row.checkInSelfieUrl,
-        checkOutLat: row.checkOutLat,
-        checkOutLng: row.checkOutLng,
-        checkOutDistance: row.checkOutDistance,
-        checkOutAccuracy: row.checkOutAccuracy,
-        isCheckOutMock: row.isCheckOutMock,
-        checkOutSelfieUrl: row.checkOutSelfieUrl,
+        checkOutTime: row.checkOutTime ?? null,
+        checkInLat: row.checkInLat ?? null,
+        checkInLng: row.checkInLng ?? null,
+        checkInDistance: row.checkInDistance ?? null,
+        checkInAccuracy: row.checkInAccuracy ?? null,
+        isCheckInMock: row.isCheckInMock ?? null,
+        checkInSelfieUrl: row.checkInSelfieUrl ?? null,
+        checkOutLat: row.checkOutLat ?? null,
+        checkOutLng: row.checkOutLng ?? null,
+        checkOutDistance: row.checkOutDistance ?? null,
+        checkOutAccuracy: row.checkOutAccuracy ?? null,
+        isCheckOutMock: row.isCheckOutMock ?? null,
+        checkOutSelfieUrl: row.checkOutSelfieUrl ?? null,
         securityFlags: row.securityFlags ?? [],
-        deviceTelemetry: row.deviceTelemetry,
+        deviceTelemetry: row.deviceTelemetry ?? null,
         createdAt: row.createdAt,
         updatedAt: row.updatedAt,
         teacher: teacherObj

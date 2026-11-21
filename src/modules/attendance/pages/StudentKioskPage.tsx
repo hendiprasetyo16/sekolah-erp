@@ -185,6 +185,25 @@ function playKioskFeedbackSound(
 }
 
 /**
+ * Mengambil pesan error yang jelas dari objek error Supabase maupun JavaScript.
+ */
+function extractReadableError(err: unknown): string {
+  if (
+    typeof err === 'object' &&
+    err !== null &&
+    'message' in err &&
+    typeof (err as { message?: unknown }).message === 'string'
+  ) {
+    const msg = (err as { message: string }).message.trim();
+    if (msg.length > 0) return msg;
+  }
+  if (err instanceof Error && err.message.trim().length > 0) {
+    return err.message.trim();
+  }
+  return 'Terjadi kesalahan saat memproses permintaan.';
+}
+
+/**
  * Menambahkan menit toleransi keterlambatan ke jam masuk standar (HH:mm).
  */
 function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
@@ -767,11 +786,12 @@ export function StudentKioskPage() {
       );
       setSpecialEventInput('');
       triggerSound('checkin');
-    } catch {
+    } catch (err: unknown) {
+      const detail = extractReadableError(err);
       triggerSound('error');
-      setResultMessage('Gagal mengaktifkan mode kegiatan khusus.');
+      setResultMessage(`Gagal mengaktifkan mode kegiatan khusus: ${detail}`);
       setKioskState('error');
-      scheduleAutoReset();
+      scheduleAutoReset(6000);
     }
   };
 
@@ -1260,7 +1280,8 @@ export function StudentKioskPage() {
     'Mode Simulasi Kiosk'
     : school?.name ?? 'SekolahERP';
 
-  const volumePercent = Math.round((soundEnabled ? soundVolume : 0) * 100);
+  const isAudioActive = soundEnabled && soundVolume > 0;
+  const volumePercent = Math.round((isAudioActive ? soundVolume : 0) * 100);
 
   return (
     <div
@@ -1271,12 +1292,46 @@ export function StudentKioskPage() {
         flexDirection: 'column',
       }}
     >
-      {/* CSS Responsif untuk Menyeimbangkan Peta & Kamera di Semua Ukuran Monitor */}
+      {/* CSS Khusus Kiosk: Peta & Penggeser Volume Dark-Glass Modern */}
       <style>{`
         .kiosk-map-fill > div,
         .kiosk-map-fill .leaflet-container {
           height: 100% !important;
           min-height: 185px !important;
+        }
+        .kiosk-volume-slider {
+          -webkit-appearance: none;
+          appearance: none;
+          height: 6px;
+          border-radius: 9999px;
+          outline: none;
+          cursor: pointer;
+        }
+        .kiosk-volume-slider::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: #34d399;
+          border: 2px solid #ffffff;
+          box-shadow: 0 0 8px rgba(52, 211, 153, 0.7);
+          cursor: pointer;
+          transition: transform 0.15s ease, background-color 0.15s ease;
+        }
+        .kiosk-volume-slider::-webkit-slider-thumb:hover {
+          transform: scale(1.16);
+          background: #6ee7b7;
+        }
+        .kiosk-volume-slider::-moz-range-thumb {
+          width: 14px;
+          height: 14px;
+          border-radius: 9999px;
+          background: #34d399;
+          border: 2px solid #ffffff;
+          box-shadow: 0 0 8px rgba(52, 211, 153, 0.7);
+          cursor: pointer;
+          transition: transform 0.15s ease, background-color 0.15s ease;
         }
       `}</style>
 
@@ -1343,28 +1398,31 @@ export function StudentKioskPage() {
             </button>
           )}
 
-          {/* Kontrol Suara & Penggeser Volume (0% - 100%) */}
-          <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-xl border border-border bg-card/80">
+          {/* Kontrol Suara & Penggeser Volume Dark-Glass Modern */}
+          <div className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-white/15 bg-slate-900/90 backdrop-blur-md shadow-sm">
             <button
               type="button"
               onClick={toggleSound}
-              className={`inline-flex items-center gap-1 text-xs font-bold transition cursor-pointer ${soundEnabled && soundVolume > 0
-                  ? 'text-emerald-600 dark:text-emerald-300'
-                  : 'text-muted-foreground hover:text-foreground'
+              className={`inline-flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer ${isAudioActive
+                  ? 'text-emerald-400 hover:text-emerald-300'
+                  : 'text-slate-400 hover:text-slate-200'
                 }`}
               title={
-                soundEnabled && soundVolume > 0
+                isAudioActive
                   ? 'Klik untuk membisukan suara'
                   : 'Klik untuk mengaktifkan suara'
               }
             >
-              {soundEnabled && soundVolume > 0 ? (
-                <Volume2 size={15} />
-              ) : (
-                <VolumeX size={15} />
-              )}
-              <span className="hidden md:inline">
-                {soundEnabled && soundVolume > 0 ? 'Suara' : 'Bisu'}
+              <span
+                className={`p-1 rounded-lg transition ${isAudioActive
+                    ? 'bg-emerald-500/15 text-emerald-400'
+                    : 'bg-white/5 text-slate-400'
+                  }`}
+              >
+                {isAudioActive ? <Volume2 size={14} /> : <VolumeX size={14} />}
+              </span>
+              <span className="hidden md:inline tracking-tight">
+                {isAudioActive ? 'Suara' : 'Bisu'}
               </span>
             </button>
 
@@ -1376,21 +1434,27 @@ export function StudentKioskPage() {
               value={volumePercent}
               onChange={(e) => handleVolumeChange(Number(e.target.value))}
               onMouseUp={() => {
-                if (soundEnabled && soundVolume > 0) {
+                if (isAudioActive) {
                   playKioskFeedbackSound('checkin', soundVolume);
                 }
               }}
               onTouchEnd={() => {
-                if (soundEnabled && soundVolume > 0) {
+                if (isAudioActive) {
                   playKioskFeedbackSound('checkin', soundVolume);
                 }
               }}
               aria-label="Volume Suara Kiosk"
               title={`Volume Suara: ${volumePercent}%`}
-              className="w-16 sm:w-20 h-1.5 accent-emerald-600 cursor-pointer"
+              style={{
+                background: `linear-gradient(to right, #10b981 0%, #34d399 ${volumePercent}%, rgba(255, 255, 255, 0.16) ${volumePercent}%, rgba(255, 255, 255, 0.16) 100%)`,
+              }}
+              className="kiosk-volume-slider w-16 sm:w-20"
             />
 
-            <span className="text-[11px] font-mono font-bold text-muted-foreground w-8 text-right select-none">
+            <span
+              className={`text-[11px] font-mono font-bold min-w-9 text-right select-none ${isAudioActive ? 'text-slate-100' : 'text-slate-400'
+                }`}
+            >
               {volumePercent}%
             </span>
           </div>
