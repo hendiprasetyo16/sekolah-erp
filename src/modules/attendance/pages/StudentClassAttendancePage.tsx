@@ -33,10 +33,12 @@ import { getLocalDateString } from '../services/gps.utils';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 
 // ============================================================================
-// PARAMETER KONFIGURASI PAGINATION & STATUS PRESENSI SISWA
+// PARAMETER KONFIGURASI PAGINATION, CATATAN LIBUR & STATUS PRESENSI SISWA
 // ============================================================================
 const DEFAULT_STUDENT_PAGE_SIZE = 10;
 const STUDENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 0] as const; // 0 = Semua
+//const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Sekolah'; // Keterangan otomatis jika alasan libur dikosongkan
+const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah'; // Selaras dengan StudentKioskPage.tsx
 
 type StudentAttendanceStatus =
     | 'HADIR'
@@ -274,21 +276,29 @@ export function StudentClassAttendancePage() {
         useState<boolean>(false);
     const [specialEventInput, setSpecialEventInput] = useState<string>('');
 
+    // Penanda aktifnya mode presensi hari libur & teks keterangan otomatisnya
+    const isSpecialEventMode = Boolean(
+        holidayLock.isHoliday && holidayLock.isSpecialEventActive
+    );
+    const specialEventNote = useMemo(() => {
+        const reason = (holidayLock.specialEventReason ?? '').trim();
+        return reason || DEFAULT_SPECIAL_EVENT_NOTE;
+    }, [holidayLock.specialEventReason]);
+
     const lockBannerMessage = useMemo(() => {
         if (holidayLock.isHoliday) {
             return `Presensi dikunci otomatis karena hari libur (${holidayLock.holidayName ?? 'Libur Kalender'
                 }).`;
         }
         if (holidayLock.isSpecialEventActive) {
-            return `Mode kegiatan khusus aktif: ${holidayLock.specialEventReason ?? 'Kegiatan Sekolah'
-                }.`;
+            return `Mode kegiatan khusus aktif: ${specialEventNote}.`;
         }
         return 'Presensi pada tanggal ini sedang dikunci.';
     }, [
         holidayLock.isHoliday,
         holidayLock.holidayName,
         holidayLock.isSpecialEventActive,
-        holidayLock.specialEventReason,
+        specialEventNote,
     ]);
 
     // Tutup modal hapus dengan tombol Escape pada keyboard
@@ -487,6 +497,8 @@ export function StudentClassAttendancePage() {
                     ? st.classes[0]?.name
                     : st.classes?.name;
 
+                const savedNote = (existing?.notes ?? '').trim();
+
                 return {
                     studentId: sid,
                     fullName: st.fullName ?? 'Tanpa Nama',
@@ -498,7 +510,7 @@ export function StudentClassAttendancePage() {
                     status: validStatus,
                     checkInTime: existing?.checkInTime ?? existing?.time ?? null,
                     checkOutTime: existing?.checkOutTime ?? null,
-                    notes: existing?.notes ?? '',
+                    notes: savedNote || (isSpecialEventMode ? specialEventNote : ''),
                     existingRecordId: existing?.id ? String(existing.id) : null,
                     isDirty: false,
                 };
@@ -521,11 +533,32 @@ export function StudentClassAttendancePage() {
         selectedDate,
         isHomeroomRestricted,
         homeroomClassKey,
+        isSpecialEventMode,
+        specialEventNote,
     ]);
 
     useEffect(() => {
         void loadClassStudentsAndAttendance();
     }, [loadClassStudentsAndAttendance]);
+
+    // Isi otomatis kolom Keterangan ketika Mode Kegiatan Khusus aktif pada tanggal libur
+    useEffect(() => {
+        if (!isSpecialEventMode) return;
+        setRows((prev) => {
+            let hasChanged = false;
+            const updated = prev.map((row) => {
+                if (row.notes.trim() !== '') return row;
+                hasChanged = true;
+                return {
+                    ...row,
+                    notes: specialEventNote,
+                    // Tandai dirty bila siswa sudah terabsen namun catatannya masih kosong
+                    isDirty: row.isDirty || row.status !== null,
+                };
+            });
+            return hasChanged ? updated : prev;
+        });
+    }, [isSpecialEventMode, specialEventNote]);
 
     const handleSetStudentStatus = (
         studentId: string,
@@ -544,10 +577,15 @@ export function StudentClassAttendancePage() {
             prev.map((row) => {
                 if (row.studentId !== studentId) return row;
                 const isPresent = newStatus === 'HADIR' || newStatus === 'TERLAMBAT';
+                const resolvedNote =
+                    isSpecialEventMode && !row.notes.trim()
+                        ? specialEventNote
+                        : row.notes;
                 return {
                     ...row,
                     status: newStatus,
                     checkInTime: isPresent ? row.checkInTime || nowIso : null,
+                    notes: resolvedNote,
                     isDirty: true,
                 };
             })
@@ -576,10 +614,15 @@ export function StudentClassAttendancePage() {
         setRows((prev) =>
             prev.map((row) => {
                 if (row.status !== null) return row;
+                const resolvedNote =
+                    isSpecialEventMode && !row.notes.trim()
+                        ? specialEventNote
+                        : row.notes;
                 return {
                     ...row,
                     status: 'HADIR',
                     checkInTime: row.checkInTime ?? nowIso,
+                    notes: resolvedNote,
                     isDirty: true,
                 };
             })
@@ -620,12 +663,17 @@ export function StudentClassAttendancePage() {
                     ? item.checkInTime || nowIso
                     : null;
 
+                // Jika mode libur aktif & catatan dikosongkan, otomatis gunakan nama kegiatan
+                const effectiveNote =
+                    item.notes.trim() ||
+                    (isSpecialEventMode ? specialEventNote : null);
+
                 // Kolom "time" adalah GENERATED ALWAYS di PostgreSQL sehingga tidak ikut dikirim
                 if (item.existingRecordId) {
                     const updatePayload: Record<string, string | null> = {
                         status: item.status,
                         checkInTime: effectiveCheckIn,
-                        notes: item.notes.trim() || null,
+                        notes: effectiveNote,
                         recordedBy: user?.id ?? null,
                     };
 
@@ -641,7 +689,7 @@ export function StudentClassAttendancePage() {
                                 .update({
                                     status: item.status,
                                     checkInTime: effectiveCheckIn,
-                                    notes: item.notes.trim() || null,
+                                    notes: effectiveNote,
                                 })
                                 .eq('id', item.existingRecordId);
                             if (fallbackErr) throw fallbackErr;
@@ -657,7 +705,7 @@ export function StudentClassAttendancePage() {
                         date: selectedDate,
                         status: item.status,
                         checkInTime: effectiveCheckIn,
-                        notes: item.notes?.trim() ? item.notes.trim() : null,
+                        notes: effectiveNote,
                         recordedBy: user?.id ?? null,
                     };
 
@@ -676,7 +724,7 @@ export function StudentClassAttendancePage() {
                                     date: selectedDate,
                                     status: item.status,
                                     checkInTime: effectiveCheckIn,
-                                    notes: item.notes.trim() || null,
+                                    notes: effectiveNote,
                                 });
                             if (fallbackInsErr) throw fallbackInsErr;
                         } else {
@@ -790,14 +838,26 @@ export function StudentClassAttendancePage() {
     };
 
     const handleConfirmActivateSpecialEvent = async () => {
-        if (!specialEventInput.trim()) return;
+        const resolvedReason =
+            specialEventInput.trim() || DEFAULT_SPECIAL_EVENT_NOTE;
         try {
-            await holidayLock.activateSpecialEvent(specialEventInput.trim());
+            await holidayLock.activateSpecialEvent(resolvedReason);
             setShowSpecialEventModal(false);
             setSpecialEventInput('');
+            setRows((prev) =>
+                prev.map((row) =>
+                    row.notes.trim()
+                        ? row
+                        : {
+                            ...row,
+                            notes: resolvedReason,
+                            isDirty: row.isDirty || row.status !== null,
+                        }
+                )
+            );
             setMessage({
                 status: 'success',
-                text: 'Mode Kegiatan Khusus berhasil diaktifkan. Presensi siswa pada tanggal libur ini kini dibuka.',
+                text: `Mode Kegiatan Khusus ("${resolvedReason}") berhasil diaktifkan. Presensi siswa pada tanggal libur ini kini dibuka.`,
             });
         } catch (err: unknown) {
             const { message: errMsg } = getErrorInfo(err);
@@ -811,6 +871,13 @@ export function StudentClassAttendancePage() {
     const handleDeactivateSpecialEvent = async () => {
         try {
             await holidayLock.deactivateSpecialEvent();
+            setRows((prev) =>
+                prev.map((row) =>
+                    !row.existingRecordId && row.notes === specialEventNote
+                        ? { ...row, notes: '' }
+                        : row
+                )
+            );
             setMessage({
                 status: 'success',
                 text: 'Mode Kegiatan Khusus dinonaktifkan. Penguncian hari libur kembali berlaku.',
@@ -1021,14 +1088,12 @@ export function StudentClassAttendancePage() {
                     </div>
                 </div>
             ) : (
-                holidayLock.isHoliday &&
-                holidayLock.isSpecialEventActive && (
+                isSpecialEventMode && (
                     <div className="p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 flex items-center gap-2.5 text-xs">
                         <Unlock size={17} className="text-emerald-600 shrink-0" />
                         <span>
-                            <strong>Mode Kegiatan Khusus Aktif:</strong>{' '}
-                            {holidayLock.specialEventReason} (Pengecualian untuk jadwal libur{' '}
-                            {holidayLock.holidayName})
+                            <strong>Mode Kegiatan Khusus Aktif:</strong> {specialEventNote}{' '}
+                            (Pengecualian untuk jadwal libur {holidayLock.holidayName})
                         </span>
                     </div>
                 )
@@ -1048,8 +1113,8 @@ export function StudentClassAttendancePage() {
             {message && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${message.status === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {message.status === 'success' ? (
@@ -1298,8 +1363,8 @@ export function StudentClassAttendancePage() {
                                                                     )
                                                                 }
                                                                 className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer disabled:opacity-50 ${isSelected
-                                                                        ? opt.activeClass
-                                                                        : 'border-border bg-background hover:bg-muted text-foreground/80'
+                                                                    ? opt.activeClass
+                                                                    : 'border-border bg-background hover:bg-muted text-foreground/80'
                                                                     }`}
                                                             >
                                                                 <IconComp size={12} />
@@ -1354,7 +1419,11 @@ export function StudentClassAttendancePage() {
                                                     onChange={(e) =>
                                                         handleSetStudentNote(row.studentId, e.target.value)
                                                     }
-                                                    placeholder="Catatan opsional..."
+                                                    placeholder={
+                                                        isSpecialEventMode
+                                                            ? specialEventNote
+                                                            : 'Catatan opsional...'
+                                                    }
                                                     className="form-input w-full text-[11px] py-1 px-2"
                                                 />
                                             </td>
@@ -1562,7 +1631,7 @@ export function StudentClassAttendancePage() {
                                 type="text"
                                 value={specialEventInput}
                                 onChange={(e) => setSpecialEventInput(e.target.value)}
-                                placeholder="Contoh: Class Meeting / Kegiatan Pramuka / Studi Wisata"
+                                placeholder={`Kosongkan untuk otomatis: ${DEFAULT_SPECIAL_EVENT_NOTE}`}
                                 className="form-input w-full text-xs"
                             />
                         </div>
@@ -1576,7 +1645,7 @@ export function StudentClassAttendancePage() {
                             </button>
                             <button
                                 type="button"
-                                disabled={!specialEventInput.trim() || holidayLock.isToggling}
+                                disabled={holidayLock.isToggling}
                                 onClick={() => void handleConfirmActivateSpecialEvent()}
                                 className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50 cursor-pointer"
                             >

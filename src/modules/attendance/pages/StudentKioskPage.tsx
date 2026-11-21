@@ -96,6 +96,7 @@ interface OfflineKioskQueueItem {
   timeFormatted: string;
   scanMode: KioskScanMode;
   status: 'HADIR' | 'TERLAMBAT';
+  notes?: string | null;
   recordedBy: string | null;
 }
 
@@ -397,6 +398,12 @@ export function StudentKioskPage() {
     targetDate: today,
   });
 
+  // Teks keterangan otomatis untuk kolom `notes` saat Kiosk digunakan di hari libur
+  const activeSpecialEventNote = useMemo(() => {
+    if (!isHoliday || !isSpecialEventActive) return null;
+    return (specialEventReason ?? '').trim() || DEFAULT_KIOSK_SPECIAL_EVENT;
+  }, [isHoliday, isSpecialEventActive, specialEventReason]);
+
   const [specialEventInput, setSpecialEventInput] = useState<string>('');
 
   const [kioskState, setKioskState] = useState<KioskState>('idle');
@@ -618,6 +625,7 @@ export function StudentKioskPage() {
                   date: item.date,
                   status: item.status,
                   checkInTime: item.timestampIso,
+                  notes: item.notes ?? null,
                   recordedBy: item.recordedBy,
                 });
 
@@ -848,6 +856,7 @@ export function StudentKioskPage() {
         timeFormatted: timeStr,
         scanMode: isCheckOutAction ? 'CHECK_OUT' : scanMode,
         status,
+        notes: activeSpecialEventNote,
         recordedBy: user?.id ?? null,
       };
 
@@ -891,6 +900,7 @@ export function StudentKioskPage() {
       studentConfig.workStartTime,
       studentConfig.lateToleranceMinutes,
       schoolTimezone,
+      activeSpecialEventNote,
       user?.id,
       triggerSound,
       scheduleAutoReset,
@@ -971,6 +981,7 @@ export function StudentKioskPage() {
               date: today,
               status,
               checkInTime: nowIso,
+              notes: activeSpecialEventNote,
               recordedBy: user?.id ?? null,
             });
 
@@ -1143,6 +1154,7 @@ export function StudentKioskPage() {
       studentConfig.enableCheckOut,
       studentConfig.checkOutStartTime,
       schoolTimezone,
+      activeSpecialEventNote,
       triggerSound,
       scheduleAutoReset,
       enqueueOfflineScan,
@@ -1404,8 +1416,8 @@ export function StudentKioskPage() {
               type="button"
               onClick={toggleSound}
               className={`inline-flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer ${isAudioActive
-                  ? 'text-emerald-400 hover:text-emerald-300'
-                  : 'text-slate-400 hover:text-slate-200'
+                ? 'text-emerald-400 hover:text-emerald-300'
+                : 'text-slate-400 hover:text-slate-200'
                 }`}
               title={
                 isAudioActive
@@ -1415,8 +1427,8 @@ export function StudentKioskPage() {
             >
               <span
                 className={`p-1 rounded-lg transition ${isAudioActive
-                    ? 'bg-emerald-500/15 text-emerald-400'
-                    : 'bg-white/5 text-slate-400'
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-white/5 text-slate-400'
                   }`}
               >
                 {isAudioActive ? <Volume2 size={14} /> : <VolumeX size={14} />}
@@ -1628,7 +1640,7 @@ export function StudentKioskPage() {
                 <Sparkles size={16} className="text-emerald-500 shrink-0" />
                 <div>
                   <span className="font-bold">
-                    Mode Kegiatan Khusus Aktif: {specialEventReason}
+                    Mode Kegiatan Khusus Aktif: {activeSpecialEventNote}
                   </span>
                   <p className="text-[11px] opacity-80">
                     Pengecualian untuk jadwal libur ({holidayName})
@@ -1689,7 +1701,7 @@ export function StudentKioskPage() {
                           type="text"
                           value={specialEventInput}
                           onChange={(e) => setSpecialEventInput(e.target.value)}
-                          placeholder="Contoh: Kegiatan Pramuka / Class Meeting / Lomba..."
+                          placeholder={`Kosongkan untuk otomatis: ${DEFAULT_KIOSK_SPECIAL_EVENT}`}
                           className="form-input w-full text-xs"
                         />
                         <button
@@ -1747,8 +1759,8 @@ export function StudentKioskPage() {
                             type="button"
                             onClick={() => setScanMode(modeOpt.id)}
                             className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
-                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                                : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
+                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                              : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
                               }`}
                           >
                             {modeOpt.label}
