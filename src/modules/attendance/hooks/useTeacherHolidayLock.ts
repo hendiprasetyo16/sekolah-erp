@@ -10,6 +10,26 @@ import {
   type WorkDaysMode,
 } from '../utils/indonesianHolidays';
 
+export type SpecialEventTargetType = 'ALL' | 'GURU' | 'SISWA';
+
+interface SchoolSpecialEventDbRow {
+  id: string;
+  schoolId: string;
+  eventDate: string;
+  reason: string | null;
+  targetType: string | null;
+  isActive: boolean;
+}
+
+interface SchoolSpecialEventUpsertPayload {
+  schoolId: string;
+  eventDate: string;
+  reason: string;
+  targetType: SpecialEventTargetType;
+  isActive: boolean;
+  createdBy: string | null;
+}
+
 interface UseTeacherHolidayLockParams {
   schoolId: string;
   targetDate: string; // Format YYYY-MM-DD
@@ -24,6 +44,18 @@ export interface TeacherHolidayLockState {
   isSpecialEvent: boolean;
   reason: string;
   specialEventId: string | null;
+}
+
+function normalizeTargetType(
+  rawTarget: string | null | undefined
+): SpecialEventTargetType {
+  const upper = String(rawTarget ?? 'ALL')
+    .trim()
+    .toUpperCase();
+  if (upper === 'GURU' || upper === 'SISWA' || upper === 'ALL') {
+    return upper;
+  }
+  return 'ALL';
 }
 
 export function useTeacherHolidayLock({
@@ -66,7 +98,6 @@ export function useTeacherHolidayLock({
     setState((prev) => ({ ...prev, loading: true }));
 
     try {
-      // Gunakan nama kolom camelCase sesuai skema tabel school_special_events
       const { data, error } = await supabase
         .from('school_special_events')
         .select('id, schoolId, eventDate, reason, targetType, isActive')
@@ -78,12 +109,12 @@ export function useTeacherHolidayLock({
         throw error;
       }
 
-      const rows = data ?? [];
+      const rows = (data ?? []) as SchoolSpecialEventDbRow[];
 
       // Cari kegiatan khusus aktif dengan sasaran GURU atau ALL
       const matchedEvent = rows.find((row) => {
-        const rowTarget = String(row.targetType ?? 'ALL').toUpperCase();
-        return rowTarget === 'GURU' || rowTarget === 'ALL';
+        const normalizedTarget = normalizeTargetType(row.targetType);
+        return normalizedTarget === 'GURU' || normalizedTarget === 'ALL';
       });
 
       if (matchedEvent) {
@@ -120,8 +151,11 @@ export function useTeacherHolidayLock({
           specialEventId: null,
         });
       }
-    } catch (err) {
-      console.error('[useTeacherHolidayLock] Gagal memeriksa status libur:', err);
+    } catch (err: unknown) {
+      console.error(
+        '[useTeacherHolidayLock] Gagal memeriksa status libur:',
+        err
+      );
       setState({
         loading: false,
         isLocked: redStatus.isRedDate,
@@ -138,57 +172,62 @@ export function useTeacherHolidayLock({
   }, [checkLockStatus]);
 
   /**
-   * Membuka kunci presensi khusus guru pada hari libur
+   * Membuka kunci presensi khusus guru pada hari libur secara atomik (bebas duplicate key)
    */
   const enableTeacherSpecialEvent = async (
     title: string,
     userId?: string | null
-  ) => {
-    if (!schoolId) return;
+  ): Promise<void> => {
+    if (!schoolId) {
+      throw new Error('Identitas sekolah belum tersedia.');
+    }
+    if (targetDate.length !== 10) {
+      throw new Error('Format tanggal presensi tidak valid.');
+    }
+
     const cleanTitle = title.trim() || 'Kegiatan Khusus Guru';
 
-    // Cek apakah sudah pernah ada baris untuk tanggal & targetType 'GURU' agar tidak duplikat
-    const { data: existing, error: checkErr } = await supabase
+    // Periksa baris berdasarkan unique constraint aktual: (schoolId, eventDate)
+    const { data: existingRaw, error: checkErr } = await supabase
       .from('school_special_events')
-      .select('id')
+      .select('id, targetType, isActive')
       .eq('schoolId', schoolId)
       .eq('eventDate', targetDate)
-      .eq('targetType', 'GURU')
       .maybeSingle();
 
     if (checkErr) {
       throw new Error(checkErr.message);
     }
 
-    if (existing?.id) {
-      // Aktifkan kembali baris yang sudah ada
-      const { error: updateErr } = await supabase
-        .from('school_special_events')
-        .update({
-          reason: cleanTitle,
-          isActive: true,
-        })
-        .eq('id', existing.id);
+    const existing = existingRaw as Pick<
+      SchoolSpecialEventDbRow,
+      'id' | 'targetType' | 'isActive'
+    > | null;
 
-      if (updateErr) {
-        throw new Error(updateErr.message);
-      }
-    } else {
-      // Buat baris baru dengan nama kolom camelCase yang benar
-      const { error: insertErr } = await supabase
-        .from('school_special_events')
-        .insert({
-          schoolId,
-          eventDate: targetDate,
-          reason: cleanTitle,
-          targetType: 'GURU',
-          isActive: true,
-          createdBy: userId ?? null,
-        });
+    // Jika sudah ada agenda aktif khusus SISWA di tanggal yang sama, gabungkan menjadi ALL
+    // agar presensi siswa yang sedang dibuka tidak ikut tertutup.
+    const nextTargetType: SpecialEventTargetType =
+      existing?.isActive && normalizeTargetType(existing.targetType) === 'SISWA'
+        ? 'ALL'
+        : 'GURU';
 
-      if (insertErr) {
-        throw new Error(insertErr.message);
-      }
+    const payload: SchoolSpecialEventUpsertPayload = {
+      schoolId,
+      eventDate: targetDate,
+      reason: cleanTitle,
+      targetType: nextTargetType,
+      isActive: true,
+      createdBy: userId ?? null,
+    };
+
+    const { error: upsertErr } = await supabase
+      .from('school_special_events')
+      .upsert(payload, {
+        onConflict: 'schoolId,eventDate',
+      });
+
+    if (upsertErr) {
+      throw new Error(upsertErr.message);
     }
 
     await checkLockStatus();
@@ -197,16 +236,30 @@ export function useTeacherHolidayLock({
   /**
    * Mengunci kembali presensi guru pada hari libur
    */
-  const disableTeacherSpecialEvent = async () => {
-    if (!state.specialEventId) return;
+  const disableTeacherSpecialEvent = async (): Promise<void> => {
+    if (!schoolId) {
+      throw new Error('Identitas sekolah belum tersedia.');
+    }
 
-    const { error } = await supabase
-      .from('school_special_events')
-      .update({ isActive: false })
-      .eq('id', state.specialEventId);
+    if (state.specialEventId) {
+      const { error } = await supabase
+        .from('school_special_events')
+        .update({ isActive: false })
+        .eq('id', state.specialEventId);
 
-    if (error) {
-      throw new Error(error.message);
+      if (error) {
+        throw new Error(error.message);
+      }
+    } else {
+      const { error } = await supabase
+        .from('school_special_events')
+        .update({ isActive: false })
+        .eq('schoolId', schoolId)
+        .eq('eventDate', targetDate);
+
+      if (error) {
+        throw new Error(error.message);
+      }
     }
 
     await checkLockStatus();
