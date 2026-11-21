@@ -449,6 +449,89 @@ function evaluateCheckOutTiming(
   };
 }
 
+function AutoScrollingText({
+  text,
+  className = '',
+}: {
+  text: string;
+  className?: string;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const measureRef = useRef<HTMLSpanElement | null>(null);
+  const [isOverflowing, setIsOverflowing] = useState(false);
+  const [durationSec, setDurationSec] = useState(8);
+
+  useEffect(() => {
+    const checkOverflow = () => {
+      const container = containerRef.current;
+      const measure = measureRef.current;
+      if (!container || !measure) return;
+
+      const overflow = measure.offsetWidth > container.clientWidth + 2;
+      setIsOverflowing(overflow);
+      if (overflow) {
+        setDurationSec(Math.max(6, Math.round((measure.offsetWidth + 32) / 35)));
+      }
+    };
+
+    checkOverflow();
+
+    const observer =
+      typeof ResizeObserver !== 'undefined'
+        ? new ResizeObserver(checkOverflow)
+        : null;
+    if (observer && containerRef.current) {
+      observer.observe(containerRef.current);
+    }
+    window.addEventListener('resize', checkOverflow);
+
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener('resize', checkOverflow);
+    };
+  }, [text]);
+
+  return (
+    <div
+      ref={containerRef}
+      style={
+        isOverflowing
+          ? {
+            maskImage:
+              'linear-gradient(to right, transparent, black 6%, black 94%, transparent)',
+            WebkitMaskImage:
+              'linear-gradient(to right, transparent, black 6%, black 94%, transparent)',
+          }
+          : undefined
+      }
+      className={`relative overflow-hidden whitespace-nowrap ${className}`}
+      title={text}
+    >
+      <span
+        ref={measureRef}
+        aria-hidden="true"
+        className="invisible absolute pointer-events-none whitespace-nowrap"
+      >
+        {text}
+      </span>
+
+      {isOverflowing ? (
+        <div
+          className="inline-flex w-max animate-attendance-marquee hover:[animation-play-state:paused]"
+          style={{ animationDuration: `${durationSec}s` }}
+        >
+          <span className="pr-8">{text}</span>
+          <span className="pr-8" aria-hidden="true">
+            {text}
+          </span>
+        </div>
+      ) : (
+        <span>{text}</span>
+      )}
+    </div>
+  );
+}
+
 // ============================================================================
 // KOMPONEN UTAMA HALAMAN PRESENSI GURU
 // ============================================================================
@@ -2068,6 +2151,17 @@ export function TeacherAttendancePage() {
         body:not(.attendance-hide-header) header {
           transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
         }
+        @keyframes attendance-marquee {
+          0%, 15% {
+            transform: translateX(0%);
+          }
+          100% {
+            transform: translateX(-50%);
+          }
+        }
+        .animate-attendance-marquee {
+          animation: attendance-marquee linear infinite;
+        }
       `}</style>
 
       {/* Notifikasi Melayang */}
@@ -2261,8 +2355,8 @@ export function TeacherAttendancePage() {
                       }
                     }}
                     className={`inline-flex items-center justify-center gap-1.5 p-2.5 sm:px-2.5 sm:py-2 rounded-xl border text-[11px] font-semibold backdrop-blur-xs transition active:scale-95 shrink-0 sm:order-1 ${isHolidayLocked
-                        ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
-                        : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
+                      ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
+                      : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
                       }`}
                     title={
                       isHolidayLocked
@@ -2515,21 +2609,24 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <p className="text-[11px] text-slate-200/85 truncate">
-                  {isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                    ? `Terkunci • ${holidayReason}`
-                    : isOnLeaveToday
-                      ? `Terkunci • ${todayRecord?.status}`
-                      : hasCheckedIn
-                        ? 'Terkunci • Sudah absen datang'
-                        : currentLateMinutes > 0
-                          ? `Terlambat ${formatDurationMinutes(currentLateMinutes)}`
-                          : effectiveToleranceMinutes > 0
-                            ? `Batas toleransi ${effectiveDeadlineStr}`
-                            : 'Ketuk untuk absen datang'}
-                </p>
-                <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
+              <div className="space-y-1 w-full min-w-0">
+                <AutoScrollingText
+                  className="text-[11px] text-slate-200/85 w-full"
+                  text={
+                    isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
+                      ? `Terkunci • ${holidayReason}`
+                      : isOnLeaveToday
+                        ? `Terkunci • ${todayRecord?.status}`
+                        : hasCheckedIn
+                          ? 'Terkunci • Sudah absen datang'
+                          : currentLateMinutes > 0
+                            ? `Terlambat ${formatDurationMinutes(currentLateMinutes)}`
+                            : effectiveToleranceMinutes > 0
+                              ? `Batas toleransi ${effectiveDeadlineStr}`
+                              : 'Ketuk untuk absen datang'
+                  }
+                />
+                <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
                       ? 'bg-rose-400'
@@ -2542,18 +2639,21 @@ export function TeacherAttendancePage() {
                           : 'bg-amber-300 animate-pulse'
                       }`}
                   />
-                  <span className="truncate">
-                    {isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                      ? 'Hari libur'
-                      : hasCheckedIn
-                        ? todayRecord?.status === 'TERLAMBAT' &&
-                          currentLateMinutes > 0
-                          ? `Terlambat (${currentLateMinutes} mnt)`
-                          : `Status: ${todayRecord?.status}`
-                        : currentLateMinutes > 0
-                          ? `Lewat batas ${effectiveDeadlineStr}`
-                          : 'Menunggu presensi datang'}
-                  </span>
+                  <AutoScrollingText
+                    className="flex-1 min-w-0"
+                    text={
+                      isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
+                        ? 'Hari libur'
+                        : hasCheckedIn
+                          ? todayRecord?.status === 'TERLAMBAT' &&
+                            currentLateMinutes > 0
+                            ? `Terlambat (${currentLateMinutes} mnt)`
+                            : `Status: ${todayRecord?.status}`
+                          : currentLateMinutes > 0
+                            ? `Lewat batas ${effectiveDeadlineStr}`
+                            : 'Menunggu presensi datang'
+                    }
+                  />
                 </div>
               </div>
             </button>
@@ -2604,43 +2704,49 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <p className="text-[11px] text-amber-50/90 truncate">
-                  {isHolidayLocked && !hasCheckedOut
-                    ? `Terkunci • ${holidayReason}`
-                    : !hasCheckedIn
-                      ? 'Terkunci • Absen datang dulu'
-                      : hasCheckedOut
-                        ? 'Terkunci • Sudah absen pulang'
-                        : 'Presensi pulang belum tercatat'}
-                </p>
-                <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
+              <div className="space-y-1 w-full min-w-0">
+                <AutoScrollingText
+                  className="text-[11px] text-amber-50/90 w-full"
+                  text={
+                    isHolidayLocked && !hasCheckedOut
+                      ? `Terkunci • ${holidayReason}`
+                      : !hasCheckedIn
+                        ? 'Terkunci • Absen datang dulu'
+                        : hasCheckedOut
+                          ? 'Terkunci • Sudah absen pulang'
+                          : 'Presensi pulang belum tercatat'
+                  }
+                />
+                <div className="text-[11px] text-white flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedOut
-                      ? 'bg-rose-300'
-                      : hasCheckedOut
-                        ? todayCheckOutTimingInfo.isEarly ||
-                          todayCheckOutTimingInfo.isOvertime
-                          ? 'bg-amber-200'
-                          : 'bg-emerald-300'
-                        : canCheckOut
-                          ? 'bg-red-400 animate-ping'
-                          : 'bg-amber-100/60'
+                        ? 'bg-rose-300'
+                        : hasCheckedOut
+                          ? todayCheckOutTimingInfo.isEarly ||
+                            todayCheckOutTimingInfo.isOvertime
+                            ? 'bg-amber-200'
+                            : 'bg-emerald-300'
+                          : canCheckOut
+                            ? 'bg-red-400 animate-ping'
+                            : 'bg-amber-100/60'
                       }`}
                   />
-                  <span className="truncate">
-                    {isHolidayLocked && !hasCheckedOut
-                      ? 'Hari libur'
-                      : !hasCheckedIn
-                        ? 'Aktif setelah absen masuk'
-                        : hasCheckedOut
-                          ? todayCheckOutTimingInfo.isEarly
-                            ? 'Status: Pulang Lebih Awal'
-                            : todayCheckOutTimingInfo.isOvertime
-                              ? 'Melewati jadwal pulang'
-                              : 'Selesai tepat waktu'
-                          : 'Ketuk untuk absen pulang'}
-                  </span>
+                  <AutoScrollingText
+                    className="flex-1 min-w-0"
+                    text={
+                      isHolidayLocked && !hasCheckedOut
+                        ? 'Hari libur'
+                        : !hasCheckedIn
+                          ? 'Aktif setelah absen masuk'
+                          : hasCheckedOut
+                            ? todayCheckOutTimingInfo.isEarly
+                              ? 'Status: Pulang Lebih Awal'
+                              : todayCheckOutTimingInfo.isOvertime
+                                ? 'Melewati jadwal pulang'
+                                : 'Selesai tepat waktu'
+                            : 'Ketuk untuk absen pulang'
+                    }
+                  />
                 </div>
               </div>
             </button>
