@@ -12,6 +12,7 @@ import {
   History,
   Menu,
   Lock,
+  Unlock,
   MapPin,
   Clock,
   LocateFixed,
@@ -65,6 +66,7 @@ import {
   compressSelfieToJpeg,
   stopMediaStreamTracks,
 } from '../utils/apkMediaUtils';
+import { useTeacherHolidayLock } from '../hooks/useTeacherHolidayLock';
 
 // ============================================================================
 // PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
@@ -84,6 +86,11 @@ const MIN_REASON_LENGTH = 15;                  // Minimal karakter alasan izin/s
 const FINGERPRINT_GLOW_DURATION_MS = 550;      // Durasi efek cahaya tombol sidik jari (ms)
 const TOP_REVEAL_SWIPE_THRESHOLD = 45;         // Jarak usap ke bawah (px) untuk memunculkan header
 const HIDE_HEADER_SCROLL_THRESHOLD = 25;       // Jarak scroll ke bawah (px) untuk menyembunyikan header
+
+// Pengaturan penguncian Tab Izin / Dinas Luar saat hari libur:
+// false = Tab Izin/Dinas Luar ikut terkunci di hari libur (otomatis terbuka saat Kegiatan Khusus Guru aktif)
+// true  = Tab Izin/Dinas Luar tetap bisa diisi meski hari libur
+const ALLOW_LEAVE_ON_HOLIDAY = false;
 
 const DEFAULT_DAILY_QUOTES: Array<{ quote: string; author?: string }> = [
   {
@@ -341,9 +348,6 @@ function formatDeadlineWithTolerance(
   return `${finalH}:${finalM}`;
 }
 
-/**
- * Menghitung selisih menit keterlambatan otomatis berdasarkan jam masuk + toleransi
- */
 function calculateLateMinutes(
   targetDate: Date,
   workStartTime: string,
@@ -514,6 +518,13 @@ export function TeacherAttendancePage() {
     getSchoolDateString(new Date(), DEFAULT_SCHOOL_TIMEZONE)
   );
   const [dbHolidaysMap, setDbHolidaysMap] = useState<Record<string, string>>({});
+
+  // State Kontrol Pembuka Kunci Kegiatan Khusus Guru (Admin / Super Admin)
+  const [specialEventTitleInput, setSpecialEventTitleInput] = useState<string>(
+    'Rapat Kerja / Kegiatan Khusus Guru'
+  );
+  const [isTogglingHolidayLock, setIsTogglingHolidayLock] =
+    useState<boolean>(false);
 
   // State GPS & Peta Leaflet
   const [userCoords, setUserCoords] = useState<{
@@ -958,6 +969,60 @@ export function TeacherAttendancePage() {
   const effectiveSelfieCheckOut =
     schoolGeo?.requireSelfieCheckOut ?? FALLBACK_REQUIRE_SELFIE_CHECKOUT;
 
+  // ============================================================================
+  // PENGUNCIAN HARI LIBUR & KEGIATAN KHUSUS GURU (BERLAKU UNTUK SEMUA ROLE)
+  // ============================================================================
+  const {
+    loading: isHolidayLoading,
+    isLocked: isHolidayLocked,
+    isHoliday,
+    reason: holidayReason,
+    enableTeacherSpecialEvent,
+    disableTeacherSpecialEvent,
+  } = useTeacherHolidayLock({
+    schoolId: activeSchoolId,
+    targetDate: todayStr,
+    dbHolidaysMap,
+    workDaysMode: effectiveWorkDaysMode,
+  });
+
+  const isLeaveFormLocked = !ALLOW_LEAVE_ON_HOLIDAY && isHolidayLocked;
+
+  const handleEnableSpecialEvent = async () => {
+    if (isTogglingHolidayLock) return;
+    setIsTogglingHolidayLock(true);
+    try {
+      await enableTeacherSpecialEvent(specialEventTitleInput, user?.id ?? null);
+      showToast(
+        'success',
+        `Presensi Khusus Guru dibuka (${specialEventTitleInput.trim() || 'Kegiatan Khusus Guru'}).`
+      );
+    } catch (err: unknown) {
+      showToast(
+        'error',
+        extractErrorMessage(err, 'Gagal membuka kunci presensi khusus guru.')
+      );
+    } finally {
+      setIsTogglingHolidayLock(false);
+    }
+  };
+
+  const handleDisableSpecialEvent = async () => {
+    if (isTogglingHolidayLock) return;
+    setIsTogglingHolidayLock(true);
+    try {
+      await disableTeacherSpecialEvent();
+      showToast('success', 'Presensi guru pada hari libur dikunci kembali.');
+    } catch (err: unknown) {
+      showToast(
+        'error',
+        extractErrorMessage(err, 'Gagal mengunci kembali presensi hari libur.')
+      );
+    } finally {
+      setIsTogglingHolidayLock(false);
+    }
+  };
+
   const effectiveDeadlineStr = useMemo(
     () =>
       formatDeadlineWithTolerance(
@@ -967,7 +1032,7 @@ export function TeacherAttendancePage() {
     [effectiveWorkStartTime, effectiveToleranceMinutes]
   );
 
-  // Kalkulasi Menit Keterlambatan (Real-time sebelum absen atau dari record yang sudah masuk)
+  // Kalkulasi Menit Keterlambatan
   const currentLateMinutes = useMemo(() => {
     if (todayRecord?.checkInTime) {
       return calculateLateMinutes(
@@ -1177,8 +1242,14 @@ export function TeacherAttendancePage() {
     );
   }, [todayRecord?.checkOutTime, effectiveWorkEndTime]);
 
-  const isCheckInLocked = hasCheckedIn || isOnLeaveToday;
-  const canCheckOut = hasCheckedIn && !hasCheckedOut && !isOnLeaveToday;
+  const isCheckInLocked =
+    hasCheckedIn || isOnLeaveToday || isHolidayLoading || isHolidayLocked;
+  const canCheckOut =
+    hasCheckedIn &&
+    !hasCheckedOut &&
+    !isOnLeaveToday &&
+    !isHolidayLoading &&
+    !isHolidayLocked;
 
   const attendancePhase: 'CHECK_IN' | 'CHECK_OUT' | 'COMPLETED' | 'ON_LEAVE' =
     useMemo(() => {
@@ -1201,6 +1272,11 @@ export function TeacherAttendancePage() {
   }, []);
 
   const openCameraModal = async (mode: 'CHECK_IN' | 'CHECK_OUT') => {
+    if (isHolidayLocked) {
+      showToast('error', `Presensi guru terkunci: ${holidayReason}`);
+      return;
+    }
+
     const needSelfie =
       mode === 'CHECK_IN' ? effectiveSelfieCheckIn : effectiveSelfieCheckOut;
 
@@ -1299,6 +1375,11 @@ export function TeacherAttendancePage() {
       return;
     }
 
+    if (isHolidayLocked) {
+      showToast('error', `Presensi guru terkunci: ${holidayReason}`);
+      return;
+    }
+
     if (!teacher) {
       showToast('error', 'Akun Anda belum terhubung dengan data Master Guru/PTK.');
       return;
@@ -1377,6 +1458,11 @@ export function TeacherAttendancePage() {
     mode: 'CHECK_IN' | 'CHECK_OUT',
     selfieBlob: Blob | null
   ) => {
+    if (isHolidayLocked) {
+      showToast('error', `Presensi guru terkunci: ${holidayReason}`);
+      return;
+    }
+
     if (
       isSubmittingAttendance ||
       !teacher ||
@@ -1444,7 +1530,7 @@ export function TeacherAttendancePage() {
         new Set([...securityState.flags, ...freshTelemetry.securityFlags])
       );
 
-      // 3. Panggil RPC Server (Jam Server + Radius Server + Validasi Izin Komputer)
+      // 3. Panggil RPC Server (Jam Server + Radius Server + Validasi Libur + Izin Komputer)
       const { data: rpcResult, error: rpcError } = await supabase.rpc(
         'submit_teacher_gps_attendance',
         {
@@ -1507,6 +1593,14 @@ export function TeacherAttendancePage() {
   const handleSubmitStrictLeave = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!teacher || !activeSchoolId) return;
+
+    if (isLeaveFormLocked) {
+      showToast(
+        'error',
+        `Pengajuan izin/dinas luar dikunci pada hari libur (${holidayReason}).`
+      );
+      return;
+    }
 
     if (!leaveFile) {
       showToast(
@@ -1805,6 +1899,12 @@ export function TeacherAttendancePage() {
         : 'bg-linear-to-br from-amber-300 via-amber-500 to-orange-500 text-slate-950 shadow-xl hover:scale-105';
     }
 
+    if (isHolidayLocked) {
+      return isFingerprintGlowing
+        ? 'bg-slate-600 text-white scale-105 ring-4 ring-rose-400/70 shadow-[0_0_24px_rgba(244,63,94,0.75)]'
+        : 'bg-linear-to-br from-slate-500 to-slate-700 text-white/85 shadow-lg';
+    }
+
     if (attendancePhase === 'CHECK_OUT') {
       return isFingerprintGlowing
         ? 'bg-linear-to-br from-rose-400 via-red-500 to-red-700 text-white scale-110 ring-4 ring-red-400/90 shadow-[0_0_32px_rgba(239,68,68,0.95)]'
@@ -1820,13 +1920,15 @@ export function TeacherAttendancePage() {
     return isFingerprintGlowing
       ? 'bg-linear-to-br from-emerald-300 via-emerald-400 to-teal-500 text-white scale-110 ring-4 ring-emerald-300/90 shadow-[0_0_32px_rgba(16,185,129,0.95)]'
       : 'bg-linear-to-br from-emerald-400 via-emerald-500 to-teal-600 text-white shadow-[0_6px_22px_rgba(16,185,129,0.65)] hover:scale-105';
-  }, [isOnMapView, attendancePhase, isFingerprintGlowing]);
+  }, [isOnMapView, isHolidayLocked, attendancePhase, isFingerprintGlowing]);
 
   const fingerprintAuraColor = !isOnMapView
     ? 'bg-orange-400'
-    : attendancePhase === 'CHECK_OUT'
-      ? 'bg-red-500'
-      : 'bg-emerald-400';
+    : isHolidayLocked
+      ? 'bg-rose-500'
+      : attendancePhase === 'CHECK_OUT'
+        ? 'bg-red-500'
+        : 'bg-emerald-400';
 
   // ============================================================================
   // LAYAR TERKUNCI JIKA DIBUKA DARI KOMPUTER TANPA IZIN ADMIN
@@ -2233,6 +2335,88 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
+          {/* BANNER STATUS HARI LIBUR & KEGIATAN KHUSUS GURU */}
+          {!isHolidayLoading && isHoliday && (
+            <div
+              className={`rounded-2xl border p-4 shadow-sm space-y-3 ${isHolidayLocked
+                  ? 'bg-rose-500/15 border-rose-500/35 text-rose-800 dark:text-rose-200'
+                  : 'bg-emerald-500/15 border-emerald-500/35 text-emerald-800 dark:text-emerald-200'
+                }`}
+            >
+              <div className="flex items-start gap-2.5">
+                <div
+                  className={`p-2 rounded-xl shrink-0 ${isHolidayLocked
+                      ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300'
+                      : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300'
+                    }`}
+                >
+                  {isHolidayLocked ? <Lock size={18} /> : <Unlock size={18} />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-bold text-xs sm:text-sm">
+                    {isHolidayLocked
+                      ? 'Presensi Guru Terkunci (Hari Libur)'
+                      : 'Kegiatan Khusus Guru Aktif'}
+                  </h3>
+                  <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
+                    {isHolidayLocked
+                      ? `Hari ini adalah ${holidayReason}. Absensi datang, pulang, dan pengajuan izin guru dinonaktifkan.`
+                      : `Presensi khusus guru dibuka untuk agenda: "${holidayReason}".`}
+                  </p>
+                </div>
+              </div>
+
+              {/* Panel Buka / Tutup Kunci Khusus Admin & Super Admin */}
+              {isAdminOrSuperAdmin && (
+                <div className="pt-2.5 border-t border-current/15">
+                  {isHolidayLocked ? (
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <input
+                        type="text"
+                        value={specialEventTitleInput}
+                        onChange={(e) => setSpecialEventTitleInput(e.target.value)}
+                        placeholder="Nama agenda (misal: Rapat Kerja Guru)"
+                        className="form-input text-xs py-1.5 flex-1 bg-white/90 dark:bg-slate-900/80"
+                      />
+                      <button
+                        type="button"
+                        disabled={isTogglingHolidayLock}
+                        onClick={handleEnableSpecialEvent}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center gap-1.5 shrink-0 transition disabled:opacity-50"
+                      >
+                        <Unlock size={14} />
+                        <span>
+                          {isTogglingHolidayLock
+                            ? 'Membuka...'
+                            : 'Buka Presensi Khusus Guru'}
+                        </span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[11px] opacity-80">
+                        Hanya membuka presensi Guru (Siswa tetap libur)
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isTogglingHolidayLock}
+                        onClick={handleDisableSpecialEvent}
+                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center gap-1.5 shrink-0 transition disabled:opacity-50"
+                      >
+                        <Lock size={14} />
+                        <span>
+                          {isTogglingHolidayLock
+                            ? 'Mengunci...'
+                            : 'Kunci Kembali Libur'}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Dua Kartu Utama: DATANG & PULANG */}
           <div className="grid grid-cols-2 gap-3.5">
             {/* KARTU DATANG */}
@@ -2286,36 +2470,42 @@ export function TeacherAttendancePage() {
 
               <div className="space-y-1">
                 <p className="text-[11px] text-slate-200/85 truncate">
-                  {isOnLeaveToday
-                    ? `Terkunci • ${todayRecord?.status}`
-                    : hasCheckedIn
-                      ? 'Terkunci • Sudah absen datang'
-                      : currentLateMinutes > 0
-                        ? `Terlambat ${formatDurationMinutes(currentLateMinutes)}`
-                        : effectiveToleranceMinutes > 0
-                          ? `Batas toleransi ${effectiveDeadlineStr}`
-                          : 'Ketuk untuk absen datang'}
+                  {isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
+                    ? `Terkunci • ${holidayReason}`
+                    : isOnLeaveToday
+                      ? `Terkunci • ${todayRecord?.status}`
+                      : hasCheckedIn
+                        ? 'Terkunci • Sudah absen datang'
+                        : currentLateMinutes > 0
+                          ? `Terlambat ${formatDurationMinutes(currentLateMinutes)}`
+                          : effectiveToleranceMinutes > 0
+                            ? `Batas toleransi ${effectiveDeadlineStr}`
+                            : 'Ketuk untuk absen datang'}
                 </p>
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium">
                   <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedIn
-                        ? todayRecord?.status === 'TERLAMBAT'
-                          ? 'bg-amber-400'
-                          : 'bg-emerald-400'
-                        : currentLateMinutes > 0
-                          ? 'bg-rose-400 animate-pulse'
-                          : 'bg-amber-300 animate-pulse'
+                    className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
+                        ? 'bg-rose-400'
+                        : hasCheckedIn
+                          ? todayRecord?.status === 'TERLAMBAT'
+                            ? 'bg-amber-400'
+                            : 'bg-emerald-400'
+                          : currentLateMinutes > 0
+                            ? 'bg-rose-400 animate-pulse'
+                            : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <span className="truncate">
-                    {hasCheckedIn
-                      ? todayRecord?.status === 'TERLAMBAT' &&
-                        currentLateMinutes > 0
-                        ? `Terlambat (${currentLateMinutes} mnt)`
-                        : `Status: ${todayRecord?.status}`
-                      : currentLateMinutes > 0
-                        ? `Lewat batas ${effectiveDeadlineStr}`
-                        : 'Menunggu presensi datang'}
+                    {isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
+                      ? 'Presensi libur terkunci'
+                      : hasCheckedIn
+                        ? todayRecord?.status === 'TERLAMBAT' &&
+                          currentLateMinutes > 0
+                          ? `Terlambat (${currentLateMinutes} mnt)`
+                          : `Status: ${todayRecord?.status}`
+                        : currentLateMinutes > 0
+                          ? `Lewat batas ${effectiveDeadlineStr}`
+                          : 'Menunggu presensi datang'}
                   </span>
                 </div>
               </div>
@@ -2369,34 +2559,40 @@ export function TeacherAttendancePage() {
 
               <div className="space-y-1">
                 <p className="text-[11px] text-amber-50/90 truncate">
-                  {!hasCheckedIn
-                    ? 'Terkunci • Absen datang dulu'
-                    : hasCheckedOut
-                      ? 'Terkunci • Sudah absen pulang'
-                      : 'Presensi pulang belum tercatat'}
+                  {isHolidayLocked && !hasCheckedOut
+                    ? `Terkunci • ${holidayReason}`
+                    : !hasCheckedIn
+                      ? 'Terkunci • Absen datang dulu'
+                      : hasCheckedOut
+                        ? 'Terkunci • Sudah absen pulang'
+                        : 'Presensi pulang belum tercatat'}
                 </p>
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium">
                   <span
-                    className={`w-2 h-2 rounded-full shrink-0 ${hasCheckedOut
-                        ? todayCheckOutTimingInfo.isEarly ||
-                          todayCheckOutTimingInfo.isOvertime
-                          ? 'bg-amber-200'
-                          : 'bg-emerald-300'
-                        : canCheckOut
-                          ? 'bg-red-400 animate-ping'
-                          : 'bg-amber-100/60'
+                    className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedOut
+                        ? 'bg-rose-300'
+                        : hasCheckedOut
+                          ? todayCheckOutTimingInfo.isEarly ||
+                            todayCheckOutTimingInfo.isOvertime
+                            ? 'bg-amber-200'
+                            : 'bg-emerald-300'
+                          : canCheckOut
+                            ? 'bg-red-400 animate-ping'
+                            : 'bg-amber-100/60'
                       }`}
                   />
                   <span className="truncate">
-                    {!hasCheckedIn
-                      ? 'Aktif setelah absen masuk'
-                      : hasCheckedOut
-                        ? todayCheckOutTimingInfo.isEarly
-                          ? 'Status: Pulang Lebih Awal'
-                          : todayCheckOutTimingInfo.isOvertime
-                            ? 'Melewati jadwal pulang'
-                            : 'Selesai tepat waktu'
-                        : 'Ketuk untuk absen pulang'}
+                    {isHolidayLocked && !hasCheckedOut
+                      ? 'Presensi libur terkunci'
+                      : !hasCheckedIn
+                        ? 'Aktif setelah absen masuk'
+                        : hasCheckedOut
+                          ? todayCheckOutTimingInfo.isEarly
+                            ? 'Status: Pulang Lebih Awal'
+                            : todayCheckOutTimingInfo.isOvertime
+                              ? 'Melewati jadwal pulang'
+                              : 'Selesai tepat waktu'
+                          : 'Ketuk untuk absen pulang'}
                   </span>
                 </div>
               </div>
@@ -2599,6 +2795,16 @@ export function TeacherAttendancePage() {
             <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
               Akun Anda belum terhubung dengan data Master Guru/PTK.
             </div>
+          ) : isHolidayLocked ? (
+            <div className="w-full py-3.5 px-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-200 font-semibold text-xs flex flex-col items-center justify-center gap-1 text-center">
+              <div className="flex items-center gap-1.5 font-bold">
+                <Lock size={16} className="shrink-0" />
+                <span>Presensi Guru Terkunci ({holidayReason})</span>
+              </div>
+              <span className="text-[11px] opacity-85">
+                Absensi hanya dapat dilakukan jika Admin mengaktifkan Kegiatan Khusus Guru di halaman Beranda.
+              </span>
+            </div>
           ) : attendancePhase === 'COMPLETED' ? (
             <div className="w-full py-3 px-4 rounded-2xl bg-emerald-600/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs flex items-center justify-center gap-2 text-center">
               <CheckCircle2 size={17} className="shrink-0" />
@@ -2693,174 +2899,192 @@ export function TeacherAttendancePage() {
             </button>
           </div>
 
-          <form onSubmit={handleSubmitStrictLeave} className="space-y-4">
-            <div>
-              <label className="block text-xs font-semibold mb-1.5">
-                Jenis Ketidakhadiran *
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(
-                  [
-                    { value: 'DINAS_LUAR', label: 'Dinas Luar' },
-                    { value: 'IZIN', label: 'Izin Pribadi' },
-                    { value: 'SAKIT', label: 'Sakit' },
-                  ] as const
-                ).map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    onClick={() => setLeaveCategory(item.value)}
-                    className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
-                      }`}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+          {isLeaveFormLocked ? (
+            <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-200 text-xs space-y-2 leading-relaxed">
+              <div className="flex items-center gap-2 font-bold text-sm">
+                <Lock size={17} className="text-amber-500 shrink-0" />
+                <span>Pengajuan Izin / Dinas Luar Terkunci</span>
               </div>
+              <p>
+                Hari ini tercatat sebagai <strong>{holidayReason}</strong>. Formulir
+                pengajuan Izin, Sakit, dan Dinas Luar dinonaktifkan secara otomatis
+                pada hari libur.
+              </p>
+              <p className="opacity-80">
+                Formulir akan otomatis terbuka apabila Admin sekolah mengaktifkan{' '}
+                <strong>Kegiatan Khusus Guru</strong> pada hari ini.
+              </p>
             </div>
+          ) : (
+            <form onSubmit={handleSubmitStrictLeave} className="space-y-4">
+              <div>
+                <label className="block text-xs font-semibold mb-1.5">
+                  Jenis Ketidakhadiran *
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {(
+                    [
+                      { value: 'DINAS_LUAR', label: 'Dinas Luar' },
+                      { value: 'IZIN', label: 'Izin Pribadi' },
+                      { value: 'SAKIT', label: 'Sakit' },
+                    ] as const
+                  ).map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      onClick={() => setLeaveCategory(item.value)}
+                      className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
+                          ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                          : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                        }`}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-            <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold mb-1">
+                    Tanggal Mulai *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={leaveStartDate}
+                    onChange={(e) => {
+                      setLeaveStartDate(e.target.value);
+                      if (leaveEndDate < e.target.value) {
+                        setLeaveEndDate(e.target.value);
+                      }
+                    }}
+                    className="form-input w-full text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold mb-1">
+                    Tanggal Selesai *
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    min={leaveStartDate}
+                    value={leaveEndDate}
+                    onChange={(e) => setLeaveEndDate(e.target.value)}
+                    className="form-input w-full text-xs"
+                  />
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold mb-1">
-                  Tanggal Mulai *
+                  {leaveCategory === 'DINAS_LUAR'
+                    ? 'Nomor Surat Tugas / Instansi Tujuan *'
+                    : 'Nomor Surat / Nama Fasilitas Kesehatan (Opsional)'}
                 </label>
                 <input
-                  type="date"
-                  required
-                  value={leaveStartDate}
-                  onChange={(e) => {
-                    setLeaveStartDate(e.target.value);
-                    if (leaveEndDate < e.target.value) {
-                      setLeaveEndDate(e.target.value);
-                    }
-                  }}
-                  className="form-input w-full text-xs"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-semibold mb-1">
-                  Tanggal Selesai *
-                </label>
-                <input
-                  type="date"
-                  required
-                  min={leaveStartDate}
-                  value={leaveEndDate}
-                  onChange={(e) => setLeaveEndDate(e.target.value)}
-                  className="form-input w-full text-xs"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold mb-1">
-                {leaveCategory === 'DINAS_LUAR'
-                  ? 'Nomor Surat Tugas / Instansi Tujuan *'
-                  : 'Nomor Surat / Nama Fasilitas Kesehatan (Opsional)'}
-              </label>
-              <input
-                type="text"
-                required={leaveCategory === 'DINAS_LUAR'}
-                value={leaveRefNumber}
-                onChange={(e) => setLeaveRefNumber(e.target.value)}
-                placeholder={
-                  leaveCategory === 'DINAS_LUAR'
-                    ? 'Contoh: 800/124/2026 — Dinas Pendidikan Kab. Sleman'
-                    : 'Contoh: Puskesmas Berbah / RSUD'
-                }
-                className="form-input w-full text-xs"
-              />
-            </div>
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <label className="font-semibold">Keterangan / Uraian Kegiatan *</label>
-                <span
-                  className={
-                    leaveReason.trim().length >= MIN_REASON_LENGTH
-                      ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
-                      : 'text-amber-600 dark:text-amber-400'
+                  type="text"
+                  required={leaveCategory === 'DINAS_LUAR'}
+                  value={leaveRefNumber}
+                  onChange={(e) => setLeaveRefNumber(e.target.value)}
+                  placeholder={
+                    leaveCategory === 'DINAS_LUAR'
+                      ? 'Contoh: 800/124/2026 — Dinas Pendidikan Kab. Sleman'
+                      : 'Contoh: Puskesmas Berbah / RSUD'
                   }
-                >
-                  {leaveReason.trim().length}/{MIN_REASON_LENGTH} karakter
-                </span>
-              </div>
-              <textarea
-                rows={3}
-                required
-                value={leaveReason}
-                onChange={(e) => setLeaveReason(e.target.value)}
-                placeholder="Tuliskan rincian kegiatan dinas luar, keperluan izin, atau keterangan sakit secara jelas..."
-                className="form-input w-full text-xs"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold mb-1.5">
-                Unggah Bukti Surat / Foto Dokumen (Wajib: JPG, PNG, PDF) *
-              </label>
-              <label
-                className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                    ? 'border-emerald-500/70 bg-emerald-500/10'
-                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
-                  }`}
-              >
-                {leaveFile ? (
-                  <CheckCircle2 size={22} className="text-emerald-500 mb-1.5" />
-                ) : (
-                  <Upload size={22} className="text-emerald-500 mb-1.5" />
-                )}
-                <span className="text-xs font-semibold text-center">
-                  {leaveFile
-                    ? `Berkas Siap: ${leaveFile.name}`
-                    : 'Klik untuk memilih foto surat dokter / surat tugas'}
-                </span>
-                <span className="text-[11px] opacity-60 mt-0.5">
-                  {leaveFile
-                    ? 'Ketuk lagi jika ingin mengganti berkas'
-                    : 'Maksimal ukuran berkas 2 MB'}
-                </span>
-                <input
-                  type="file"
-                  accept="image/*,.pdf"
-                  className="hidden"
-                  onChange={(e) => {
-                    const file = e.target.files?.[0] ?? null;
-                    if (file && file.size > 2 * 1024 * 1024) {
-                      showToast('error', 'Ukuran file maksimal 2 MB.');
-                      return;
-                    }
-                    setLeaveFile(file);
-                  }}
+                  className="form-input w-full text-xs"
                 />
-              </label>
-            </div>
+              </div>
 
-            <div className="pt-1">
-              <button
-                type="submit"
-                disabled={isSubmittingLeave || !teacher}
-                className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
-                  }`}
-              >
-                {isSubmittingLeave ? (
-                  <>
-                    <Loader2 size={18} className="animate-spin shrink-0" />
-                    <span>Mengunggah Bukti & Menyimpan...</span>
-                  </>
-                ) : (
-                  <>
-                    <Send size={17} className="shrink-0" />
-                    <span>Kirim Pengajuan Resmi</span>
-                  </>
-                )}
-              </button>
-            </div>
-          </form>
+              <div>
+                <div className="flex justify-between text-xs mb-1">
+                  <label className="font-semibold">Keterangan / Uraian Kegiatan *</label>
+                  <span
+                    className={
+                      leaveReason.trim().length >= MIN_REASON_LENGTH
+                        ? 'text-emerald-600 dark:text-emerald-400 font-semibold'
+                        : 'text-amber-600 dark:text-amber-400'
+                    }
+                  >
+                    {leaveReason.trim().length}/{MIN_REASON_LENGTH} karakter
+                  </span>
+                </div>
+                <textarea
+                  rows={3}
+                  required
+                  value={leaveReason}
+                  onChange={(e) => setLeaveReason(e.target.value)}
+                  placeholder="Tuliskan rincian kegiatan dinas luar, keperluan izin, atau keterangan sakit secara jelas..."
+                  className="form-input w-full text-xs"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold mb-1.5">
+                  Unggah Bukti Surat / Foto Dokumen (Wajib: JPG, PNG, PDF) *
+                </label>
+                <label
+                  className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
+                      ? 'border-emerald-500/70 bg-emerald-500/10'
+                      : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                    }`}
+                >
+                  {leaveFile ? (
+                    <CheckCircle2 size={22} className="text-emerald-500 mb-1.5" />
+                  ) : (
+                    <Upload size={22} className="text-emerald-500 mb-1.5" />
+                  )}
+                  <span className="text-xs font-semibold text-center">
+                    {leaveFile
+                      ? `Berkas Siap: ${leaveFile.name}`
+                      : 'Klik untuk memilih foto surat dokter / surat tugas'}
+                  </span>
+                  <span className="text-[11px] opacity-60 mt-0.5">
+                    {leaveFile
+                      ? 'Ketuk lagi jika ingin mengganti berkas'
+                      : 'Maksimal ukuran berkas 2 MB'}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/*,.pdf"
+                    className="hidden"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] ?? null;
+                      if (file && file.size > 2 * 1024 * 1024) {
+                        showToast('error', 'Ukuran file maksimal 2 MB.');
+                        return;
+                      }
+                      setLeaveFile(file);
+                    }}
+                  />
+                </label>
+              </div>
+
+              <div className="pt-1">
+                <button
+                  type="submit"
+                  disabled={isSubmittingLeave || !teacher}
+                  className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
+                      ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                    }`}
+                >
+                  {isSubmittingLeave ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin shrink-0" />
+                      <span>Mengunggah Bukti & Menyimpan...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Send size={17} className="shrink-0" />
+                      <span>Kirim Pengajuan Resmi</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          )}
         </motion.div>
       )}
 
@@ -3283,9 +3507,11 @@ export function TeacherAttendancePage() {
               title={
                 !isOnMapView
                   ? 'Buka Peta Presensi'
-                  : isCheckOutPhase
-                    ? 'Presensi Pulang (Check-Out)'
-                    : 'Presensi Datang (Check-In)'
+                  : isHolidayLocked
+                    ? `Presensi Terkunci (${holidayReason})`
+                    : isCheckOutPhase
+                      ? 'Presensi Pulang (Check-Out)'
+                      : 'Presensi Datang (Check-In)'
               }
             >
               <Fingerprint
