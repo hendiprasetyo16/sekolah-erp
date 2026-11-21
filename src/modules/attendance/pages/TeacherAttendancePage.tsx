@@ -41,6 +41,7 @@ import {
   Loader2,
   Smartphone,
   ArrowLeft,
+  LayoutDashboard,
   Radio,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
@@ -546,6 +547,7 @@ export function TeacherAttendancePage() {
   );
   const [isTogglingHolidayLock, setIsTogglingHolidayLock] =
     useState<boolean>(false);
+  const [isHolidayModalOpen, setIsHolidayModalOpen] = useState<boolean>(false);
 
   // State GPS & Peta Leaflet
   const [userCoords, setUserCoords] = useState<{
@@ -1023,6 +1025,7 @@ export function TeacherAttendancePage() {
     setIsTogglingHolidayLock(true);
     try {
       await enableTeacherSpecialEvent(specialEventTitleInput, user?.id ?? null);
+      setIsHolidayModalOpen(false);
       showToast(
         'success',
         `Presensi Khusus Guru dibuka (${specialEventTitleInput.trim() || 'Kegiatan Khusus Guru'}).`
@@ -1042,6 +1045,7 @@ export function TeacherAttendancePage() {
     setIsTogglingHolidayLock(true);
     try {
       await disableTeacherSpecialEvent();
+      setIsHolidayModalOpen(false);
       showToast('success', 'Presensi guru pada hari libur dikunci kembali.');
     } catch (err: unknown) {
       showToast(
@@ -1308,7 +1312,7 @@ export function TeacherAttendancePage() {
 
   const openCameraModal = async (mode: 'CHECK_IN' | 'CHECK_OUT') => {
     if (isHolidayLocked) {
-      showToast('error', `Presensi guru terkunci: ${holidayReason}`);
+      showToast('error', `Hari Libur: ${holidayReason}`);
       return;
     }
 
@@ -1418,7 +1422,7 @@ export function TeacherAttendancePage() {
     }
 
     if (isHolidayLocked) {
-      showToast('error', `Presensi guru terkunci: ${holidayReason}`);
+      showToast('error', `Hari Libur: ${holidayReason}`);
       return;
     }
 
@@ -1501,7 +1505,7 @@ export function TeacherAttendancePage() {
     selfieBlob: Blob | null
   ) => {
     if (isHolidayLocked) {
-      showToast('error', `Presensi guru terkunci: ${holidayReason}`);
+      showToast('error', `Hari Libur: ${holidayReason}`);
       return;
     }
 
@@ -1645,10 +1649,7 @@ export function TeacherAttendancePage() {
     if (!teacher || !activeSchoolId) return;
 
     if (isLeaveFormLocked) {
-      showToast(
-        'error',
-        `Pengajuan izin/dinas luar dikunci pada hari libur (${holidayReason}).`
-      );
+      showToast('error', `Hari Libur: ${holidayReason}`);
       return;
     }
 
@@ -2000,13 +2001,15 @@ export function TeacherAttendancePage() {
   if (!isLoadingData && isDesktopBlockedForTeacher) {
     return (
       <div className="min-h-[75vh] flex items-center justify-center p-4">
-        <div className="data-card max-w-md w-full p-6 text-center space-y-4 border border-amber-500/30 shadow-xl">
-          <div className="w-16 h-16 mx-auto rounded-3xl bg-amber-500/15 text-amber-500 flex items-center justify-center">
-            <Lock size={30} />
+        <div className="max-w-md w-full rounded-3xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl p-7 text-center space-y-5 border border-slate-200/80 dark:border-white/10 shadow-2xl">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-linear-to-br from-amber-400/20 to-orange-500/20 border border-amber-500/30 text-amber-500 flex items-center justify-center shadow-inner">
+            <Lock size={28} />
           </div>
 
-          <div className="space-y-1.5">
-            <h2 className="text-lg font-bold">Presensi Terkunci di Komputer</h2>
+          <div className="space-y-2">
+            <h2 className="text-lg font-extrabold tracking-tight">
+              Presensi Terkunci di Komputer
+            </h2>
             <p className="text-xs opacity-75 leading-relaxed">
               Halo <strong>{teacher?.fullName}</strong>, akun Anda saat ini
               diatur untuk melakukan presensi melalui{' '}
@@ -2015,9 +2018,9 @@ export function TeacherAttendancePage() {
             </p>
           </div>
 
-          <div className="p-3 rounded-2xl bg-muted/50 border border-border text-[11px] opacity-80 flex items-center justify-center gap-2">
+          <div className="p-3.5 rounded-2xl bg-slate-100/80 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 text-[11px] opacity-85 flex items-center justify-center gap-2.5">
             <Smartphone size={16} className="text-emerald-500 shrink-0" />
-            <span>
+            <span className="text-left">
               Hubungi Admin Sekolah jika Anda memerlukan pengecualian presensi
               menggunakan komputer.
             </span>
@@ -2026,10 +2029,16 @@ export function TeacherAttendancePage() {
           <button
             type="button"
             onClick={() => navigate(TEACHER_DASHBOARD_ROUTE)}
-            className="btn-primary w-full justify-center py-3 rounded-xl font-bold text-xs"
+            className="group relative w-full overflow-hidden rounded-2xl bg-linear-to-r from-[#1C3D6E] via-[#26508E] to-[#1E447A] hover:from-[#163159] hover:to-[#1C3D6E] text-white font-semibold text-xs sm:text-sm py-3.5 px-5 shadow-lg shadow-[#1C3D6E]/25 hover:shadow-xl hover:shadow-[#1C3D6E]/35 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2.5 border border-white/15 cursor-pointer"
           >
-            <ArrowLeft size={16} />
-            Kembali ke Dashboard Guru
+            <span className="p-1.5 rounded-xl bg-white/15 group-hover:-translate-x-0.5 transition-transform duration-200">
+              <LayoutDashboard size={15} />
+            </span>
+            <span>Kembali ke Dashboard Guru</span>
+            <ArrowLeft
+              size={15}
+              className="opacity-75 group-hover:-translate-x-1 transition-transform duration-200"
+            />
           </button>
         </div>
       </div>
@@ -2142,7 +2151,7 @@ export function TeacherAttendancePage() {
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
               >
                 <Settings2 size={12} />
-                Jam & Libur
+                Jam &amp; Libur
               </button>
               <button
                 type="button"
@@ -2198,8 +2207,8 @@ export function TeacherAttendancePage() {
             <div className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 rounded-full bg-white/5" />
             <div className="pointer-events-none absolute right-12 top-24 w-28 h-28 rounded-full bg-amber-300/10" />
 
-            <div className="relative flex items-center justify-between gap-3 mb-4">
-              <div className="flex items-center gap-3">
+            <div className="relative flex items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-3 min-w-0">
                 <button
                   type="button"
                   onClick={handleToggleSidebar}
@@ -2209,11 +2218,11 @@ export function TeacherAttendancePage() {
                 >
                   <Menu size={18} />
                 </button>
-                <div>
+                <div className="min-w-0">
                   <h1 className="text-xl font-bold tracking-tight leading-tight">
                     Selamat Datang!
                   </h1>
-                  <p className="text-xs text-blue-100/95 font-medium mt-0.5">
+                  <p className="text-xs text-blue-100/95 font-medium mt-0.5 truncate">
                     {formattedDateWithPasaran}
                   </p>
                   <span className="inline-block mt-1 px-2 py-0.5 rounded-md bg-amber-300/20 border border-amber-200/30 text-[10px] font-semibold text-amber-200">
@@ -2222,17 +2231,62 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              <button
-                type="button"
-                onClick={() => void loadTeacherAndAttendance()}
-                className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
-                title="Segarkan Data"
-              >
-                <RefreshCw
-                  size={17}
-                  className={isLoadingData ? 'animate-spin' : ''}
-                />
-              </button>
+              {/* Indikator Gembok Hari Libur / Khusus Guru + Tombol Segarkan Data */}
+              <div className="flex items-center gap-1.5 shrink-0">
+                {!isHolidayLoading && isHoliday && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (isAdminOrSuperAdmin) {
+                        setIsHolidayModalOpen(true);
+                      } else if (isHolidayLocked) {
+                        showToast('error', `Hari Libur: ${holidayReason}`);
+                      } else {
+                        showToast(
+                          'success',
+                          `Presensi Khusus Aktif: ${holidayReason}`
+                        );
+                      }
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-2 rounded-xl border text-[11px] font-semibold backdrop-blur-xs transition active:scale-95 ${isHolidayLocked
+                        ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
+                        : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
+                      }`}
+                    title={
+                      isHolidayLocked
+                        ? `Hari Libur: ${holidayReason}`
+                        : `Presensi Khusus Aktif: ${holidayReason}`
+                    }
+                  >
+                    {isHolidayLocked ? (
+                      <>
+                        <Lock size={14} className="text-rose-200 shrink-0" />
+                        <span>Hari Libur</span>
+                      </>
+                    ) : (
+                      <>
+                        <Unlock
+                          size={14}
+                          className="text-emerald-200 shrink-0"
+                        />
+                        <span>Khusus Guru</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => void loadTeacherAndAttendance()}
+                  className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
+                  title="Segarkan Data"
+                >
+                  <RefreshCw
+                    size={17}
+                    className={isLoadingData ? 'animate-spin' : ''}
+                  />
+                </button>
+              </div>
             </div>
 
             {/* KARTU PROFIL & JAM */}
@@ -2409,90 +2463,6 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          {/* BANNER STATUS HARI LIBUR & KEGIATAN KHUSUS GURU */}
-          {!isHolidayLoading && isHoliday && (
-            <div
-              className={`rounded-2xl border p-4 shadow-sm space-y-3 ${isHolidayLocked
-                  ? 'bg-rose-500/15 border-rose-500/35 text-rose-800 dark:text-rose-200'
-                  : 'bg-emerald-500/15 border-emerald-500/35 text-emerald-800 dark:text-emerald-200'
-                }`}
-            >
-              <div className="flex items-start gap-2.5">
-                <div
-                  className={`p-2 rounded-xl shrink-0 ${isHolidayLocked
-                      ? 'bg-rose-500/20 text-rose-600 dark:text-rose-300'
-                      : 'bg-emerald-500/20 text-emerald-600 dark:text-emerald-300'
-                    }`}
-                >
-                  {isHolidayLocked ? <Lock size={18} /> : <Unlock size={18} />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-bold text-xs sm:text-sm">
-                    {isHolidayLocked
-                      ? 'Presensi Guru Terkunci (Hari Libur)'
-                      : 'Kegiatan Khusus Guru Aktif'}
-                  </h3>
-                  <p className="text-[11px] opacity-90 mt-0.5 leading-relaxed">
-                    {isHolidayLocked
-                      ? `Hari ini adalah ${holidayReason}. Absensi datang, pulang, dan pengajuan izin guru dinonaktifkan.`
-                      : `Presensi khusus guru dibuka untuk agenda: "${holidayReason}".`}
-                  </p>
-                </div>
-              </div>
-
-              {/* Panel Buka / Tutup Kunci Khusus Admin & Super Admin */}
-              {isAdminOrSuperAdmin && (
-                <div className="pt-2.5 border-t border-current/15">
-                  {isHolidayLocked ? (
-                    <div className="flex flex-col sm:flex-row gap-2">
-                      <input
-                        type="text"
-                        value={specialEventTitleInput}
-                        onChange={(e) =>
-                          setSpecialEventTitleInput(e.target.value)
-                        }
-                        placeholder="Nama agenda (misal: Rapat Kerja Guru)"
-                        className="form-input text-xs py-1.5 flex-1 bg-white/90 dark:bg-slate-900/80"
-                      />
-                      <button
-                        type="button"
-                        disabled={isTogglingHolidayLock}
-                        onClick={() => void handleEnableSpecialEvent()}
-                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center gap-1.5 shrink-0 transition disabled:opacity-50"
-                      >
-                        <Unlock size={14} />
-                        <span>
-                          {isTogglingHolidayLock
-                            ? 'Membuka...'
-                            : 'Buka Presensi Khusus Guru'}
-                        </span>
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-[11px] opacity-80">
-                        Hanya membuka presensi Guru (Siswa tetap libur)
-                      </span>
-                      <button
-                        type="button"
-                        disabled={isTogglingHolidayLock}
-                        onClick={() => void handleDisableSpecialEvent()}
-                        className="px-3.5 py-2 rounded-xl text-xs font-bold bg-emerald-700 hover:bg-emerald-800 text-white flex items-center justify-center gap-1.5 shrink-0 transition disabled:opacity-50"
-                      >
-                        <Lock size={14} />
-                        <span>
-                          {isTogglingHolidayLock
-                            ? 'Mengunci...'
-                            : 'Kunci Kembali Libur'}
-                        </span>
-                      </button>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Dua Kartu Utama: DATANG & PULANG */}
           <div className="grid grid-cols-2 gap-3.5">
             {/* KARTU DATANG */}
@@ -2573,7 +2543,7 @@ export function TeacherAttendancePage() {
                   />
                   <span className="truncate">
                     {isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                      ? 'Presensi libur terkunci'
+                      ? 'Hari libur'
                       : hasCheckedIn
                         ? todayRecord?.status === 'TERLAMBAT' &&
                           currentLateMinutes > 0
@@ -2659,7 +2629,7 @@ export function TeacherAttendancePage() {
                   />
                   <span className="truncate">
                     {isHolidayLocked && !hasCheckedOut
-                      ? 'Presensi libur terkunci'
+                      ? 'Hari libur'
                       : !hasCheckedIn
                         ? 'Aktif setelah absen masuk'
                         : hasCheckedOut
@@ -2879,15 +2849,9 @@ export function TeacherAttendancePage() {
               Akun Anda belum terhubung dengan data Master Guru/PTK.
             </div>
           ) : isHolidayLocked ? (
-            <div className="w-full py-3.5 px-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-200 font-semibold text-xs flex flex-col items-center justify-center gap-1 text-center">
-              <div className="flex items-center gap-1.5 font-bold">
-                <Lock size={16} className="shrink-0" />
-                <span>Presensi Guru Terkunci ({holidayReason})</span>
-              </div>
-              <span className="text-[11px] opacity-85">
-                Absensi hanya dapat dilakukan jika Admin mengaktifkan Kegiatan
-                Khusus Guru di halaman Beranda.
-              </span>
+            <div className="w-full py-3 px-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-200 font-semibold text-xs flex items-center justify-center gap-2 text-center">
+              <Lock size={15} className="shrink-0" />
+              <span>Hari Libur ({holidayReason})</span>
             </div>
           ) : attendancePhase === 'COMPLETED' ? (
             <div className="w-full py-3 px-4 rounded-2xl bg-emerald-600/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs flex items-center justify-center gap-2 text-center">
@@ -2988,20 +2952,14 @@ export function TeacherAttendancePage() {
           </div>
 
           {isLeaveFormLocked ? (
-            <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-200 text-xs space-y-2 leading-relaxed">
+            <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-200 text-xs space-y-1.5 leading-relaxed">
               <div className="flex items-center gap-2 font-bold text-sm">
-                <Lock size={17} className="text-amber-500 shrink-0" />
-                <span>Pengajuan Izin / Dinas Luar Terkunci</span>
+                <Lock size={16} className="text-amber-500 shrink-0" />
+                <span>Hari Libur ({holidayReason})</span>
               </div>
-              <p>
-                Hari ini tercatat sebagai <strong>{holidayReason}</strong>.
+              <p className="opacity-85">
                 Formulir pengajuan Izin, Sakit, dan Dinas Luar dinonaktifkan
-                secara otomatis pada hari libur.
-              </p>
-              <p className="opacity-80">
-                Formulir akan otomatis terbuka apabila Admin sekolah
-                mengaktifkan <strong>Kegiatan Khusus Guru</strong> pada hari
-                ini.
+                pada hari libur.
               </p>
             </div>
           ) : (
@@ -3608,7 +3566,7 @@ export function TeacherAttendancePage() {
                 !isOnMapView
                   ? 'Buka Peta Presensi'
                   : isHolidayLocked
-                    ? `Presensi Terkunci (${holidayReason})`
+                    ? `Hari Libur (${holidayReason})`
                     : isCheckOutPhase
                       ? 'Presensi Pulang (Check-Out)'
                       : 'Presensi Datang (Check-In)'
@@ -3649,6 +3607,108 @@ export function TeacherAttendancePage() {
           </button>
         </div>
       </div>
+
+      {/* ====================================================================
+          MODAL RINGKAS PENGATURAN HARI LIBUR / KHUSUS GURU (ADMIN / SUPER ADMIN)
+      ==================================================================== */}
+      <AnimatePresence>
+        {isHolidayModalOpen && isAdminOrSuperAdmin && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+          >
+            <motion.div
+              initial={{ scale: 0.94, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.94, opacity: 0 }}
+              className="data-card max-w-sm w-full p-5 space-y-4 border border-border shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div
+                    className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${isHolidayLocked
+                        ? 'bg-rose-500/15 text-rose-500'
+                        : 'bg-emerald-500/15 text-emerald-500'
+                      }`}
+                  >
+                    {isHolidayLocked ? (
+                      <Lock size={20} />
+                    ) : (
+                      <Unlock size={20} />
+                    )}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-sm leading-snug">
+                      {isHolidayLocked ? 'Hari Libur' : 'Khusus Guru Aktif'}
+                    </h3>
+                    <p className="text-[11px] opacity-70">{holidayReason}</p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsHolidayModalOpen(false)}
+                  className="p-1 rounded-lg hover:bg-muted shrink-0"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              {isHolidayLocked ? (
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-[11px] font-semibold mb-1">
+                      Nama Kegiatan Khusus Guru
+                    </label>
+                    <input
+                      type="text"
+                      value={specialEventTitleInput}
+                      onChange={(e) =>
+                        setSpecialEventTitleInput(e.target.value)
+                      }
+                      placeholder="Contoh: Rapat Kerja Guru"
+                      className="form-input text-xs py-2 w-full"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={isTogglingHolidayLock}
+                    onClick={() => void handleEnableSpecialEvent()}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+                  >
+                    <Unlock size={14} />
+                    <span>
+                      {isTogglingHolidayLock
+                        ? 'Membuka...'
+                        : 'Buka Presensi Khusus Guru'}
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <p className="text-xs opacity-75">
+                    Presensi khusus guru sedang terbuka (siswa tetap libur).
+                  </p>
+                  <button
+                    type="button"
+                    disabled={isTogglingHolidayLock}
+                    onClick={() => void handleDisableSpecialEvent()}
+                    className="w-full py-2.5 px-4 rounded-xl text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white flex items-center justify-center gap-1.5 transition disabled:opacity-50"
+                  >
+                    <Lock size={14} />
+                    <span>
+                      {isTogglingHolidayLock
+                        ? 'Mengunci...'
+                        : 'Kunci Kembali Libur'}
+                    </span>
+                  </button>
+                </div>
+              )}
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ====================================================================
           MODAL PERINGATAN PULANG LEBIH AWAL (ALASAN WAJIB DIISI)
