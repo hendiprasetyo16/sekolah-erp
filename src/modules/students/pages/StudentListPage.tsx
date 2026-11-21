@@ -37,6 +37,7 @@ import * as XLSX from 'xlsx';
 import { cn } from '@/utils/cn';
 import { formatDate } from '@/utils/format';
 import { useTranslation } from '@/hooks/useTranslation';
+import { useTeacherScope } from '@/hooks/useTeacherScope';
 import {
   studentService,
   MANAGE_STUDENT_ROLES,
@@ -186,7 +187,10 @@ const extractFriendlyErrorMessage = (
     if (typeof apiMessage === 'string' && apiMessage.trim() !== '') {
       return apiMessage;
     }
-    if (typeof errObj.response?.data?.error === 'string' && errObj.response.data.error.trim() !== '') {
+    if (
+      typeof errObj.response?.data?.error === 'string' &&
+      errObj.response.data.error.trim() !== ''
+    ) {
       return errObj.response.data.error;
     }
 
@@ -303,13 +307,18 @@ const detectStudentExcelSource = (
     .join(' | ');
 
   const hasTeacherBanner =
-    normSheets.some((s) => s === 'daftar guru' || s === 'template_guru_ptk' || s === 'data guru') ||
+    normSheets.some(
+      (s) => s === 'daftar guru' || s === 'template_guru_ptk' || s === 'data guru'
+    ) ||
     topText.includes('daftar guru') ||
     topText.includes('daftar ptk');
 
   const hasStudentBanner =
     normSheets.some(
-      (s) => s === 'daftar peserta didik' || s === 'template_siswa' || s === 'data_siswa'
+      (s) =>
+        s === 'daftar peserta didik' ||
+        s === 'template_siswa' ||
+        s === 'data_siswa'
     ) || topText.includes('daftar peserta didik');
 
   let studentScore = 0;
@@ -370,7 +379,12 @@ const getStatusConfig = (status: string, locale: string) => {
       color: 'bg-gray-500/10 text-gray-600 border-gray-500/20',
     },
   };
-  return config[status] || { label: status, color: 'bg-muted text-muted-foreground border-border' };
+  return (
+    config[status] || {
+      label: status,
+      color: 'bg-muted text-muted-foreground border-border',
+    }
+  );
 };
 
 const normalizeClassName = (name: string): string => {
@@ -394,7 +408,12 @@ const cleanDapodikText = (val: unknown): string => {
     .replace(/\u2013|\u2014/g, '-')
     .replace(/\s+/g, ' ')
     .trim();
-  if (!cleaned || cleaned === '-' || cleaned === '(tidak diisi)' || cleaned.toLowerCase() === 'null') {
+  if (
+    !cleaned ||
+    cleaned === '-' ||
+    cleaned === '(tidak diisi)' ||
+    cleaned.toLowerCase() === 'null'
+  ) {
     return '';
   }
   return cleaned;
@@ -423,7 +442,12 @@ const cleanNamaKip = (val: unknown): string | null => {
 };
 
 const getValidNumber = (val: unknown, min = 0): number | null => {
-  if (val === undefined || val === null || String(val).trim() === '' || String(val).trim() === '-') {
+  if (
+    val === undefined ||
+    val === null ||
+    String(val).trim() === '' ||
+    String(val).trim() === '-'
+  ) {
     return null;
   }
   const num = Number(String(val).replace(',', '.'));
@@ -442,14 +466,18 @@ const normalizeReligionDiff = (val: string | null | undefined): string => {
   return s;
 };
 
-const parseStudentStatus = (raw: string, fallback: StudentStatus = 'AKTIF'): StudentStatus => {
+const parseStudentStatus = (
+  raw: string,
+  fallback: StudentStatus = 'AKTIF'
+): StudentStatus => {
   const upper = cleanDapodikText(raw).toUpperCase().replace(/\s+/g, '_');
   if (!upper) return fallback;
   if (VALID_STUDENT_STATUSES.has(upper as StudentStatus)) {
     return upper as StudentStatus;
   }
   if (upper === 'AKTIF' || upper === 'ACTIVE') return 'AKTIF';
-  if (upper.startsWith('MUTASI') || upper === 'TRANSFERRED') return 'MUTASI_KELUAR';
+  if (upper.startsWith('MUTASI') || upper === 'TRANSFERRED')
+    return 'MUTASI_KELUAR';
   if (upper === 'LULUS' || upper === 'GRADUATED') return 'LULUS';
   if (upper === 'DO' || upper === 'DROPPED_OUT') return 'DO';
   if (upper === 'CUTI' || upper === 'ON_LEAVE') return 'CUTI';
@@ -468,8 +496,10 @@ const buildDeterministicFallbackId = (prefix: string, seed: string): string => {
 
 const guessGradeLevel = (className: string): number => {
   const upper = className.toUpperCase();
-  if (/\bTK\s*B\b/.test(upper) || upper.includes('TKB') || upper.includes('BESAR')) return 2;
-  if (/\bTK\s*A\b/.test(upper) || upper.includes('TKA') || upper.includes('KECIL')) return 1;
+  if (/\bTK\s*B\b/.test(upper) || upper.includes('TKB') || upper.includes('BESAR'))
+    return 2;
+  if (/\bTK\s*A\b/.test(upper) || upper.includes('TKA') || upper.includes('KECIL'))
+    return 1;
 
   const digit = upper.match(/\d{1,2}/);
   if (digit) {
@@ -491,7 +521,9 @@ const guessGradeLevel = (className: string): number => {
     XI: 11,
     XII: 12,
   };
-  const roman = upper.match(/(?<![A-Z])(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)(?![IVX])/);
+  const roman = upper.match(
+    /(?<![A-Z])(XII|XI|X|IX|VIII|VII|VI|V|IV|III|II|I)(?![IVX])/
+  );
   if (roman) return romanMap[roman[1]] ?? 0;
 
   if (upper.includes('PAKET C')) return 12;
@@ -501,8 +533,19 @@ const guessGradeLevel = (className: string): number => {
   return 0;
 };
 
-const isValidCalendarDate = (year: number, month: number, day: number): boolean => {
-  if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) {
+const isValidCalendarDate = (
+  year: number,
+  month: number,
+  day: number
+): boolean => {
+  if (
+    year < 1900 ||
+    year > 2100 ||
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > 31
+  ) {
     return false;
   }
   const dt = new Date(Date.UTC(year, month - 1, day));
@@ -549,7 +592,11 @@ const parseExcelDate = (raw: unknown, fallback: string): string => {
 };
 
 const parseDesil = (row: ExcelRow): number | null => {
-  const raw = row['desil'] || row['desil p3ke'] || row['desil dtks'] || row['desil (p3ke/dtks)'];
+  const raw =
+    row['desil'] ||
+    row['desil p3ke'] ||
+    row['desil dtks'] ||
+    row['desil (p3ke/dtks)'];
   if (!raw || raw === '-') return null;
   const num = parseInt(String(raw).replace(/\D/g, ''), 10);
   return num >= 1 && num <= 10 ? num : null;
@@ -558,7 +605,8 @@ const parseDesil = (row: ExcelRow): number | null => {
 const pick = (row: ExcelRow, ...keys: string[]): string => {
   for (const k of keys) {
     const v = row[k];
-    if (v !== undefined && v !== null && String(v).trim() !== '') return String(v).trim();
+    if (v !== undefined && v !== null && String(v).trim() !== '')
+      return String(v).trim();
   }
   return '';
 };
@@ -573,18 +621,32 @@ const buildParent = (
       row,
       `data ${who} nama`,
       `nama ${who}`,
-      who === 'ayah' ? 'father name' : who === 'ibu' ? 'mother name' : 'guardian name'
+      who === 'ayah'
+        ? 'father name'
+        : who === 'ibu'
+          ? 'mother name'
+          : 'guardian name'
     )
   );
   if (!fullName) return null;
   return {
     relation,
     fullName,
-    birthYear: cleanBirthYear(pick(row, `data ${who} tahun lahir`, `tahun lahir ${who}`)),
+    birthYear: cleanBirthYear(
+      pick(row, `data ${who} tahun lahir`, `tahun lahir ${who}`)
+    ),
     nik: cleanNumericId(pick(row, `data ${who} nik`, `nik ${who}`)) || null,
-    occupation: cleanDapodikText(pick(row, `data ${who} pekerjaan`, `pekerjaan ${who}`)) || null,
-    monthlyIncome: cleanDapodikText(pick(row, `data ${who} penghasilan`, `penghasilan ${who}`)) || null,
-    education: cleanDapodikText(pick(row, `data ${who} jenjang pendidikan`, `pendidikan ${who}`)) || null,
+    occupation:
+      cleanDapodikText(pick(row, `data ${who} pekerjaan`, `pekerjaan ${who}`)) ||
+      null,
+    monthlyIncome:
+      cleanDapodikText(
+        pick(row, `data ${who} penghasilan`, `penghasilan ${who}`)
+      ) || null,
+    education:
+      cleanDapodikText(
+        pick(row, `data ${who} jenjang pendidikan`, `pendidikan ${who}`)
+      ) || null,
     isAlive: true,
   };
 };
@@ -641,8 +703,10 @@ const computeStudentDiff = (
 ): string[] => {
   const diffs = new Set<string>();
   const norm = (v: string | null | undefined) => (v || '').trim().toLowerCase();
-  const numDiff = (a: number | null | undefined, b: number | null | undefined) =>
-    b !== null && b !== undefined && Number(a ?? NaN) !== Number(b);
+  const numDiff = (
+    a: number | null | undefined,
+    b: number | null | undefined
+  ) => b !== null && b !== undefined && Number(a ?? NaN) !== Number(b);
 
   if (norm(existing.nisn) !== norm(incoming.nisn)) {
     diffs.add('NISN');
@@ -653,7 +717,10 @@ const computeStudentDiff = (
   if (incoming.nis && norm(existing.nis) !== norm(incoming.nis)) {
     diffs.add('NIPD / NIS');
   }
-  if ((existing.classId || null) !== (incoming.classId || null) && incoming.classId !== null) {
+  if (
+    (existing.classId || null) !== (incoming.classId || null) &&
+    incoming.classId !== null
+  ) {
     diffs.add(isId ? 'Kelas' : 'Class');
   }
   if (existing.gender !== incoming.gender) {
@@ -664,31 +731,46 @@ const computeStudentDiff = (
   }
   if (
     incoming.religion &&
-    normalizeReligionDiff(existing.religion) !== normalizeReligionDiff(incoming.religion)
+    normalizeReligionDiff(existing.religion) !==
+    normalizeReligionDiff(incoming.religion)
   ) {
     diffs.add(isId ? 'Agama' : 'Religion');
   }
-  if (norm(existing.birthPlace) !== norm(incoming.birthPlace) && incoming.birthPlace !== '-') {
+  if (
+    norm(existing.birthPlace) !== norm(incoming.birthPlace) &&
+    incoming.birthPlace !== '-'
+  ) {
     diffs.add(isId ? 'Tempat Lahir' : 'Birth Place');
   }
   const existingDob = (existing.birthDate || '').split('T')[0];
   if (existingDob && incoming.birthDate && existingDob !== incoming.birthDate) {
     diffs.add(isId ? 'Tanggal Lahir' : 'Birth Date');
   }
-  if (!incoming.nik.startsWith('NONIK-') && norm(existing.nik) !== norm(incoming.nik)) {
+  if (
+    !incoming.nik.startsWith('NONIK-') &&
+    norm(existing.nik) !== norm(incoming.nik)
+  ) {
     diffs.add('NIK');
   }
-  if (incoming.noKk && incoming.noKk !== '-' && norm(existing.noKk) !== norm(incoming.noKk)) {
+  if (
+    incoming.noKk &&
+    incoming.noKk !== '-' &&
+    norm(existing.noKk) !== norm(incoming.noKk)
+  ) {
     diffs.add('No. KK');
   }
 
   if (
-    (norm(existing.address) !== norm(incoming.address) && incoming.address !== '-') ||
+    (norm(existing.address) !== norm(incoming.address) &&
+      incoming.address !== '-') ||
     (incoming.rt && norm(existing.rt) !== norm(incoming.rt)) ||
     (incoming.rw && norm(existing.rw) !== norm(incoming.rw)) ||
-    (incoming.kelurahan && norm(existing.kelurahan) !== norm(incoming.kelurahan)) ||
-    (incoming.kecamatan && norm(existing.kecamatan) !== norm(incoming.kecamatan)) ||
-    (incoming.postalCode && norm(existing.postalCode) !== norm(incoming.postalCode))
+    (incoming.kelurahan &&
+      norm(existing.kelurahan) !== norm(incoming.kelurahan)) ||
+    (incoming.kecamatan &&
+      norm(existing.kecamatan) !== norm(incoming.kecamatan)) ||
+    (incoming.postalCode &&
+      norm(existing.postalCode) !== norm(incoming.postalCode))
   ) {
     diffs.add(isId ? 'Alamat' : 'Address');
   }
@@ -701,18 +783,23 @@ const computeStudentDiff = (
   }
 
   if (
-    (incoming.noAktaLahir && norm(existing.noAktaLahir) !== norm(incoming.noAktaLahir)) ||
+    (incoming.noAktaLahir &&
+      norm(existing.noAktaLahir) !== norm(incoming.noAktaLahir)) ||
     (incoming.skhun && norm(existing.skhun) !== norm(incoming.skhun)) ||
-    (incoming.noPesertaUn && norm(existing.noPesertaUn) !== norm(incoming.noPesertaUn)) ||
+    (incoming.noPesertaUn &&
+      norm(existing.noPesertaUn) !== norm(incoming.noPesertaUn)) ||
     (incoming.noIjazah && norm(existing.noIjazah) !== norm(incoming.noIjazah)) ||
-    (incoming.sekolahAsal && norm(existing.sekolahAsal) !== norm(incoming.sekolahAsal))
+    (incoming.sekolahAsal &&
+      norm(existing.sekolahAsal) !== norm(incoming.sekolahAsal))
   ) {
     diffs.add(isId ? 'Dokumen/Asal Sekolah' : 'Documents');
   }
   if (
     (incoming.bank && norm(existing.bank) !== norm(incoming.bank)) ||
-    (incoming.noRekening && norm(existing.noRekening) !== norm(incoming.noRekening)) ||
-    (incoming.namaRekening && norm(existing.namaRekening) !== norm(incoming.namaRekening))
+    (incoming.noRekening &&
+      norm(existing.noRekening) !== norm(incoming.noRekening)) ||
+    (incoming.namaRekening &&
+      norm(existing.namaRekening) !== norm(incoming.namaRekening))
   ) {
     diffs.add(isId ? 'Rekening Bank' : 'Bank Account');
   }
@@ -723,9 +810,12 @@ const computeStudentDiff = (
     numDiff(existing.tinggiBadan, incoming.tinggiBadan) ||
     numDiff(existing.lingkarKepala, incoming.lingkarKepala) ||
     numDiff(existing.jarakSekolah, incoming.jarakSekolah) ||
-    (incoming.jenisTinggal && norm(existing.jenisTinggal) !== norm(incoming.jenisTinggal)) ||
-    (incoming.alatTransportasi && norm(existing.alatTransportasi) !== norm(incoming.alatTransportasi)) ||
-    (incoming.kebutuhanKhusus && norm(existing.kebutuhanKhusus) !== norm(incoming.kebutuhanKhusus))
+    (incoming.jenisTinggal &&
+      norm(existing.jenisTinggal) !== norm(incoming.jenisTinggal)) ||
+    (incoming.alatTransportasi &&
+      norm(existing.alatTransportasi) !== norm(incoming.alatTransportasi)) ||
+    (incoming.kebutuhanKhusus &&
+      norm(existing.kebutuhanKhusus) !== norm(incoming.kebutuhanKhusus))
   ) {
     diffs.add(isId ? 'Data Periodik' : 'Periodic Info');
   }
@@ -744,7 +834,8 @@ const computeStudentDiff = (
       (incP.birthYear && norm(exP.birthYear) !== norm(incP.birthYear)) ||
       (incP.education && norm(exP.education) !== norm(incP.education)) ||
       (incP.occupation && norm(exP.occupation) !== norm(incP.occupation)) ||
-      (incP.monthlyIncome && norm(exP.monthlyIncome) !== norm(incP.monthlyIncome))
+      (incP.monthlyIncome &&
+        norm(exP.monthlyIncome) !== norm(incP.monthlyIncome))
     ) {
       diffs.add(isId ? 'Orang Tua/Wali' : 'Parents');
       break;
@@ -756,8 +847,12 @@ const computeStudentDiff = (
   if (incEco) {
     const kipChanged =
       Boolean(exEco?.hasKip) !== Boolean(incEco.hasKip) ||
-      (Boolean(incEco.hasKip) && incEco.kipNumber && norm(exEco?.kipNumber) !== norm(incEco.kipNumber)) ||
-      (Boolean(incEco.hasKip) && incEco.namaKip && norm(exEco?.namaKip) !== norm(incEco.namaKip));
+      (Boolean(incEco.hasKip) &&
+        incEco.kipNumber &&
+        norm(exEco?.kipNumber) !== norm(incEco.kipNumber)) ||
+      (Boolean(incEco.hasKip) &&
+        incEco.namaKip &&
+        norm(exEco?.namaKip) !== norm(incEco.namaKip));
 
     const pipChanged =
       Boolean(exEco?.layakPip) !== Boolean(incEco.layakPip) ||
@@ -767,7 +862,9 @@ const computeStudentDiff = (
 
     const kksChanged =
       Boolean(exEco?.hasKks) !== Boolean(incEco.hasKks) ||
-      (Boolean(incEco.hasKks) && incEco.kksNumber && norm(exEco?.kksNumber) !== norm(incEco.kksNumber));
+      (Boolean(incEco.hasKks) &&
+        incEco.kksNumber &&
+        norm(exEco?.kksNumber) !== norm(incEco.kksNumber));
 
     const pkhChanged = Boolean(exEco?.hasPkh) !== Boolean(incEco.hasPkh);
 
@@ -795,7 +892,12 @@ interface SortableHeaderProps {
   onSort: (key: string) => void;
 }
 
-function SortableHeader({ columnKey, label, sortConfig, onSort }: SortableHeaderProps) {
+function SortableHeader({
+  columnKey,
+  label,
+  sortConfig,
+  onSort,
+}: SortableHeaderProps) {
   const direction = sortConfig?.key === columnKey ? sortConfig.direction : null;
   return (
     <th
@@ -845,9 +947,15 @@ export function StudentListPage() {
     [user]
   );
 
-  const [resolvedSchoolId, setResolvedSchoolId] = useState<string>(schoolInfo?.id || '');
+  const [resolvedSchoolId, setResolvedSchoolId] = useState<string>(
+    schoolInfo?.id || ''
+  );
+  const teacherScope = useTeacherScope(resolvedSchoolId);
+
   const [canManageData, setCanManageData] = useState<boolean>(() =>
-    initialRoles.some((r) => (MANAGE_STUDENT_ROLES as readonly string[]).includes(r))
+    initialRoles.some((r) =>
+      (MANAGE_STUDENT_ROLES as readonly string[]).includes(r)
+    )
   );
   const [isSuperAdmin, setIsSuperAdmin] = useState<boolean>(() =>
     initialRoles.includes('SUPER_ADMIN')
@@ -864,7 +972,11 @@ export function StudentListPage() {
         if (!authUser) return;
 
         const [{ data: profile }, { data: allRoles }] = await Promise.all([
-          supabase.from('users').select('schoolId, role').eq('id', authUser.id).maybeSingle(),
+          supabase
+            .from('users')
+            .select('schoolId, role')
+            .eq('id', authUser.id)
+            .maybeSingle(),
           supabase.rpc('get_user_all_roles'),
         ]);
 
@@ -878,7 +990,9 @@ export function StudentListPage() {
 
         if (!mounted) return;
         setCanManageData(
-          effectiveRoles.some((r) => (MANAGE_STUDENT_ROLES as readonly string[]).includes(r))
+          effectiveRoles.some((r) =>
+            (MANAGE_STUDENT_ROLES as readonly string[]).includes(r)
+          )
         );
         setIsSuperAdmin(effectiveRoles.includes('SUPER_ADMIN'));
         setResolvedSchoolId(schoolInfo?.id || profile?.schoolId || '');
@@ -902,17 +1016,27 @@ export function StudentListPage() {
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [jumpPage, setJumpPage] = useState<string>('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
-  const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'fullName', direction: 'asc' });
+  const [sortConfig, setSortConfig] = useState<SortConfig>({
+    key: 'fullName',
+    direction: 'asc',
+  });
 
-  const [studentToDelete, setStudentToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [studentToDelete, setStudentToDelete] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isDeletingAll, setIsDeletingAll] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importError, setImportError] = useState<string | null>(null);
-  const [wizardState, setWizardState] = useState<'idle' | 'parsing' | 'preview' | 'importing'>('idle');
-  const [parsedImportData, setParsedImportData] = useState<StudentBulkImportItem[]>([]);
+  const [wizardState, setWizardState] = useState<
+    'idle' | 'parsing' | 'preview' | 'importing'
+  >('idle');
+  const [parsedImportData, setParsedImportData] = useState<
+    StudentBulkImportItem[]
+  >([]);
   const [existingWelfareMap, setExistingWelfareMap] = useState<
     Record<string, ExistingEconomicSnapshot>
   >({});
@@ -975,6 +1099,27 @@ export function StudentListPage() {
     enabled: Boolean(resolvedSchoolId),
   });
 
+  // Kunci parameter classId agar Wali Kelas SD tidak pernah menarik data siswa kelas lain
+  const effectiveClassFilter = useMemo(() => {
+    if (teacherScope.isElementaryHomeroomRestricted) {
+      if (teacherScope.homeroomClassIds.length === 1) {
+        return teacherScope.homeroomClassIds[0];
+      }
+      if (
+        selectedClass !== 'all' &&
+        teacherScope.homeroomClassIds.includes(selectedClass)
+      ) {
+        return selectedClass;
+      }
+      return teacherScope.homeroomClassIds[0] || '__NO_CLASS__';
+    }
+    return selectedClass === 'all' ? undefined : selectedClass;
+  }, [
+    teacherScope.isElementaryHomeroomRestricted,
+    teacherScope.homeroomClassIds,
+    selectedClass,
+  ]);
+
   const {
     data: studentsResponse,
     isLoading,
@@ -988,7 +1133,7 @@ export function StudentListPage() {
       currentPage,
       pageSize,
       debouncedSearch,
-      selectedClass,
+      effectiveClassFilter,
       selectedStatus,
       sortConfig,
     ],
@@ -998,12 +1143,13 @@ export function StudentListPage() {
         page: currentPage,
         limit: pageSize,
         search: debouncedSearch,
-        classId: selectedClass === 'all' ? undefined : selectedClass,
+        classId: effectiveClassFilter,
         status: selectedStatus === 'all' ? undefined : selectedStatus,
         sortBy: sortConfig?.key,
         sortOrder: sortConfig?.direction,
       }),
-    enabled: isSuperAdmin || Boolean(resolvedSchoolId),
+    enabled:
+      (isSuperAdmin || Boolean(resolvedSchoolId)) && !teacherScope.isLoading,
   });
 
   const students = studentsResponse?.data?.data || [];
@@ -1019,9 +1165,12 @@ export function StudentListPage() {
 
   // --- MUTATIONS ---
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => studentService.delete(id, resolvedSchoolId || undefined),
+    mutationFn: (id: string) =>
+      studentService.delete(id, resolvedSchoolId || undefined),
     onSuccess: (_res, deletedId) => {
-      toast.success(tr('Siswa berhasil dihapus', 'Student deleted successfully'));
+      toast.success(
+        tr('Siswa berhasil dihapus', 'Student deleted successfully')
+      );
       queryClient.invalidateQueries({ queryKey: ['students'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
       setSelectedRows((prev) => prev.filter((r) => r !== deletedId));
@@ -1041,7 +1190,8 @@ export function StudentListPage() {
   });
 
   const bulkDeleteMutation = useMutation({
-    mutationFn: (ids: string[]) => studentService.deleteMany(ids, resolvedSchoolId || undefined),
+    mutationFn: (ids: string[]) =>
+      studentService.deleteMany(ids, resolvedSchoolId || undefined),
     onSuccess: (res) => {
       toast.success(
         res.message ||
@@ -1079,7 +1229,9 @@ export function StudentListPage() {
         );
       }
       if (!resolvedSchoolId) {
-        throw new Error(tr('Data sekolah belum termuat.', 'School data is not loaded yet.'));
+        throw new Error(
+          tr('Data sekolah belum termuat.', 'School data is not loaded yet.')
+        );
       }
       const svc = studentService as typeof studentService & {
         deleteAll?: (schoolId: string) => Promise<{ message?: string }>;
@@ -1101,7 +1253,8 @@ export function StudentListPage() {
     },
     onSuccess: (res) => {
       toast.success(
-        res?.message || tr('Seluruh data berhasil dihapus', 'All data deleted successfully')
+        res?.message ||
+        tr('Seluruh data berhasil dihapus', 'All data deleted successfully')
       );
       queryClient.invalidateQueries({ queryKey: ['students'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
@@ -1123,7 +1276,8 @@ export function StudentListPage() {
   });
 
   const importMutation = useMutation({
-    mutationFn: (payload: StudentBulkImportItem[]) => studentService.bulkImport(payload),
+    mutationFn: (payload: StudentBulkImportItem[]) =>
+      studentService.bulkImport(payload),
     onSuccess: (res) => {
       toast.success(res.message || tr('Import berhasil', 'Import successful'));
       queryClient.invalidateQueries({ queryKey: ['students'] });
@@ -1155,7 +1309,9 @@ export function StudentListPage() {
   };
 
   const toggleRow = (id: string) =>
-    setSelectedRows((prev) => (prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]));
+    setSelectedRows((prev) =>
+      prev.includes(id) ? prev.filter((r) => r !== id) : [...prev, id]
+    );
 
   const toggleAll = () =>
     setSelectedRows(
@@ -1173,10 +1329,20 @@ export function StudentListPage() {
     setPreserveManualWelfare(false);
   };
 
-  const sortedClasses = useMemo(
-    () => [...(classesData || [])].sort((a, b) => a.name.localeCompare(b.name)),
-    [classesData]
-  );
+  // Saring opsi dropdown kelas bagi Wali Kelas jenjang SD
+  const sortedClasses = useMemo(() => {
+    let list = [...(classesData || [])];
+    if (teacherScope.isElementaryHomeroomRestricted) {
+      list = list.filter((c) =>
+        teacherScope.homeroomClassIds.includes(String(c.id))
+      );
+    }
+    return list.sort((a, b) => a.name.localeCompare(b.name));
+  }, [
+    classesData,
+    teacherScope.isElementaryHomeroomRestricted,
+    teacherScope.homeroomClassIds,
+  ]);
 
   // --- DOWNLOAD TEMPLATE EXCEL (v14) ---
   const handleDownloadTemplate = () => {
@@ -1214,7 +1380,9 @@ export function StudentListPage() {
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'Template_Siswa');
     XLSX.writeFile(wb, 'Template_Import_Siswa_Dapodik_v14.xlsx');
-    toast.success(tr('Template Excel berhasil diunduh', 'Excel template downloaded'));
+    toast.success(
+      tr('Template Excel berhasil diunduh', 'Excel template downloaded')
+    );
   };
 
   // --- SMARTDIFF IMPORT PARSER + SKOR PIP v14 ---
@@ -1271,7 +1439,10 @@ export function StudentListPage() {
 
     setWizardState('parsing');
     const toastId = toast.loading(
-      tr('Menganalisis file Excel Dapodik PD...', 'Analyzing Dapodik Student Excel...')
+      tr(
+        'Menganalisis file Excel Dapodik PD...',
+        'Analyzing Dapodik Student Excel...'
+      )
     );
 
     const reader = new FileReader();
@@ -1302,7 +1473,9 @@ export function StudentListPage() {
           for (let i = 0; i < Math.min(25, sheetRows.length); i++) {
             const currentRow = Array.isArray(sheetRows[i]) ? sheetRows[i] : [];
             const rowText = currentRow.map((cell) =>
-              String(cell ?? '').toLowerCase().replace(/\s+/g, '')
+              String(cell ?? '')
+                .toLowerCase()
+                .replace(/\s+/g, '')
             );
             const hasNameCol = rowText.some(
               (c) =>
@@ -1312,9 +1485,17 @@ export function StudentListPage() {
                 c === 'fullname'
             );
             const hasIdCol = rowText.some((c) =>
-              ['nipd', 'nis', 'nisn', 'nuptk', 'nip', 'jk', 'jeniskelamin', 'l/p', 'gender'].includes(
-                c
-              )
+              [
+                'nipd',
+                'nis',
+                'nisn',
+                'nuptk',
+                'nip',
+                'jk',
+                'jeniskelamin',
+                'l/p',
+                'gender',
+              ].includes(c)
             );
             if (hasNameCol && hasIdCol) {
               rawData = sheetRows;
@@ -1336,8 +1517,12 @@ export function StudentListPage() {
         }
 
         // Array.from memastikan tidak ada slot kosong (sparse array) saat di-loop
-        const rawMain = Array.isArray(rawData[headerRowIndex]) ? rawData[headerRowIndex] : [];
-        const rawSub = Array.isArray(rawData[headerRowIndex + 1]) ? rawData[headerRowIndex + 1] : [];
+        const rawMain = Array.isArray(rawData[headerRowIndex])
+          ? rawData[headerRowIndex]
+          : [];
+        const rawSub = Array.isArray(rawData[headerRowIndex + 1])
+          ? rawData[headerRowIndex + 1]
+          : [];
         const rowMain = Array.from(rawMain, (c) => String(c ?? ''));
         const rowSub = Array.from(rawSub, (c) => String(c ?? ''));
 
@@ -1415,14 +1600,18 @@ export function StudentListPage() {
           );
         }
 
-        const dataStartIndex = hasGroupedSubHeader ? headerRowIndex + 2 : headerRowIndex + 1;
+        const dataStartIndex = hasGroupedSubHeader
+          ? headerRowIndex + 2
+          : headerRowIndex + 1;
         const data: ExcelRow[] = rawData.slice(dataStartIndex).map((rowArray) => {
           const rowObject: ExcelRow = {};
           cleanHeaders.forEach((header, index) => {
             if (header && Array.isArray(rowArray)) {
               const cellValue = rowArray[index];
               rowObject[header] =
-                cellValue !== undefined && cellValue !== null ? String(cellValue).trim() : '';
+                cellValue !== undefined && cellValue !== null
+                  ? String(cellValue).trim()
+                  : '';
             }
           });
           return rowObject;
@@ -1437,7 +1626,8 @@ export function StudentListPage() {
           );
         }
 
-        const existingStudents = await fetchExistingStudentsSnapshot(resolvedSchoolId);
+        const existingStudents =
+          await fetchExistingStudentsSnapshot(resolvedSchoolId);
         const existingByNisn = new Map<string, ExistingStudentSnapshot>();
         const existingByNik = new Map<string, ExistingStudentSnapshot>();
         const existingByNameDob = new Map<string, ExistingStudentSnapshot>();
@@ -1493,10 +1683,15 @@ export function StudentListPage() {
           validNamedRows++;
 
           const fullName = nameVal;
-          const birthDate = parseExcelDate(pick(row, 'tanggal lahir', 'birth date'), todayLocal);
+          const birthDate = parseExcelDate(
+            pick(row, 'tanggal lahir', 'birth date'),
+            todayLocal
+          );
           const rawNisn = cleanNumericId(nisnVal);
           const rawNik = cleanNumericId(row['nik']);
-          const rawNoKk = cleanNumericId(pick(row, 'no kk', 'nokk', 'no. kk', 'nomor kk'));
+          const rawNoKk = cleanNumericId(
+            pick(row, 'no kk', 'nokk', 'no. kk', 'nomor kk')
+          );
 
           let matchedExisting: ExistingStudentSnapshot | undefined;
           if (rawNisn) {
@@ -1506,7 +1701,9 @@ export function StudentListPage() {
             matchedExisting = existingByNik.get(rawNik);
           }
           if (!matchedExisting) {
-            const byNameDob = existingByNameDob.get(`${fullName.toLowerCase()}|${birthDate}`);
+            const byNameDob = existingByNameDob.get(
+              `${fullName.toLowerCase()}|${birthDate}`
+            );
             if (byNameDob && (!rawNisn || byNameDob.nisn.startsWith('TK-'))) {
               matchedExisting = byNameDob;
             }
@@ -1546,7 +1743,10 @@ export function StudentListPage() {
           let resolvedNik =
             rawNik ||
             matchedExisting?.nik ||
-            buildDeterministicFallbackId('NONIK', `${resolvedSchoolId}|${resolvedNisn}`);
+            buildDeterministicFallbackId(
+              'NONIK',
+              `${resolvedSchoolId}|${resolvedNisn}`
+            );
 
           const nikOwnerId = existingNikOwner.get(resolvedNik);
           if (
@@ -1556,14 +1756,20 @@ export function StudentListPage() {
             resolvedNik =
               matchedExisting?.nik && !seenNikInFile.has(matchedExisting.nik)
                 ? matchedExisting.nik
-                : buildDeterministicFallbackId('NONIK', `${resolvedSchoolId}|${resolvedNisn}`);
+                : buildDeterministicFallbackId(
+                  'NONIK',
+                  `${resolvedSchoolId}|${resolvedNisn}`
+                );
           }
           seenNikInFile.add(resolvedNik);
 
           const alamatRaw = cleanDapodikText(pick(row, 'alamat', 'address'));
           const dusunRaw = cleanDapodikText(row['dusun']);
           let finalAddress = alamatRaw;
-          if (dusunRaw && !finalAddress.toLowerCase().includes(dusunRaw.toLowerCase())) {
+          if (
+            dusunRaw &&
+            !finalAddress.toLowerCase().includes(dusunRaw.toLowerCase())
+          ) {
             finalAddress = finalAddress
               ? `${finalAddress}, Dusun ${dusunRaw}`
               : `Dusun ${dusunRaw}`;
@@ -1572,7 +1778,9 @@ export function StudentListPage() {
           const rombelKey = Object.keys(row).find(
             (k) => k.includes('rombel') || k.includes('kelas') || k === 'class'
           );
-          const rawExcelRombel = rombelKey ? cleanDapodikText(row[rombelKey]) : '';
+          const rawExcelRombel = rombelKey
+            ? cleanDapodikText(row[rombelKey])
+            : '';
           const normalizedExcelRombel = normalizeClassName(rawExcelRombel);
 
           const matchedClass = normalizedExcelRombel
@@ -1586,7 +1794,8 @@ export function StudentListPage() {
           if (!matchedClass) {
             if (rawExcelRombel) {
               missingClassCount++;
-              const normKey = normalizedExcelRombel || rawExcelRombel.toLowerCase();
+              const normKey =
+                normalizedExcelRombel || rawExcelRombel.toLowerCase();
               if (!unfoundClassByNorm.has(normKey)) {
                 unfoundClassByNorm.set(normKey, rawExcelRombel);
               }
@@ -1601,14 +1810,21 @@ export function StudentListPage() {
             buildParent(row, 'wali', 'WALI'),
           ].filter((p): p is CreateStudentParentPayload => p !== null);
 
-          const rawEntryDate = pick(row, 'tanggal masuk', 'tanggal masuk sekolah', 'entry date');
+          const rawEntryDate = pick(
+            row,
+            'tanggal masuk',
+            'tanggal masuk sekolah',
+            'entry date'
+          );
           const resolvedEntryDate = rawEntryDate
             ? parseExcelDate(rawEntryDate, '') || null
             : matchedExisting?.entryDate
               ? matchedExisting.entryDate.split('T')[0]
               : null;
 
-          const rawReligion = cleanDapodikText(pick(row, 'agama', 'religion')).toUpperCase();
+          const rawReligion = cleanDapodikText(
+            pick(row, 'agama', 'religion')
+          ).toUpperCase();
           const resolvedReligion =
             rawReligion === 'KATHOLIK'
               ? 'KATOLIK'
@@ -1634,13 +1850,22 @@ export function StudentListPage() {
 
           // Normalisasi data bansos + Kalkulasi Skor PIP v14
           const rawKipNumber =
-            cleanNumericId(pick(row, 'nomor kip', 'no. kip', 'no kip', 'kip number')) || null;
-          const hasKip = toBool(pick(row, 'penerima kip', 'has kip')) || Boolean(rawKipNumber);
+            cleanNumericId(
+              pick(row, 'nomor kip', 'no. kip', 'no kip', 'kip number')
+            ) || null;
+          const hasKip =
+            toBool(pick(row, 'penerima kip', 'has kip')) ||
+            Boolean(rawKipNumber);
           const kipNumber = hasKip ? rawKipNumber : null;
           const namaKip = hasKip ? cleanNamaKip(row['nama di kip']) : null;
 
           const layakPip = toBool(
-            pick(row, 'layak pip (usulan dari sekolah)', 'layak pip', 'eligible pip')
+            pick(
+              row,
+              'layak pip (usulan dari sekolah)',
+              'layak pip',
+              'eligible pip'
+            )
           );
           const alasanLayakPip = layakPip
             ? cleanDapodikText(row['alasan layak pip']) || null
@@ -1648,11 +1873,25 @@ export function StudentListPage() {
 
           const rawKksNumber =
             cleanNumericId(
-              pick(row, 'no. kps', 'nomor kks', 'no kks', 'nomor kks/kps', 'kks/kps number')
+              pick(
+                row,
+                'no. kps',
+                'nomor kks',
+                'no kks',
+                'nomor kks/kps',
+                'kks/kps number'
+              )
             ) || null;
           const hasKks =
-            toBool(pick(row, 'penerima kps', 'penerima kks', 'penerima kks/kps', 'has kks/kps')) ||
-            Boolean(rawKksNumber);
+            toBool(
+              pick(
+                row,
+                'penerima kps',
+                'penerima kks',
+                'penerima kks/kps',
+                'has kks/kps'
+              )
+            ) || Boolean(rawKksNumber);
           const kksNumber = hasKks ? rawKksNumber : null;
           const hasPkh = toBool(pick(row, 'penerima pkh', 'has pkh'));
           const isDtks = toBool(pick(row, 'dtks', 'terdaftar dtks', 'in dtks'));
@@ -1693,25 +1932,40 @@ export function StudentListPage() {
             noKk: rawNoKk || matchedExisting?.noKk || null,
             fullName,
             gender: resolvedGender,
-            birthPlace: cleanDapodikText(pick(row, 'tempat lahir', 'birth place')) || '-',
+            birthPlace:
+              cleanDapodikText(pick(row, 'tempat lahir', 'birth place')) || '-',
             birthDate,
             religion: resolvedReligion,
             address: finalAddress || '-',
             dusun: dusunRaw,
             rt: cleanDapodikText(row['rt']),
             rw: cleanDapodikText(row['rw']),
-            kelurahan: cleanDapodikText(pick(row, 'kelurahan', 'desa/kelurahan', 'village')),
+            kelurahan: cleanDapodikText(
+              pick(row, 'kelurahan', 'desa/kelurahan', 'village')
+            ),
             kecamatan: cleanDapodikText(pick(row, 'kecamatan', 'district')),
             city:
-              cleanDapodikText(pick(row, 'kabupaten/kota', 'kab/kota', 'kota', 'city')) ||
+              cleanDapodikText(
+                pick(row, 'kabupaten/kota', 'kab/kota', 'kota', 'city')
+              ) ||
               schoolInfo?.city ||
               '-',
             province:
-              cleanDapodikText(pick(row, 'provinsi', 'province')) || schoolInfo?.province || '-',
+              cleanDapodikText(pick(row, 'provinsi', 'province')) ||
+              schoolInfo?.province ||
+              '-',
             postalCode: cleanNumericId(row['kode pos']),
             telepon: cleanNumericId(row['telepon']),
             phone: cleanNumericId(
-              pick(row, 'hp', 'no. hp', 'no hp', 'handphone', 'no. hp/telepon', 'phone number')
+              pick(
+                row,
+                'hp',
+                'no. hp',
+                'no hp',
+                'handphone',
+                'no. hp/telepon',
+                'phone number'
+              )
             ),
             email: cleanDapodikText(pick(row, 'e-mail', 'email')),
             anakKe: getValidNumber(row['anak ke-berapa'], 1),
@@ -1728,12 +1982,19 @@ export function StudentListPage() {
             ),
             lingkarKepala: getValidNumber(row['lingkar kepala'], 0),
             jarakSekolah: getValidNumber(
-              pick(row, 'jarak rumah ke sekolah (km)', 'jarak rumah ke sekolah', 'jarak sekolah'),
+              pick(
+                row,
+                'jarak rumah ke sekolah (km)',
+                'jarak rumah ke sekolah',
+                'jarak sekolah'
+              ),
               0
             ),
             jenisTinggal: cleanDapodikText(row['jenis tinggal']),
             alatTransportasi: cleanDapodikText(row['alat transportasi']),
-            sekolahAsal: cleanDapodikText(pick(row, 'sekolah asal', 'previous school')),
+            sekolahAsal: cleanDapodikText(
+              pick(row, 'sekolah asal', 'previous school')
+            ),
             kebutuhanKhusus: cleanDapodikText(row['kebutuhan khusus']),
             classId: matchedClass?.id || matchedExisting?.classId || null,
             rawClassName: rawExcelRombel || 'Belum Ada Kelas',
@@ -1743,7 +2004,12 @@ export function StudentListPage() {
             noPesertaUn: cleanDapodikText(row['no peserta ujian nasional']),
             noIjazah: cleanDapodikText(row['no seri ijazah']),
             noAktaLahir: cleanDapodikText(
-              pick(row, 'no registrasi akta lahir', 'no. akta lahir', 'birth cert no.')
+              pick(
+                row,
+                'no registrasi akta lahir',
+                'no. akta lahir',
+                'birth cert no.'
+              )
             ),
             bank: cleanDapodikText(row['bank']),
             noRekening: cleanNumericId(
@@ -1774,7 +2040,11 @@ export function StudentListPage() {
           };
 
           if (matchedExisting) {
-            const diffFields = computeStudentDiff(matchedExisting, candidate, isId);
+            const diffFields = computeStudentDiff(
+              matchedExisting,
+              candidate,
+              isId
+            );
             if (!matchedClass && rawExcelRombel) {
               const clsLabel = isId ? 'Kelas' : 'Class';
               if (!diffFields.includes(clsLabel)) diffFields.push(clsLabel);
@@ -1885,7 +2155,9 @@ export function StudentListPage() {
     const uniqueNewClassesMap = new Map<string, string>();
     for (const p of payloadsToProcess) {
       if (!p.classId && p.rawClassName && p.rawClassName !== 'Belum Ada Kelas') {
-        const normKey = normalizeClassName(p.rawClassName) || p.rawClassName.toLowerCase().trim();
+        const normKey =
+          normalizeClassName(p.rawClassName) ||
+          p.rawClassName.toLowerCase().trim();
         if (!uniqueNewClassesMap.has(normKey)) {
           uniqueNewClassesMap.set(normKey, p.rawClassName);
         }
@@ -1921,7 +2193,9 @@ export function StudentListPage() {
 
         const { data: newClasses, error: classError } = await supabase
           .from('classes')
-          .upsert(classesToCreate, { onConflict: 'schoolId,academicYearId,name' })
+          .upsert(classesToCreate, {
+            onConflict: 'schoolId,academicYearId,name',
+          })
           .select('id, name, gradeLevel');
 
         if (classError) {
@@ -1934,7 +2208,8 @@ export function StudentListPage() {
         }
 
         (newClasses || []).forEach((c) => {
-          const normKey = normalizeClassName(c.name) || c.name.toLowerCase().trim();
+          const normKey =
+            normalizeClassName(c.name) || c.name.toLowerCase().trim();
           createdClassByNorm.set(normKey, c.id);
         });
 
@@ -1943,53 +2218,71 @@ export function StudentListPage() {
           ...currentClasses,
           ...(newClasses || []).filter((c) => !knownIds.has(c.id)),
         ];
-        queryClient.setQueryData(['classes-list', resolvedSchoolId], currentClasses);
+        queryClient.setQueryData(
+          ['classes-list', resolvedSchoolId],
+          currentClasses
+        );
       }
 
-      const finalPayload: StudentBulkImportItem[] = payloadsToProcess.map((payload) => {
-        let updatedClassId = payload.classId;
+      const finalPayload: StudentBulkImportItem[] = payloadsToProcess.map(
+        (payload) => {
+          let updatedClassId = payload.classId;
 
-        if (!updatedClassId && payload.rawClassName && payload.rawClassName !== 'Belum Ada Kelas') {
-          const normKey =
-            normalizeClassName(payload.rawClassName) || payload.rawClassName.toLowerCase().trim();
-          updatedClassId =
-            createdClassByNorm.get(normKey) ||
-            currentClasses.find(
-              (c) => (normalizeClassName(c.name) || c.name.toLowerCase().trim()) === normKey
-            )?.id ||
-            null;
+          if (
+            !updatedClassId &&
+            payload.rawClassName &&
+            payload.rawClassName !== 'Belum Ada Kelas'
+          ) {
+            const normKey =
+              normalizeClassName(payload.rawClassName) ||
+              payload.rawClassName.toLowerCase().trim();
+            updatedClassId =
+              createdClassByNorm.get(normKey) ||
+              currentClasses.find(
+                (c) =>
+                  (normalizeClassName(c.name) || c.name.toLowerCase().trim()) ===
+                  normKey
+              )?.id ||
+              null;
+          }
+
+          const existingEco = payload.id
+            ? existingWelfareMap[payload.id]
+            : undefined;
+          const savedEco =
+            preserveManualWelfare && payload.diffAction === 'updated'
+              ? existingEco
+                ? {
+                  hasKip: Boolean(existingEco.hasKip),
+                  kipNumber: existingEco.kipNumber ?? null,
+                  namaKip: existingEco.namaKip ?? null,
+                  layakPip: Boolean(existingEco.layakPip),
+                  alasanLayakPip: existingEco.alasanLayakPip ?? null,
+                  hasPkh: Boolean(existingEco.hasPkh),
+                  hasKks: Boolean(existingEco.hasKks),
+                  kksNumber: existingEco.kksNumber ?? null,
+                  isDtks: Boolean(existingEco.isDtks),
+                  houseOwnership: existingEco.houseOwnership ?? null,
+                  houseCondition: existingEco.houseCondition ?? null,
+                  dependentsCount: existingEco.dependentsCount ?? null,
+                  desil: existingEco.desil ?? null,
+                  isOrphan: Boolean(existingEco.isOrphan),
+                  orphanType: existingEco.orphanType ?? null,
+                  pipScore: existingEco.pipScore ?? null,
+                  economicCategory: existingEco.economicCategory ?? null,
+                  scoringDetails: existingEco.scoringDetails ?? null,
+                  scoredAt: existingEco.scoredAt ?? null,
+                }
+                : undefined
+              : payload.economic;
+
+          return {
+            ...payload,
+            classId: updatedClassId || null,
+            economic: savedEco,
+          };
         }
-
-        const existingEco = payload.id ? existingWelfareMap[payload.id] : undefined;
-        const savedEco =
-          preserveManualWelfare && payload.diffAction === 'updated'
-            ? existingEco
-              ? {
-                hasKip: Boolean(existingEco.hasKip),
-                kipNumber: existingEco.kipNumber ?? null,
-                namaKip: existingEco.namaKip ?? null,
-                layakPip: Boolean(existingEco.layakPip),
-                alasanLayakPip: existingEco.alasanLayakPip ?? null,
-                hasPkh: Boolean(existingEco.hasPkh),
-                hasKks: Boolean(existingEco.hasKks),
-                kksNumber: existingEco.kksNumber ?? null,
-                isDtks: Boolean(existingEco.isDtks),
-                houseOwnership: existingEco.houseOwnership ?? null,
-                houseCondition: existingEco.houseCondition ?? null,
-                dependentsCount: existingEco.dependentsCount ?? null,
-                desil: existingEco.desil ?? null,
-                isOrphan: Boolean(existingEco.isOrphan),
-                orphanType: existingEco.orphanType ?? null,
-                pipScore: existingEco.pipScore ?? null,
-                economicCategory: existingEco.economicCategory ?? null,
-                scoringDetails: existingEco.scoringDetails ?? null,
-                scoredAt: existingEco.scoredAt ?? null,
-              }
-              : undefined
-            : payload.economic;
-
-        return { ...payload, classId: updatedClassId || null, economic: savedEco };
-      });
+      );
 
       importMutation.mutate(finalPayload);
     } catch (error: unknown) {
@@ -2010,10 +2303,27 @@ export function StudentListPage() {
     if (isExportDisabled) return;
 
     setIsExporting(true);
-    const toastId = toast.loading(tr('Menyiapkan file Excel...', 'Preparing Excel file...'));
+    const toastId = toast.loading(
+      tr('Menyiapkan file Excel...', 'Preparing Excel file...')
+    );
     try {
-      const response = await studentService.exportAll(resolvedSchoolId || undefined);
+      const response = await studentService.exportAll(
+        resolvedSchoolId || undefined
+      );
       let dataToExport = response.data || [];
+
+      if (teacherScope.isElementaryHomeroomRestricted) {
+        const allowedClassNames = new Set(sortedClasses.map((c) => c.name));
+        dataToExport = dataToExport.filter((s) => {
+          const studentClassId = (s as { classId?: string | null }).classId;
+          if (studentClassId) {
+            return teacherScope.homeroomClassIds.includes(
+              String(studentClassId)
+            );
+          }
+          return s.className ? allowedClassNames.has(s.className) : false;
+        });
+      }
 
       if (selectedRows.length > 0) {
         dataToExport = dataToExport.filter((s) => selectedRows.includes(s.id));
@@ -2037,35 +2347,65 @@ export function StudentListPage() {
           [tr('L/P', 'Gender')]:
             s.gender === 'L' ? tr('Laki-laki', 'Male') : tr('Perempuan', 'Female'),
           [tr('Kelas', 'Class')]: sanitizeExcelCell(s.className || '-'),
-          [tr('Tempat Lahir', 'Birth Place')]: sanitizeExcelCell(s.birthPlace || '-'),
-          [tr('Tanggal Lahir', 'Birth Date')]: s.birthDate ? formatDate(s.birthDate) : '-',
+          [tr('Tempat Lahir', 'Birth Place')]: sanitizeExcelCell(
+            s.birthPlace || '-'
+          ),
+          [tr('Tanggal Lahir', 'Birth Date')]: s.birthDate
+            ? formatDate(s.birthDate)
+            : '-',
           [tr('Agama', 'Religion')]: sanitizeExcelCell(s.religion || '-'),
           [tr('Alamat', 'Address')]: sanitizeExcelCell(s.address || '-'),
-          [tr('Desa/Kelurahan', 'Village')]: sanitizeExcelCell(s.kelurahan || '-'),
+          [tr('Desa/Kelurahan', 'Village')]: sanitizeExcelCell(
+            s.kelurahan || '-'
+          ),
           [tr('Kecamatan', 'District')]: sanitizeExcelCell(s.kecamatan || '-'),
           [tr('Kab/Kota', 'City')]: sanitizeExcelCell(s.city || '-'),
-          [tr('No. HP/Telepon', 'Phone Number')]: sanitizeExcelCell(s.phone || s.telepon || '-'),
-          [tr('No. Akta Lahir', 'Birth Cert No.')]: sanitizeExcelCell(s.noAktaLahir || '-'),
-          [tr('Sekolah Asal', 'Previous School')]: sanitizeExcelCell(s.sekolahAsal || '-'),
+          [tr('No. HP/Telepon', 'Phone Number')]: sanitizeExcelCell(
+            s.phone || s.telepon || '-'
+          ),
+          [tr('No. Akta Lahir', 'Birth Cert No.')]: sanitizeExcelCell(
+            s.noAktaLahir || '-'
+          ),
+          [tr('Sekolah Asal', 'Previous School')]: sanitizeExcelCell(
+            s.sekolahAsal || '-'
+          ),
           [tr('Berat Badan (kg)', 'Weight (kg)')]: s.beratBadan ?? '-',
           [tr('Tinggi Badan (cm)', 'Height (cm)')]: s.tinggiBadan ?? '-',
-          [tr('Nama Ayah', 'Father Name')]: sanitizeExcelCell(ayah?.fullName || '-'),
-          [tr('Nama Ibu', 'Mother Name')]: sanitizeExcelCell(ibu?.fullName || '-'),
-          [tr('Nama Wali', 'Guardian Name')]: sanitizeExcelCell(wali?.fullName || '-'),
+          [tr('Nama Ayah', 'Father Name')]: sanitizeExcelCell(
+            ayah?.fullName || '-'
+          ),
+          [tr('Nama Ibu', 'Mother Name')]: sanitizeExcelCell(
+            ibu?.fullName || '-'
+          ),
+          [tr('Nama Wali', 'Guardian Name')]: sanitizeExcelCell(
+            wali?.fullName || '-'
+          ),
           [tr('Penerima KIP', 'Has KIP')]: s.economic?.hasKip ? 'Ya' : 'Tidak',
-          [tr('Nomor KIP', 'KIP Number')]: sanitizeExcelCell(s.economic?.kipNumber || '-'),
-          [tr('Layak PIP', 'Eligible PIP')]: s.economic?.layakPip ? 'Ya' : 'Tidak',
+          [tr('Nomor KIP', 'KIP Number')]: sanitizeExcelCell(
+            s.economic?.kipNumber || '-'
+          ),
+          [tr('Layak PIP', 'Eligible PIP')]: s.economic?.layakPip
+            ? 'Ya'
+            : 'Tidak',
           [tr('Penerima PKH', 'Has PKH')]: s.economic?.hasPkh ? 'Ya' : 'Tidak',
-          [tr('Penerima KKS/KPS', 'Has KKS/KPS')]: s.economic?.hasKks ? 'Ya' : 'Tidak',
-          [tr('Nomor KKS/KPS', 'KKS/KPS Number')]: sanitizeExcelCell(s.economic?.kksNumber || '-'),
-          [tr('Terdaftar DTKS', 'In DTKS')]: s.economic?.isDtks ? 'Ya' : 'Tidak',
+          [tr('Penerima KKS/KPS', 'Has KKS/KPS')]: s.economic?.hasKks
+            ? 'Ya'
+            : 'Tidak',
+          [tr('Nomor KKS/KPS', 'KKS/KPS Number')]: sanitizeExcelCell(
+            s.economic?.kksNumber || '-'
+          ),
+          [tr('Terdaftar DTKS', 'In DTKS')]: s.economic?.isDtks
+            ? 'Ya'
+            : 'Tidak',
           'Desil DTKS': s.economic?.desil ?? '-',
           'Skor PIP': s.economic?.pipScore ?? 0,
           [tr('Kategori Ekonomi', 'Economic Category')]: sanitizeExcelCell(
             s.economic?.economicCategory || 'REGULER'
           ),
           Bank: sanitizeExcelCell(s.bank || '-'),
-          [tr('No. Rekening', 'Account No.')]: sanitizeExcelCell(s.noRekening || '-'),
+          [tr('No. Rekening', 'Account No.')]: sanitizeExcelCell(
+            s.noRekening || '-'
+          ),
           Status: s.status,
         };
       });
@@ -2133,7 +2473,9 @@ export function StudentListPage() {
           : `Data_Siswa_Keseluruhan_${dateStr}.xlsx`;
 
       XLSX.writeFile(workbook, fileName);
-      toast.success(tr('Export berhasil!', 'Export successful!'), { id: toastId });
+      toast.success(tr('Export berhasil!', 'Export successful!'), {
+        id: toastId,
+      });
     } catch (error: unknown) {
       const msg = extractFriendlyErrorMessage(
         error,
@@ -2150,7 +2492,9 @@ export function StudentListPage() {
   const hasWelfareDiffs = useMemo(
     () =>
       parsedImportData.some(
-        (p) => p.diffAction === 'updated' && (p.diffFields || []).some(isWelfareLabel)
+        (p) =>
+          p.diffAction === 'updated' &&
+          (p.diffFields || []).some(isWelfareLabel)
       ),
     [parsedImportData]
   );
@@ -2185,7 +2529,11 @@ export function StudentListPage() {
   }, [actionableItems, protectedWelfareItems]);
 
   return (
-    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6">
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="space-y-6"
+    >
       <input
         type="file"
         ref={fileInputRef}
@@ -2211,7 +2559,9 @@ export function StudentListPage() {
                   </div>
                   <div>
                     <div className="flex items-center gap-2">
-                      <h3 className="text-lg font-bold text-foreground">SmartDiff Import Dapodik</h3>
+                      <h3 className="text-lg font-bold text-foreground">
+                        SmartDiff Import Dapodik
+                      </h3>
                       <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[11px] font-semibold text-emerald-600">
                         <Sparkles size={11} /> Verval PD
                       </span>
@@ -2255,7 +2605,10 @@ export function StudentListPage() {
                       )}
                     </p>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {tr('Mohon jangan tutup jendela ini.', 'Please do not close this window.')}
+                      {tr(
+                        'Mohon jangan tutup jendela ini.',
+                        'Please do not close this window.'
+                      )}
                     </p>
                   </div>
                 )}
@@ -2304,7 +2657,9 @@ export function StudentListPage() {
                           <input
                             type="checkbox"
                             checked={applySmartUpdates}
-                            onChange={(e) => setApplySmartUpdates(e.target.checked)}
+                            onChange={(e) =>
+                              setApplySmartUpdates(e.target.checked)
+                            }
                             className="mt-0.5 h-4 w-4 rounded border-border accent-emerald-600"
                           />
                           <div className="text-xs">
@@ -2329,12 +2684,17 @@ export function StudentListPage() {
                             <input
                               type="checkbox"
                               checked={preserveManualWelfare}
-                              onChange={(e) => setPreserveManualWelfare(e.target.checked)}
+                              onChange={(e) =>
+                                setPreserveManualWelfare(e.target.checked)
+                              }
                               className="mt-0.5 h-4 w-4 rounded border-border accent-emerald-600"
                             />
                             <div className="text-xs">
                               <p className="font-semibold text-foreground flex items-center gap-1.5">
-                                <ShieldCheck size={13} className="text-emerald-600" />
+                                <ShieldCheck
+                                  size={13}
+                                  className="text-emerald-600"
+                                />
                                 {tr(
                                   'Pertahankan data bansos (PKH / KIP / KKS / DTKS) yang sudah diedit manual',
                                   'Preserve manually edited welfare data (PKH / KIP / KKS / DTKS)'
@@ -2374,7 +2734,9 @@ export function StudentListPage() {
                               item.diffFields!.every(isWelfareLabel);
 
                             const visibleDiffs = preserveManualWelfare
-                              ? (item.diffFields || []).filter((f) => !isWelfareLabel(f))
+                              ? (item.diffFields || []).filter(
+                                (f) => !isWelfareLabel(f)
+                              )
                               : item.diffFields || [];
 
                             return (
@@ -2399,7 +2761,8 @@ export function StudentListPage() {
                                       visibleDiffs.length > 0 && (
                                         <span className="text-amber-600 dark:text-amber-400 font-medium">
                                           {' '}
-                                          ({tr('Ubah', 'Diff')}: {visibleDiffs.join(', ')})
+                                          ({tr('Ubah', 'Diff')}:{' '}
+                                          {visibleDiffs.join(', ')})
                                         </span>
                                       )
                                     )}
@@ -2465,35 +2828,36 @@ export function StudentListPage() {
                         </div>
                       )}
 
-                      {importStats.missingClass > 0 && unmatchedClasses.length > 0 && (
-                        <div className="flex items-start gap-2.5 p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-400 text-xs">
-                          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                          <div className="w-full">
-                            <p className="font-semibold">
-                              {tr(
-                                `Kelas Baru Terdeteksi (${importStats.missingClass} Siswa):`,
-                                `New Classes Detected (${importStats.missingClass} Students):`
-                              )}
-                            </p>
-                            <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1">
-                              {unmatchedClasses.map((className, idx) => (
-                                <span
-                                  key={idx}
-                                  className="bg-indigo-500/20 px-2 py-0.5 rounded font-bold font-mono"
-                                >
-                                  {className}
-                                </span>
-                              ))}
+                      {importStats.missingClass > 0 &&
+                        unmatchedClasses.length > 0 && (
+                          <div className="flex items-start gap-2.5 p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-400 text-xs">
+                            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                            <div className="w-full">
+                              <p className="font-semibold">
+                                {tr(
+                                  `Kelas Baru Terdeteksi (${importStats.missingClass} Siswa):`,
+                                  `New Classes Detected (${importStats.missingClass} Students):`
+                                )}
+                              </p>
+                              <div className="flex flex-wrap gap-1.5 mt-1.5 mb-1">
+                                {unmatchedClasses.map((className, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="bg-indigo-500/20 px-2 py-0.5 rounded font-bold font-mono"
+                                  >
+                                    {className}
+                                  </span>
+                                ))}
+                              </div>
+                              <p className="italic opacity-90">
+                                {tr(
+                                  '*Kelas di atas akan dibuat otomatis sebelum data siswa disimpan.',
+                                  '*These classes will be created automatically before importing students.'
+                                )}
+                              </p>
                             </div>
-                            <p className="italic opacity-90">
-                              {tr(
-                                '*Kelas di atas akan dibuat otomatis sebelum data siswa disimpan.',
-                                '*These classes will be created automatically before importing students.'
-                              )}
-                            </p>
                           </div>
-                        </div>
-                      )}
+                        )}
 
                       {actionableCount === 0 && (
                         <div className="flex items-start gap-2.5 p-3 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400 text-xs font-medium">
@@ -2578,7 +2942,9 @@ export function StudentListPage() {
                     setStudentToDelete(null);
                     setIsBulkDeleting(false);
                   }}
-                  disabled={deleteMutation.isPending || bulkDeleteMutation.isPending}
+                  disabled={
+                    deleteMutation.isPending || bulkDeleteMutation.isPending
+                  }
                 >
                   {tr('Batal', 'Cancel')}
                 </Button>
@@ -2587,9 +2953,12 @@ export function StudentListPage() {
                   onClick={() =>
                     isBulkDeleting
                       ? bulkDeleteMutation.mutate(selectedRows)
-                      : studentToDelete && deleteMutation.mutate(studentToDelete.id)
+                      : studentToDelete &&
+                      deleteMutation.mutate(studentToDelete.id)
                   }
-                  disabled={deleteMutation.isPending || bulkDeleteMutation.isPending}
+                  disabled={
+                    deleteMutation.isPending || bulkDeleteMutation.isPending
+                  }
                 >
                   {deleteMutation.isPending || bulkDeleteMutation.isPending ? (
                     <Loader2 className="w-4 h-4 mr-2 animate-spin" />
@@ -2657,9 +3026,14 @@ export function StudentListPage() {
       {/* --- PAGE HEADER --- */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-foreground">{t('students.title')}</h1>
+          <h1 className="text-2xl font-bold text-foreground">
+            {t('students.title')}
+          </h1>
           <p className="text-sm text-muted-foreground mt-1">
-            {tr(`Total ${total} siswa terdaftar`, `${total} students registered`)}
+            {tr(
+              `Total ${total} siswa terdaftar`,
+              `${total} students registered`
+            )}
           </p>
         </div>
 
@@ -2690,7 +3064,9 @@ export function StudentListPage() {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-500/10 text-red-600 border border-red-500/20 text-sm font-medium hover:bg-red-500/20 transition-colors shadow-sm"
               >
                 <Trash2 size={16} />
-                <span className="hidden sm:inline">{tr('Kosongkan Data', 'Wipe Data')}</span>
+                <span className="hidden sm:inline">
+                  {tr('Kosongkan Data', 'Wipe Data')}
+                </span>
               </motion.button>
             ) : null)}
 
@@ -2702,7 +3078,9 @@ export function StudentListPage() {
                 className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm"
               >
                 <FileSpreadsheet size={16} className="text-emerald-600" />
-                <span className="hidden sm:inline">{tr('Template', 'Template')}</span>
+                <span className="hidden sm:inline">
+                  {tr('Template', 'Template')}
+                </span>
               </button>
 
               <button
@@ -2731,15 +3109,25 @@ export function StudentListPage() {
             disabled={isExportDisabled}
             title={
               total === 0 || students.length === 0
-                ? tr('Tidak ada data siswa untuk diekspor', 'No student data to export')
+                ? tr(
+                  'Tidak ada data siswa untuk diekspor',
+                  'No student data to export'
+                )
                 : undefined
             }
             className="flex items-center gap-2 px-4 py-2 rounded-lg bg-background border border-border/50 text-sm font-medium text-foreground hover:bg-muted/50 transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground disabled:hover:bg-muted/50"
           >
-            {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+            {isExporting ? (
+              <Loader2 size={16} className="animate-spin" />
+            ) : (
+              <Download size={16} />
+            )}
             <span className="hidden sm:inline">
               {selectedRows.length > 0
-                ? tr(`Ekspor (${selectedRows.length})`, `Export (${selectedRows.length})`)
+                ? tr(
+                  `Ekspor (${selectedRows.length})`,
+                  `Export (${selectedRows.length})`
+                )
                 : tr('Ekspor Data', 'Export Data')}
             </span>
           </button>
@@ -2763,7 +3151,10 @@ export function StudentListPage() {
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
             <div>
               <p className="font-semibold">
-                {tr('Gagal Memproses Impor Data Siswa', 'Failed to Process Student Import')}
+                {tr(
+                  'Gagal Memproses Impor Data Siswa',
+                  'Failed to Process Student Import'
+                )}
               </p>
               <p className="mt-0.5 leading-relaxed">{importError}</p>
             </div>
@@ -2784,7 +3175,10 @@ export function StudentListPage() {
           <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p className="font-semibold">
-              {tr('Mode Super Admin Lintas Sekolah', 'Cross-School Super Admin Mode')}
+              {tr(
+                'Mode Super Admin Lintas Sekolah',
+                'Cross-School Super Admin Mode'
+              )}
             </p>
             <p className="mt-0.5">
               {tr(
@@ -2862,7 +3256,9 @@ export function StudentListPage() {
             >
               <option value="all">{tr('Semua Status', 'All Status')}</option>
               <option value="AKTIF">{tr('Aktif', 'Active')}</option>
-              <option value="MUTASI_KELUAR">{tr('Mutasi Keluar', 'Transferred')}</option>
+              <option value="MUTASI_KELUAR">
+                {tr('Mutasi Keluar', 'Transferred')}
+              </option>
               <option value="LULUS">{tr('Lulus', 'Graduated')}</option>
               <option value="DO">DO</option>
               <option value="CUTI">{tr('Cuti', 'On Leave')}</option>
@@ -2884,7 +3280,10 @@ export function StudentListPage() {
                   <th className="p-4 w-12">
                     <input
                       type="checkbox"
-                      checked={selectedRows.length === students.length && students.length > 0}
+                      checked={
+                        selectedRows.length === students.length &&
+                        students.length > 0
+                      }
                       onChange={toggleAll}
                       className="w-4 h-4 rounded border-border accent-emerald-600"
                     />
@@ -2925,18 +3324,29 @@ export function StudentListPage() {
             <tbody className="divide-y divide-border/50">
               {isLoading ? (
                 <tr>
-                  <td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center">
+                  <td
+                    colSpan={canManageData ? 7 : 6}
+                    className="px-6 py-12 text-center"
+                  >
                     <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-4" />
-                    <p className="text-muted-foreground">{tr('Memuat...', 'Loading...')}</p>
+                    <p className="text-muted-foreground">
+                      {tr('Memuat...', 'Loading...')}
+                    </p>
                   </td>
                 </tr>
               ) : isError ? (
                 <tr>
-                  <td colSpan={canManageData ? 7 : 6} className="px-6 py-12 text-center">
+                  <td
+                    colSpan={canManageData ? 7 : 6}
+                    className="px-6 py-12 text-center"
+                  >
                     <div className="flex flex-col items-center justify-center gap-2 text-red-600 dark:text-red-400">
                       <AlertCircle className="h-8 w-8" />
                       <p className="font-semibold">
-                        {tr('Gagal memuat data siswa.', 'Failed to load student data.')}
+                        {tr(
+                          'Gagal memuat data siswa.',
+                          'Failed to load student data.'
+                        )}
                       </p>
                       <p className="text-xs text-muted-foreground max-w-md">
                         {extractFriendlyErrorMessage(
@@ -2995,9 +3405,13 @@ export function StudentListPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col">
-                          <span className="text-sm font-bold text-foreground">{student.nisn}</span>
+                          <span className="text-sm font-bold text-foreground">
+                            {student.nisn}
+                          </span>
                           <span className="text-xs font-mono text-muted-foreground">
-                            {student.nis && student.nis !== '-' ? student.nis : '-'}
+                            {student.nis && student.nis !== '-'
+                              ? student.nis
+                              : '-'}
                           </span>
                         </div>
                       </td>
@@ -3007,7 +3421,9 @@ export function StudentListPage() {
                             {student.fullName.charAt(0)}
                           </div>
                           <div>
-                            <p className="text-sm font-medium">{student.fullName}</p>
+                            <p className="text-sm font-medium">
+                              {student.fullName}
+                            </p>
                             <p className="text-xs text-muted-foreground">
                               {student.gender === 'L'
                                 ? tr('Laki-laki', 'Male')
@@ -3017,7 +3433,9 @@ export function StudentListPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <span className="text-sm">{student.className || '-'}</span>
+                        <span className="text-sm">
+                          {student.className || '-'}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         <span
@@ -3048,7 +3466,10 @@ export function StudentListPage() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  setStudentToDelete({ id: student.id, name: student.fullName })
+                                  setStudentToDelete({
+                                    id: student.id,
+                                    name: student.fullName,
+                                  })
                                 }
                                 className="p-2 text-red-600 hover:bg-red-500/10 rounded-md transition-colors"
                               >
@@ -3142,32 +3563,41 @@ export function StudentListPage() {
               </Button>
 
               <div className="flex items-center gap-1">
-                {Array.from({ length: totalPages }, (_, i) => i + 1).map((page) => {
-                  if (page === 1 || page === totalPages || Math.abs(currentPage - page) <= 1) {
-                    return (
-                      <button
-                        key={page}
-                        onClick={() => setCurrentPage(page)}
-                        className={cn(
-                          'w-8 h-8 flex items-center justify-center rounded-md text-sm font-medium transition-colors border',
-                          currentPage === page
-                            ? 'bg-emerald-600 text-white border-emerald-600'
-                            : 'bg-background border-border/50 hover:bg-muted text-muted-foreground'
-                        )}
-                      >
-                        {page}
-                      </button>
-                    );
+                {Array.from({ length: totalPages }, (_, i) => i + 1).map(
+                  (page) => {
+                    if (
+                      page === 1 ||
+                      page === totalPages ||
+                      Math.abs(currentPage - page) <= 1
+                    ) {
+                      return (
+                        <button
+                          key={page}
+                          onClick={() => setCurrentPage(page)}
+                          className={cn(
+                            'w-8 h-8 flex items-center justify-center rounded-md text-sm font-medium transition-colors border',
+                            currentPage === page
+                              ? 'bg-emerald-600 text-white border-emerald-600'
+                              : 'bg-background border-border/50 hover:bg-muted text-muted-foreground'
+                          )}
+                        >
+                          {page}
+                        </button>
+                      );
+                    }
+                    if (Math.abs(currentPage - page) === 2) {
+                      return (
+                        <span
+                          key={`ellipsis-${page}`}
+                          className="text-muted-foreground px-1"
+                        >
+                          ...
+                        </span>
+                      );
+                    }
+                    return null;
                   }
-                  if (Math.abs(currentPage - page) === 2) {
-                    return (
-                      <span key={`ellipsis-${page}`} className="text-muted-foreground px-1">
-                        ...
-                      </span>
-                    );
-                  }
-                  return null;
-                })}
+                )}
               </div>
 
               <Button
@@ -3175,7 +3605,9 @@ export function StudentListPage() {
                 size="sm"
                 className="h-8 w-8 p-0"
                 disabled={currentPage === totalPages}
-                onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
+                onClick={() =>
+                  setCurrentPage((prev) => Math.min(prev + 1, totalPages))
+                }
               >
                 <ChevronRight size={16} />
               </Button>

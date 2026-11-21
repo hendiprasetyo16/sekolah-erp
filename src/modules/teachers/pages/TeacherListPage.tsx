@@ -25,6 +25,7 @@ import type {
   TeacherBulkImportItem,
   TeacherDiffAction,
 } from '../types/teacher.types';
+import { useTeacherScope } from '@/hooks/useTeacherScope';
 
 // ==========================================
 // TYPES & CONSTANTS
@@ -741,6 +742,9 @@ export function TeacherListPage() {
     [schoolInfo?.id, currentUser?.schoolId]
   );
 
+  const teacherScope = useTeacherScope(activeSchoolId);
+  const isRestrictedToSelf = !teacherScope.hasFullAcademicAccess;
+
   const canCreateTeacher = hasPermission('teachers', 'create');
   const canUpdateTeacher = hasPermission('teachers', 'update');
   const canDeleteTeacher = hasPermission('teachers', 'delete');
@@ -796,7 +800,7 @@ export function TeacherListPage() {
   // --- QUERIES ---
   const {
     data: teachersResponse,
-    isLoading,
+    isLoading: isTeachersQueryLoading,
     isError,
     error: teachersQueryError,
     refetch: refetchTeachers,
@@ -805,6 +809,8 @@ export function TeacherListPage() {
       'teachers',
       activeSchoolId,
       isSuperAdmin,
+      isRestrictedToSelf,
+      teacherScope.teacherId,
       currentPage,
       PAGE_SIZE,
       searchQuery,
@@ -812,9 +818,29 @@ export function TeacherListPage() {
       certifiedFilter,
       sortConfig,
     ],
-    queryFn: () =>
-      teacherService.list({
+    queryFn: async () => {
+      // Jika akun guru biasa belum tertaut ke tabel teachers, kembalikan kosong
+      if (isRestrictedToSelf && !teacherScope.teacherId) {
+        return {
+          success: true,
+          data: {
+            data: [],
+            meta: {
+              total: 0,
+              page: 1,
+              limit: PAGE_SIZE,
+              totalPages: 0,
+              hasNext: false,
+              hasPrev: false,
+            },
+          },
+          message: 'Profil guru belum tertaut',
+        };
+      }
+
+      return teacherService.list({
         schoolId: activeSchoolId ?? undefined,
+        teacherId: isRestrictedToSelf ? (teacherScope.teacherId ?? undefined) : undefined,
         page: currentPage,
         limit: PAGE_SIZE,
         search: searchQuery,
@@ -822,9 +848,12 @@ export function TeacherListPage() {
         isCertified: parsedCertifiedFilter,
         sortBy: sortConfig?.key,
         sortOrder: sortConfig?.direction,
-      }),
-    enabled: isSuperAdmin || Boolean(activeSchoolId),
+      });
+    },
+    enabled: !teacherScope.isLoading && (isSuperAdmin || Boolean(activeSchoolId)),
   });
+
+  const isLoading = teacherScope.isLoading || isTeachersQueryLoading;
 
   const teachers = teachersResponse?.data?.data || [];
   const meta = teachersResponse?.data?.meta;
@@ -1303,6 +1332,13 @@ export function TeacherListPage() {
     try {
       const response = await teacherService.exportAll(activeSchoolId ?? undefined);
       let dataToExport = response.data || [];
+
+      if (isRestrictedToSelf) {
+        dataToExport = teacherScope.teacherId
+          ? dataToExport.filter((t) => String(t.id) === teacherScope.teacherId)
+          : [];
+      }
+
       if (dataToExport.length === 0) {
         throw new Error(tr('Tidak ada data untuk diekspor', 'No data to export'));
       }
@@ -2073,12 +2109,12 @@ export function TeacherListPage() {
                   <div className="space-y-1">
                     {importSkippedCount > 0 && (
                       <p className="text-xs text-amber-600 dark:text-amber-400">
-                        * {importSkippedCount} baris kosong/catatan kaki tanpa kolom Nama dilewati otomatis.
+                        &bull; {importSkippedCount} baris kosong/catatan kaki tanpa kolom Nama dilewati otomatis.
                       </p>
                     )}
                     {importDuplicateCount > 0 && (
                       <p className="text-xs text-amber-600 dark:text-amber-400">
-                        * {importDuplicateCount} baris duplikat (NIP/NUPTK/NIK ganda) di dalam file Excel dilewati otomatis.
+                        &bull; {importDuplicateCount} baris duplikat (NIP/NUPTK/NIK ganda) di dalam file Excel dilewati otomatis.
                       </p>
                     )}
                   </div>

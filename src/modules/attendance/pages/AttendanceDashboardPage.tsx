@@ -35,6 +35,7 @@ import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
 import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTeacherScope } from '@/hooks/useTeacherScope';
 import type {
   StudentAttendance,
   TeacherAttendance,
@@ -73,6 +74,8 @@ type TeacherAttendanceWithCheckOut = Omit<
   TeacherAttendance,
   'deviceTelemetry' | 'securityFlags'
 > & {
+  teacherId?: string | null;
+  teacher?: (TeacherAttendance['teacher'] & { id?: string | null }) | null;
   checkOutSelfieUrl?: string | null;
   checkOutDistance?: number | null;
   checkOutLat?: number | null;
@@ -247,6 +250,8 @@ export function AttendanceDashboardPage() {
   const activeSchoolId = isSuperAdmin
     ? simSchoolId || school?.id || user?.schoolId || ''
     : school?.id || user?.schoolId || '';
+
+  const teacherScope = useTeacherScope(activeSchoolId);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
@@ -501,6 +506,17 @@ export function AttendanceDashboardPage() {
         }
       }
 
+      // Hanya Kepala Sekolah, Admin, dan Super Admin yang melihat semua guru
+      if (!teacherScope.canViewAllTeacherAttendance) {
+        enrichedTeachers = teacherScope.teacherId
+          ? enrichedTeachers.filter(
+            (item) =>
+              String(item.teacherId) === teacherScope.teacherId ||
+              String(item.teacher?.id) === teacherScope.teacherId
+          )
+          : [];
+      }
+
       setStudentRecords(enrichedStudents);
       setTeacherRecords(enrichedTeachers);
     } catch (err: unknown) {
@@ -508,7 +524,13 @@ export function AttendanceDashboardPage() {
     } finally {
       setIsLoading(false);
     }
-  }, [activeSchoolId, selectedDate, showToast]);
+  }, [
+    activeSchoolId,
+    selectedDate,
+    showToast,
+    teacherScope.canViewAllTeacherAttendance,
+    teacherScope.teacherId,
+  ]);
 
   useEffect(() => {
     loadData();
@@ -1331,31 +1353,33 @@ export function AttendanceDashboardPage() {
             </div>
           </motion.div>
 
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.15 }}
-            className="summary-card"
-          >
-            <div
-              className="summary-card-icon"
-              style={{ background: 'rgba(59,130,246,0.15)', color: '#3B82F6' }}
+          {teacherScope.canViewAllTeacherAttendance && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.15 }}
+              className="summary-card"
             >
-              <Users size={24} />
-            </div>
-            <div className="summary-card-content">
-              <p className="summary-card-label">Hadir Guru & PTK</p>
-              <p className="summary-card-value">
-                {summary.teacherPresent + summary.teacherLate}{' '}
-                <span className="text-sm font-normal opacity-60">
-                  / {summary.teacherTotal}
-                </span>
-              </p>
-              <p className="summary-card-sub text-blue-500">
-                {summary.teacherPercentage}% kehadiran PTK
-              </p>
-            </div>
-          </motion.div>
+              <div
+                className="summary-card-icon"
+                style={{ background: 'rgba(59,130,246,0.15)', color: '#3B82F6' }}
+              >
+                <Users size={24} />
+              </div>
+              <div className="summary-card-content">
+                <p className="summary-card-label">Hadir Guru & PTK</p>
+                <p className="summary-card-value">
+                  {summary.teacherPresent + summary.teacherLate}{' '}
+                  <span className="text-sm font-normal opacity-60">
+                    / {summary.teacherTotal}
+                  </span>
+                </p>
+                <p className="summary-card-sub text-blue-500">
+                  {summary.teacherPercentage}% kehadiran PTK
+                </p>
+              </div>
+            </motion.div>
+          )}
         </div>
       )}
 
@@ -1576,52 +1600,54 @@ export function AttendanceDashboardPage() {
               </div>
             </div>
 
-            <div className="data-card">
-              <h3 className="card-section-title">
-                Distribusi Kehadiran Guru & PTK ({summary.teacherTotal} PTK Aktif)
-              </h3>
-              <div className="status-distribution">
-                {[
-                  { key: 'HADIR', count: summary.teacherPresent },
-                  { key: 'TERLAMBAT', count: summary.teacherLate },
-                  { key: 'SAKIT', count: summary.teacherSick },
-                  { key: 'IZIN', count: summary.teacherPermission },
-                  { key: 'ALPA', count: summary.teacherAbsent },
-                  {
-                    key: 'BELUM_ABSEN',
-                    count: Math.max(
-                      0,
-                      summary.teacherTotal - summary.teacherRecorded
-                    ),
-                  },
-                ].map(({ key, count }) => {
-                  const total = summary.teacherTotal || 1;
-                  const pct = Math.round((count / total) * 100);
-                  return (
-                    <div key={key} className="status-dist-item">
-                      <div className="status-dist-label">
-                        <span
-                          className="status-dot"
-                          style={{ background: STATUS_COLORS[key] }}
-                        />
-                        <span>{STATUS_LABELS[key]}</span>
-                        <span className="status-dist-count">{count} PTK</span>
+            {teacherScope.canViewAllTeacherAttendance && (
+              <div className="data-card">
+                <h3 className="card-section-title">
+                  Distribusi Kehadiran Guru & PTK ({summary.teacherTotal} PTK Aktif)
+                </h3>
+                <div className="status-distribution">
+                  {[
+                    { key: 'HADIR', count: summary.teacherPresent },
+                    { key: 'TERLAMBAT', count: summary.teacherLate },
+                    { key: 'SAKIT', count: summary.teacherSick },
+                    { key: 'IZIN', count: summary.teacherPermission },
+                    { key: 'ALPA', count: summary.teacherAbsent },
+                    {
+                      key: 'BELUM_ABSEN',
+                      count: Math.max(
+                        0,
+                        summary.teacherTotal - summary.teacherRecorded
+                      ),
+                    },
+                  ].map(({ key, count }) => {
+                    const total = summary.teacherTotal || 1;
+                    const pct = Math.round((count / total) * 100);
+                    return (
+                      <div key={key} className="status-dist-item">
+                        <div className="status-dist-label">
+                          <span
+                            className="status-dot"
+                            style={{ background: STATUS_COLORS[key] }}
+                          />
+                          <span>{STATUS_LABELS[key]}</span>
+                          <span className="status-dist-count">{count} PTK</span>
+                        </div>
+                        <div className="status-dist-bar-bg">
+                          <div
+                            className="status-dist-bar"
+                            style={{
+                              width: `${pct}%`,
+                              background: STATUS_COLORS[key],
+                            }}
+                          />
+                        </div>
+                        <span className="status-dist-pct">{pct}%</span>
                       </div>
-                      <div className="status-dist-bar-bg">
-                        <div
-                          className="status-dist-bar"
-                          style={{
-                            width: `${pct}%`,
-                            background: STATUS_COLORS[key],
-                          }}
-                        />
-                      </div>
-                      <span className="status-dist-pct">{pct}%</span>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         )}
 

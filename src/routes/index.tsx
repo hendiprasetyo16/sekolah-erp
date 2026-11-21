@@ -231,7 +231,7 @@ export function AppRouter() {
           <Route
             path="/students/print-cards"
             element={
-              <RoleRoute allowedRoles={ACADEMIC_STAFF_ROLES}>
+              <RoleRoute allowedRoles={TU_ROLES}>
                 <StudentCardPrintPage />
               </RoleRoute>
             }

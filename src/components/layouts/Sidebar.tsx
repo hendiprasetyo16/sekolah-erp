@@ -181,12 +181,12 @@ export function Sidebar() {
           href: '/students',
           allowedRoles: ACADEMIC_STAFF_ROLES,
         },
-        // [BARU] Menu Cetak Kartu Pelajar
+        // [BARU] Menu Cetak Kartu Pelajar (Hanya Admin, Kepsek, Operator, & Staff TU)
         {
           label: locale === 'id' ? 'Kartu Pelajar' : 'Student Cards',
           icon: <Barcode size={17} />,
           href: '/students/print-cards',
-          allowedRoles: ACADEMIC_STAFF_ROLES,
+          allowedRoles: TU_ROLES,
         },
         {
           label: t('sidebar.teachers'),

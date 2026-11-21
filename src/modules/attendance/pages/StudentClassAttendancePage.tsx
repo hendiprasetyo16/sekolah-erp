@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTeacherScope } from '@/hooks/useTeacherScope';
 import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
@@ -220,6 +221,8 @@ export function StudentClassAttendancePage() {
         ? simSchoolId || school?.id || user?.schoolId || ''
         : school?.id || user?.schoolId || '';
 
+    const teacherScope = useTeacherScope(activeSchoolId);
+
     const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString);
     const [classesList, setClassesList] = useState<
         Array<{ id: string; name: string }>
@@ -325,10 +328,19 @@ export function StudentClassAttendancePage() {
 
             if (classesRes.error) throw classesRes.error;
 
-            const loadedClasses = (classesRes.data ?? []) as Array<{
+            let loadedClasses = (classesRes.data ?? []) as Array<{
                 id: string;
                 name: string;
             }>;
+
+            // Jika Wali Kelas di jenjang SD, tampilkan hanya kelas walinya
+            // (Guru Mapel memiliki homeroomClassIds kosong sehingga melihat semua kelas)
+            if (teacherScope.isElementaryHomeroomRestricted) {
+                loadedClasses = loadedClasses.filter((cls) =>
+                    teacherScope.homeroomClassIds.includes(String(cls.id))
+                );
+            }
+
             setClassesList(loadedClasses);
 
             if (loadedClasses.length > 0) {
@@ -357,7 +369,11 @@ export function StudentClassAttendancePage() {
         } finally {
             setIsLoadingClasses(false);
         }
-    }, [activeSchoolId]);
+    }, [
+        activeSchoolId,
+        teacherScope.isElementaryHomeroomRestricted,
+        teacherScope.homeroomClassIds,
+    ]);
 
     useEffect(() => {
         void loadClassesAndConfig();

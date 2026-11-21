@@ -198,6 +198,7 @@ export type UpdateTeacherPayload = Partial<Omit<CreateTeacherPayload, 'schoolId'
 
 export interface TeacherListParams {
   schoolId?: string;
+  teacherId?: string; // <-- Tambahkan baris ini
   page?: number;
   limit?: number;
   search?: string;

@@ -29,6 +29,7 @@ import {
 } from '../services/teacher.service';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
+import { useTeacherScope } from '@/hooks/useTeacherScope';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatDate, formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
@@ -138,6 +139,13 @@ export function TeacherDetailPage() {
     [school?.id, currentUser?.schoolId]
   );
 
+  // Mengecek cakupan akses profil guru bagi pengguna yang sedang login
+  const teacherScope = useTeacherScope(activeSchoolId);
+  const isForbiddenTeacherView =
+    !teacherScope.isLoading &&
+    !teacherScope.hasFullAcademicAccess &&
+    (!teacherScope.teacherId || teacherScope.teacherId !== id);
+
   // Kamus label teks
   const dict = {
     title: locale === 'id' ? 'Profil Guru & PTK' : 'Teacher Profile',
@@ -160,24 +168,58 @@ export function TeacherDetailPage() {
   // Mengambil detail data guru berdasarkan ID dari URL
   const {
     data: response,
-    isLoading,
+    isLoading: isDetailLoading,
     isError,
     error: queryError,
     refetch,
   } = useQuery({
     queryKey: ['teacher', id, activeSchoolId],
     queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
-    enabled: Boolean(id),
+    enabled: Boolean(id) && !teacherScope.isLoading && !isForbiddenTeacherView,
     retry: false,
   });
 
   const teacher = response?.data;
 
-  // Tampilan saat data sedang dimuat
-  if (isLoading) {
+  // Tampilan saat data atau hak akses sedang dimuat
+  if (teacherScope.isLoading || isDetailLoading) {
     return (
       <div className="flex h-96 items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-emerald-600" />
+      </div>
+    );
+  }
+
+  // Blokir akses jika akun guru biasa mencoba membuka profil guru lain lewat URL
+  if (isForbiddenTeacherView) {
+    return (
+      <div className="flex h-96 flex-col items-center justify-center gap-3 p-4 text-center">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400">
+          <AlertCircle className="h-6 w-6" />
+        </div>
+        <h2 className="text-base font-semibold text-foreground">
+          {locale === 'id' ? 'Akses Profil Dibatasi' : 'Profile Access Restricted'}
+        </h2>
+        <p className="max-w-md text-sm text-muted-foreground">
+          {locale === 'id'
+            ? 'Anda hanya diperbolehkan melihat biodata kepegawaian milik Anda sendiri.'
+            : 'You are only permitted to view your own employment profile.'}
+        </p>
+        <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+          {teacherScope.teacherId && (
+            <Button
+              type="button"
+              className="bg-emerald-600 text-white hover:bg-emerald-700"
+              onClick={() => navigate(`/teachers/${teacherScope.teacherId}`, { replace: true })}
+            >
+              {locale === 'id' ? 'Buka Profil Saya' : 'Open My Profile'}
+            </Button>
+          )}
+          <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
+            <ArrowLeft className="mr-2 h-4 w-4" />
+            {dict.back}
+          </Button>
+        </div>
       </div>
     );
   }

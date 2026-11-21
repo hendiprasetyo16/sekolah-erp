@@ -312,6 +312,7 @@ export const teacherService = {
   async list(params: TeacherListParams): Promise<ApiResponsePaginated<TeacherListItem>> {
     const {
       schoolId,
+      teacherId,
       page = 1,
       limit = 10,
       search,
@@ -323,6 +324,7 @@ export const teacherService = {
     } = params;
 
     const validSchoolId = normalizeTeacherSchoolId(schoolId);
+    const validTeacherId = normalizeTeacherSchoolId(teacherId);
     const safePage = Math.max(1, Math.trunc(page));
     const safeLimit = Math.max(1, Math.min(200, Math.trunc(limit)));
 
@@ -332,6 +334,10 @@ export const teacherService = {
 
     if (validSchoolId) {
       query = query.eq('schoolId', validSchoolId);
+    }
+
+    if (validTeacherId) {
+      query = query.eq('id', validTeacherId);
     }
 
     if (search && search.trim()) {
