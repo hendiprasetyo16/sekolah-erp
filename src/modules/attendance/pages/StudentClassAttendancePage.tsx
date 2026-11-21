@@ -33,12 +33,12 @@ import { getLocalDateString } from '../services/gps.utils';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 
 // ============================================================================
-// PARAMETER KONFIGURASI PAGINATION, CATATAN LIBUR & STATUS PRESENSI SISWA
+// PARAMETER KONFIGURASI PAGINATION, FILTER DEFAULT & CATATAN LIBUR SISWA
 // ============================================================================
 const DEFAULT_STUDENT_PAGE_SIZE = 10;
 const STUDENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 0] as const; // 0 = Semua
-//const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Sekolah'; // Keterangan otomatis jika alasan libur dikosongkan
 const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah'; // Selaras dengan StudentKioskPage.tsx
+const DEFAULT_CLASS_FILTER_FOR_ADMIN = 'ALL'; // Default filter kelas untuk Super Admin / Admin / Kepsek ('ALL' = Semua Kelas)
 
 type StudentAttendanceStatus =
     | 'HADIR'
@@ -374,10 +374,16 @@ export function StudentClassAttendancePage() {
 
             if (loadedClasses.length > 0) {
                 setSelectedClassId((prev) => {
-                    if (!isHomeroomRestricted && prev === 'ALL') return 'ALL';
-                    return loadedClasses.some((c) => c.id === prev)
-                        ? prev
-                        : loadedClasses[0].id;
+                    // Wali Kelas SD dikunci ke kelas ampuannya
+                    if (isHomeroomRestricted) {
+                        return loadedClasses.some((c) => c.id === prev)
+                            ? prev
+                            : loadedClasses[0].id;
+                    }
+                    // Super Admin / Admin / Kepsek default ke 'ALL' (Semua Kelas) saat pertama dibuka atau ganti sekolah
+                    if (prev === 'ALL') return 'ALL';
+                    if (loadedClasses.some((c) => c.id === prev)) return prev;
+                    return DEFAULT_CLASS_FILTER_FOR_ADMIN;
                 });
             } else {
                 setSelectedClassId('');
@@ -521,7 +527,7 @@ export function StudentClassAttendancePage() {
             const { message: errMsg } = getErrorInfo(err);
             setMessage({
                 status: 'error',
-                text: `Gagal memuat data siswa kelas ${selectedClassName}: ${errMsg}`,
+                text: `Gagal memuat data siswa ${selectedClassName}: ${errMsg}`,
             });
         } finally {
             setIsLoadingRows(false);
@@ -734,9 +740,13 @@ export function StudentClassAttendancePage() {
                 }
             }
 
+            const scopeLabel =
+                selectedClassId === 'ALL'
+                    ? 'Semua Kelas'
+                    : `kelas ${selectedClassName}`;
             setMessage({
                 status: 'success',
-                text: `Berhasil menyimpan presensi ${rowsToSave.length} siswa kelas ${selectedClassName} (${selectedDate}).`,
+                text: `Berhasil menyimpan presensi ${rowsToSave.length} siswa ${scopeLabel} (${selectedDate}).`,
             });
             await loadClassStudentsAndAttendance();
         } catch (err: unknown) {
