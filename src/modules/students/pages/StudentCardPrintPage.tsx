@@ -12,6 +12,7 @@ import {
     Loader2,
     School,
     Barcode,
+    QrCode,
     X,
     ArrowLeft,
     Filter,
@@ -25,20 +26,30 @@ import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { normalizeStudentSchoolId } from '../services/student.service';
 import { encodeCode128B } from '../utils/code128Barcode';
+import { encodeQrCodeSvg } from '../utils/qrCodeGenerator';
 
 // ============================================================================
-// PARAMETER UKURAN KARTU & POSISI KONTEN (MUDAH DISESUAIKAN)
+// PARAMETER UKURAN KARTU, QR CODE & POSISI KONTEN (MUDAH DISESUAIKAN)
 // ============================================================================
 const CARD_WIDTH_MM = 85.6; // Lebar standar kartu ATM / CR80 (mm)
 const CARD_HEIGHT_MM = 54; // Tinggi standar kartu ATM / CR80 (mm)
 const CARD_GAP_X_MM = 5; // Jarak mendatar antar kartu kiri & kanan (mm)
 const CARD_GAP_Y_MM = 5.5; // Jarak tegak antar baris kartu (mm)
 const PRINT_GRID_WIDTH_MM = CARD_WIDTH_MM * 2 + CARD_GAP_X_MM; // Total lebar 2 kartu (176.2mm)
-const BARCODE_HEIGHT_PX = 27; // Tinggi batang barcode di dalam kartu (px)
 const CARDS_PER_A4_SHEET = 8; // 2 kolom x 4 baris per lembar A4
 
+// Mode Default Kode Kartu ('HYBRID' = QR Code + Barcode, 'QR_ONLY' = QR Saja, 'BARCODE_ONLY' = Barcode Saja)
+type CardCodeMode = 'HYBRID' | 'QR_ONLY' | 'BARCODE_ONLY';
+const DEFAULT_CARD_CODE_MODE: CardCodeMode = 'HYBRID';
+
+// Ukuran Barcode & QR Code di dalam kartu
+const BARCODE_ONLY_HEIGHT_PX = 27; // Tinggi barcode pada mode BARCODE_ONLY (px)
+const BARCODE_HYBRID_HEIGHT_PX = 20; // Tinggi barcode pada mode HYBRID agar proporsional (px)
+const QR_HYBRID_SIZE_MM = 17; // Ukuran sisi QR Code pada mode HYBRID (mm)
+const QR_ONLY_SIZE_MM = 21.5; // Ukuran sisi QR Code pada mode QR_ONLY (mm)
+
 // Parameter Geser Isi Kartu (Bingkai Foto 3x4, Nama, NISN, Kelas, Jenis Kelamin)
-const CARD_PROFILE_OFFSET_LEFT_MM = 8; // Geser blok foto & teks ke kanan di dalam kartu (mm)
+const CARD_PROFILE_OFFSET_LEFT_MM = 4.5; // Jarak dari tepi kiri kartu ke foto (mm)
 const CARD_PROFILE_OFFSET_RIGHT_MM = 3.5; // Jarak aman dari tepi kanan kartu (mm)
 
 // Parameter Geser Posisi Cetak di Kertas A4 (mm)
@@ -88,7 +99,7 @@ interface SchoolHeaderInfo {
 }
 
 /**
- * Mengambil kode pemindaian terbaik untuk barcode kartu pelajar.
+ * Mengambil kode pemindaian terbaik untuk QR Code & Barcode kartu pelajar.
  * Mengabaikan NISN sementara bawaan sistem yang berawalan "TK-".
  */
 function resolveScanCode(student: Pick<PrintableStudent, 'nisn' | 'nis'>): string {
@@ -126,15 +137,16 @@ function formatGenderLabel(gender: string | null): string | null {
 }
 
 /**
- * Komponen SVG Barcode Code 128B menggunakan 1 elemen <path> tunggal
- * agar lebih ringan dirender di browser namun tetap tajam saat dicetak.
+ * Komponen SVG Barcode Code 128B menggunakan 1 elemen <path> tunggal.
  */
 const StudentBarcodeSvg = memo(function StudentBarcodeSvg({
     codeValue,
-    height = BARCODE_HEIGHT_PX,
+    height = BARCODE_ONLY_HEIGHT_PX,
+    showText = true,
 }: {
     codeValue: string;
     height?: number;
+    showText?: boolean;
 }) {
     const barcodeData = useMemo(() => {
         const encoded = encodeCode128B(codeValue);
@@ -176,20 +188,71 @@ const StudentBarcodeSvg = memo(function StudentBarcodeSvg({
                 />
                 <path d={barcodeData.pathD} fill="#000000" />
             </svg>
-            <span className="text-[9.5px] font-mono font-bold tracking-[0.22em] text-slate-900 mt-1 leading-none">
-                {barcodeData.value}
-            </span>
+            {showText && (
+                <span className="text-[9px] font-mono font-bold tracking-[0.2em] text-slate-900 mt-0.5 leading-none">
+                    {barcodeData.value}
+                </span>
+            )}
         </div>
     );
 });
 
 /**
- * Komponen Desain 1 Kartu Pelajar (Dibungkus memo agar klik centang tidak merender ulang semua kartu)
+ * Komponen SVG QR Code vektor tajam dengan quiet zone 1 modul.
+ */
+const StudentQrCodeSvg = memo(function StudentQrCodeSvg({
+    codeValue,
+    sizeMm,
+    caption,
+}: {
+    codeValue: string;
+    sizeMm: number;
+    caption?: string;
+}) {
+    const qrData = useMemo(() => encodeQrCodeSvg(codeValue), [codeValue]);
+
+    if (!qrData) return null;
+
+    return (
+        <div className="flex flex-col items-center justify-center shrink-0">
+            <div className="p-1 rounded-lg border border-slate-300 bg-white shadow-2xs flex items-center justify-center">
+                <svg
+                    viewBox={`-1 -1 ${qrData.size + 2} ${qrData.size + 2}`}
+                    shapeRendering="crispEdges"
+                    style={{
+                        width: `${sizeMm}mm`,
+                        height: `${sizeMm}mm`,
+                    }}
+                    className="block bg-white"
+                    aria-label={`QR Code ${qrData.value}`}
+                >
+                    <rect
+                        x={-1}
+                        y={-1}
+                        width={qrData.size + 2}
+                        height={qrData.size + 2}
+                        fill="#FFFFFF"
+                    />
+                    <path d={qrData.pathD} fill="#000000" />
+                </svg>
+            </div>
+            {caption && (
+                <span className="text-[7.5px] font-mono font-bold tracking-wider text-slate-700 mt-0.5 leading-none">
+                    {caption}
+                </span>
+            )}
+        </div>
+    );
+});
+
+/**
+ * Komponen Desain 1 Kartu Pelajar (Mendukung Hybrid QR+Barcode, QR Saja, & Barcode Saja)
  */
 const StudentIdCardBox = memo(function StudentIdCardBox({
     student,
     schoolInfo,
     academicYearLabel,
+    codeMode,
     isSelected,
     isPrintMode = false,
     onToggleSelect,
@@ -197,6 +260,7 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
     student: PrintableStudent;
     schoolInfo: SchoolHeaderInfo;
     academicYearLabel: string;
+    codeMode: CardCodeMode;
     isSelected: boolean;
     isPrintMode?: boolean;
     onToggleSelect?: (id: string) => void;
@@ -206,6 +270,9 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
         Boolean(student.nisn) && !student.nisn!.toUpperCase().startsWith('TK-');
     const genderLabel = formatGenderLabel(student.gender);
 
+    const showQr = codeMode === 'HYBRID' || codeMode === 'QR_ONLY';
+    const showBarcode = codeMode === 'HYBRID' || codeMode === 'BARCODE_ONLY';
+
     return (
         <div
             onClick={() => !isPrintMode && scanCode && onToggleSelect?.(student.id)}
@@ -214,16 +281,16 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                 height: `${CARD_HEIGHT_MM}mm`,
             }}
             className={`student-id-card-item relative rounded-xl bg-white text-slate-900 overflow-hidden flex flex-col justify-between select-none ${isPrintMode
-                    ? 'border border-dashed border-slate-400 shadow-none'
-                    : !scanCode
-                        ? 'border-2 border-red-300 opacity-65 cursor-not-allowed shadow-sm'
-                        : isSelected
-                            ? 'border-2 border-emerald-600 ring-2 ring-emerald-500/20 cursor-pointer shadow-sm transition'
-                            : 'border-2 border-slate-300 opacity-50 cursor-pointer shadow-sm transition'
+                ? 'border border-dashed border-slate-400 shadow-none'
+                : !scanCode
+                    ? 'border-2 border-red-300 opacity-65 cursor-not-allowed shadow-sm'
+                    : isSelected
+                        ? 'border-2 border-emerald-600 ring-2 ring-emerald-500/20 cursor-pointer shadow-sm transition'
+                        : 'border-2 border-slate-300 opacity-50 cursor-pointer shadow-sm transition'
                 }`}
         >
             {/* 1. HEADER KARTU SEKOLAH */}
-            <div className="bg-linear-to-r from-emerald-700 via-emerald-600 to-teal-600 text-white px-3.5 py-1.5 border-b-2 border-amber-400 flex items-center justify-between gap-2 shrink-0">
+            <div className="bg-linear-to-r from-emerald-700 via-emerald-600 to-teal-600 text-white px-3 py-1.5 border-b-2 border-amber-400 flex items-center justify-between gap-2 shrink-0">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
                     <div className="w-6 h-6 rounded-md bg-white text-emerald-700 flex items-center justify-center overflow-hidden shrink-0">
                         {schoolInfo.logoUrl ? (
@@ -238,10 +305,10 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                         )}
                     </div>
                     <div className="min-w-0 flex-1">
-                        <p className="text-[9.5px] font-extrabold uppercase tracking-wide text-white truncate leading-tight">
+                        <p className="text-[9px] font-extrabold uppercase tracking-wide text-white truncate leading-tight">
                             {schoolInfo.name}
                         </p>
-                        <p className="text-[7px] font-medium text-emerald-100 truncate leading-tight">
+                        <p className="text-[6.8px] font-medium text-emerald-100 truncate leading-tight">
                             {schoolInfo.address?.trim() || 'KARTU IDENTITAS & PRESENSI DIGITAL'}
                         </p>
                     </div>
@@ -250,7 +317,7 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                 {/* Lencana Tahun Ajaran + Centang (Centang hanya di layar) */}
                 <div className="flex items-center gap-1.5 shrink-0">
                     {academicYearLabel && (
-                        <span className="px-1.5 py-0.5 rounded bg-white/15 border border-white/30 text-[7px] font-bold text-amber-200 tracking-tight leading-none">
+                        <span className="px-1.5 py-0.5 rounded bg-white/15 border border-white/30 text-[6.8px] font-bold text-amber-200 tracking-tight leading-none">
                             {academicYearLabel}
                         </span>
                     )}
@@ -266,70 +333,108 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                 </div>
             </div>
 
-            {/* 2. ISI PROFIL SISWA (DIGESER KE KANAN AGAR SEIMBANG DI TENGAH KARTU) */}
+            {/* 2. ISI PROFIL SISWA + QR CODE (JIKA AKTIF) */}
             <div
                 style={{
-                    paddingLeft: `${CARD_PROFILE_OFFSET_LEFT_MM}mm`,
+                    paddingLeft: `${codeMode === 'BARCODE_ONLY' ? 8 : CARD_PROFILE_OFFSET_LEFT_MM}mm`,
                     paddingRight: `${CARD_PROFILE_OFFSET_RIGHT_MM}mm`,
                 }}
-                className="flex items-center gap-3.5 py-2 flex-1 min-h-0"
+                className="flex items-center justify-between gap-2.5 py-1.5 flex-1 min-h-0"
             >
-                {/* Bingkai Pas Foto 3x4 */}
-                <div className="w-13.5 h-17.5 rounded-lg border border-slate-300 bg-linear-to-b from-slate-50 to-slate-100 overflow-hidden flex flex-col items-center justify-center shrink-0">
-                    {student.photoUrl ? (
-                        <img
-                            src={student.photoUrl}
-                            alt={student.fullName}
-                            loading="lazy"
-                            className="w-full h-full object-cover"
-                        />
-                    ) : (
-                        <div className="flex flex-col items-center justify-center text-slate-400">
-                            <User size={22} strokeWidth={1.75} className="text-emerald-600/70" />
-                            <span className="text-[7px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">
-                                3 × 4
-                            </span>
-                        </div>
-                    )}
-                </div>
-
-                {/* Detail Nama, Nomor Induk, Kelas & Jenis Kelamin */}
-                <div className="min-w-0 flex-1 flex flex-col justify-center">
-                    <p className="text-[11.5px] font-extrabold text-slate-900 leading-[1.2] line-clamp-2">
-                        {student.fullName}
-                    </p>
-
-                    <p className="text-[9.5px] font-mono font-semibold text-slate-700 mt-1 leading-none">
-                        {hasRealNisn
-                            ? `NISN : ${student.nisn}`
-                            : student.nis && student.nis !== '-'
-                                ? `NIS : ${student.nis}`
-                                : 'NISN/NIS Belum Diisi'}
-                    </p>
-
-                    <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-                        <span className="inline-block px-2 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[8.5px] font-bold text-emerald-800 leading-none">
-                            Kelas {student.className}
-                        </span>
-                        {genderLabel && (
-                            <span className="inline-block px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[8.5px] font-semibold text-slate-700 leading-none">
-                                {genderLabel}
-                            </span>
+                <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                    {/* Bingkai Pas Foto 3x4 */}
+                    <div className="w-12.5 h-16.5 rounded-lg border border-slate-300 bg-linear-to-b from-slate-50 to-slate-100 overflow-hidden flex flex-col items-center justify-center shrink-0">
+                        {student.photoUrl ? (
+                            <img
+                                src={student.photoUrl}
+                                alt={student.fullName}
+                                loading="lazy"
+                                className="w-full h-full object-cover"
+                            />
+                        ) : (
+                            <div className="flex flex-col items-center justify-center text-slate-400">
+                                <User size={20} strokeWidth={1.75} className="text-emerald-600/70" />
+                                <span className="text-[6.5px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">
+                                    3 × 4
+                                </span>
+                            </div>
                         )}
                     </div>
-                </div>
-            </div>
 
-            {/* 3. AREA BARCODE BAWAH */}
-            <div className="px-3.5 pt-1.5 pb-1.5 bg-slate-50/90 border-t border-slate-200 flex items-center justify-center shrink-0">
-                {scanCode ? (
-                    <StudentBarcodeSvg codeValue={scanCode} />
-                ) : (
-                    <span className="text-[8.5px] text-red-600 font-bold text-center">
-                        Lengkapi NISN/NIS di Master Siswa untuk mencetak barcode
-                    </span>
+                    {/* Detail Nama, Nomor Induk, Kelas & Jenis Kelamin */}
+                    <div className="min-w-0 flex-1 flex flex-col justify-center">
+                        <p className="text-[10.5px] font-extrabold text-slate-900 leading-[1.18] line-clamp-2">
+                            {student.fullName}
+                        </p>
+
+                        <p className="text-[8.8px] font-mono font-semibold text-slate-700 mt-1 leading-none">
+                            {hasRealNisn
+                                ? `NISN: ${student.nisn}`
+                                : student.nis && student.nis !== '-'
+                                    ? `NIS: ${student.nis}`
+                                    : 'NISN/NIS Belum Diisi'}
+                        </p>
+
+                        <div className="flex flex-wrap items-center gap-1 mt-1.5">
+                            <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[8px] font-bold text-emerald-800 leading-none">
+                                Kelas {student.className}
+                            </span>
+                            {genderLabel && (
+                                <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[8px] font-semibold text-slate-700 leading-none">
+                                    {genderLabel}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </div>
+
+                {/* Slot QR Code Kanan */}
+                {showQr && scanCode && (
+                    <StudentQrCodeSvg
+                        codeValue={scanCode}
+                        sizeMm={codeMode === 'QR_ONLY' ? QR_ONLY_SIZE_MM : QR_HYBRID_SIZE_MM}
+                        caption={codeMode === 'QR_ONLY' ? scanCode : 'SCAN QR'}
+                    />
                 )}
             </div>
+
+            {/* 3. AREA BARCODE BAWAH ATAU FOOTER QR_ONLY */}
+            {showBarcode ? (
+                <div className="px-3.5 pt-1 pb-1 bg-slate-50/95 border-t border-slate-200 flex items-center justify-center shrink-0">
+                    {scanCode ? (
+                        <StudentBarcodeSvg
+                            codeValue={scanCode}
+                            height={
+                                codeMode === 'HYBRID'
+                                    ? BARCODE_HYBRID_HEIGHT_PX
+                                    : BARCODE_ONLY_HEIGHT_PX
+                            }
+                            showText={true}
+                        />
+                    ) : (
+                        <span className="text-[8.5px] text-red-600 font-bold text-center">
+                            Lengkapi NISN/NIS di Master Siswa untuk mencetak kode presensi
+                        </span>
+                    )}
+                </div>
+            ) : (
+                <div className="px-3.5 py-1.5 bg-emerald-50/80 border-t border-emerald-200/80 flex items-center justify-between text-[7.5px] text-emerald-900 shrink-0">
+                    {scanCode ? (
+                        <>
+                            <span className="font-semibold">
+                                Arahkan QR Code ke kamera kiosk saat datang & pulang
+                            </span>
+                            <span className="font-mono font-bold text-emerald-700">
+                                AKTIF
+                            </span>
+                        </>
+                    ) : (
+                        <span className="text-red-600 font-bold mx-auto">
+                            Lengkapi NISN/NIS di Master Siswa untuk mencetak QR Code
+                        </span>
+                    )}
+                </div>
+            )}
         </div>
     );
 });
@@ -361,6 +466,9 @@ export function StudentCardPrintPage() {
     const [isClassesReady, setIsClassesReady] = useState<boolean>(false);
     const [selectedClassId, setSelectedClassId] = useState<string>('ALL');
     const [selectedStatus, setSelectedStatus] = useState<string>('AKTIF');
+    const [cardCodeMode, setCardCodeMode] = useState<CardCodeMode>(
+        DEFAULT_CARD_CODE_MODE
+    );
     const [searchQuery, setSearchQuery] = useState<string>('');
     const [students, setStudents] = useState<PrintableStudent[]>([]);
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -372,7 +480,6 @@ export function StudentCardPrintPage() {
     const [pageSize, setPageSize] = useState<number>(DEFAULT_PREVIEW_PAGE_SIZE);
     const [isPrinting, setIsPrinting] = useState<boolean>(false);
 
-    // Pantau dialog print browser agar portal cetak hanya dirender saat mencetak
     useEffect(() => {
         const handleBeforePrint = () => setIsPrinting(true);
         const handleAfterPrint = () => setIsPrinting(false);
@@ -385,7 +492,6 @@ export function StudentCardPrintPage() {
         };
     }, []);
 
-    // 1. Pastikan schoolId terdeteksi dengan aman (baik dari store maupun profil Supabase)
     useEffect(() => {
         let mounted = true;
         async function resolveSchool() {
@@ -420,7 +526,6 @@ export function StudentCardPrintPage() {
         };
     }, [schoolMeta?.id, user]);
 
-    // 2. Muat profil sekolah lengkap (alamat & logo), Tahun Ajaran aktif, serta daftar kelas
     useEffect(() => {
         if (!activeSchoolId) return;
         let mounted = true;
@@ -501,7 +606,6 @@ export function StudentCardPrintPage() {
         };
     }, [activeSchoolId]);
 
-    // 3. Muat data siswa 1x setelah daftar kelas siap
     const loadStudents = useCallback(async () => {
         if (!activeSchoolId || !isClassesReady) return;
         setIsLoading(true);
@@ -547,7 +651,6 @@ export function StudentCardPrintPage() {
 
             setStudents(mapped);
 
-            // Otomatis centang semua siswa yang memiliki NISN asli atau NIS valid
             const validIds = mapped
                 .filter((s) => Boolean(resolveScanCode(s)))
                 .map((s) => s.id);
@@ -576,7 +679,6 @@ export function StudentCardPrintPage() {
         );
     }, [students, searchQuery]);
 
-    // Kalkulasi Pagination Pratinjau Layar
     const effectivePageSize =
         pageSize === 0 ? filteredStudents.length || 1 : pageSize;
     const totalPages =
@@ -656,7 +758,7 @@ export function StudentCardPrintPage() {
 
     return (
         <div className="space-y-5 max-w-6xl mx-auto">
-            {/* CSS Khusus Cetak: Geser posisi eksplisit ke kanan agar kartu & bingkai foto utuh */}
+            {/* CSS Khusus Cetak */}
             <style>{`
         @page {
           size: A4 portrait;
@@ -729,11 +831,11 @@ export function StudentCardPrintPage() {
                     </Link>
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2 text-foreground">
-                            <Barcode className="text-emerald-600" size={24} />
-                            Cetak Kartu Pelajar & Barcode
+                            <QrCode className="text-emerald-600" size={24} />
+                            Cetak Kartu Pelajar (QR Code & Barcode)
                         </h1>
                         <p className="text-sm text-muted-foreground mt-0.5">
-                            Ukuran standar CR80 ({CARD_WIDTH_MM} × {CARD_HEIGHT_MM} mm) ber-barcode Code 128 siap potong di kertas A4.
+                            Ukuran standar CR80 ({CARD_WIDTH_MM} × {CARD_HEIGHT_MM} mm) siap pindai kamera QR maupun scanner barcode USB.
                         </p>
                     </div>
                 </div>
@@ -752,7 +854,7 @@ export function StudentCardPrintPage() {
             {/* Filter & Kontrol Pemilihan */}
             <div className="rounded-xl border border-border bg-card p-4 shadow-sm space-y-3">
                 <div className="flex flex-wrap items-end gap-3">
-                    <div className="min-w-44">
+                    <div className="min-w-40">
                         <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
                             Filter Kelas
                         </label>
@@ -792,7 +894,49 @@ export function StudentCardPrintPage() {
                         </div>
                     </div>
 
-                    <div className="flex-1 min-w-60">
+                    {/* Pemilih Desain Kode (Hybrid / QR Saja / Barcode Saja) */}
+                    <div>
+                        <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
+                            Desain Kode Presensi
+                        </label>
+                        <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
+                            <button
+                                type="button"
+                                onClick={() => setCardCodeMode('HYBRID')}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${cardCodeMode === 'HYBRID'
+                                    ? 'bg-emerald-600 text-white shadow-2xs'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <QrCode size={12} />
+                                <span>QR + Barcode</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setCardCodeMode('QR_ONLY')}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${cardCodeMode === 'QR_ONLY'
+                                    ? 'bg-emerald-600 text-white shadow-2xs'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <QrCode size={12} />
+                                <span>QR Saja</span>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setCardCodeMode('BARCODE_ONLY')}
+                                className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer ${cardCodeMode === 'BARCODE_ONLY'
+                                    ? 'bg-emerald-600 text-white shadow-2xs'
+                                    : 'text-muted-foreground hover:text-foreground'
+                                    }`}
+                            >
+                                <Barcode size={12} />
+                                <span>Barcode Saja</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="flex-1 min-w-52">
                         <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
                             Cari Nama / NISN / NIS
                         </label>
@@ -805,7 +949,7 @@ export function StudentCardPrintPage() {
                                     setSearchQuery(e.target.value);
                                     setCurrentPage(1);
                                 }}
-                                placeholder="Ketik nama siswa atau nomor NISN..."
+                                placeholder="Ketik nama siswa atau NISN..."
                                 className="w-full min-w-0 bg-transparent text-xs focus:outline-none"
                             />
                             {searchQuery && (
@@ -830,7 +974,7 @@ export function StudentCardPrintPage() {
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-background hover:bg-muted transition cursor-pointer disabled:opacity-50"
                     >
                         <Users size={15} />
-                        Pilih / Batal Semua ({filteredStudents.length})
+                        Pilih / Batal ({filteredStudents.length})
                     </button>
                 </div>
 
@@ -881,6 +1025,7 @@ export function StudentCardPrintPage() {
                                     student={student}
                                     schoolInfo={schoolInfo}
                                     academicYearLabel={activeAcademicYearName}
+                                    codeMode={cardCodeMode}
                                     isSelected={selectedIds.has(student.id)}
                                     onToggleSelect={toggleStudentSelection}
                                 />
@@ -948,7 +1093,7 @@ export function StudentCardPrintPage() {
                 </div>
             )}
 
-            {/* Wadah Cetak Khusus (Hanya dirender saat mode cetak aktif agar ringan di layar) */}
+            {/* Wadah Cetak Khusus */}
             {typeof document !== 'undefined' &&
                 isPrinting &&
                 cardsToPrint.length > 0 &&
@@ -961,6 +1106,7 @@ export function StudentCardPrintPage() {
                                     student={student}
                                     schoolInfo={schoolInfo}
                                     academicYearLabel={activeAcademicYearName}
+                                    codeMode={cardCodeMode}
                                     isSelected={true}
                                     isPrintMode={true}
                                 />
