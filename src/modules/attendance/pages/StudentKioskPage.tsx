@@ -52,6 +52,7 @@ const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';
 const DEFAULT_KIOSK_SPECIAL_EVENT = 'Kegiatan Khusus Sekolah';
 const OFFLINE_QUEUE_STORAGE_PREFIX = 'sekolaherp_kiosk_offline_queue_';
 const STUDENT_CACHE_STORAGE_PREFIX = 'sekolaherp_kiosk_student_cache_';
+const SCHOOL_META_STORAGE_PREFIX = 'sekolaherp_kiosk_school_meta_';
 
 type KioskState = 'idle' | 'scanning' | 'found' | 'success' | 'already' | 'error';
 type KioskScanMode = 'AUTO' | 'CHECK_IN' | 'CHECK_OUT';
@@ -82,6 +83,11 @@ interface StudentScheduleConfig {
   checkOutStartTime: string;
   enableKiosk: boolean;
   enableCheckOut: boolean;
+}
+
+interface SchoolBrandMeta {
+  name: string;
+  logoUrl: string | null;
 }
 
 interface OfflineKioskQueueItem {
@@ -277,17 +283,60 @@ function writeStudentDirectoryCache(schoolId: string, students: FoundStudent[]) 
   }
 }
 
+/**
+ * Membaca metadata nama & logo sekolah dari cache lokal (untuk tampilan offline).
+ */
+function readSchoolMetaCache(schoolId: string): SchoolBrandMeta | null {
+  if (!schoolId) return null;
+  try {
+    const raw = localStorage.getItem(`${SCHOOL_META_STORAGE_PREFIX}${schoolId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<SchoolBrandMeta>;
+    if (typeof parsed.name === 'string') {
+      return {
+        name: parsed.name,
+        logoUrl: typeof parsed.logoUrl === 'string' ? parsed.logoUrl : null,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Menyimpan metadata nama & logo sekolah ke cache lokal.
+ */
+function writeSchoolMetaCache(schoolId: string, meta: SchoolBrandMeta) {
+  if (!schoolId) return;
+  try {
+    localStorage.setItem(
+      `${SCHOOL_META_STORAGE_PREFIX}${schoolId}`,
+      JSON.stringify(meta)
+    );
+  } catch {
+    // Abaikan jika penyimpanan lokal penuh
+  }
+}
+
 export function StudentKioskPage() {
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
   const [simSchools, setSimSchools] = useState<
-    Array<{ id: string; name: string; npsn: string }>
+    Array<{ id: string; name: string; npsn: string; logoUrl?: string | null }>
   >([]);
   const [simSchoolId, setSimSchoolId] = useState<string>('');
   const activeSchoolId = isSuperAdmin
     ? simSchoolId || school?.id || ''
     : school?.id || '';
+
+  // State identitas visual sekolah (Nama & Logo otomatis sinkron)
+  const [schoolBrand, setSchoolBrand] = useState<SchoolBrandMeta>(() => ({
+    name: school?.name ?? 'SekolahERP',
+    logoUrl: (school as { logoUrl?: string | null } | null)?.logoUrl ?? null,
+  }));
+  const [logoLoadError, setLogoLoadError] = useState<boolean>(false);
 
   const [nowTick, setNowTick] = useState<Date>(() => new Date());
   const [schoolTimezone, setSchoolTimezone] = useState<string>(
@@ -499,17 +548,106 @@ export function StudentKioskPage() {
     return () => clearInterval(interval);
   }, []);
 
+  // Muat daftar sekolah untuk mode simulasi Super Admin (termasuk logoUrl)
   useEffect(() => {
     if (!isSuperAdmin) return;
-    attendanceService
-      .getAllSchoolsForSimulation()
-      .then((list) => {
+    let mounted = true;
+
+    async function loadSimSchools() {
+      try {
+        const { data, error } = await supabase
+          .from('schools')
+          .select('id, name, npsn, logoUrl')
+          .order('name', { ascending: true });
+
+        if (error) throw error;
+        if (!mounted) return;
+
+        const list = (data ?? []) as Array<{
+          id: string;
+          name: string;
+          npsn: string;
+          logoUrl?: string | null;
+        }>;
         setSimSchools(list);
         if (school?.id) setSimSchoolId(school.id);
         else if (list.length > 0) setSimSchoolId(list[0].id);
-      })
-      .catch(console.error);
+      } catch {
+        // Fallback jika offline atau query terbatas
+        attendanceService
+          .getAllSchoolsForSimulation()
+          .then((list) => {
+            if (!mounted) return;
+            setSimSchools(list);
+            if (school?.id) setSimSchoolId(school.id);
+            else if (list.length > 0) setSimSchoolId(list[0].id);
+          })
+          .catch(console.error);
+      }
+    }
+
+    void loadSimSchools();
+    return () => {
+      mounted = false;
+    };
   }, [isSuperAdmin, school?.id]);
+
+  // Sinkronkan Nama & Logo Sekolah secara otomatis (dari Store, Cache Offline, & Database)
+  const storeSchoolLogo = (school as { logoUrl?: string | null } | null)?.logoUrl ?? null;
+
+  useEffect(() => {
+    if (!activeSchoolId) return;
+    let mounted = true;
+
+    // 1. Terapkan langsung jika cocok dengan data store global atau daftar simulasi
+    if (school?.id === activeSchoolId) {
+      const nextMeta: SchoolBrandMeta = {
+        name: school.name || 'SekolahERP',
+        logoUrl: storeSchoolLogo,
+      };
+      setSchoolBrand(nextMeta);
+      setLogoLoadError(false);
+      writeSchoolMetaCache(activeSchoolId, nextMeta);
+    } else {
+      const simMatch = simSchools.find((s) => s.id === activeSchoolId);
+      if (simMatch) {
+        setSchoolBrand({
+          name: simMatch.name,
+          logoUrl: simMatch.logoUrl ?? null,
+        });
+        setLogoLoadError(false);
+      } else {
+        const cached = readSchoolMetaCache(activeSchoolId);
+        if (cached) {
+          setSchoolBrand(cached);
+          setLogoLoadError(false);
+        }
+      }
+    }
+
+    // 2. Ambil data terbaru dari database saat online agar perubahan logo langsung muncul
+    if (navigator.onLine) {
+      void supabase
+        .from('schools')
+        .select('name, logoUrl')
+        .eq('id', activeSchoolId)
+        .maybeSingle()
+        .then(({ data, error }) => {
+          if (!mounted || error || !data) return;
+          const freshMeta: SchoolBrandMeta = {
+            name: data.name || 'SekolahERP',
+            logoUrl: data.logoUrl ?? null,
+          };
+          setSchoolBrand(freshMeta);
+          setLogoLoadError(false);
+          writeSchoolMetaCache(activeSchoolId, freshMeta);
+        });
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [activeSchoolId, school?.id, school?.name, storeSchoolLogo, simSchools]);
 
   // Muat antrean offline yang tersimpan untuk sekolah aktif
   useEffect(() => {
@@ -1287,10 +1425,9 @@ export function StudentKioskPage() {
     day: 'numeric',
   });
 
-  const activeSchoolName = isSuperAdmin
-    ? simSchools.find((s) => s.id === activeSchoolId)?.name ??
-    'Mode Simulasi Kiosk'
-    : school?.name ?? 'SekolahERP';
+  const activeSchoolName = schoolBrand.name;
+  const activeSchoolLogoUrl = schoolBrand.logoUrl;
+  const hasRenderableLogo = Boolean(activeSchoolLogoUrl) && !logoLoadError;
 
   const isAudioActive = soundEnabled && soundVolume > 0;
   const volumePercent = Math.round((isAudioActive ? soundVolume : 0) * 100);
@@ -1349,7 +1486,18 @@ export function StudentKioskPage() {
 
       <div className="kiosk-header" style={{ flexShrink: 0 }}>
         <div className="kiosk-school-info">
-          <School size={28} className="kiosk-school-icon" />
+          {hasRenderableLogo ? (
+            <div className="w-11 h-11 rounded-xl bg-white border border-border/70 p-1 shadow-xs flex items-center justify-center overflow-hidden shrink-0">
+              <img
+                src={activeSchoolLogoUrl!}
+                alt={activeSchoolName}
+                onError={() => setLogoLoadError(true)}
+                className="w-full h-full object-contain"
+              />
+            </div>
+          ) : (
+            <School size={28} className="kiosk-school-icon" />
+          )}
           <div>
             <h1 className="kiosk-school-name">{activeSchoolName}</h1>
             <p className="kiosk-date">

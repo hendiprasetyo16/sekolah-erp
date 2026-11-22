@@ -15,8 +15,37 @@ import type {
     UpdateClassPayload,
     AcademicYearRelation,
     TeacherRelation,
-    StudentRelation,
 } from '../types/academic.types';
+
+// ======================================================
+// COLUMN PROJECTIONS (RINGAN & EKSPLISIT)
+// ======================================================
+
+const ACADEMIC_YEAR_COLUMNS =
+    'id, schoolId, name, startYear, endYear, isActive, createdAt';
+
+const SEMESTER_COLUMNS =
+    'id, schoolId, academicYearId, type, startDate, endDate, isActive, createdAt';
+
+const CLASS_WITH_RELATIONS_SELECT = `
+    id,
+    schoolId,
+    academicYearId,
+    name,
+    gradeLevel,
+    major,
+    homeroomTeacherId,
+    capacity,
+    academic_years (
+        id,
+        name,
+        isActive
+    ),
+    teachers (
+        id,
+        fullName
+    )
+`;
 
 // ======================================================
 // INTERNAL TYPES
@@ -33,7 +62,6 @@ interface ClassQueryRow {
     capacity: number;
     academic_years: AcademicYearRelation | AcademicYearRelation[] | null;
     teachers: TeacherRelation | TeacherRelation[] | null;
-    students?: StudentRelation[] | null;
 }
 
 // ======================================================
@@ -53,10 +81,16 @@ const handleDbError = (error: unknown): Error => {
         lowerMessage.includes('networkerror') ||
         lowerMessage.includes('network request failed')
     ) {
-        return new Error('Koneksi ke server terputus. Periksa sambungan internet Anda lalu coba kembali.');
+        return new Error(
+            'Koneksi ke server terputus. Periksa sambungan internet Anda lalu coba kembali.'
+        );
     }
 
-    if (pgError?.code === '23505' || lowerMessage.includes('unique constraint') || lowerMessage.includes('duplicate key')) {
+    if (
+        pgError?.code === '23505' ||
+        lowerMessage.includes('unique constraint') ||
+        lowerMessage.includes('duplicate key')
+    ) {
         if (lowerMessage.includes('academic_years_school_year_key')) {
             return new Error('Tahun ajaran tersebut sudah terdaftar di sekolah ini.');
         }
@@ -86,7 +120,11 @@ const handleDbError = (error: unknown): Error => {
         return new Error('Masih ada kolom wajib yang belum terisi.');
     }
 
-    if (pgError?.code === '42501' || lowerMessage.includes('row-level security') || lowerMessage.includes('permission denied')) {
+    if (
+        pgError?.code === '42501' ||
+        lowerMessage.includes('row-level security') ||
+        lowerMessage.includes('permission denied')
+    ) {
         return new Error('Anda tidak memiliki izin akses untuk melakukan operasi ini.');
     }
 
@@ -127,24 +165,19 @@ const firstRelation = <T>(relation: T | T[] | null | undefined): T | null => {
     return Array.isArray(relation) ? (relation[0] ?? null) : relation;
 };
 
-const toClassItem = (row: ClassQueryRow): ClassItem => {
-    const activeStudentsCount =
-        row.students?.filter((student) => student.status === 'AKTIF').length ?? 0;
-
-    return {
-        id: row.id,
-        schoolId: row.schoolId,
-        academicYearId: row.academicYearId,
-        name: row.name,
-        gradeLevel: row.gradeLevel,
-        major: row.major ?? null,
-        homeroomTeacherId: row.homeroomTeacherId ?? null,
-        capacity: row.capacity,
-        academic_years: firstRelation(row.academic_years),
-        teachers: firstRelation(row.teachers),
-        studentCount: activeStudentsCount,
-    };
-};
+const toClassItem = (row: ClassQueryRow, activeStudentCount = 0): ClassItem => ({
+    id: row.id,
+    schoolId: row.schoolId,
+    academicYearId: row.academicYearId,
+    name: row.name,
+    gradeLevel: row.gradeLevel,
+    major: row.major ?? null,
+    homeroomTeacherId: row.homeroomTeacherId ?? null,
+    capacity: row.capacity,
+    academic_years: firstRelation(row.academic_years),
+    teachers: firstRelation(row.teachers),
+    studentCount: activeStudentCount,
+});
 
 // ======================================================
 // ACADEMIC SERVICE
@@ -160,7 +193,7 @@ export const academicService = {
 
         const { data, error } = await supabase
             .from('academic_years')
-            .select('*')
+            .select(ACADEMIC_YEAR_COLUMNS)
             .eq('schoolId', schoolId)
             .order('startYear', { ascending: false });
 
@@ -211,7 +244,7 @@ export const academicService = {
                 endYear,
                 isActive: shouldAutoActivate,
             })
-            .select('*')
+            .select(ACADEMIC_YEAR_COLUMNS)
             .single();
 
         if (insertErr) throw handleDbError(insertErr);
@@ -268,6 +301,14 @@ export const academicService = {
         if (findError) throw handleDbError(findError);
         if (!targetYear) {
             throw new Error('Tahun ajaran tidak ditemukan pada sekolah ini.');
+        }
+
+        if (targetYear.isActive) {
+            return {
+                success: true,
+                data: undefined,
+                message: 'Tahun ajaran aktif berhasil diperbarui.',
+            };
         }
 
         const { data: currentActive } = await supabase
@@ -351,7 +392,9 @@ export const academicService = {
         if (checkClassesError) throw handleDbError(checkClassesError);
 
         if (classes && classes.length > 0) {
-            throw new Error('Tahun ajaran terpilih tidak dapat dihapus karena masih digunakan oleh kelas.');
+            throw new Error(
+                'Tahun ajaran terpilih tidak dapat dihapus karena masih digunakan oleh kelas.'
+            );
         }
 
         const { error: delSemError } = await supabase
@@ -394,7 +437,7 @@ export const academicService = {
 
         let query = supabase
             .from('semesters')
-            .select('*')
+            .select(SEMESTER_COLUMNS)
             .eq('schoolId', schoolId);
 
         if (academicYearId) {
@@ -445,7 +488,7 @@ export const academicService = {
                 endDate: payload.endDate,
                 isActive: Boolean(payload.isActive),
             })
-            .select('*')
+            .select(SEMESTER_COLUMNS)
             .single();
 
         if (error) throw handleDbError(error);
@@ -474,7 +517,7 @@ export const academicService = {
             .update(payload)
             .eq('schoolId', schoolId)
             .eq('id', id)
-            .select('*')
+            .select(SEMESTER_COLUMNS)
             .single();
 
         if (error) throw handleDbError(error);
@@ -560,7 +603,7 @@ export const academicService = {
     },
 
     // ==================================================
-    // KELAS
+    // KELAS (DIOPTIMASI: TANPA JOIN NESTED SEMUA SISWA)
     // ==================================================
 
     async getClasses(
@@ -571,22 +614,7 @@ export const academicService = {
 
         let query = supabase
             .from('classes')
-            .select(`
-                *,
-                academic_years (
-                    id,
-                    name,
-                    isActive
-                ),
-                teachers (
-                    id,
-                    fullName
-                ),
-                students (
-                    id,
-                    status
-                )
-            `)
+            .select(CLASS_WITH_RELATIONS_SELECT)
             .eq('schoolId', schoolId);
 
         if (academicYearId) {
@@ -600,10 +628,35 @@ export const academicService = {
         if (error) throw handleDbError(error);
 
         const rows = (data ?? []) as unknown as ClassQueryRow[];
+        if (rows.length === 0) {
+            return {
+                success: true,
+                data: [],
+                message: 'Berhasil mengambil data kelas.',
+            };
+        }
+
+        // Hitung siswa AKTIF hanya lewat kolom `classId` yang ringan
+        const classIds = rows.map((r) => r.id);
+        const { data: activeStudentRows, error: countErr } = await supabase
+            .from('students')
+            .select('classId')
+            .eq('schoolId', schoolId)
+            .eq('status', 'AKTIF')
+            .in('classId', classIds);
+
+        if (countErr) throw handleDbError(countErr);
+
+        const countByClassId = new Map<string, number>();
+        for (const st of activeStudentRows ?? []) {
+            if (st.classId) {
+                countByClassId.set(st.classId, (countByClassId.get(st.classId) ?? 0) + 1);
+            }
+        }
 
         return {
             success: true,
-            data: rows.map(toClassItem),
+            data: rows.map((row) => toClassItem(row, countByClassId.get(row.id) ?? 0)),
             message: 'Berhasil mengambil data kelas.',
         };
     },
@@ -612,37 +665,34 @@ export const academicService = {
         requireSchoolId(schoolId);
         requireId(id, 'ID kelas');
 
-        const { data, error } = await supabase
-            .from('classes')
-            .select(`
-                *,
-                academic_years (
-                    id,
-                    name,
-                    isActive
-                ),
-                teachers (
-                    id,
-                    fullName
-                ),
-                students (
-                    id,
-                    status
-                )
-            `)
-            .eq('schoolId', schoolId)
-            .eq('id', id)
-            .maybeSingle();
+        const [classRes, countRes] = await Promise.all([
+            supabase
+                .from('classes')
+                .select(CLASS_WITH_RELATIONS_SELECT)
+                .eq('schoolId', schoolId)
+                .eq('id', id)
+                .maybeSingle(),
+            supabase
+                .from('students')
+                .select('id', { count: 'exact', head: true })
+                .eq('schoolId', schoolId)
+                .eq('classId', id)
+                .eq('status', 'AKTIF'),
+        ]);
 
-        if (error) throw handleDbError(error);
+        if (classRes.error) throw handleDbError(classRes.error);
+        if (countRes.error) throw handleDbError(countRes.error);
 
-        if (!data) {
+        if (!classRes.data) {
             throw new Error('Kelas tidak ditemukan atau Anda tidak memiliki akses.');
         }
 
         return {
             success: true,
-            data: toClassItem(data as unknown as ClassQueryRow),
+            data: toClassItem(
+                classRes.data as unknown as ClassQueryRow,
+                countRes.count ?? 0
+            ),
             message: 'Berhasil mengambil detail kelas.',
         };
     },
@@ -659,34 +709,39 @@ export const academicService = {
             throw new Error('Tingkat kelas harus antara 0 (TK/PAUD/TKLB) hingga 12.');
         }
 
-        if (!Number.isInteger(payload.capacity) || payload.capacity < 1 || payload.capacity > 500) {
+        if (
+            !Number.isInteger(payload.capacity) ||
+            payload.capacity < 1 ||
+            payload.capacity > 500
+        ) {
             throw new Error('Kapasitas kelas harus antara 1 hingga 500 siswa.');
         }
 
-        const { data: academicYear, error: yearError } = await supabase
-            .from('academic_years')
-            .select('id')
-            .eq('schoolId', payload.schoolId)
-            .eq('id', payload.academicYearId)
-            .maybeSingle();
+        const [yearRes, teacherRes] = await Promise.all([
+            supabase
+                .from('academic_years')
+                .select('id')
+                .eq('schoolId', payload.schoolId)
+                .eq('id', payload.academicYearId)
+                .maybeSingle(),
+            payload.homeroomTeacherId
+                ? supabase
+                      .from('teachers')
+                      .select('id')
+                      .eq('schoolId', payload.schoolId)
+                      .eq('id', payload.homeroomTeacherId)
+                      .maybeSingle()
+                : Promise.resolve({ data: { id: 'skip' }, error: null }),
+        ]);
 
-        if (yearError) throw handleDbError(yearError);
-        if (!academicYear) {
+        if (yearRes.error) throw handleDbError(yearRes.error);
+        if (!yearRes.data) {
             throw new Error('Tahun ajaran tidak ditemukan atau bukan milik sekolah ini.');
         }
 
-        if (payload.homeroomTeacherId) {
-            const { data: teacher, error: teacherError } = await supabase
-                .from('teachers')
-                .select('id')
-                .eq('schoolId', payload.schoolId)
-                .eq('id', payload.homeroomTeacherId)
-                .maybeSingle();
-
-            if (teacherError) throw handleDbError(teacherError);
-            if (!teacher) {
-                throw new Error('Wali kelas tidak ditemukan atau bukan milik sekolah ini.');
-            }
+        if (teacherRes.error) throw handleDbError(teacherRes.error);
+        if (!teacherRes.data) {
+            throw new Error('Wali kelas tidak ditemukan atau bukan milik sekolah ini.');
         }
 
         const { data, error } = await supabase
@@ -700,29 +755,14 @@ export const academicService = {
                 homeroomTeacherId: payload.homeroomTeacherId ?? null,
                 capacity: payload.capacity,
             })
-            .select(`
-                *,
-                academic_years (
-                    id,
-                    name,
-                    isActive
-                ),
-                teachers (
-                    id,
-                    fullName
-                ),
-                students (
-                    id,
-                    status
-                )
-            `)
+            .select(CLASS_WITH_RELATIONS_SELECT)
             .single();
 
         if (error) throw handleDbError(error);
 
         return {
             success: true,
-            data: toClassItem(data as unknown as ClassQueryRow),
+            data: toClassItem(data as unknown as ClassQueryRow, 0),
             message: 'Kelas berhasil dibuat.',
         };
     },
@@ -749,39 +789,44 @@ export const academicService = {
 
         if (
             payload.capacity !== undefined &&
-            (!Number.isInteger(payload.capacity) || payload.capacity < 1 || payload.capacity > 500)
+            (!Number.isInteger(payload.capacity) ||
+                payload.capacity < 1 ||
+                payload.capacity > 500)
         ) {
             throw new Error('Kapasitas kelas harus antara 1 hingga 500 siswa.');
         }
 
         if (payload.academicYearId !== undefined) {
             requireId(payload.academicYearId, 'ID tahun ajaran');
-
-            const { data: academicYear, error: yearError } = await supabase
-                .from('academic_years')
-                .select('id')
-                .eq('schoolId', schoolId)
-                .eq('id', payload.academicYearId)
-                .maybeSingle();
-
-            if (yearError) throw handleDbError(yearError);
-            if (!academicYear) {
-                throw new Error('Tahun ajaran tidak ditemukan atau bukan milik sekolah ini.');
-            }
         }
 
-        if (payload.homeroomTeacherId) {
-            const { data: teacher, error: teacherError } = await supabase
-                .from('teachers')
-                .select('id')
-                .eq('schoolId', schoolId)
-                .eq('id', payload.homeroomTeacherId)
-                .maybeSingle();
+        const [yearRes, teacherRes] = await Promise.all([
+            payload.academicYearId !== undefined
+                ? supabase
+                      .from('academic_years')
+                      .select('id')
+                      .eq('schoolId', schoolId)
+                      .eq('id', payload.academicYearId)
+                      .maybeSingle()
+                : Promise.resolve({ data: { id: 'skip' }, error: null }),
+            payload.homeroomTeacherId
+                ? supabase
+                      .from('teachers')
+                      .select('id')
+                      .eq('schoolId', schoolId)
+                      .eq('id', payload.homeroomTeacherId)
+                      .maybeSingle()
+                : Promise.resolve({ data: { id: 'skip' }, error: null }),
+        ]);
 
-            if (teacherError) throw handleDbError(teacherError);
-            if (!teacher) {
-                throw new Error('Wali kelas tidak ditemukan atau bukan milik sekolah ini.');
-            }
+        if (yearRes.error) throw handleDbError(yearRes.error);
+        if (!yearRes.data) {
+            throw new Error('Tahun ajaran tidak ditemukan atau bukan milik sekolah ini.');
+        }
+
+        if (teacherRes.error) throw handleDbError(teacherRes.error);
+        if (!teacherRes.data) {
+            throw new Error('Wali kelas tidak ditemukan atau bukan milik sekolah ini.');
         }
 
         const updatePayload: UpdateClassPayload = {
@@ -790,34 +835,31 @@ export const academicService = {
             ...(payload.major !== undefined ? { major: payload.major?.trim() || null } : {}),
         };
 
-        const { data, error } = await supabase
-            .from('classes')
-            .update(updatePayload)
-            .eq('schoolId', schoolId)
-            .eq('id', id)
-            .select(`
-                *,
-                academic_years (
-                    id,
-                    name,
-                    isActive
-                ),
-                teachers (
-                    id,
-                    fullName
-                ),
-                students (
-                    id,
-                    status
-                )
-            `)
-            .single();
+        const [updateRes, countRes] = await Promise.all([
+            supabase
+                .from('classes')
+                .update(updatePayload)
+                .eq('schoolId', schoolId)
+                .eq('id', id)
+                .select(CLASS_WITH_RELATIONS_SELECT)
+                .single(),
+            supabase
+                .from('students')
+                .select('id', { count: 'exact', head: true })
+                .eq('schoolId', schoolId)
+                .eq('classId', id)
+                .eq('status', 'AKTIF'),
+        ]);
 
-        if (error) throw handleDbError(error);
+        if (updateRes.error) throw handleDbError(updateRes.error);
+        if (countRes.error) throw handleDbError(countRes.error);
 
         return {
             success: true,
-            data: toClassItem(data as unknown as ClassQueryRow),
+            data: toClassItem(
+                updateRes.data as unknown as ClassQueryRow,
+                countRes.count ?? 0
+            ),
             message: 'Kelas berhasil diperbarui.',
         };
     },
@@ -826,28 +868,31 @@ export const academicService = {
         requireSchoolId(schoolId);
         requireId(id, 'ID kelas');
 
-        const { data: existingClass, error: classError } = await supabase
-            .from('classes')
-            .select('id')
-            .eq('schoolId', schoolId)
-            .eq('id', id)
-            .maybeSingle();
+        const [classRes, studentRes] = await Promise.all([
+            supabase
+                .from('classes')
+                .select('id')
+                .eq('schoolId', schoolId)
+                .eq('id', id)
+                .maybeSingle(),
+            supabase
+                .from('students')
+                .select('id')
+                .eq('schoolId', schoolId)
+                .eq('classId', id)
+                .limit(1),
+        ]);
 
-        if (classError) throw handleDbError(classError);
-        if (!existingClass) {
+        if (classRes.error) throw handleDbError(classRes.error);
+        if (!classRes.data) {
             throw new Error('Kelas tidak ditemukan atau bukan milik sekolah ini.');
         }
 
-        const { data: students, error: checkError } = await supabase
-            .from('students')
-            .select('id')
-            .eq('schoolId', schoolId)
-            .eq('classId', id)
-            .limit(1);
-
-        if (checkError) throw handleDbError(checkError);
-        if (students && students.length > 0) {
-            throw new Error('Kelas tidak dapat dihapus karena masih memiliki siswa terdaftar.');
+        if (studentRes.error) throw handleDbError(studentRes.error);
+        if (studentRes.data && studentRes.data.length > 0) {
+            throw new Error(
+                'Kelas tidak dapat dihapus karena masih memiliki siswa terdaftar.'
+            );
         }
 
         const { data, error } = await supabase
@@ -878,36 +923,38 @@ export const academicService = {
 
         const uniqueIds = [...new Set(ids)];
 
-        const { data: existingClasses, error: classError } = await supabase
-            .from('classes')
-            .select('id, name')
-            .eq('schoolId', schoolId)
-            .in('id', uniqueIds);
+        const [classesRes, enrolledRes] = await Promise.all([
+            supabase
+                .from('classes')
+                .select('id, name')
+                .eq('schoolId', schoolId)
+                .in('id', uniqueIds),
+            supabase
+                .from('students')
+                .select('classId')
+                .eq('schoolId', schoolId)
+                .in('classId', uniqueIds),
+        ]);
 
-        if (classError) throw handleDbError(classError);
+        if (classesRes.error) throw handleDbError(classesRes.error);
 
-        if ((existingClasses?.length ?? 0) !== uniqueIds.length) {
+        const existingClasses = classesRes.data ?? [];
+        if (existingClasses.length !== uniqueIds.length) {
             throw new Error('Sebagian kelas tidak ditemukan atau bukan milik sekolah ini.');
         }
 
-        const { data: enrolledRows, error: checkError } = await supabase
-            .from('students')
-            .select('classId')
-            .eq('schoolId', schoolId)
-            .in('classId', uniqueIds);
-
-        if (checkError) throw handleDbError(checkError);
+        if (enrolledRes.error) throw handleDbError(enrolledRes.error);
 
         const occupiedClassIds = new Set(
-            (enrolledRows ?? [])
+            (enrolledRes.data ?? [])
                 .map((row) => row.classId)
                 .filter((cid): cid is string => Boolean(cid))
         );
 
-        const deletableClasses = (existingClasses ?? []).filter(
+        const deletableClasses = existingClasses.filter(
             (cls) => !occupiedClassIds.has(cls.id)
         );
-        const skippedClasses = (existingClasses ?? []).filter((cls) =>
+        const skippedClasses = existingClasses.filter((cls) =>
             occupiedClassIds.has(cls.id)
         );
 
