@@ -92,7 +92,7 @@ export async function updateSubject(
 }
 
 /**
- * Menghapus mata pelajaran (jika belum terikat pada nilai/jadwal).
+ * Menghapus satu mata pelajaran (jika belum terikat pada nilai/jadwal).
  */
 export async function deleteSubject(id: string, schoolId: string): Promise<void> {
   const { error } = await supabase
@@ -112,18 +112,90 @@ export async function deleteSubject(id: string, schoolId: string): Promise<void>
 }
 
 /**
- * Mengisi paket awal mata pelajaran Kurikulum Merdeka agar siap dipakai
- * untuk Jadwal Pelajaran maupun Input Nilai & Cetak Raport.
+ * Menghapus beberapa mata pelajaran sekaligus berdasarkan daftar ID yang diseleksi.
+ */
+export async function deleteSubjectsByIds(
+  ids: string[],
+  schoolId: string
+): Promise<void> {
+  if (ids.length === 0) return;
+
+  const { error } = await supabase
+    .from('subjects')
+    .delete()
+    .eq('schoolId', schoolId)
+    .in('id', ids);
+
+  if (error) {
+    if (error.code === '23503') {
+      throw new Error(
+        'Salah satu mata pelajaran yang dipilih sudah dipakai pada data Nilai atau Jadwal sehingga tidak dapat dihapus.'
+      );
+    }
+    throw new Error(`Gagal menghapus mata pelajaran terpilih: ${error.message}`);
+  }
+}
+
+/**
+ * Menghapus SELURUH mata pelajaran milik sekolah tertentu (Khusus SUPER_ADMIN).
+ */
+export async function deleteAllSubjectsBySchool(schoolId: string): Promise<void> {
+  const { error } = await supabase
+    .from('subjects')
+    .delete()
+    .eq('schoolId', schoolId);
+
+  if (error) {
+    if (error.code === '23503') {
+      throw new Error(
+        'Sebagian mata pelajaran sudah terikat pada data Nilai atau Jadwal sehingga tidak dapat dihapus massal.'
+      );
+    }
+    throw new Error(`Gagal menghapus seluruh mata pelajaran: ${error.message}`);
+  }
+}
+
+/**
+ * Mengisi paket awal mata pelajaran Kurikulum Merdeka sesuai jenjang sekolah.
  */
 export async function seedDefaultMerdekaSubjects(
   schoolId: string,
-  existingCodes: string[]
+  existingCodes: string[],
+  schoolLevel?: string | null
 ): Promise<number> {
   const normalizedExisting = new Set(
     existingCodes.map((c) => c.trim().toUpperCase()).filter(Boolean)
   );
 
-  const templates = [
+  const level = (schoolLevel || 'SMA').toUpperCase().trim();
+
+  const sdTemplates = [
+    { code: 'PABP', name: 'Pendidikan Agama dan Budi Pekerti', category: 'UMUM', sortOrder: 10 },
+    { code: 'PPKN', name: 'Pendidikan Pancasila', category: 'UMUM', sortOrder: 20 },
+    { code: 'BIN', name: 'Bahasa Indonesia', category: 'UMUM', sortOrder: 30 },
+    { code: 'MTK', name: 'Matematika', category: 'UMUM', sortOrder: 40 },
+    { code: 'IPAS', name: 'Ilmu Pengetahuan Alam dan Sosial (IPAS)', category: 'UMUM', sortOrder: 50 },
+    { code: 'PJOK', name: 'Pendidikan Jasmani, Olahraga, dan Kesehatan', category: 'UMUM', sortOrder: 60 },
+    { code: 'SENI', name: 'Seni dan Budaya', category: 'UMUM', sortOrder: 70 },
+    { code: 'BING', name: 'Bahasa Inggris', category: 'PILIHAN', sortOrder: 80 },
+    { code: 'BJW', name: 'Bahasa Jawa', category: 'MUATAN_LOKAL', sortOrder: 90 },
+  ];
+
+  const smpTemplates = [
+    { code: 'PABP', name: 'Pendidikan Agama dan Budi Pekerti', category: 'UMUM', sortOrder: 10 },
+    { code: 'PPKN', name: 'Pendidikan Pancasila', category: 'UMUM', sortOrder: 20 },
+    { code: 'BIN', name: 'Bahasa Indonesia', category: 'UMUM', sortOrder: 30 },
+    { code: 'MTK', name: 'Matematika', category: 'UMUM', sortOrder: 40 },
+    { code: 'IPA', name: 'Ilmu Pengetahuan Alam', category: 'UMUM', sortOrder: 50 },
+    { code: 'IPS', name: 'Ilmu Pengetahuan Sosial', category: 'UMUM', sortOrder: 60 },
+    { code: 'BING', name: 'Bahasa Inggris', category: 'UMUM', sortOrder: 70 },
+    { code: 'PJOK', name: 'Pendidikan Jasmani, Olahraga, dan Kesehatan', category: 'UMUM', sortOrder: 80 },
+    { code: 'INF', name: 'Informatika', category: 'UMUM', sortOrder: 90 },
+    { code: 'SENI', name: 'Seni, Budaya, dan Prakarya', category: 'UMUM', sortOrder: 100 },
+    { code: 'BJW', name: 'Bahasa Jawa', category: 'MUATAN_LOKAL', sortOrder: 110 },
+  ];
+
+  const smaTemplates = [
     { code: 'PABP', name: 'Pendidikan Agama dan Budi Pekerti', category: 'UMUM', sortOrder: 10 },
     { code: 'PPKN', name: 'Pendidikan Pancasila', category: 'UMUM', sortOrder: 20 },
     { code: 'BIN', name: 'Bahasa Indonesia', category: 'UMUM', sortOrder: 30 },
@@ -137,7 +209,14 @@ export async function seedDefaultMerdekaSubjects(
     { code: 'BJW', name: 'Bahasa Jawa', category: 'MUATAN_LOKAL', sortOrder: 110 },
   ];
 
-  const rowsToInsert = templates
+  const selectedTemplates =
+    level === 'SD' || level === 'MI'
+      ? sdTemplates
+      : level === 'SMP' || level === 'MTS'
+      ? smpTemplates
+      : smaTemplates;
+
+  const rowsToInsert = selectedTemplates
     .filter((item) => !normalizedExisting.has(item.code))
     .map((item) => ({
       schoolId,
@@ -145,7 +224,7 @@ export async function seedDefaultMerdekaSubjects(
       name: item.name,
       category: item.category,
       sortOrder: item.sortOrder,
-      description: 'Kurikulum Merdeka',
+      description: `Kurikulum Merdeka (${level})`,
       isActive: true,
     }));
 

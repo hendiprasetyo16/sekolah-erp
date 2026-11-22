@@ -45,8 +45,8 @@ import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 import SubjectsPage from '@/modules/subjects/pages/SubjectsPage';
 
 // Grades & Report module (Kurikulum Merdeka)
-import { GradesAndReportPage } from '@/modules/grades/pages/GradesAndReportPage';
-import { PortalGradesPage } from '@/modules/grades/pages/PortalGradesPage';
+import GradesAndReportPage from '@/modules/grades/pages/GradesAndReportPage';
+import PortalGradesPage from '@/modules/grades/pages/PortalGradesPage';
 
 import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
 import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswordPage';

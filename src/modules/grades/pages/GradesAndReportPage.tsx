@@ -1,36 +1,47 @@
 // src/modules/grades/pages/GradesAndReportPage.tsx
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { motion } from 'framer-motion';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    AlertCircle,
-    Award,
-    BookOpen,
+    Calendar,
     CheckCircle2,
-    FileDown,
+    ClipboardCheck,
+    Download,
+    FileSpreadsheet,
+    FileText,
     Loader2,
-    Lock,
     Plus,
     RefreshCw,
     Save,
     Sparkles,
     Trash2,
-    Unlock,
+    Trophy,
     Users,
+    Wand2,
 } from 'lucide-react';
 import { toast } from 'sonner';
-
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { cn } from '@/utils/cn';
-import { useTranslation } from '@/hooks/useTranslation';
-import { useTeacherScope } from '@/hooks/useTeacherScope';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import { gradeService, type GradeSheetRow } from '../services/grade.service';
-import { generateCurriculumMerdekaReportPdf } from '../utils/reportPdfGenerator';
+import { useTeacherScope } from '@/hooks/useTeacherScope';
+import {
+    gradeService,
+    type GradeSheetRow,
+} from '../services/grade.service';
+import {
+    generateClassBatchReportPdf,
+    generateCurriculumMerdekaReportPdf,
+} from '../utils/reportPdfGenerator';
 import type {
     ClassRankingRow,
     ClassReportContext,
     ExtracurricularItem,
-    GradeWeights,
     PromotionStatus,
     ReportExamMode,
     StudentReportNoteRecord,
@@ -54,20 +65,63 @@ interface ClassOption {
     id: string;
     name: string;
     gradeLevel: number;
-    major: string | null;
-    homeroomTeacher: {
-        id: string;
-        fullName: string;
-        nip: string | null;
-    } | null;
+    homeroomTeacherName: string;
+    homeroomTeacherNip: string | null;
 }
 
-type ActiveTab = 'INPUT_NILAI' | 'WALI_KELAS_RAPORT' | 'PERINGKAT_KELAS';
+interface StudentCrossSubjectGrade {
+    studentId: string;
+    subjectId: string;
+    formativeAvg: number | null;
+    stsScore: number | null;
+    sasScore: number | null;
+    finalScore: number | null;
+}
 
-/**
- * Menentukan predikat huruf berdasarkan skor numerik (0-100)
- */
-function calculatePredicate(score: number | null): string | null {
+type ActiveTab = 'GRADES' | 'NOTES' | 'RANKING';
+
+function clampScore(raw: string): number | null {
+    const trimmed = raw.trim();
+    if (trimmed === '') return null;
+    const num = Number(trimmed);
+    if (Number.isNaN(num)) return null;
+    return Math.max(0, Math.min(100, Math.round(num * 100) / 100));
+}
+
+function computeFormativeAverage(scores: number[]): number | null {
+    const valid = scores.filter((v) => typeof v === 'number' && !Number.isNaN(v));
+    if (valid.length === 0) return null;
+    const sum = valid.reduce((acc, cur) => acc + cur, 0);
+    return Math.round((sum / valid.length) * 100) / 100;
+}
+
+function computeWeightedFinalScore(
+    formativeAvg: number | null,
+    stsScore: number | null,
+    sasScore: number | null,
+    weights: { formative: number; sts: number; sas: number }
+): number | null {
+    let weightedSum = 0;
+    let activeWeight = 0;
+
+    if (formativeAvg !== null && !Number.isNaN(formativeAvg)) {
+        weightedSum += formativeAvg * weights.formative;
+        activeWeight += weights.formative;
+    }
+    if (stsScore !== null && !Number.isNaN(stsScore)) {
+        weightedSum += stsScore * weights.sts;
+        activeWeight += weights.sts;
+    }
+    if (sasScore !== null && !Number.isNaN(sasScore)) {
+        weightedSum += sasScore * weights.sas;
+        activeWeight += weights.sas;
+    }
+
+    if (activeWeight <= 0) return null;
+    return Math.round((weightedSum / activeWeight) * 100) / 100;
+}
+
+function computePredicate(score: number | null): string | null {
     if (score === null || Number.isNaN(score)) return null;
     if (score >= 90) return 'A';
     if (score >= 80) return 'B';
@@ -75,337 +129,399 @@ function calculatePredicate(score: number | null): string | null {
     return 'D';
 }
 
-/**
- * Menghitung Nilai Akhir secara berbobot dari komponen Formatif, STS, dan SAS
- */
-function computeWeightedFinalScore(
-    formativeAvg: number | null,
-    stsScore: number | null,
-    sasScore: number | null,
-    weights: GradeWeights
-): number | null {
-    const f = formativeAvg ?? 0;
-    const sts = stsScore ?? 0;
-    const sas = sasScore ?? 0;
-
-    if (formativeAvg === null && stsScore === null && sasScore === null) {
-        return null;
+function buildAutoDescription(
+    subjectName: string,
+    score: number | null,
+    isSts: boolean
+): string {
+    if (score === null) return '';
+    const periodLabel = isSts ? 'tengah semester ini' : 'semester ini';
+    if (score >= 90) {
+        return `Menunjukkan penguasaan yang sangat baik dalam memahami dan menerapkan kompetensi ${subjectName} pada ${periodLabel}.`;
     }
-
-    const totalWeight = weights.formative + weights.sts + weights.sas;
-    if (totalWeight <= 0) return null;
-
-    const raw =
-        (f * weights.formative + sts * weights.sts + sas * weights.sas) / totalWeight;
-    return Math.round(raw * 100) / 100;
+    if (score >= 80) {
+        return `Menunjukkan penguasaan yang baik dalam memahami kompetensi dasar ${subjectName} pada ${periodLabel}.`;
+    }
+    if (score >= 70) {
+        return `Cukup mampu memahami kompetensi ${subjectName} pada ${periodLabel}, namun perlu latihan tambahan pada beberapa materi.`;
+    }
+    return `Memerlukan bimbingan dan pendampingan lebih intensif untuk mencapai ketuntasan kompetensi ${subjectName} pada ${periodLabel}.`;
 }
 
-export function GradesAndReportPage() {
-    const { locale } = useTranslation();
-    const { school, user } = useAuthStore();
+/**
+ * Generator Catatan Wali Kelas otomatis berdasarkan capaian nilai seluruh mapel,
+ * kehadiran, dan kegiatan ekstrakurikuler siswa.
+ */
+function buildAutoHomeroomNote(params: {
+    studentName: string;
+    mode: ReportExamMode;
+    subjectScores: { subjectName: string; score: number }[];
+    sickDays: number;
+    permissionDays: number;
+    alphaDays: number;
+    extracurriculars: ExtracurricularItem[];
+}): string {
+    const {
+        studentName,
+        mode,
+        subjectScores,
+        sickDays,
+        permissionDays,
+        alphaDays,
+        extracurriculars,
+    } = params;
 
-    const isId = locale === 'id';
-    const tr = (idText: string, enText: string) => (isId ? idText : enText);
+    const firstName = studentName.trim().split(' ')[0] || studentName;
+    const periodText =
+        mode === 'STS' ? 'tengah semester ini' : 'akhir semester ini';
 
-    const schoolInfo = school as { id?: string; name?: string } | null;
+    const parts: string[] = [];
 
-    const initialRoles = useMemo(
-        () =>
-            Array.from(
-                new Set([
-                    ...((user as { roles?: string[] } | null)?.roles || []),
-                    ...(user?.role ? [user.role] : []),
-                ])
-            ),
-        [user]
-    );
+    if (subjectScores.length > 0) {
+        const sorted = [...subjectScores].sort((a, b) => b.score - a.score);
+        const avg =
+            sorted.reduce((sum, item) => sum + item.score, 0) / sorted.length;
+        const topTwo = sorted
+            .slice(0, 2)
+            .map((s) => s.subjectName)
+            .join(' dan ');
+        const needSupport = sorted
+            .filter((s) => s.score < 75)
+            .slice(-2)
+            .map((s) => s.subjectName);
 
-    const [resolvedSchoolId, setResolvedSchoolId] = useState<string>(
-        schoolInfo?.id || user?.schoolId || ''
-    );
-    const [currentUserId, setCurrentUserId] = useState<string>(user?.id || '');
-    const [effectiveRoles, setEffectiveRoles] = useState<string[]>(initialRoles);
-    const teacherScope = useTeacherScope(resolvedSchoolId);
-
-    const isSuperAdmin = useMemo(
-        () => effectiveRoles.includes('SUPER_ADMIN'),
-        [effectiveRoles]
-    );
-
-    const isStudentOrParentOnly = useMemo(
-        () =>
-            effectiveRoles.length > 0 &&
-            effectiveRoles.every((role) => role === 'SISWA' || role === 'ORANG_TUA'),
-        [effectiveRoles]
-    );
-
-    // Sinkronisasi Role Multi-Role & SchoolId aktif (selaras dengan StudentListPage)
-    useEffect(() => {
-        let mounted = true;
-        async function resolvePermissions() {
-            try {
-                const {
-                    data: { user: authUser },
-                } = await supabase.auth.getUser();
-                if (!authUser) return;
-
-                const [{ data: profile }, { data: allRoles }] = await Promise.all([
-                    supabase
-                        .from('users')
-                        .select('schoolId, role')
-                        .eq('id', authUser.id)
-                        .maybeSingle(),
-                    supabase.rpc('get_user_all_roles'),
-                ]);
-
-                const mergedRoles: string[] = Array.from(
-                    new Set([
-                        ...(Array.isArray(allRoles) ? (allRoles as string[]) : []),
-                        ...(profile?.role ? [profile.role] : []),
-                        ...initialRoles,
-                    ])
-                );
-
-                if (!mounted) return;
-                setCurrentUserId(authUser.id);
-                setEffectiveRoles(mergedRoles);
-                setResolvedSchoolId(
-                    schoolInfo?.id || profile?.schoolId || user?.schoolId || ''
-                );
-            } catch {
-                if (mounted) {
-                    setResolvedSchoolId(schoolInfo?.id || user?.schoolId || '');
-                }
-            }
+        if (avg >= 90) {
+            parts.push(
+                `Ananda ${firstName} menunjukkan prestasi akademik yang sangat membanggakan pada ${periodText}, khususnya pada mata pelajaran ${topTwo}. Pertahankan semangat belajar dan ketekunan yang sudah sangat baik ini.`
+            );
+        } else if (avg >= 80) {
+            parts.push(
+                `Ananda ${firstName} menunjukkan perkembangan belajar yang baik pada ${periodText} dengan capaian menonjol di mata pelajaran ${topTwo}. Terus tingkatkan konsistensi belajar agar meraih hasil yang lebih optimal.`
+            );
+        } else if (avg >= 70) {
+            const supportText =
+                needSupport.length > 0
+                    ? ` serta memperbanyak latihan pada mata pelajaran ${needSupport.join(' dan ')}`
+                    : '';
+            parts.push(
+                `Ananda ${firstName} mengikuti pembelajaran dengan cukup baik pada ${periodText}. Diharapkan lebih percaya diri dalam berdiskusi${supportText}.`
+            );
+        } else {
+            const supportText =
+                needSupport.length > 0
+                    ? ` terutama pada mata pelajaran ${needSupport.join(' dan ')}`
+                    : '';
+            parts.push(
+                `Ananda ${firstName} perlu meningkatkan fokus dan kedisiplinan belajar pada ${periodText}${supportText}. Kerja sama antara sekolah dan orang tua sangat diharapkan untuk mendampingi belajar di rumah.`
+            );
         }
-        resolvePermissions();
-        return () => {
-            mounted = false;
-        };
-    }, [schoolInfo?.id, user?.schoolId, initialRoles]);
+    } else {
+        parts.push(
+            `Ananda ${firstName} mengikuti kegiatan pembelajaran dengan baik pada ${periodText}. Terus jaga motivasi belajar, sikap santun, dan semangat berprestasi.`
+        );
+    }
 
-    const [currentTeacherId, setCurrentTeacherId] = useState<string | null>(null);
-    const [activeTab, setActiveTab] = useState<ActiveTab>('INPUT_NILAI');
-    const [loadingInit, setLoadingInit] = useState<boolean>(true);
-    const [loadingSheet, setLoadingSheet] = useState<boolean>(false);
-    const [saving, setSaving] = useState<boolean>(false);
-    const [feedback, setFeedback] = useState<{
-        type: 'success' | 'error';
-        text: string;
-    } | null>(null);
+    const activeEkskul = extracurriculars
+        .filter((e) => e.name.trim())
+        .map((e) => e.name.trim());
+    if (activeEkskul.length > 0) {
+        parts.push(
+            `Keaktifan dalam kegiatan ekstrakurikuler ${activeEkskul.join(', ')} patut diapresiasi.`
+        );
+    }
 
-    // Filter Master Akademik
+    if (alphaDays >= 3) {
+        parts.push(
+            `Perlu perhatian khusus terkait kedisiplinan kehadiran di sekolah agar tidak tertinggal materi pelajaran.`
+        );
+    } else if (alphaDays === 0 && sickDays === 0 && permissionDays === 0) {
+        parts.push(`Kedisiplinan dan tingkat kehadiran sangat baik.`);
+    }
+
+    return parts.join(' ');
+}
+
+/**
+ * Generator deskripsi Kokurikuler / Projek P5 sesuai format Kurikulum Merdeka.
+ */
+function buildAutoCocurricularNote(params: {
+    studentName: string;
+    subjectScores: { subjectName: string; score: number }[];
+}): string {
+    const firstName =
+        params.studentName.trim().split(' ')[0] || params.studentName;
+    const avg =
+        params.subjectScores.length > 0
+            ? params.subjectScores.reduce((acc, s) => acc + s.score, 0) /
+            params.subjectScores.length
+            : 82;
+
+    const levelLabel =
+        avg >= 88
+            ? 'Sangat Berkembang (SAB)'
+            : avg >= 75
+                ? 'Berkembang Sesuai Harapan (BSH)'
+                : 'Sedang Berkembang (SB)';
+
+    return `Dalam kegiatan kokurikuler / Projek Penguatan Profil Pelajar Pancasila (P5), ananda ${firstName} menunjukkan capaian ${levelLabel} pada dimensi Bergotong Royong, Bernalar Kritis, dan Kreatif melalui partisipasi aktif dalam diskusi kelompok dan penyelesaian produk projek.`;
+}
+
+export default function GradesAndReportPage() {
+    const authUser = useAuthStore((state) => state.user);
+    const authSchool = useAuthStore((state) => state.school);
+
+    const [resolvedSchoolId, setResolvedSchoolId] = useState<string>('');
+    const [teacherId, setTeacherId] = useState<string | null>(null);
+
+    const { isElementaryHomeroomRestricted, homeroomClassIds } =
+        useTeacherScope(resolvedSchoolId);
+
+    // Filter Akademik
     const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
-    const [semesters, setSemesters] = useState<SemesterOption[]>([]);
-    const [classes, setClasses] = useState<ClassOption[]>([]);
-    const [subjects, setSubjects] = useState<SubjectOption[]>([]);
-
     const [selectedYearId, setSelectedYearId] = useState<string>('');
+    const [semesters, setSemesters] = useState<SemesterOption[]>([]);
     const [selectedSemesterId, setSelectedSemesterId] = useState<string>('');
+    const [classes, setClasses] = useState<ClassOption[]>([]);
     const [selectedClassId, setSelectedClassId] = useState<string>('');
+    const [subjects, setSubjects] = useState<SubjectOption[]>([]);
     const [selectedSubjectId, setSelectedSubjectId] = useState<string>('');
 
-    // Bobot Nilai Dinamis (Default: 40% Formatif, 30% STS, 30% SAS)
-    const [weights, setWeights] = useState<GradeWeights>({
+    const [examMode, setExamMode] = useState<ReportExamMode>('SAS');
+    const [activeTab, setActiveTab] = useState<ActiveTab>('GRADES');
+
+    // Bobot Penilaian
+    const [weights, setWeights] = useState({
         formative: 40,
         sts: 30,
         sas: 30,
     });
 
-    // State Tab 1: Nilai Mata Pelajaran
-    const [gradeRows, setGradeRows] = useState<GradeSheetRow[]>([]);
+    const [tpCount, setTpCount] = useState<number>(3);
 
-    // State Tab 2: Catatan Wali Kelas & Raport
-    const [reportNotesMap, setReportNotesMap] = useState<
+    // State Data Tab 1: Nilai Mapel
+    const [gradeRows, setGradeRows] = useState<GradeSheetRow[]>([]);
+    const [isLoadingSheet, setIsLoadingSheet] = useState<boolean>(false);
+    const [isSavingGrades, setIsSavingGrades] = useState<boolean>(false);
+
+    // State Data Tab 2: Catatan Wali Kelas & Publikasi
+    const [notesMap, setNotesMap] = useState<
         Map<string, StudentReportNoteRecord>
-    >(() => new Map());
-    const [selectedStudentForNote, setSelectedStudentForNote] =
-        useState<string>('');
+    >(new Map());
+    const [classAllGrades, setClassAllGrades] = useState<
+        StudentCrossSubjectGrade[]
+    >([]);
+    const [classReportDate, setClassReportDate] = useState<string>(() =>
+        new Date().toISOString().slice(0, 10)
+    );
+    const [isSyncingAttendance, setIsSyncingAttendance] =
+        useState<boolean>(false);
+    const [savingStudentId, setSavingStudentId] = useState<string | null>(null);
+    const [isSavingAllNotes, setIsSavingAllNotes] = useState<boolean>(false);
+    const [isPublishingBatch, setIsPublishingBatch] = useState<boolean>(false);
     const [printingStudentId, setPrintingStudentId] = useState<string | null>(
         null
     );
+    const [isPrintingBatch, setIsPrintingBatch] = useState<boolean>(false);
 
-    // State Tab 3: Peringkat Kelas
-    const [rankingMode, setRankingMode] = useState<ReportExamMode>('SAS');
+    // State Data Tab 3: Peringkat Kelas
     const [rankings, setRankings] = useState<ClassRankingRow[]>([]);
+    const [isLoadingRankings, setIsLoadingRankings] = useState<boolean>(false);
 
-    // Saring daftar kelas apabila user adalah Wali Kelas jenjang SD
-    const visibleClasses = useMemo(() => {
-        if (teacherScope.isElementaryHomeroomRestricted) {
-            return classes.filter((c) =>
-                teacherScope.homeroomClassIds.includes(String(c.id))
-            );
-        }
-        return classes;
-    }, [
-        classes,
-        teacherScope.isElementaryHomeroomRestricted,
-        teacherScope.homeroomClassIds,
-    ]);
-
-    // ==========================================================================
-    // 1. MUAT DATA MASTER & PROFIL GURU AKTIF
-    // ==========================================================================
+    // 1. Resolusi School ID & Teacher ID
     useEffect(() => {
-        let isMounted = true;
-        async function fetchMasterFilters() {
-            if (!resolvedSchoolId) {
-                setLoadingInit(false);
-                return;
+        let active = true;
+        const initIdentity = async () => {
+            let sId = authSchool?.id || authUser?.schoolId || '';
+            const {
+                data: { user },
+            } = await supabase.auth.getUser();
+
+            if (!sId && user) {
+                const { data: profile } = await supabase
+                    .from('users')
+                    .select('schoolId')
+                    .eq('id', user.id)
+                    .single();
+                sId = (profile?.schoolId as string) || '';
             }
-            setLoadingInit(true);
-            try {
-                const [ayRes, semRes, clsRes, subjRes, teacherRes] = await Promise.all([
-                    supabase
-                        .from('academic_years')
-                        .select('id, name, isActive')
-                        .eq('schoolId', resolvedSchoolId)
-                        .order('startYear', { ascending: false }),
-                    supabase
-                        .from('semesters')
-                        .select('id, academicYearId, type, isActive')
-                        .eq('schoolId', resolvedSchoolId),
-                    supabase
-                        .from('classes')
-                        .select(
-                            'id, name, gradeLevel, major, homeroomTeacher:teachers(id, fullName, nip)'
-                        )
-                        .eq('schoolId', resolvedSchoolId)
-                        .order('gradeLevel', { ascending: true })
-                        .order('name', { ascending: true }),
-                    supabase
-                        .from('subjects')
-                        .select('id, code, name, category, sortOrder')
-                        .eq('schoolId', resolvedSchoolId)
-                        .eq('isActive', true)
-                        .order('sortOrder', { ascending: true })
-                        .order('name', { ascending: true }),
-                    currentUserId
-                        ? supabase
-                            .from('teachers')
-                            .select('id')
-                            .eq('schoolId', resolvedSchoolId)
-                            .eq('userId', currentUserId)
-                            .maybeSingle()
-                        : Promise.resolve({ data: null, error: null }),
-                ]);
 
-                if (!isMounted) return;
+            if (active) setResolvedSchoolId(sId);
 
-                if (teacherRes.data?.id) {
-                    setCurrentTeacherId(String(teacherRes.data.id));
+            if (sId && user) {
+                const { data: teacherRow } = await supabase
+                    .from('teachers')
+                    .select('id')
+                    .eq('schoolId', sId)
+                    .eq('userId', user.id)
+                    .maybeSingle();
+
+                if (active && teacherRow?.id) {
+                    setTeacherId(String(teacherRow.id));
                 }
-
-                const ayList = (ayRes.data ?? []) as AcademicYearOption[];
-                const semList = (semRes.data ?? []) as SemesterOption[];
-                const clsList = (clsRes.data ?? []).map((c: Record<string, unknown>) => {
-                    const rawTeacher = Array.isArray(c.homeroomTeacher)
-                        ? c.homeroomTeacher[0]
-                        : c.homeroomTeacher;
-                    return {
-                        id: String(c.id),
-                        name: String(c.name),
-                        gradeLevel: Number(c.gradeLevel),
-                        major: c.major ? String(c.major) : null,
-                        homeroomTeacher: rawTeacher
-                            ? {
-                                id: String((rawTeacher as Record<string, unknown>).id),
-                                fullName: String(
-                                    (rawTeacher as Record<string, unknown>).fullName
-                                ),
-                                nip: (rawTeacher as Record<string, unknown>).nip
-                                    ? String((rawTeacher as Record<string, unknown>).nip)
-                                    : null,
-                            }
-                            : null,
-                    };
-                });
-                const subjList = (subjRes.data ?? []) as SubjectOption[];
-
-                setAcademicYears(ayList);
-                setSemesters(semList);
-                setClasses(clsList);
-                setSubjects(subjList);
-
-                const activeYear = ayList.find((y) => y.isActive) ?? ayList[0];
-                if (activeYear) {
-                    setSelectedYearId(activeYear.id);
-                    const activeSem =
-                        semList.find(
-                            (s) => s.academicYearId === activeYear.id && s.isActive
-                        ) ?? semList.find((s) => s.academicYearId === activeYear.id);
-                    if (activeSem) setSelectedSemesterId(activeSem.id);
-                }
-                if (clsList[0]) setSelectedClassId(clsList[0].id);
-                if (subjList[0]) setSelectedSubjectId(subjList[0].id);
-            } catch (err) {
-                if (isMounted) {
-                    const msg =
-                        err instanceof Error
-                            ? err.message
-                            : tr(
-                                'Gagal memuat filter akademik.',
-                                'Failed to load academic filters.'
-                            );
-                    setFeedback({ type: 'error', text: msg });
-                    toast.error(msg);
-                }
-            } finally {
-                if (isMounted) setLoadingInit(false);
             }
-        }
-
-        fetchMasterFilters();
-        return () => {
-            isMounted = false;
         };
-    }, [resolvedSchoolId, currentUserId, isId]);
 
+        void initIdentity();
+        return () => {
+            active = false;
+        };
+    }, [authSchool?.id, authUser?.schoolId]);
+
+    // 2. Muat Tahun Ajaran, Semester, dan Mata Pelajaran
     useEffect(() => {
-        if (
-            visibleClasses.length > 0 &&
-            !visibleClasses.some((c) => c.id === selectedClassId)
-        ) {
-            setSelectedClassId(visibleClasses[0].id);
-        }
-    }, [visibleClasses, selectedClassId]);
+        if (!resolvedSchoolId) return;
+        let active = true;
+
+        const loadMasterFilters = async () => {
+            const [ayRes, semRes, subjRes] = await Promise.all([
+                supabase
+                    .from('academic_years')
+                    .select('id, name, isActive')
+                    .eq('schoolId', resolvedSchoolId)
+                    .order('startYear', { ascending: false }),
+                supabase
+                    .from('semesters')
+                    .select('id, academicYearId, type, isActive')
+                    .eq('schoolId', resolvedSchoolId)
+                    .order('type', { ascending: true }),
+                supabase
+                    .from('subjects')
+                    .select('id, code, name, category, sortOrder')
+                    .eq('schoolId', resolvedSchoolId)
+                    .eq('isActive', true)
+                    .order('sortOrder', { ascending: true })
+                    .order('name', { ascending: true }),
+            ]);
+
+            if (!active) return;
+
+            const ayList = (ayRes.data ?? []) as AcademicYearOption[];
+            const semList = (semRes.data ?? []) as SemesterOption[];
+            const subjList = (subjRes.data ?? []) as SubjectOption[];
+
+            setAcademicYears(ayList);
+            setSemesters(semList);
+            setSubjects(subjList);
+
+            const activeAy = ayList.find((a) => a.isActive) ?? ayList[0];
+            if (activeAy) {
+                setSelectedYearId(activeAy.id);
+                const relatedSems = semList.filter(
+                    (s) => s.academicYearId === activeAy.id
+                );
+                const activeSem =
+                    relatedSems.find((s) => s.isActive) ?? relatedSems[0];
+                if (activeSem) setSelectedSemesterId(activeSem.id);
+            }
+
+            if (subjList.length > 0 && !selectedSubjectId) {
+                setSelectedSubjectId(subjList[0].id);
+            }
+        };
+
+        void loadMasterFilters();
+        return () => {
+            active = false;
+        };
+    }, [resolvedSchoolId]);
 
     const filteredSemesters = useMemo(
         () => semesters.filter((s) => s.academicYearId === selectedYearId),
         [semesters, selectedYearId]
     );
 
-    // ==========================================================================
-    // 2. MUAT LEMBAR NILAI & CATATAN RAPORT SAAT FILTER BERUBAH
-    // ==========================================================================
-    const loadClassGradeAndReportData = useCallback(async () => {
+    useEffect(() => {
+        if (
+            filteredSemesters.length > 0 &&
+            !filteredSemesters.some((s) => s.id === selectedSemesterId)
+        ) {
+            const activeSem =
+                filteredSemesters.find((s) => s.isActive) ?? filteredSemesters[0];
+            setSelectedSemesterId(activeSem.id);
+        }
+    }, [filteredSemesters, selectedSemesterId]);
+
+    // 3. Muat Daftar Kelas
+    useEffect(() => {
+        if (!resolvedSchoolId || !selectedYearId) return;
+        let active = true;
+
+        const loadClasses = async () => {
+            const { data, error } = await supabase
+                .from('classes')
+                .select(
+                    'id, name, gradeLevel, homeroomTeacher:teachers(fullName, nip)'
+                )
+                .eq('schoolId', resolvedSchoolId)
+                .eq('academicYearId', selectedYearId)
+                .order('gradeLevel', { ascending: true })
+                .order('name', { ascending: true });
+
+            if (error || !active) return;
+
+            let mapped: ClassOption[] = (data ?? []).map(
+                (row: Record<string, unknown>) => {
+                    const hr = row.homeroomTeacher as
+                        | { fullName?: string; nip?: string | null }
+                        | null
+                        | undefined;
+                    return {
+                        id: String(row.id),
+                        name: String(row.name),
+                        gradeLevel: Number(row.gradeLevel ?? 1),
+                        homeroomTeacherName: hr?.fullName || '-',
+                        homeroomTeacherNip: hr?.nip || null,
+                    };
+                }
+            );
+
+            if (isElementaryHomeroomRestricted && homeroomClassIds.length > 0) {
+                mapped = mapped.filter((c) => homeroomClassIds.includes(c.id));
+            }
+
+            setClasses(mapped);
+            if (mapped.length > 0 && !mapped.some((c) => c.id === selectedClassId)) {
+                setSelectedClassId(mapped[0].id);
+            } else if (mapped.length === 0) {
+                setSelectedClassId('');
+            }
+        };
+
+        void loadClasses();
+        return () => {
+            active = false;
+        };
+    }, [
+        resolvedSchoolId,
+        selectedYearId,
+        isElementaryHomeroomRestricted,
+        homeroomClassIds,
+    ]);
+
+    // 4. Muat Lembar Nilai & Catatan Wali Kelas
+    const loadGradeAndNotesData = useCallback(async () => {
         if (
             !resolvedSchoolId ||
             !selectedYearId ||
             !selectedSemesterId ||
-            !selectedClassId
+            !selectedClassId ||
+            !selectedSubjectId
         ) {
+            setGradeRows([]);
             return;
         }
 
-        setLoadingSheet(true);
-        setFeedback(null);
+        setIsLoadingSheet(true);
         try {
             const [sheetRes, notesRes] = await Promise.all([
-                selectedSubjectId
-                    ? gradeService.getSubjectGradeSheet({
-                        schoolId: resolvedSchoolId,
-                        academicYearId: selectedYearId,
-                        semesterId: selectedSemesterId,
-                        classId: selectedClassId,
-                        subjectId: selectedSubjectId,
-                        teacherId: currentTeacherId,
-                    })
-                    : Promise.resolve({
-                        success: true,
-                        data: [] as GradeSheetRow[],
-                        message: '',
-                    }),
+                gradeService.getSubjectGradeSheet({
+                    schoolId: resolvedSchoolId,
+                    academicYearId: selectedYearId,
+                    semesterId: selectedSemesterId,
+                    classId: selectedClassId,
+                    subjectId: selectedSubjectId,
+                    teacherId,
+                }),
                 gradeService.getClassReportNotes({
                     schoolId: resolvedSchoolId,
                     academicYearId: selectedYearId,
@@ -414,23 +530,20 @@ export function GradesAndReportPage() {
                 }),
             ]);
 
-            setGradeRows(sheetRes.data);
-            setReportNotesMap(notesRes.data);
-            if (sheetRes.data.length > 0) {
-                setSelectedStudentForNote((prev) => prev || sheetRes.data[0].student.id);
-            }
+            const rows = sheetRes.data;
+            const maxExistingTp = rows.reduce(
+                (max, r) => Math.max(max, r.grade.formativeScores.length),
+                3
+            );
+            setTpCount(Math.max(3, maxExistingTp));
+            setGradeRows(rows);
+            setNotesMap(notesRes.data);
         } catch (err) {
-            const msg =
-                err instanceof Error
-                    ? err.message
-                    : tr(
-                        'Gagal memuat data nilai kelas.',
-                        'Failed to load class grade data.'
-                    );
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+            toast.error(
+                err instanceof Error ? err.message : 'Gagal memuat lembar nilai.'
+            );
         } finally {
-            setLoadingSheet(false);
+            setIsLoadingSheet(false);
         }
     }, [
         resolvedSchoolId,
@@ -438,174 +551,180 @@ export function GradesAndReportPage() {
         selectedSemesterId,
         selectedClassId,
         selectedSubjectId,
-        currentTeacherId,
-        isId,
+        teacherId,
     ]);
 
     useEffect(() => {
-        loadClassGradeAndReportData();
-    }, [loadClassGradeAndReportData]);
+        void loadGradeAndNotesData();
+    }, [loadGradeAndNotesData]);
 
-    // ==========================================================================
-    // 3. MUAT PERINGKAT KELAS (TAB 3)
-    // ==========================================================================
-    const loadRankings = useCallback(async () => {
-        if (
-            isStudentOrParentOnly ||
-            !resolvedSchoolId ||
-            !selectedSemesterId ||
-            !selectedClassId ||
-            activeTab !== 'PERINGKAT_KELAS'
-        ) {
-            return;
+    // Sinkronisasi Tanggal Raport Kelas dari data yang sudah tersimpan saat mode STS/SAS berganti
+    useEffect(() => {
+        const firstNote = Array.from(notesMap.values())[0];
+        if (!firstNote) return;
+        const savedDate =
+            examMode === 'STS' ? firstNote.reportDateSts : firstNote.reportDateSas;
+        if (savedDate) {
+            setClassReportDate(savedDate);
         }
-        setLoadingSheet(true);
+    }, [notesMap, examMode]);
+
+    // 5. Muat Nilai Seluruh Mapel untuk Generator Catatan Otomatis di Tab 2
+    const loadAllClassGradesForNotes = useCallback(async () => {
+        if (!resolvedSchoolId || !selectedSemesterId || !selectedClassId) return;
+        const { data } = await supabase
+            .from('student_grades')
+            .select(
+                'studentId, subjectId, formativeAvg, stsScore, sasScore, finalScore'
+            )
+            .eq('schoolId', resolvedSchoolId)
+            .eq('semesterId', selectedSemesterId)
+            .eq('classId', selectedClassId);
+
+        if (data) {
+            setClassAllGrades(
+                data.map((r: Record<string, unknown>) => ({
+                    studentId: String(r.studentId),
+                    subjectId: String(r.subjectId),
+                    formativeAvg:
+                        r.formativeAvg !== null && r.formativeAvg !== undefined
+                            ? Number(r.formativeAvg)
+                            : null,
+                    stsScore:
+                        r.stsScore !== null && r.stsScore !== undefined
+                            ? Number(r.stsScore)
+                            : null,
+                    sasScore:
+                        r.sasScore !== null && r.sasScore !== undefined
+                            ? Number(r.sasScore)
+                            : null,
+                    finalScore:
+                        r.finalScore !== null && r.finalScore !== undefined
+                            ? Number(r.finalScore)
+                            : null,
+                }))
+            );
+        }
+    }, [resolvedSchoolId, selectedSemesterId, selectedClassId]);
+
+    useEffect(() => {
+        if (activeTab === 'NOTES') {
+            void loadAllClassGradesForNotes();
+        }
+    }, [activeTab, loadAllClassGradesForNotes]);
+
+    // 6. Muat Peringkat Kelas saat Tab Ranking dibuka
+    const loadRankings = useCallback(async () => {
+        if (!resolvedSchoolId || !selectedSemesterId || !selectedClassId) return;
+        setIsLoadingRankings(true);
         try {
             const res = await gradeService.getClassRankings({
                 schoolId: resolvedSchoolId,
                 semesterId: selectedSemesterId,
                 classId: selectedClassId,
-                examType: rankingMode,
+                examType: examMode,
             });
             setRankings(res.data);
         } catch (err) {
-            const msg =
-                err instanceof Error
-                    ? err.message
-                    : tr('Gagal memuat peringkat kelas.', 'Failed to load class rankings.');
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+            toast.error(
+                err instanceof Error ? err.message : 'Gagal memuat peringkat kelas.'
+            );
         } finally {
-            setLoadingSheet(false);
+            setIsLoadingRankings(false);
         }
-    }, [
-        isStudentOrParentOnly,
-        resolvedSchoolId,
-        selectedSemesterId,
-        selectedClassId,
-        activeTab,
-        rankingMode,
-        isId,
-    ]);
+    }, [resolvedSchoolId, selectedSemesterId, selectedClassId, examMode]);
 
     useEffect(() => {
-        loadRankings();
-    }, [loadRankings]);
+        if (activeTab === 'RANKING') {
+            void loadRankings();
+        }
+    }, [activeTab, loadRankings]);
 
-    // ==========================================================================
-    // 4. LOGIKA HITUNG BOBOT & EDIT MANUAL NILAI AKHIR
-    // ==========================================================================
-    const handleWeightChange = (field: keyof GradeWeights, value: number) => {
-        const safeVal = Math.max(0, Math.min(100, Number.isNaN(value) ? 0 : value));
-        const nextWeights = { ...weights, [field]: safeVal };
-        setWeights(nextWeights);
-
-        setGradeRows((prev) =>
-            prev.map((row) => {
-                if (row.isManualFinalScore) return row;
-                const recalculated = computeWeightedFinalScore(
-                    row.grade.formativeAvg,
-                    row.grade.stsScore,
-                    row.grade.sasScore,
-                    nextWeights
-                );
-                return {
-                    ...row,
-                    grade: {
-                        ...row.grade,
-                        finalScore: recalculated,
-                        predicate: calculatePredicate(recalculated),
-                    },
-                };
-            })
-        );
-    };
-
-    const handleScoreComponentChange = (
+    // Handler Perubahan Nilai Formatif (TP ke-i)
+    const handleFormativeTpChange = (
         studentId: string,
-        field: 'formativeAvg' | 'stsScore' | 'sasScore',
+        tpIndex: number,
         rawValue: string
     ) => {
-        const parsed =
-            rawValue.trim() === ''
-                ? null
-                : Math.max(0, Math.min(100, Number(rawValue)));
+        const parsedVal = clampScore(rawValue);
         setGradeRows((prev) =>
             prev.map((row) => {
                 if (row.student.id !== studentId) return row;
-                const updatedGrade = {
-                    ...row.grade,
-                    [field]: parsed !== null && Number.isNaN(parsed) ? null : parsed,
-                };
 
-                if (!row.isManualFinalScore) {
-                    const autoFinal = computeWeightedFinalScore(
-                        updatedGrade.formativeAvg,
-                        updatedGrade.stsScore,
-                        updatedGrade.sasScore,
-                        weights
-                    );
-                    updatedGrade.finalScore = autoFinal;
-                    updatedGrade.predicate = calculatePredicate(autoFinal);
+                const nextScores = [...row.grade.formativeScores];
+                while (nextScores.length <= tpIndex) {
+                    nextScores.push(Number.NaN);
                 }
+                nextScores[tpIndex] = parsedVal === null ? Number.NaN : parsedVal;
 
-                return {
-                    ...row,
-                    grade: updatedGrade,
-                };
-            })
-        );
-    };
-
-    const handleManualFinalScoreChange = (
-        studentId: string,
-        rawValue: string
-    ) => {
-        const parsed =
-            rawValue.trim() === ''
-                ? null
-                : Math.max(0, Math.min(100, Number(rawValue)));
-        setGradeRows((prev) =>
-            prev.map((row) => {
-                if (row.student.id !== studentId) return row;
-                const cleanVal =
-                    parsed !== null && Number.isNaN(parsed) ? null : parsed;
-                return {
-                    ...row,
-                    isManualFinalScore: true,
-                    grade: {
-                        ...row.grade,
-                        finalScore: cleanVal,
-                        predicate: calculatePredicate(cleanVal),
-                    },
-                };
-            })
-        );
-    };
-
-    const toggleManualLock = (studentId: string) => {
-        setGradeRows((prev) =>
-            prev.map((row) => {
-                if (row.student.id !== studentId) return row;
-                const nextManual = !row.isManualFinalScore;
-                if (!nextManual) {
-                    const autoFinal = computeWeightedFinalScore(
-                        row.grade.formativeAvg,
+                const cleanedScores = nextScores.filter((n) => !Number.isNaN(n));
+                const nextAvg = computeFormativeAverage(cleanedScores);
+                const nextFinal = row.isManualFinalScore
+                    ? row.grade.finalScore
+                    : computeWeightedFinalScore(
+                        nextAvg,
                         row.grade.stsScore,
                         row.grade.sasScore,
                         weights
                     );
+
+                return {
+                    ...row,
+                    grade: {
+                        ...row.grade,
+                        formativeScores: cleanedScores,
+                        formativeAvg: nextAvg,
+                        finalScore: nextFinal,
+                        predicate: computePredicate(nextFinal),
+                    },
+                };
+            })
+        );
+    };
+
+    const handleExamScoreChange = (
+        studentId: string,
+        field: 'stsScore' | 'sasScore' | 'finalScore',
+        rawValue: string
+    ) => {
+        const parsedVal = clampScore(rawValue);
+        setGradeRows((prev) =>
+            prev.map((row) => {
+                if (row.student.id !== studentId) return row;
+
+                if (field === 'finalScore') {
                     return {
                         ...row,
-                        isManualFinalScore: false,
+                        isManualFinalScore: parsedVal !== null,
                         grade: {
                             ...row.grade,
-                            finalScore: autoFinal,
-                            predicate: calculatePredicate(autoFinal),
+                            finalScore: parsedVal,
+                            predicate: computePredicate(parsedVal),
                         },
                     };
                 }
-                return { ...row, isManualFinalScore: true };
+
+                const nextSts = field === 'stsScore' ? parsedVal : row.grade.stsScore;
+                const nextSas = field === 'sasScore' ? parsedVal : row.grade.sasScore;
+                const nextFinal = row.isManualFinalScore
+                    ? row.grade.finalScore
+                    : computeWeightedFinalScore(
+                        row.grade.formativeAvg,
+                        nextSts,
+                        nextSas,
+                        weights
+                    );
+
+                return {
+                    ...row,
+                    grade: {
+                        ...row.grade,
+                        stsScore: nextSts,
+                        sasScore: nextSas,
+                        finalScore: nextFinal,
+                        predicate: computePredicate(nextFinal),
+                    },
+                };
             })
         );
     };
@@ -618,674 +737,971 @@ export function GradesAndReportPage() {
         setGradeRows((prev) =>
             prev.map((row) =>
                 row.student.id === studentId
-                    ? { ...row, grade: { ...row.grade, [field]: value } }
+                    ? {
+                        ...row,
+                        grade: {
+                            ...row.grade,
+                            [field]: value,
+                        },
+                    }
                     : row
             )
         );
     };
 
-    const handleAutoGenerateDescriptions = () => {
-        const subjectName =
-            subjects.find((s) => s.id === selectedSubjectId)?.name ??
-            'mata pelajaran ini';
+    const handleRecalculateAll = () => {
         setGradeRows((prev) =>
             prev.map((row) => {
-                const score =
-                    row.grade.finalScore ?? row.grade.stsScore ?? row.grade.formativeAvg;
-                if (score === null) return row;
+                const nextFinal = computeWeightedFinalScore(
+                    row.grade.formativeAvg,
+                    row.grade.stsScore,
+                    row.grade.sasScore,
+                    weights
+                );
+                return {
+                    ...row,
+                    isManualFinalScore: false,
+                    grade: {
+                        ...row.grade,
+                        finalScore: nextFinal,
+                        predicate: computePredicate(nextFinal),
+                    },
+                };
+            })
+        );
+        toast.success('Seluruh nilai akhir berhasil dihitung ulang sesuai bobot.');
+    };
 
-                let levelPhrase = 'menunjukkan penguasaan yang baik';
-                if (score >= 90)
-                    levelPhrase =
-                        'menunjukkan penguasaan yang sangat baik dan melampaui ekspektasi';
-                else if (score >= 80) levelPhrase = 'menunjukkan penguasaan yang baik';
-                else if (score >= 70)
-                    levelPhrase =
-                        'cukup menguasai materi dasar, namun perlu penguatan latihan';
-                else
-                    levelPhrase =
-                        'memerlukan bimbingan intensif dalam memahami konsep dasar';
+    const handleAutoFillDescriptions = () => {
+        const subjName =
+            subjects.find((s) => s.id === selectedSubjectId)?.name ||
+            'mata pelajaran ini';
 
-                const generated = `Ananda ${row.student.fullName} ${levelPhrase} pada kompetensi ${subjectName}.`;
+        setGradeRows((prev) =>
+            prev.map((row) => {
+                const stsBasis = row.grade.stsScore ?? row.grade.formativeAvg;
+                const sasBasis = row.grade.finalScore;
+
                 return {
                     ...row,
                     grade: {
                         ...row.grade,
                         stsCompetencyDescription:
-                            row.grade.stsCompetencyDescription || generated,
-                        competencyDescription: generated,
+                            row.grade.stsCompetencyDescription?.trim()
+                                ? row.grade.stsCompetencyDescription
+                                : buildAutoDescription(subjName, stsBasis, true),
+                        competencyDescription: row.grade.competencyDescription?.trim()
+                            ? row.grade.competencyDescription
+                            : buildAutoDescription(subjName, sasBasis, false),
                     },
                 };
             })
         );
-        const msg = tr(
-            'Template deskripsi capaian kompetensi berhasil dibuat otomatis.',
-            'Competency descriptions generated automatically.'
+        toast.success(
+            'Deskripsi capaian kompetensi otomatis berhasil diisi untuk kolom yang masih kosong.'
         );
-        setFeedback({ type: 'success', text: msg });
-        toast.success(msg);
     };
 
     const handleSaveAllGrades = async () => {
-        const totalWeight = weights.formative + weights.sts + weights.sas;
-        if (totalWeight !== 100) {
-            const msg = tr(
-                `Total bobot saat ini ${totalWeight}%. Pastikan jumlah bobot Formatif + STS + SAS sama dengan 100%.`,
-                `Current total weight is ${totalWeight}%. Ensure Formative + STS + SAS equals 100%.`
-            );
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
-            return;
-        }
-
-        setSaving(true);
-        setFeedback(null);
+        if (gradeRows.length === 0) return;
+        setIsSavingGrades(true);
         try {
-            const payload = gradeRows.map((r) => r.grade);
-            const res = await gradeService.saveSubjectGradesBatch(payload);
-            setFeedback({ type: 'success', text: res.message });
+            const records = gradeRows.map((r) => r.grade);
+            const res = await gradeService.saveSubjectGradesBatch(records);
             toast.success(res.message);
-            await loadClassGradeAndReportData();
+            await loadGradeAndNotesData();
         } catch (err) {
-            const msg =
-                err instanceof Error
-                    ? err.message
-                    : tr('Gagal menyimpan nilai.', 'Failed to save grades.');
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+            toast.error(
+                err instanceof Error ? err.message : 'Gagal menyimpan data nilai.'
+            );
         } finally {
-            setSaving(false);
+            setIsSavingGrades(false);
         }
     };
 
-    // ==========================================================================
-    // 5. HANDLER TAB WALI KELAS, ABSENSI & CETAK PDF RAPORT
-    // ==========================================================================
-    const currentStudentNote: StudentReportNoteRecord = useMemo(() => {
-        const existing = reportNotesMap.get(selectedStudentForNote);
-        if (existing) return existing;
-        return {
-            schoolId: resolvedSchoolId,
-            academicYearId: selectedYearId,
-            semesterId: selectedSemesterId,
-            classId: selectedClassId,
-            studentId: selectedStudentForNote,
-            extracurriculars: [],
-            cocurricularNote: '',
-            stsHomeroomNote: '',
-            homeroomNote: '',
-            stsSickDays: 0,
-            stsPermissionDays: 0,
-            stsAlphaDays: 0,
-            sickDays: 0,
-            permissionDays: 0,
-            alphaDays: 0,
-            promotionStatus: 'PROSES',
-            reportDateSts: new Date().toISOString().slice(0, 10),
-            reportDateSas: new Date().toISOString().slice(0, 10),
-            isStsPublished: false,
-            isSasPublished: false,
-        };
-    }, [
-        reportNotesMap,
-        selectedStudentForNote,
-        resolvedSchoolId,
-        selectedYearId,
-        selectedSemesterId,
-        selectedClassId,
-    ]);
+    // Helper Catatan Raport per Siswa (otomatis memakai classReportDate)
+    const getOrInitStudentNote = useCallback(
+        (studentId: string): StudentReportNoteRecord => {
+            const existing = notesMap.get(studentId);
+            if (existing) {
+                return {
+                    ...existing,
+                    reportDateSts:
+                        examMode === 'STS'
+                            ? classReportDate || existing.reportDateSts
+                            : existing.reportDateSts,
+                    reportDateSas:
+                        examMode === 'SAS'
+                            ? classReportDate || existing.reportDateSas
+                            : existing.reportDateSas,
+                };
+            }
+            return {
+                schoolId: resolvedSchoolId,
+                academicYearId: selectedYearId,
+                semesterId: selectedSemesterId,
+                classId: selectedClassId,
+                studentId,
+                extracurriculars: [],
+                cocurricularNote: '',
+                stsHomeroomNote: '',
+                homeroomNote: '',
+                stsSickDays: 0,
+                stsPermissionDays: 0,
+                stsAlphaDays: 0,
+                sickDays: 0,
+                permissionDays: 0,
+                alphaDays: 0,
+                promotionStatus: 'PROSES',
+                reportDateSts: classReportDate,
+                reportDateSas: classReportDate,
+                isStsPublished: false,
+                isSasPublished: false,
+            };
+        },
+        [
+            notesMap,
+            examMode,
+            classReportDate,
+            resolvedSchoolId,
+            selectedYearId,
+            selectedSemesterId,
+            selectedClassId,
+        ]
+    );
 
-    const updateActiveStudentNote = (patch: Partial<StudentReportNoteRecord>) => {
-        if (!selectedStudentForNote) return;
-        setReportNotesMap((prev) => {
+    const updateStudentNoteState = (
+        studentId: string,
+        updater: (prev: StudentReportNoteRecord) => StudentReportNoteRecord
+    ) => {
+        setNotesMap((prev) => {
             const next = new Map(prev);
-            next.set(selectedStudentForNote, { ...currentStudentNote, ...patch });
+            const current = getOrInitStudentNote(studentId);
+            next.set(studentId, updater(current));
             return next;
         });
     };
 
-    const handleAddExtracurricular = () => {
-        const nextList: ExtracurricularItem[] = [
-            ...currentStudentNote.extracurriculars,
-            { name: '', predicate: 'Baik', description: '' },
-        ];
-        updateActiveStudentNote({ extracurriculars: nextList });
+    // Terapkan tanggal raport kelas ke semua siswa di memori
+    const handleClassReportDateChange = (newDate: string) => {
+        setClassReportDate(newDate);
+        setNotesMap((prev) => {
+            const next = new Map(prev);
+            gradeRows.forEach((row) => {
+                const current = getOrInitStudentNote(row.student.id);
+                next.set(row.student.id, {
+                    ...current,
+                    reportDateSts:
+                        examMode === 'STS' ? newDate || null : current.reportDateSts,
+                    reportDateSas:
+                        examMode === 'SAS' ? newDate || null : current.reportDateSas,
+                });
+            });
+            return next;
+        });
     };
 
-    const handleSaveReportNote = async () => {
-        if (!selectedStudentForNote) return;
-        setSaving(true);
-        setFeedback(null);
+    // Ambil daftar nilai semua mapel milik 1 siswa untuk generator catatan otomatis
+    const getStudentSubjectScores = useCallback(
+        (studentId: string): { subjectName: string; score: number }[] => {
+            const subjectNameById = new Map(subjects.map((s) => [s.id, s.name]));
+            return classAllGrades
+                .filter((g) => g.studentId === studentId)
+                .map((g) => {
+                    const rawScore =
+                        examMode === 'STS'
+                            ? (g.stsScore ?? g.formativeAvg)
+                            : (g.finalScore ?? g.sasScore ?? g.stsScore);
+                    return {
+                        subjectName:
+                            subjectNameById.get(g.subjectId) || 'Mata Pelajaran',
+                        score: rawScore,
+                    };
+                })
+                .filter(
+                    (item): item is { subjectName: string; score: number } =>
+                        item.score !== null && !Number.isNaN(item.score)
+                );
+        },
+        [classAllGrades, subjects, examMode]
+    );
+
+    // Generate catatan otomatis untuk 1 siswa
+    const handleGenerateSingleStudentNotes = (row: GradeSheetRow) => {
+        const current = getOrInitStudentNote(row.student.id);
+        const subjectScores = getStudentSubjectScores(row.student.id);
+
+        const autoHomeroom = buildAutoHomeroomNote({
+            studentName: row.student.fullName,
+            mode: examMode,
+            subjectScores,
+            sickDays:
+                examMode === 'STS' ? current.stsSickDays : current.sickDays,
+            permissionDays:
+                examMode === 'STS'
+                    ? current.stsPermissionDays
+                    : current.permissionDays,
+            alphaDays:
+                examMode === 'STS' ? current.stsAlphaDays : current.alphaDays,
+            extracurriculars: current.extracurriculars,
+        });
+
+        const autoCocurricular = buildAutoCocurricularNote({
+            studentName: row.student.fullName,
+            subjectScores,
+        });
+
+        updateStudentNoteState(row.student.id, (prev) => ({
+            ...prev,
+            stsHomeroomNote:
+                examMode === 'STS' ? autoHomeroom : prev.stsHomeroomNote,
+            homeroomNote:
+                examMode === 'SAS' ? autoHomeroom : prev.homeroomNote,
+            cocurricularNote:
+                examMode === 'SAS' && !prev.cocurricularNote?.trim()
+                    ? autoCocurricular
+                    : prev.cocurricularNote,
+        }));
+
+        toast.success(
+            `Catatan otomatis untuk ${row.student.fullName} berhasil dibuat.`
+        );
+    };
+
+    // Generate catatan otomatis untuk SELURUH SISWA di kelas
+    const handleGenerateAllClassNotes = (overwriteExisting: boolean) => {
+        if (gradeRows.length === 0) return;
+
+        let updatedCount = 0;
+        setNotesMap((prev) => {
+            const next = new Map(prev);
+            gradeRows.forEach((row) => {
+                const current = getOrInitStudentNote(row.student.id);
+                const subjectScores = getStudentSubjectScores(row.student.id);
+
+                const existingNote =
+                    examMode === 'STS'
+                        ? current.stsHomeroomNote
+                        : current.homeroomNote;
+
+                const shouldFillHomeroom =
+                    overwriteExisting || !existingNote?.trim();
+                const shouldFillCocurricular =
+                    examMode === 'SAS' &&
+                    (overwriteExisting || !current.cocurricularNote?.trim());
+
+                if (shouldFillHomeroom || shouldFillCocurricular) {
+                    updatedCount += 1;
+                }
+
+                const autoHomeroom = buildAutoHomeroomNote({
+                    studentName: row.student.fullName,
+                    mode: examMode,
+                    subjectScores,
+                    sickDays:
+                        examMode === 'STS'
+                            ? current.stsSickDays
+                            : current.sickDays,
+                    permissionDays:
+                        examMode === 'STS'
+                            ? current.stsPermissionDays
+                            : current.permissionDays,
+                    alphaDays:
+                        examMode === 'STS'
+                            ? current.stsAlphaDays
+                            : current.alphaDays,
+                    extracurriculars: current.extracurriculars,
+                });
+
+                const autoCocurricular = buildAutoCocurricularNote({
+                    studentName: row.student.fullName,
+                    subjectScores,
+                });
+
+                next.set(row.student.id, {
+                    ...current,
+                    stsHomeroomNote:
+                        examMode === 'STS' && shouldFillHomeroom
+                            ? autoHomeroom
+                            : current.stsHomeroomNote,
+                    homeroomNote:
+                        examMode === 'SAS' && shouldFillHomeroom
+                            ? autoHomeroom
+                            : current.homeroomNote,
+                    cocurricularNote: shouldFillCocurricular
+                        ? autoCocurricular
+                        : current.cocurricularNote,
+                });
+            });
+            return next;
+        });
+
+        toast.success(
+            `Catatan otomatis ${examMode} berhasil dibuat untuk ${updatedCount} siswa. Jangan lupa klik "Simpan Semua Catatan".`
+        );
+    };
+
+    const handleSaveSingleNote = async (studentId: string) => {
+        const note = getOrInitStudentNote(studentId);
+        setSavingStudentId(studentId);
         try {
             const res = await gradeService.saveStudentReportNote(
-                currentStudentNote,
-                currentUserId
+                note,
+                authUser?.id
             );
-            setReportNotesMap((prev) => {
-                const next = new Map(prev);
-                next.set(selectedStudentForNote, currentStudentNote);
-                return next;
-            });
-            setFeedback({ type: 'success', text: res.message });
             toast.success(res.message);
         } catch (err) {
-            const msg =
+            toast.error(
                 err instanceof Error
                     ? err.message
-                    : tr('Gagal menyimpan catatan raport.', 'Failed to save report notes.');
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+                    : 'Gagal menyimpan catatan raport.'
+            );
         } finally {
-            setSaving(false);
+            setSavingStudentId(null);
         }
     };
 
-    const handleSyncAttendance = async () => {
+    // Simpan seluruh catatan siswa satu kelas sekaligus
+    const handleSaveAllNotesBatch = async () => {
+        if (gradeRows.length === 0) return;
+        setIsSavingAllNotes(true);
+        try {
+            for (const row of gradeRows) {
+                const note = getOrInitStudentNote(row.student.id);
+                await gradeService.saveStudentReportNote(note, authUser?.id);
+            }
+            toast.success(
+                `Seluruh catatan raport ${examMode} (${gradeRows.length} siswa) berhasil disimpan.`
+            );
+            await loadGradeAndNotesData();
+        } catch (err) {
+            toast.error(
+                err instanceof Error
+                    ? err.message
+                    : 'Gagal menyimpan semua catatan kelas.'
+            );
+        } finally {
+            setIsSavingAllNotes(false);
+        }
+    };
+
+    const handleSyncDailyAttendance = async () => {
         if (!resolvedSchoolId || !selectedSemesterId || !selectedClassId) return;
-        setSaving(true);
-        setFeedback(null);
+        setIsSyncingAttendance(true);
         try {
             const res = await gradeService.syncAttendanceFromDaily({
                 schoolId: resolvedSchoolId,
                 semesterId: selectedSemesterId,
                 classId: selectedClassId,
             });
-            setFeedback({ type: 'success', text: res.message });
             toast.success(res.message);
-            await loadClassGradeAndReportData();
+            await loadGradeAndNotesData();
         } catch (err) {
-            const msg =
+            toast.error(
                 err instanceof Error
                     ? err.message
-                    : tr('Gagal sinkronisasi absensi.', 'Failed to sync attendance.');
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+                    : 'Gagal menyinkronkan data kehadiran.'
+            );
         } finally {
-            setSaving(false);
+            setIsSyncingAttendance(false);
         }
     };
 
-    const handlePrintStudentPdf = async (
-        studentId: string,
-        mode: ReportExamMode
+    const handlePublishAllClassReports = async (
+        mode: ReportExamMode,
+        publish: boolean
     ) => {
-        const targetRow = gradeRows.find((r) => r.student.id === studentId);
-        const activeClass = visibleClasses.find((c) => c.id === selectedClassId);
-        const activeYear = academicYears.find((y) => y.id === selectedYearId);
-        const activeSem = semesters.find((s) => s.id === selectedSemesterId);
-
-        if (!targetRow || !activeClass || !activeYear || !activeSem) {
-            const msg = tr(
-                'Data kelas atau siswa belum lengkap untuk dicetak.',
-                'Class or student data is incomplete for printing.'
-            );
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+        if (
+            !resolvedSchoolId ||
+            !selectedYearId ||
+            !selectedSemesterId ||
+            !selectedClassId
+        )
             return;
-        }
+        setIsPublishingBatch(true);
+        try {
+            const syncedMap = new Map<string, StudentReportNoteRecord>();
+            gradeRows.forEach((r) => {
+                syncedMap.set(r.student.id, getOrInitStudentNote(r.student.id));
+            });
 
-        setPrintingStudentId(`${studentId}-${mode}`);
-        setFeedback(null);
+            const studentIds = gradeRows.map((r) => r.student.id);
+            const res = await gradeService.publishClassReportsBatch({
+                schoolId: resolvedSchoolId,
+                academicYearId: selectedYearId,
+                semesterId: selectedSemesterId,
+                classId: selectedClassId,
+                studentIds,
+                existingNotesMap: syncedMap,
+                mode,
+                isPublished: publish,
+                updatedBy: authUser?.id,
+            });
+            toast.success(res.message);
+            await loadGradeAndNotesData();
+        } catch (err) {
+            toast.error(
+                err instanceof Error
+                    ? err.message
+                    : 'Gagal memperbarui publikasi raport kelas.'
+            );
+        } finally {
+            setIsPublishingBatch(false);
+        }
+    };
+
+    const currentClassContext = useMemo((): ClassReportContext | null => {
+        const cls = classes.find((c) => c.id === selectedClassId);
+        const ay = academicYears.find((a) => a.id === selectedYearId);
+        const sem = semesters.find((s) => s.id === selectedSemesterId);
+        if (!cls || !ay || !sem) return null;
+
+        return {
+            classId: cls.id,
+            className: cls.name,
+            gradeLevel: cls.gradeLevel,
+            academicYearName: ay.name,
+            semesterType: sem.type,
+            homeroomTeacherName: cls.homeroomTeacherName,
+            homeroomTeacherNip: cls.homeroomTeacherNip,
+        };
+    }, [
+        classes,
+        selectedClassId,
+        academicYears,
+        selectedYearId,
+        semesters,
+        selectedSemesterId,
+    ]);
+
+    const handlePrintSingleStudentPdf = async (row: GradeSheetRow) => {
+        if (!resolvedSchoolId || !selectedSemesterId || !currentClassContext)
+            return;
+        setPrintingStudentId(row.student.id);
         try {
             const bundleRes = await gradeService.getStudentCompleteReportBundle({
                 schoolId: resolvedSchoolId,
                 semesterId: selectedSemesterId,
-                studentId,
+                studentId: row.student.id,
             });
 
-            const classContext: ClassReportContext = {
-                classId: activeClass.id,
-                className: activeClass.name,
-                gradeLevel: activeClass.gradeLevel,
-                major: activeClass.major,
-                academicYearName: activeYear.name,
-                semesterType: activeSem.type,
-                homeroomTeacherName:
-                    activeClass.homeroomTeacher?.fullName ?? 'Wali Kelas',
-                homeroomTeacherNip: activeClass.homeroomTeacher?.nip ?? null,
-            };
-
-            const noteRecord = reportNotesMap.get(studentId) ?? {
-                ...currentStudentNote,
-                studentId,
-            };
-
             await generateCurriculumMerdekaReportPdf({
-                mode,
+                mode: examMode,
                 school: bundleRes.data.school,
-                classContext,
-                student: targetRow.student,
+                classContext: currentClassContext,
+                student: row.student,
                 subjects: bundleRes.data.subjects,
                 grades: bundleRes.data.grades,
-                reportNote: noteRecord,
+                reportNote: getOrInitStudentNote(row.student.id),
                 achievements: bundleRes.data.achievements,
             });
 
-            const msg = tr(
-                `PDF Raport ${mode} untuk ${targetRow.student.fullName} berhasil diunduh.`,
-                `${mode} Report PDF for ${targetRow.student.fullName} downloaded.`
+            toast.success(
+                `PDF Raport ${examMode} untuk ${row.student.fullName} berhasil diunduh.`
             );
-            setFeedback({ type: 'success', text: msg });
-            toast.success(msg);
         } catch (err) {
-            const msg =
-                err instanceof Error
-                    ? err.message
-                    : tr('Gagal mencetak PDF raport.', 'Failed to generate report PDF.');
-            setFeedback({ type: 'error', text: msg });
-            toast.error(msg);
+            toast.error(
+                err instanceof Error ? err.message : 'Gagal mencetak PDF raport.'
+            );
         } finally {
             setPrintingStudentId(null);
         }
     };
 
-    if (loadingInit) {
-        return (
-            <div className="flex flex-col items-center justify-center p-12 text-center">
-                <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mb-3" />
-                <p className="text-sm text-muted-foreground">
-                    {tr(
-                        'Memuat data akademik Modul Nilai & Raport...',
-                        'Loading Grades & Report academic data...'
-                    )}
-                </p>
-            </div>
-        );
-    }
+    const handlePrintEntireClassPdf = async () => {
+        if (
+            !resolvedSchoolId ||
+            !selectedSemesterId ||
+            !selectedClassId ||
+            !currentClassContext ||
+            gradeRows.length === 0
+        )
+            return;
 
-    const totalWeight = weights.formative + weights.sts + weights.sas;
+        setIsPrintingBatch(true);
+        try {
+            const studentIds = gradeRows.map((r) => r.student.id);
+            const batchRes = await gradeService.getClassCompleteReportBundles({
+                schoolId: resolvedSchoolId,
+                semesterId: selectedSemesterId,
+                classId: selectedClassId,
+                studentIds,
+            });
+
+            const inputs = gradeRows.map((row) => ({
+                mode: examMode,
+                school: batchRes.data.school,
+                classContext: currentClassContext,
+                student: row.student,
+                subjects: batchRes.data.subjects,
+                grades: batchRes.data.gradesByStudent.get(row.student.id) ?? [],
+                reportNote: getOrInitStudentNote(row.student.id),
+                achievements:
+                    batchRes.data.achievementsByStudent.get(row.student.id) ?? [],
+            }));
+
+            await generateClassBatchReportPdf(inputs);
+            toast.success(
+                `PDF Raport ${examMode} untuk ${inputs.length} siswa berhasil diunduh.`
+            );
+        } catch (err) {
+            toast.error(
+                err instanceof Error
+                    ? err.message
+                    : 'Gagal mencetak PDF satu kelas.'
+            );
+        } finally {
+            setIsPrintingBatch(false);
+        }
+    };
 
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
-        >
+        <div className="p-6 space-y-6">
             {/* Header Halaman */}
-            <div className="flex flex-col justify-between gap-4 rounded-xl border border-border/50 bg-card p-5 shadow-sm md:flex-row md:items-center">
+            <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
                 <div>
-                    <h1 className="text-xl font-bold text-foreground">
-                        {tr(
-                            'Nilai & Raport Kurikulum Merdeka',
-                            'Curriculum Merdeka Grades & Reports'
-                        )}
+                    <h1 className="text-3xl font-bold tracking-tight text-foreground">
+                        Penilaian &amp; Raport Kurikulum Merdeka
                     </h1>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                        {tr(
-                            'Kelola asesmen formatif, STS, SAS, deskripsi capaian kompetensi, serta cetak PDF Raport.',
-                            'Manage formative, mid-term, final assessments, competency descriptions, and PDF reports.'
-                        )}
+                    <p className="text-muted-foreground mt-1">
+                        Kelola nilai formatif, STS, SAS, deskripsi capaian kompetensi,
+                        catatan wali kelas, hingga cetak PDF raport resmi.
                     </p>
                 </div>
 
-                {/* Navigasi Tab */}
-                <div className="flex flex-wrap gap-2">
+                {/* Saklar Mode Raport STS / SAS */}
+                <div className="inline-flex items-center p-1 rounded-xl border bg-muted/50">
                     <button
                         type="button"
-                        onClick={() => setActiveTab('INPUT_NILAI')}
+                        onClick={() => setExamMode('STS')}
                         className={cn(
-                            'inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition',
-                            activeTab === 'INPUT_NILAI'
-                                ? 'bg-emerald-600 text-white shadow-sm'
-                                : 'bg-muted/60 text-foreground hover:bg-muted'
+                            'px-4 py-2 rounded-lg text-sm font-semibold transition-all',
+                            examMode === 'STS'
+                                ? 'bg-primary text-primary-foreground shadow-xs'
+                                : 'text-muted-foreground hover:text-foreground'
                         )}
                     >
-                        <BookOpen className="h-4 w-4" />
-                        {tr('Input Nilai Mapel', 'Subject Grades')}
+                        Tengah Semester (STS)
                     </button>
-
                     <button
                         type="button"
-                        onClick={() => setActiveTab('WALI_KELAS_RAPORT')}
+                        onClick={() => setExamMode('SAS')}
                         className={cn(
-                            'inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition',
-                            activeTab === 'WALI_KELAS_RAPORT'
-                                ? 'bg-emerald-600 text-white shadow-sm'
-                                : 'bg-muted/60 text-foreground hover:bg-muted'
+                            'px-4 py-2 rounded-lg text-sm font-semibold transition-all',
+                            examMode === 'SAS'
+                                ? 'bg-primary text-primary-foreground shadow-xs'
+                                : 'text-muted-foreground hover:text-foreground'
                         )}
                     >
-                        <Users className="h-4 w-4" />
-                        {tr('Wali Kelas & Cetak Raport', 'Homeroom & Print Report')}
+                        Akhir Semester (SAS)
                     </button>
-
-                    {!isStudentOrParentOnly && (
-                        <button
-                            type="button"
-                            onClick={() => setActiveTab('PERINGKAT_KELAS')}
-                            className={cn(
-                                'inline-flex items-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition',
-                                activeTab === 'PERINGKAT_KELAS'
-                                    ? 'bg-emerald-600 text-white shadow-sm'
-                                    : 'bg-muted/60 text-foreground hover:bg-muted'
-                            )}
-                        >
-                            <Award className="h-4 w-4" />
-                            {tr('Peringkat Kelas', 'Class Rankings')}
-                        </button>
-                    )}
                 </div>
             </div>
 
-            {/* Peringatan Super Admin Lintas Sekolah */}
-            {isSuperAdmin && !resolvedSchoolId && (
-                <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+            {/* Filter Tahun Ajaran, Semester, Kelas, dan Mata Pelajaran */}
+            <Card className="border-none shadow-sm">
+                <CardContent className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
-                        <p className="font-semibold">
-                            {tr(
-                                'Mode Super Admin Lintas Sekolah',
-                                'Cross-School Super Admin Mode'
-                            )}
-                        </p>
-                        <p className="mt-0.5">
-                            {tr(
-                                'Pilih sekolah aktif terlebih dahulu pada switcher sekolah sebelum mengelola nilai dan raport.',
-                                'Select an active school from the school switcher before managing grades and reports.'
-                            )}
-                        </p>
-                    </div>
-                </div>
-            )}
-
-            {/* Filter Bar Global */}
-            <div className="grid grid-cols-1 gap-4 rounded-xl border border-border/50 bg-card p-4 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
-                <div>
-                    <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-                        {tr('Tahun Ajaran', 'Academic Year')}
-                    </label>
-                    <select
-                        value={selectedYearId}
-                        onChange={(e) => {
-                            const nextYear = e.target.value;
-                            setSelectedYearId(nextYear);
-                            const firstSem = semesters.find(
-                                (s) => s.academicYearId === nextYear
-                            );
-                            if (firstSem) setSelectedSemesterId(firstSem.id);
-                        }}
-                        className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm text-foreground focus:border-emerald-500 focus:outline-none"
-                    >
-                        {academicYears.map((y) => (
-                            <option key={y.id} value={y.id}>
-                                {y.name} {y.isActive ? '(Aktif)' : ''}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                <div>
-                    <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-                        {tr('Semester', 'Semester')}
-                    </label>
-                    <select
-                        value={selectedSemesterId}
-                        onChange={(e) => setSelectedSemesterId(e.target.value)}
-                        className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm text-foreground focus:border-emerald-500 focus:outline-none"
-                    >
-                        {filteredSemesters.map((s) => (
-                            <option key={s.id} value={s.id}>
-                                {s.type} {s.isActive ? '(Aktif)' : ''}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                <div>
-                    <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-                        {tr('Kelas', 'Class')}
-                    </label>
-                    <select
-                        value={selectedClassId}
-                        onChange={(e) => {
-                            setSelectedClassId(e.target.value);
-                            setSelectedStudentForNote('');
-                        }}
-                        className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm text-foreground focus:border-emerald-500 focus:outline-none"
-                    >
-                        {visibleClasses.map((c) => (
-                            <option key={c.id} value={c.id}>
-                                {c.name}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-
-                {activeTab === 'INPUT_NILAI' && (
-                    <div>
-                        <label className="mb-1 block text-xs font-semibold text-muted-foreground">
-                            {tr('Mata Pelajaran', 'Subject')}
+                        <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
+                            Tahun Ajaran
                         </label>
                         <select
-                            value={selectedSubjectId}
-                            onChange={(e) => setSelectedSubjectId(e.target.value)}
-                            className="w-full rounded-lg border border-border/50 bg-background px-3 py-2 text-sm text-foreground focus:border-emerald-500 focus:outline-none"
+                            value={selectedYearId}
+                            onChange={(e) => setSelectedYearId(e.target.value)}
+                            className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
                         >
-                            {subjects.map((subj) => (
-                                <option key={subj.id} value={subj.id}>
-                                    {subj.name}
+                            {academicYears.map((ay) => (
+                                <option key={ay.id} value={ay.id}>
+                                    {ay.name} {ay.isActive ? '(Aktif)' : ''}
                                 </option>
                             ))}
                         </select>
                     </div>
-                )}
-            </div>
 
-            {/* Notifikasi Status */}
-            {feedback && (
-                <div
-                    className={cn(
-                        'flex items-center gap-2 rounded-xl border px-4 py-3 text-sm',
-                        feedback.type === 'success'
-                            ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                            : 'border-rose-500/30 bg-rose-500/10 text-rose-700 dark:text-rose-300'
-                    )}
-                >
-                    <CheckCircle2 className="h-4 w-4 shrink-0" />
-                    <span>{feedback.text}</span>
-                </div>
-            )}
-
-            {/* ==================================================================== */}
-            {/* TAB 1: INPUT NILAI MAPEL (BOBOT OTOMATIS + EDIT MANUAL)              */}
-            {/* ==================================================================== */}
-            {activeTab === 'INPUT_NILAI' && (
-                <div className="space-y-4">
-                    <div className="flex flex-col justify-between gap-4 rounded-xl border border-border/50 bg-card p-4 shadow-sm lg:flex-row lg:items-center">
-                        <div className="flex flex-wrap items-center gap-3">
-                            <span className="text-sm font-semibold text-foreground">
-                                {tr('Bobot Nilai Akhir:', 'Final Score Weights:')}
-                            </span>
-                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                Formatif (%)
-                                <input
-                                    type="number"
-                                    min={0}
-                                    max={100}
-                                    value={weights.formative}
-                                    onChange={(e) =>
-                                        handleWeightChange('formative', Number(e.target.value))
-                                    }
-                                    className="w-16 rounded border border-border bg-background px-2 py-1 text-center font-semibold text-foreground"
-                                />
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                STS (%)
-                                <input
-                                    type="number"
-                                    min={0}
-                                    max={100}
-                                    value={weights.sts}
-                                    onChange={(e) =>
-                                        handleWeightChange('sts', Number(e.target.value))
-                                    }
-                                    className="w-16 rounded border border-border bg-background px-2 py-1 text-center font-semibold text-foreground"
-                                />
-                            </label>
-                            <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                                SAS (%)
-                                <input
-                                    type="number"
-                                    min={0}
-                                    max={100}
-                                    value={weights.sas}
-                                    onChange={(e) =>
-                                        handleWeightChange('sas', Number(e.target.value))
-                                    }
-                                    className="w-16 rounded border border-border bg-background px-2 py-1 text-center font-semibold text-foreground"
-                                />
-                            </label>
-                            <span
-                                className={cn(
-                                    'rounded-full px-2.5 py-0.5 text-xs font-semibold',
-                                    totalWeight === 100
-                                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
-                                        : 'bg-amber-500/15 text-amber-700 dark:text-amber-400'
-                                )}
-                            >
-                                Total: {totalWeight}%
-                            </span>
-                        </div>
-
-                        <div className="flex flex-wrap gap-2">
-                            <button
-                                type="button"
-                                onClick={handleAutoGenerateDescriptions}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-teal-500/30 bg-teal-500/10 px-3 py-2 text-xs font-semibold text-teal-700 hover:bg-teal-500/20 dark:text-teal-300"
-                            >
-                                <Sparkles className="h-3.5 w-3.5" />
-                                {tr('Buat Deskripsi Otomatis', 'Auto-Generate Descriptions')}
-                            </button>
-                            <button
-                                type="button"
-                                disabled={saving}
-                                onClick={handleSaveAllGrades}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-                            >
-                                <Save className="h-3.5 w-3.5" />
-                                {saving
-                                    ? tr('Menyimpan...', 'Saving...')
-                                    : tr('Simpan Semua Nilai', 'Save All Grades')}
-                            </button>
-                        </div>
+                    <div>
+                        <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
+                            Semester
+                        </label>
+                        <select
+                            value={selectedSemesterId}
+                            onChange={(e) => setSelectedSemesterId(e.target.value)}
+                            className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
+                        >
+                            {filteredSemesters.map((sem) => (
+                                <option key={sem.id} value={sem.id}>
+                                    Semester {sem.type} {sem.isActive ? '(Aktif)' : ''}
+                                </option>
+                            ))}
+                        </select>
                     </div>
 
-                    <div className="overflow-x-auto rounded-xl border border-border/50 bg-card shadow-sm">
-                        <table className="min-w-full divide-y divide-border/50 text-sm">
-                            <thead className="bg-muted/30 text-xs font-semibold uppercase text-muted-foreground">
-                                <tr>
-                                    <th className="px-3 py-3 text-center">No</th>
-                                    <th className="px-3 py-3 text-left">
-                                        {tr('Nama Peserta Didik', 'Student Name')}
-                                    </th>
-                                    <th className="px-2 py-3 text-center">Rata2 Formatif</th>
-                                    <th className="px-2 py-3 text-center">Nilai STS</th>
-                                    <th className="px-2 py-3 text-center">Nilai SAS</th>
-                                    <th className="px-2 py-3 text-center">
-                                        Nilai Akhir (Auto / Manual)
-                                    </th>
-                                    <th className="px-2 py-3 text-center">Predikat</th>
-                                    <th className="px-3 py-3 text-left">
-                                        Deskripsi Capaian Kompetensi (SAS)
-                                    </th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border/50">
-                                {loadingSheet ? (
-                                    <tr>
-                                        <td
-                                            colSpan={8}
-                                            className="py-8 text-center text-muted-foreground"
-                                        >
-                                            <Loader2 className="h-6 w-6 animate-spin text-emerald-600 mx-auto mb-2" />
-                                            {tr('Memuat daftar siswa...', 'Loading students...')}
-                                        </td>
-                                    </tr>
-                                ) : gradeRows.length === 0 ? (
-                                    <tr>
-                                        <td
-                                            colSpan={8}
-                                            className="py-8 text-center text-muted-foreground"
-                                        >
-                                            {tr(
-                                                'Tidak ada siswa aktif di kelas ini.',
-                                                'No active students in this class.'
-                                            )}
-                                        </td>
-                                    </tr>
-                                ) : (
-                                    gradeRows.map((row, idx) => (
-                                        <tr
-                                            key={row.student.id}
-                                            className="hover:bg-muted/30 transition-colors"
-                                        >
-                                            <td className="px-3 py-2.5 text-center text-muted-foreground">
-                                                {idx + 1}
-                                            </td>
-                                            <td className="px-3 py-2.5">
-                                                <div className="font-medium text-foreground">
-                                                    {row.student.fullName}
-                                                </div>
-                                                <div className="text-xs text-muted-foreground">
-                                                    NISN: {row.student.nisn}
-                                                </div>
-                                            </td>
+                    <div>
+                        <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
+                            Kelas / Rombel
+                        </label>
+                        <select
+                            value={selectedClassId}
+                            onChange={(e) => setSelectedClassId(e.target.value)}
+                            className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
+                        >
+                            {classes.length === 0 ? (
+                                <option value="">Belum ada kelas</option>
+                            ) : (
+                                classes.map((cls) => (
+                                    <option key={cls.id} value={cls.id}>
+                                        {cls.name} (Wali: {cls.homeroomTeacherName})
+                                    </option>
+                                ))
+                            )}
+                        </select>
+                    </div>
 
-                                            <td className="px-2 py-2.5 text-center">
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    max={100}
-                                                    value={row.grade.formativeAvg ?? ''}
-                                                    onChange={(e) =>
-                                                        handleScoreComponentChange(
-                                                            row.student.id,
-                                                            'formativeAvg',
-                                                            e.target.value
-                                                        )
-                                                    }
-                                                    className="w-16 rounded border border-border bg-background px-2 py-1 text-center text-sm text-foreground"
-                                                    placeholder="-"
-                                                />
-                                            </td>
+                    <div>
+                        <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
+                            Mata Pelajaran
+                        </label>
+                        <select
+                            value={selectedSubjectId}
+                            onChange={(e) => setSelectedSubjectId(e.target.value)}
+                            className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
+                        >
+                            {subjects.length === 0 ? (
+                                <option value="">Belum ada mata pelajaran</option>
+                            ) : (
+                                subjects.map((subj) => (
+                                    <option key={subj.id} value={subj.id}>
+                                        {subj.code ? `[${subj.code}] ` : ''}
+                                        {subj.name}
+                                    </option>
+                                ))
+                            )}
+                        </select>
+                    </div>
+                </CardContent>
+            </Card>
 
-                                            <td className="px-2 py-2.5 text-center">
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    max={100}
-                                                    value={row.grade.stsScore ?? ''}
-                                                    onChange={(e) =>
-                                                        handleScoreComponentChange(
-                                                            row.student.id,
-                                                            'stsScore',
-                                                            e.target.value
-                                                        )
-                                                    }
-                                                    className="w-16 rounded border border-border bg-background px-2 py-1 text-center text-sm text-foreground"
-                                                    placeholder="-"
-                                                />
-                                            </td>
+            {/* Navigasi 3 Tab Utama */}
+            <div className="flex flex-wrap items-center gap-2 border-b pb-3">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('GRADES')}
+                    className={cn(
+                        'inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                        activeTab === 'GRADES'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-card border hover:bg-muted'
+                    )}
+                >
+                    <FileSpreadsheet className="w-4 h-4" />
+                    1. Input Nilai &amp; Capaian Kompetensi
+                </button>
 
-                                            <td className="px-2 py-2.5 text-center">
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    max={100}
-                                                    value={row.grade.sasScore ?? ''}
-                                                    onChange={(e) =>
-                                                        handleScoreComponentChange(
-                                                            row.student.id,
-                                                            'sasScore',
-                                                            e.target.value
-                                                        )
-                                                    }
-                                                    className="w-16 rounded border border-border bg-background px-2 py-1 text-center text-sm text-foreground"
-                                                    placeholder="-"
-                                                />
-                                            </td>
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('NOTES')}
+                    className={cn(
+                        'inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                        activeTab === 'NOTES'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-card border hover:bg-muted'
+                    )}
+                >
+                    <ClipboardCheck className="w-4 h-4" />
+                    2. Catatan Wali Kelas, Publikasi &amp; Cetak PDF
+                </button>
 
-                                            <td className="px-2 py-2.5 text-center">
-                                                <div className="inline-flex items-center gap-1">
+                <button
+                    type="button"
+                    onClick={() => setActiveTab('RANKING')}
+                    className={cn(
+                        'inline-flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors',
+                        activeTab === 'RANKING'
+                            ? 'bg-primary text-primary-foreground'
+                            : 'bg-card border hover:bg-muted'
+                    )}
+                >
+                    <Trophy className="w-4 h-4" />
+                    3. Peringkat Kelas (Khusus Guru)
+                </button>
+            </div>
+
+            {/* ==================================================================== */}
+            {/* TAB 1: LEMBAR INPUT NILAI MATA PELAJARAN                            */}
+            {/* ==================================================================== */}
+            {activeTab === 'GRADES' && (
+                <Card className="border-none shadow-sm">
+                    <CardHeader className="border-b space-y-4">
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                            <div>
+                                <CardTitle className="text-lg">
+                                    Lembar Penilaian Mata Pelajaran
+                                </CardTitle>
+                                <CardDescription>
+                                    Nilai Akhir otomatis dihitung dari komponen yang sudah terisi
+                                    (STS tidak turun jika SAS masih kosong).
+                                </CardDescription>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-2.5">
+                                <button
+                                    type="button"
+                                    onClick={handleAutoFillDescriptions}
+                                    disabled={gradeRows.length === 0}
+                                    className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border bg-card text-sm font-medium hover:bg-muted disabled:opacity-50"
+                                >
+                                    <Sparkles className="w-4 h-4 text-amber-500" />
+                                    Isi Deskripsi Otomatis
+                                </button>
+
+                                <button
+                                    type="button"
+                                    onClick={handleSaveAllGrades}
+                                    disabled={isSavingGrades || gradeRows.length === 0}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                                >
+                                    {isSavingGrades ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <Save className="w-4 h-4" />
+                                    )}
+                                    Simpan Semua Nilai
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Pengaturan Bobot & Jumlah Kolom TP */}
+                        <div className="flex flex-wrap items-center justify-between gap-4 p-3 rounded-xl bg-muted/40 border text-xs">
+                            <div className="flex flex-wrap items-center gap-3">
+                                <span className="font-semibold text-foreground">
+                                    Bobot Nilai (%):
+                                </span>
+                                <label className="inline-flex items-center gap-1.5">
+                                    <span>Formatif</span>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={100}
+                                        value={weights.formative}
+                                        onChange={(e) =>
+                                            setWeights({
+                                                ...weights,
+                                                formative: Number(e.target.value) || 0,
+                                            })
+                                        }
+                                        className="w-14 px-2 py-1 rounded border bg-background text-center font-semibold"
+                                    />
+                                </label>
+                                <label className="inline-flex items-center gap-1.5">
+                                    <span>STS</span>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={100}
+                                        value={weights.sts}
+                                        onChange={(e) =>
+                                            setWeights({
+                                                ...weights,
+                                                sts: Number(e.target.value) || 0,
+                                            })
+                                        }
+                                        className="w-14 px-2 py-1 rounded border bg-background text-center font-semibold"
+                                    />
+                                </label>
+                                <label className="inline-flex items-center gap-1.5">
+                                    <span>SAS</span>
+                                    <input
+                                        type="number"
+                                        min={0}
+                                        max={100}
+                                        value={weights.sas}
+                                        onChange={(e) =>
+                                            setWeights({
+                                                ...weights,
+                                                sas: Number(e.target.value) || 0,
+                                            })
+                                        }
+                                        className="w-14 px-2 py-1 rounded border bg-background text-center font-semibold"
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={handleRecalculateAll}
+                                    className="px-2.5 py-1 rounded border bg-background hover:bg-muted font-medium"
+                                >
+                                    Hitung Ulang
+                                </button>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <span className="font-semibold text-foreground">
+                                    Kolom Nilai TP:
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setTpCount((c) => Math.max(1, c - 1))}
+                                    className="px-2 py-1 rounded border bg-background hover:bg-muted font-bold"
+                                >
+                                    -
+                                </button>
+                                <span className="font-mono font-bold px-1">{tpCount} TP</span>
+                                <button
+                                    type="button"
+                                    onClick={() => setTpCount((c) => Math.min(10, c + 1))}
+                                    className="px-2 py-1 rounded border bg-background hover:bg-muted font-bold"
+                                >
+                                    +
+                                </button>
+                            </div>
+                        </div>
+                    </CardHeader>
+
+                    <CardContent className="p-0">
+                        {isLoadingSheet ? (
+                            <div className="p-12 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                                <p className="text-sm">Memuat daftar siswa dan nilai...</p>
+                            </div>
+                        ) : gradeRows.length === 0 ? (
+                            <div className="p-12 text-center space-y-2 text-muted-foreground">
+                                <Users className="w-10 h-10 mx-auto opacity-40" />
+                                <p className="font-medium text-foreground">
+                                    Tidak ada siswa aktif pada kelas terpilih
+                                </p>
+                                <p className="text-xs">
+                                    Pastikan kelas dan mata pelajaran sudah dipilih dengan benar.
+                                </p>
+                            </div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-xs text-left border-collapse">
+                                    <thead className="bg-muted/60 text-muted-foreground uppercase border-b">
+                                        <tr>
+                                            <th className="px-3 py-3 w-10 text-center">No</th>
+                                            <th className="px-3 py-3 min-w-45">Nama Siswa</th>
+                                            {Array.from({ length: tpCount }).map((_, idx) => (
+                                                <th
+                                                    key={idx}
+                                                    className="px-2 py-3 w-16 text-center bg-blue-50/50 dark:bg-blue-950/20"
+                                                >
+                                                    TP {idx + 1}
+                                                </th>
+                                            ))}
+                                            <th className="px-2 py-3 w-16 text-center font-bold">
+                                                Rata TP
+                                            </th>
+                                            <th className="px-2 py-3 w-20 text-center bg-amber-50/50 dark:bg-amber-950/20">
+                                                STS
+                                            </th>
+                                            <th className="px-2 py-3 w-20 text-center bg-emerald-50/50 dark:bg-emerald-950/20">
+                                                SAS
+                                            </th>
+                                            <th className="px-2 py-3 w-20 text-center font-bold">
+                                                Nilai Akhir
+                                            </th>
+                                            <th className="px-2 py-3 w-14 text-center">Pred</th>
+                                            <th className="px-3 py-3 min-w-57.5">
+                                                Deskripsi Capaian Kompetensi (STS)
+                                            </th>
+                                            <th className="px-3 py-3 min-w-57.5">
+                                                Deskripsi Capaian Kompetensi (SAS / Akhir)
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {gradeRows.map((row, idx) => (
+                                            <tr
+                                                key={row.student.id}
+                                                className="border-b hover:bg-muted/20 align-top"
+                                            >
+                                                <td className="px-3 py-3 text-center text-muted-foreground">
+                                                    {idx + 1}
+                                                </td>
+                                                <td className="px-3 py-3">
+                                                    <div className="font-semibold text-foreground text-sm">
+                                                        {row.student.fullName}
+                                                    </div>
+                                                    <div className="text-[11px] text-muted-foreground font-mono">
+                                                        NISN: {row.student.nisn}
+                                                    </div>
+                                                </td>
+
+                                                {/* Kolom Input TP 1..N */}
+                                                {Array.from({ length: tpCount }).map((_, tpIdx) => {
+                                                    const val = row.grade.formativeScores[tpIdx];
+                                                    return (
+                                                        <td
+                                                            key={tpIdx}
+                                                            className="px-1.5 py-2.5 text-center bg-blue-50/20 dark:bg-blue-950/10"
+                                                        >
+                                                            <input
+                                                                type="number"
+                                                                min={0}
+                                                                max={100}
+                                                                step="0.01"
+                                                                value={
+                                                                    val !== undefined && !Number.isNaN(val)
+                                                                        ? val
+                                                                        : ''
+                                                                }
+                                                                onChange={(e) =>
+                                                                    handleFormativeTpChange(
+                                                                        row.student.id,
+                                                                        tpIdx,
+                                                                        e.target.value
+                                                                    )
+                                                                }
+                                                                className="w-14 px-1.5 py-1.5 text-center rounded border bg-background font-medium"
+                                                            />
+                                                        </td>
+                                                    );
+                                                })}
+
+                                                <td className="px-2 py-3 text-center font-semibold">
+                                                    {row.grade.formativeAvg !== null
+                                                        ? row.grade.formativeAvg.toFixed(1)
+                                                        : '-'}
+                                                </td>
+
+                                                {/* Nilai STS */}
+                                                <td className="px-1.5 py-2.5 text-center bg-amber-50/20 dark:bg-amber-950/10">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={100}
+                                                        step="0.01"
+                                                        value={row.grade.stsScore ?? ''}
+                                                        onChange={(e) =>
+                                                            handleExamScoreChange(
+                                                                row.student.id,
+                                                                'stsScore',
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                        className="w-16 px-1.5 py-1.5 text-center rounded border bg-background font-semibold"
+                                                    />
+                                                </td>
+
+                                                {/* Nilai SAS */}
+                                                <td className="px-1.5 py-2.5 text-center bg-emerald-50/20 dark:bg-emerald-950/10">
+                                                    <input
+                                                        type="number"
+                                                        min={0}
+                                                        max={100}
+                                                        step="0.01"
+                                                        value={row.grade.sasScore ?? ''}
+                                                        onChange={(e) =>
+                                                            handleExamScoreChange(
+                                                                row.student.id,
+                                                                'sasScore',
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                        className="w-16 px-1.5 py-1.5 text-center rounded border bg-background font-semibold"
+                                                    />
+                                                </td>
+
+                                                {/* Nilai Akhir */}
+                                                <td className="px-1.5 py-2.5 text-center">
                                                     <input
                                                         type="number"
                                                         min={0}
@@ -1293,577 +1709,786 @@ export function GradesAndReportPage() {
                                                         step="0.01"
                                                         value={row.grade.finalScore ?? ''}
                                                         onChange={(e) =>
-                                                            handleManualFinalScoreChange(
+                                                            handleExamScoreChange(
                                                                 row.student.id,
+                                                                'finalScore',
                                                                 e.target.value
                                                             )
                                                         }
-                                                        className={cn(
-                                                            'w-20 rounded border px-2 py-1 text-center text-sm font-bold',
-                                                            row.isManualFinalScore
-                                                                ? 'border-amber-400 bg-amber-500/10 text-amber-700 dark:text-amber-300'
-                                                                : 'border-emerald-400 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-                                                        )}
-                                                        placeholder="-"
+                                                        className="w-16 px-1.5 py-1.5 text-center rounded border border-primary/40 bg-primary/5 font-bold text-primary"
                                                     />
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => toggleManualLock(row.student.id)}
-                                                        title={
-                                                            row.isManualFinalScore
-                                                                ? 'Mode Manual Aktif (Klik untuk kembalikan ke hitung bobot otomatis)'
-                                                                : 'Mode Otomatis Berbobot (Klik untuk kunci/edit manual)'
+                                                </td>
+
+                                                <td className="px-2 py-3 text-center">
+                                                    {row.grade.predicate ? (
+                                                        <Badge variant="outline" className="font-bold">
+                                                            {row.grade.predicate}
+                                                        </Badge>
+                                                    ) : (
+                                                        '-'
+                                                    )}
+                                                </td>
+
+                                                {/* Deskripsi STS */}
+                                                <td className="px-2 py-2.5">
+                                                    <textarea
+                                                        rows={2}
+                                                        value={row.grade.stsCompetencyDescription ?? ''}
+                                                        onChange={(e) =>
+                                                            handleDescriptionChange(
+                                                                row.student.id,
+                                                                'stsCompetencyDescription',
+                                                                e.target.value
+                                                            )
                                                         }
-                                                        className="rounded p-1 text-muted-foreground hover:bg-muted"
-                                                    >
-                                                        {row.isManualFinalScore ? (
-                                                            <Lock className="h-3.5 w-3.5 text-amber-600" />
-                                                        ) : (
-                                                            <Unlock className="h-3.5 w-3.5 text-emerald-600" />
-                                                        )}
-                                                    </button>
-                                                </div>
-                                            </td>
+                                                        placeholder="Capaian tengah semester..."
+                                                        className="w-full p-2 rounded border bg-background text-xs resize-y"
+                                                    />
+                                                </td>
 
-                                            <td className="px-2 py-2.5 text-center">
-                                                <span className="inline-block rounded bg-muted px-2 py-0.5 text-xs font-bold text-foreground">
-                                                    {row.grade.predicate ?? '-'}
-                                                </span>
-                                            </td>
-
-                                            <td className="px-3 py-2.5">
-                                                <textarea
-                                                    rows={2}
-                                                    value={row.grade.competencyDescription ?? ''}
-                                                    onChange={(e) =>
-                                                        handleDescriptionChange(
-                                                            row.student.id,
-                                                            'competencyDescription',
-                                                            e.target.value
-                                                        )
-                                                    }
-                                                    placeholder="Deskripsi capaian kompetensi akhir..."
-                                                    className="w-full min-w-60 rounded border border-border bg-background p-1.5 text-xs text-foreground"
-                                                />
-                                            </td>
-                                        </tr>
-                                    ))
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                                                {/* Deskripsi SAS / Akhir */}
+                                                <td className="px-2 py-2.5">
+                                                    <textarea
+                                                        rows={2}
+                                                        value={row.grade.competencyDescription ?? ''}
+                                                        onChange={(e) =>
+                                                            handleDescriptionChange(
+                                                                row.student.id,
+                                                                'competencyDescription',
+                                                                e.target.value
+                                                            )
+                                                        }
+                                                        placeholder="Capaian akhir semester..."
+                                                        className="w-full p-2 rounded border bg-background text-xs resize-y"
+                                                    />
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
             )}
 
             {/* ==================================================================== */}
-            {/* TAB 2: WALI KELAS, ABSENSI, PUBLIKASI & CETAK PDF RAPORT             */}
+            {/* TAB 2: CATATAN WALI KELAS, EKSTRAKURIKULER, PUBLIKASI & CETAK PDF    */}
             {/* ==================================================================== */}
-            {activeTab === 'WALI_KELAS_RAPORT' && (
-                <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-                    <div className="space-y-3 rounded-xl border border-border/50 bg-card p-4 shadow-sm">
-                        <div className="flex items-center justify-between">
-                            <h2 className="text-sm font-bold text-foreground">
-                                {tr('Daftar Siswa & Cetak PDF', 'Student List & PDF Print')}
-                            </h2>
-                            <button
-                                type="button"
-                                disabled={saving}
-                                onClick={handleSyncAttendance}
-                                className="inline-flex items-center gap-1 rounded-lg bg-emerald-500/10 px-2.5 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-500/20 dark:text-emerald-300"
-                                title="Tarik data Sakit, Izin, Alpa dari presensi harian"
-                            >
-                                <RefreshCw className="h-3.5 w-3.5" />
-                                {tr('Sinkron Absensi', 'Sync Attendance')}
-                            </button>
-                        </div>
-
-                        <div className="max-h-135 divide-y divide-border/50 overflow-y-auto">
-                            {gradeRows.map((row) => {
-                                const isSelected = row.student.id === selectedStudentForNote;
-                                return (
-                                    <div
-                                        key={row.student.id}
-                                        onClick={() => setSelectedStudentForNote(row.student.id)}
-                                        className={cn(
-                                            'cursor-pointer rounded-lg p-3 transition',
-                                            isSelected
-                                                ? 'bg-emerald-500/10 ring-1 ring-emerald-500/40'
-                                                : 'hover:bg-muted/40'
-                                        )}
-                                    >
-                                        <div className="font-semibold text-foreground">
-                                            {row.student.fullName}
-                                        </div>
-                                        <div className="mb-2 text-xs text-muted-foreground">
-                                            NISN: {row.student.nisn}
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <button
-                                                type="button"
-                                                disabled={
-                                                    printingStudentId === `${row.student.id}-STS`
-                                                }
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handlePrintStudentPdf(row.student.id, 'STS');
-                                                }}
-                                                className="inline-flex items-center gap-1 rounded bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
-                                            >
-                                                <FileDown className="h-3.5 w-3.5" />
-                                                PDF STS
-                                            </button>
-                                            <button
-                                                type="button"
-                                                disabled={
-                                                    printingStudentId === `${row.student.id}-SAS`
-                                                }
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    handlePrintStudentPdf(row.student.id, 'SAS');
-                                                }}
-                                                className="inline-flex items-center gap-1 rounded bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-                                            >
-                                                <FileDown className="h-3.5 w-3.5" />
-                                                PDF SAS
-                                            </button>
-                                        </div>
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </div>
-
-                    <div className="space-y-5 rounded-xl border border-border/50 bg-card p-5 shadow-sm lg:col-span-2">
-                        {!selectedStudentForNote ? (
-                            <p className="text-sm text-muted-foreground">
-                                {tr(
-                                    'Pilih siswa di sebelah kiri untuk mengisi raport.',
-                                    'Select a student on the left to edit their report.'
-                                )}
-                            </p>
-                        ) : (
-                            <>
-                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/50 pb-3">
-                                    <div>
-                                        <h2 className="text-base font-bold text-foreground">
-                                            Detail Raport:{' '}
-                                            {
-                                                gradeRows.find(
-                                                    (r) => r.student.id === selectedStudentForNote
-                                                )?.student.fullName
+            {activeTab === 'NOTES' && (
+                <div className="space-y-4">
+                    {/* Panel Pengaturan & Aksi Satu Kelas */}
+                    <Card className="border-none shadow-sm">
+                        <CardContent className="p-5 space-y-4">
+                            {/* Baris 1: Tanggal Raport Seragam Satu Kelas & Generator Catatan Otomatis */}
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b">
+                                <div className="flex flex-wrap items-center gap-3">
+                                    <div className="flex items-center gap-2 bg-muted/50 px-3 py-2 rounded-lg border">
+                                        <Calendar className="w-4 h-4 text-primary" />
+                                        <span className="text-xs font-semibold">
+                                            Tanggal Raport ({examMode}):
+                                        </span>
+                                        <input
+                                            type="date"
+                                            value={classReportDate}
+                                            onChange={(e) =>
+                                                handleClassReportDateChange(e.target.value)
                                             }
-                                        </h2>
-                                        <p className="text-xs text-muted-foreground">
-                                            Isi catatan wali kelas, ekstrakurikuler, rekap
-                                            ketidakhadiran, dan status publikasi.
-                                        </p>
+                                            className="px-2 py-1 text-xs rounded border bg-background font-medium"
+                                        />
                                     </div>
+
                                     <button
                                         type="button"
-                                        disabled={saving}
-                                        onClick={handleSaveReportNote}
-                                        className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-700"
+                                        onClick={() => handleGenerateAllClassNotes(false)}
+                                        disabled={gradeRows.length === 0}
+                                        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300 disabled:opacity-50"
                                     >
-                                        <Save className="h-3.5 w-3.5" />
-                                        {tr('Simpan Raport Siswa', 'Save Student Report')}
+                                        <Sparkles className="w-4 h-4 text-amber-500" />
+                                        Generate Catatan Otomatis (Isi yang Kosong)
                                     </button>
                                 </div>
 
-                                {/* Ekstrakurikuler */}
-                                <div className="space-y-2">
-                                    <div className="flex items-center justify-between">
-                                        <label className="text-xs font-bold uppercase text-foreground">
-                                            Kegiatan Ekstrakurikuler
+                                <button
+                                    type="button"
+                                    onClick={handleSaveAllNotesBatch}
+                                    disabled={isSavingAllNotes || gradeRows.length === 0}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
+                                >
+                                    {isSavingAllNotes ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <Save className="w-4 h-4" />
+                                    )}
+                                    Simpan Semua Catatan ({gradeRows.length} Siswa)
+                                </button>
+                            </div>
+
+                            {/* Baris 2: Sinkronisasi Absensi, Publikasi Massal & Cetak PDF Satu Kelas */}
+                            <div className="flex flex-wrap items-center justify-between gap-3">
+                                <div className="flex flex-wrap items-center gap-2.5">
+                                    <button
+                                        type="button"
+                                        onClick={handleSyncDailyAttendance}
+                                        disabled={isSyncingAttendance || !selectedClassId}
+                                        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border bg-card text-xs font-medium hover:bg-muted disabled:opacity-50"
+                                    >
+                                        {isSyncingAttendance ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <RefreshCw className="w-4 h-4 text-blue-500" />
+                                        )}
+                                        Sinkronkan Absensi Harian
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={() =>
+                                            handlePublishAllClassReports(examMode, true)
+                                        }
+                                        disabled={
+                                            isPublishingBatch || gradeRows.length === 0
+                                        }
+                                        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300 disabled:opacity-50"
+                                    >
+                                        <CheckCircle2 className="w-4 h-4" />
+                                        Publikasikan Semua Raport {examMode}
+                                    </button>
+                                </div>
+
+                                <button
+                                    type="button"
+                                    onClick={handlePrintEntireClassPdf}
+                                    disabled={isPrintingBatch || gradeRows.length === 0}
+                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 disabled:opacity-50"
+                                >
+                                    {isPrintingBatch ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                    ) : (
+                                        <Download className="w-4 h-4" />
+                                    )}
+                                    Unduh PDF Raport {examMode} Satu Kelas ({gradeRows.length}{' '}
+                                    Siswa)
+                                </button>
+                            </div>
+                        </CardContent>
+                    </Card>
+
+                    {/* Daftar Kartu Per Siswa (Fokus sesuai Mode STS / SAS yang dipilih) */}
+                    {gradeRows.map((row, idx) => {
+                        const note = getOrInitStudentNote(row.student.id);
+                        const isSavingThis = savingStudentId === row.student.id;
+                        const isPrintingThis = printingStudentId === row.student.id;
+                        const isPublishedCurrentMode =
+                            examMode === 'STS'
+                                ? note.isStsPublished
+                                : note.isSasPublished;
+
+                        return (
+                            <Card key={row.student.id} className="border-none shadow-sm">
+                                <CardHeader className="pb-3 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                    <div className="flex items-center gap-3">
+                                        <div>
+                                            <CardTitle className="text-base flex items-center gap-2">
+                                                <span>
+                                                    {idx + 1}. {row.student.fullName}
+                                                </span>
+                                                <Badge
+                                                    variant="outline"
+                                                    className={cn(
+                                                        'text-[11px]',
+                                                        isPublishedCurrentMode
+                                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                                                            : 'bg-muted text-muted-foreground'
+                                                    )}
+                                                >
+                                                    {isPublishedCurrentMode
+                                                        ? `Terbit (${examMode})`
+                                                        : `Draft (${examMode})`}
+                                                </Badge>
+                                            </CardTitle>
+                                            <CardDescription>
+                                                NIS: {row.student.nis || '-'} | NISN:{' '}
+                                                {row.student.nisn}
+                                            </CardDescription>
+                                        </div>
+                                    </div>
+
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <label className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border bg-muted/40 cursor-pointer">
+                                            <input
+                                                type="checkbox"
+                                                checked={isPublishedCurrentMode}
+                                                onChange={(e) =>
+                                                    updateStudentNoteState(
+                                                        row.student.id,
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            isStsPublished:
+                                                                examMode === 'STS'
+                                                                    ? e.target.checked
+                                                                    : prev.isStsPublished,
+                                                            isSasPublished:
+                                                                examMode === 'SAS'
+                                                                    ? e.target.checked
+                                                                    : prev.isSasPublished,
+                                                        })
+                                                    )
+                                                }
+                                            />
+                                            <span>Publikasi {examMode}</span>
                                         </label>
+
                                         <button
                                             type="button"
-                                            onClick={handleAddExtracurricular}
-                                            className="inline-flex items-center gap-1 rounded bg-muted px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted/80"
+                                            onClick={() =>
+                                                handleGenerateSingleStudentNotes(row)
+                                            }
+                                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50/70 text-amber-800 text-xs font-medium hover:bg-amber-100 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300"
                                         >
-                                            <Plus className="h-3.5 w-3.5" />
-                                            Tambah Ekskul
+                                            <Wand2 className="w-3.5 h-3.5" />
+                                            Auto Catatan
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                handleSaveSingleNote(row.student.id)
+                                            }
+                                            disabled={isSavingThis}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 disabled:opacity-50"
+                                        >
+                                            {isSavingThis ? (
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            ) : (
+                                                <Save className="w-3.5 h-3.5" />
+                                            )}
+                                            Simpan
+                                        </button>
+
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                handlePrintSingleStudentPdf(row)
+                                            }
+                                            disabled={isPrintingThis}
+                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-muted disabled:opacity-50"
+                                        >
+                                            {isPrintingThis ? (
+                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                            ) : (
+                                                <FileText className="w-3.5 h-3.5 text-red-500" />
+                                            )}
+                                            PDF {examMode}
                                         </button>
                                     </div>
+                                </CardHeader>
 
-                                    {currentStudentNote.extracurriculars.map((ex, i) => (
-                                        <div
-                                            key={i}
-                                            className="grid grid-cols-1 gap-2 sm:grid-cols-12"
-                                        >
-                                            <input
-                                                type="text"
-                                                placeholder="Nama Ekskul (mis. Hizbul Wathan)"
-                                                value={ex.name}
-                                                onChange={(e) => {
-                                                    const list = [...currentStudentNote.extracurriculars];
-                                                    list[i] = { ...list[i], name: e.target.value };
-                                                    updateActiveStudentNote({ extracurriculars: list });
-                                                }}
-                                                className="rounded border border-border bg-background px-2.5 py-1.5 text-xs text-foreground sm:col-span-4"
-                                            />
-                                            <input
-                                                type="text"
-                                                placeholder="Predikat (Sangat Baik / Baik)"
-                                                value={ex.predicate}
-                                                onChange={(e) => {
-                                                    const list = [...currentStudentNote.extracurriculars];
-                                                    list[i] = { ...list[i], predicate: e.target.value };
-                                                    updateActiveStudentNote({ extracurriculars: list });
-                                                }}
-                                                className="rounded border border-border bg-background px-2.5 py-1.5 text-xs text-foreground sm:col-span-3"
-                                            />
-                                            <input
-                                                type="text"
-                                                placeholder="Keterangan capaian"
-                                                value={ex.description}
-                                                onChange={(e) => {
-                                                    const list = [...currentStudentNote.extracurriculars];
-                                                    list[i] = {
-                                                        ...list[i],
-                                                        description: e.target.value,
-                                                    };
-                                                    updateActiveStudentNote({ extracurriculars: list });
-                                                }}
-                                                className="rounded border border-border bg-background px-2.5 py-1.5 text-xs text-foreground sm:col-span-4"
-                                            />
-                                            <button
-                                                type="button"
-                                                onClick={() => {
-                                                    const list =
-                                                        currentStudentNote.extracurriculars.filter(
-                                                            (_, idx) => idx !== i
+                                <CardContent className="p-5 space-y-4">
+                                    {/* Baris Ketidakhadiran & Catatan Wali Kelas (Sesuai Mode Aktif) */}
+                                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 text-xs">
+                                        {/* Ketidakhadiran 3 Kolom Ringkas */}
+                                        <div className="lg:col-span-3 grid grid-cols-3 gap-2">
+                                            <div>
+                                                <label className="block font-medium mb-1">
+                                                    Sakit ({examMode})
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={
+                                                        examMode === 'STS'
+                                                            ? note.stsSickDays
+                                                            : note.sickDays
+                                                    }
+                                                    onChange={(e) => {
+                                                        const val = Math.max(
+                                                            0,
+                                                            Number(e.target.value) || 0
                                                         );
-                                                    updateActiveStudentNote({ extracurriculars: list });
-                                                }}
-                                                className="inline-flex items-center justify-center rounded bg-rose-500/10 text-rose-600 hover:bg-rose-500/20 sm:col-span-1"
-                                            >
-                                                <Trash2 className="h-3.5 w-3.5" />
-                                            </button>
+                                                        updateStudentNoteState(
+                                                            row.student.id,
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                stsSickDays:
+                                                                    examMode === 'STS'
+                                                                        ? val
+                                                                        : prev.stsSickDays,
+                                                                sickDays:
+                                                                    examMode === 'SAS'
+                                                                        ? val
+                                                                        : prev.sickDays,
+                                                            })
+                                                        );
+                                                    }}
+                                                    className="w-full px-2.5 py-2 rounded-lg border bg-background text-center font-semibold"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block font-medium mb-1">
+                                                    Izin ({examMode})
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={
+                                                        examMode === 'STS'
+                                                            ? note.stsPermissionDays
+                                                            : note.permissionDays
+                                                    }
+                                                    onChange={(e) => {
+                                                        const val = Math.max(
+                                                            0,
+                                                            Number(e.target.value) || 0
+                                                        );
+                                                        updateStudentNoteState(
+                                                            row.student.id,
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                stsPermissionDays:
+                                                                    examMode === 'STS'
+                                                                        ? val
+                                                                        : prev.stsPermissionDays,
+                                                                permissionDays:
+                                                                    examMode === 'SAS'
+                                                                        ? val
+                                                                        : prev.permissionDays,
+                                                            })
+                                                        );
+                                                    }}
+                                                    className="w-full px-2.5 py-2 rounded-lg border bg-background text-center font-semibold"
+                                                />
+                                            </div>
+                                            <div>
+                                                <label className="block font-medium mb-1">
+                                                    Alpha ({examMode})
+                                                </label>
+                                                <input
+                                                    type="number"
+                                                    min={0}
+                                                    value={
+                                                        examMode === 'STS'
+                                                            ? note.stsAlphaDays
+                                                            : note.alphaDays
+                                                    }
+                                                    onChange={(e) => {
+                                                        const val = Math.max(
+                                                            0,
+                                                            Number(e.target.value) || 0
+                                                        );
+                                                        updateStudentNoteState(
+                                                            row.student.id,
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                stsAlphaDays:
+                                                                    examMode === 'STS'
+                                                                        ? val
+                                                                        : prev.stsAlphaDays,
+                                                                alphaDays:
+                                                                    examMode === 'SAS'
+                                                                        ? val
+                                                                        : prev.alphaDays,
+                                                            })
+                                                        );
+                                                    }}
+                                                    className="w-full px-2.5 py-2 rounded-lg border bg-background text-center font-semibold"
+                                                />
+                                            </div>
                                         </div>
-                                    ))}
-                                </div>
 
-                                {/* Catatan Kokurikuler & Wali Kelas */}
-                                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                                    <div>
-                                        <label className="mb-1 block text-xs font-bold text-foreground">
-                                            Catatan Wali Kelas (STS / Tengah Semester)
-                                        </label>
-                                        <textarea
-                                            rows={3}
-                                            value={currentStudentNote.stsHomeroomNote ?? ''}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    stsHomeroomNote: e.target.value,
-                                                })
-                                            }
-                                            className="w-full rounded-lg border border-border bg-background p-2 text-xs text-foreground"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="mb-1 block text-xs font-bold text-foreground">
-                                            Catatan Wali Kelas (SAS / Akhir Semester)
-                                        </label>
-                                        <textarea
-                                            rows={3}
-                                            value={currentStudentNote.homeroomNote ?? ''}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    homeroomNote: e.target.value,
-                                                })
-                                            }
-                                            className="w-full rounded-lg border border-border bg-background p-2 text-xs text-foreground"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label className="mb-1 block text-xs font-bold text-foreground">
-                                        Catatan Kokurikuler / Projek P5 (Raport Akhir)
-                                    </label>
-                                    <textarea
-                                        rows={2}
-                                        value={currentStudentNote.cocurricularNote ?? ''}
-                                        onChange={(e) =>
-                                            updateActiveStudentNote({
-                                                cocurricularNote: e.target.value,
-                                            })
-                                        }
-                                        className="w-full rounded-lg border border-border bg-background p-2 text-xs text-foreground"
-                                    />
-                                </div>
-
-                                {/* Rekap Ketidakhadiran STS & SAS */}
-                                <div className="grid grid-cols-2 gap-4 rounded-lg bg-muted/40 p-3 sm:grid-cols-6">
-                                    <div>
-                                        <label className="block text-[11px] font-semibold text-muted-foreground">
-                                            Sakit STS
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={currentStudentNote.stsSickDays}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    stsSickDays: Number(e.target.value) || 0,
-                                                })
-                                            }
-                                            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-semibold text-muted-foreground">
-                                            Izin STS
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={currentStudentNote.stsPermissionDays}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    stsPermissionDays: Number(e.target.value) || 0,
-                                                })
-                                            }
-                                            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-semibold text-muted-foreground">
-                                            Alpa STS
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={currentStudentNote.stsAlphaDays}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    stsAlphaDays: Number(e.target.value) || 0,
-                                                })
-                                            }
-                                            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-semibold text-muted-foreground">
-                                            Sakit SAS
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={currentStudentNote.sickDays}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    sickDays: Number(e.target.value) || 0,
-                                                })
-                                            }
-                                            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-semibold text-muted-foreground">
-                                            Izin SAS
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={currentStudentNote.permissionDays}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    permissionDays: Number(e.target.value) || 0,
-                                                })
-                                            }
-                                            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[11px] font-semibold text-muted-foreground">
-                                            Alpa SAS
-                                        </label>
-                                        <input
-                                            type="number"
-                                            min={0}
-                                            value={currentStudentNote.alphaDays}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    alphaDays: Number(e.target.value) || 0,
-                                                })
-                                            }
-                                            className="mt-1 w-full rounded border border-border bg-background px-2 py-1 text-xs text-foreground"
-                                        />
-                                    </div>
-                                </div>
-
-                                {/* Keputusan Kenaikan, Tanggal Cetak & Publikasi */}
-                                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                                    <div>
-                                        <label className="mb-1 block text-xs font-bold text-foreground">
-                                            Keputusan Kenaikan / Kelulusan
-                                        </label>
-                                        <select
-                                            value={currentStudentNote.promotionStatus}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    promotionStatus: e.target.value as PromotionStatus,
-                                                })
-                                            }
-                                            className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground"
+                                        {/* Catatan Wali Kelas (STS atau SAS) */}
+                                        <div
+                                            className={cn(
+                                                examMode === 'SAS'
+                                                    ? 'lg:col-span-5'
+                                                    : 'lg:col-span-9'
+                                            )}
                                         >
-                                            <option value="PROSES">Dalam Proses Semester</option>
-                                            <option value="NAIK_KELAS">Naik Kelas</option>
-                                            <option value="TINGGAL_KELAS">Tinggal Kelas</option>
-                                            <option value="LULUS">Lulus Satuan Pendidikan</option>
-                                            <option value="TIDAK_LULUS">Tidak Lulus</option>
-                                        </select>
+                                            <label className="block font-semibold mb-1">
+                                                Catatan Wali Kelas ({examMode})
+                                            </label>
+                                            <textarea
+                                                rows={2}
+                                                value={
+                                                    examMode === 'STS'
+                                                        ? (note.stsHomeroomNote ?? '')
+                                                        : (note.homeroomNote ?? '')
+                                                }
+                                                onChange={(e) =>
+                                                    updateStudentNoteState(
+                                                        row.student.id,
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            stsHomeroomNote:
+                                                                examMode === 'STS'
+                                                                    ? e.target.value
+                                                                    : prev.stsHomeroomNote,
+                                                            homeroomNote:
+                                                                examMode === 'SAS'
+                                                                    ? e.target.value
+                                                                    : prev.homeroomNote,
+                                                        })
+                                                    )
+                                                }
+                                                placeholder={
+                                                    examMode === 'STS'
+                                                        ? 'Catatan motivasi tengah semester...'
+                                                        : 'Catatan evaluasi akhir semester...'
+                                                }
+                                                className="w-full p-2.5 rounded-lg border bg-background"
+                                            />
+                                        </div>
+
+                                        {/* Catatan Kokurikuler / Projek P5 (Tampil pada SAS) */}
+                                        {examMode === 'SAS' && (
+                                            <div className="lg:col-span-4">
+                                                <label className="block font-semibold mb-1">
+                                                    Catatan Kokurikuler / Projek P5
+                                                </label>
+                                                <textarea
+                                                    rows={2}
+                                                    value={note.cocurricularNote ?? ''}
+                                                    onChange={(e) =>
+                                                        updateStudentNoteState(
+                                                            row.student.id,
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                cocurricularNote:
+                                                                    e.target.value,
+                                                            })
+                                                        )
+                                                    }
+                                                    placeholder="Contoh: Capaian Berkembang Sesuai Harapan (BSH) dalam dimensi Bergotong Royong & Bernalar Kritis..."
+                                                    className="w-full p-2.5 rounded-lg border bg-background"
+                                                />
+                                            </div>
+                                        )}
                                     </div>
 
-                                    <div>
-                                        <label className="mb-1 block text-xs font-bold text-foreground">
-                                            Tanggal Raport STS
-                                        </label>
-                                        <input
-                                            type="date"
-                                            value={currentStudentNote.reportDateSts ?? ''}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    reportDateSts: e.target.value,
-                                                })
-                                            }
-                                            className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground"
-                                        />
+                                    {/* Ekstrakurikuler & Keputusan Kenaikan Kelas */}
+                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 pt-3 border-t text-xs">
+                                        <div
+                                            className={cn(
+                                                examMode === 'SAS'
+                                                    ? 'lg:col-span-2'
+                                                    : 'lg:col-span-3',
+                                                'space-y-2'
+                                            )}
+                                        >
+                                            <div className="flex items-center justify-between">
+                                                <span className="font-semibold">
+                                                    Kegiatan Ekstrakurikuler
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        updateStudentNoteState(
+                                                            row.student.id,
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                extracurriculars: [
+                                                                    ...prev.extracurriculars,
+                                                                    {
+                                                                        name: '',
+                                                                        predicate: 'Baik',
+                                                                        description: '',
+                                                                    },
+                                                                ],
+                                                            })
+                                                        )
+                                                    }
+                                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded border hover:bg-muted font-medium"
+                                                >
+                                                    <Plus className="w-3.5 h-3.5" />
+                                                    Tambah Ekskul
+                                                </button>
+                                            </div>
+
+                                            {note.extracurriculars.length === 0 ? (
+                                                <p className="text-muted-foreground italic">
+                                                    Belum ada kegiatan ekstrakurikuler yang
+                                                    ditambahkan.
+                                                </p>
+                                            ) : (
+                                                <div className="space-y-2">
+                                                    {note.extracurriculars.map(
+                                                        (
+                                                            ex: ExtracurricularItem,
+                                                            exIdx: number
+                                                        ) => (
+                                                            <div
+                                                                key={exIdx}
+                                                                className="grid grid-cols-12 gap-2 items-center"
+                                                            >
+                                                                <input
+                                                                    type="text"
+                                                                    value={ex.name}
+                                                                    onChange={(e) =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => {
+                                                                                const list = [
+                                                                                    ...prev.extracurriculars,
+                                                                                ];
+                                                                                list[exIdx] = {
+                                                                                    ...list[exIdx],
+                                                                                    name: e.target
+                                                                                        .value,
+                                                                                };
+                                                                                return {
+                                                                                    ...prev,
+                                                                                    extracurriculars:
+                                                                                        list,
+                                                                                };
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                    placeholder="Nama Ekskul (mis. Pramuka)"
+                                                                    className="col-span-4 px-2.5 py-1.5 rounded border bg-background"
+                                                                />
+                                                                <select
+                                                                    value={ex.predicate}
+                                                                    onChange={(e) =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => {
+                                                                                const list = [
+                                                                                    ...prev.extracurriculars,
+                                                                                ];
+                                                                                list[exIdx] = {
+                                                                                    ...list[exIdx],
+                                                                                    predicate:
+                                                                                        e.target
+                                                                                            .value,
+                                                                                };
+                                                                                return {
+                                                                                    ...prev,
+                                                                                    extracurriculars:
+                                                                                        list,
+                                                                                };
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                    className="col-span-3 px-2 py-1.5 rounded border bg-background"
+                                                                >
+                                                                    <option value="Sangat Baik">
+                                                                        Sangat Baik
+                                                                    </option>
+                                                                    <option value="Baik">
+                                                                        Baik
+                                                                    </option>
+                                                                    <option value="Cukup">
+                                                                        Cukup
+                                                                    </option>
+                                                                </select>
+                                                                <input
+                                                                    type="text"
+                                                                    value={ex.description}
+                                                                    onChange={(e) =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => {
+                                                                                const list = [
+                                                                                    ...prev.extracurriculars,
+                                                                                ];
+                                                                                list[exIdx] = {
+                                                                                    ...list[exIdx],
+                                                                                    description:
+                                                                                        e.target
+                                                                                            .value,
+                                                                                };
+                                                                                return {
+                                                                                    ...prev,
+                                                                                    extracurriculars:
+                                                                                        list,
+                                                                                };
+                                                                            }
+                                                                        )
+                                                                    }
+                                                                    placeholder="Keterangan singkat..."
+                                                                    className="col-span-4 px-2.5 py-1.5 rounded border bg-background"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                extracurriculars:
+                                                                                    prev.extracurriculars.filter(
+                                                                                        (
+                                                                                            _,
+                                                                                            i
+                                                                                        ) =>
+                                                                                            i !==
+                                                                                            exIdx
+                                                                                    ),
+                                                                            })
+                                                                        )
+                                                                    }
+                                                                    className="col-span-1 p-1.5 text-red-500 hover:bg-red-50 rounded"
+                                                                >
+                                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            </div>
+                                                        )
+                                                    )}
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {examMode === 'SAS' && (
+                                            <div>
+                                                <label className="block font-semibold mb-1.5">
+                                                    Keputusan Kenaikan / Kelulusan (Semester
+                                                    Genap)
+                                                </label>
+                                                <select
+                                                    value={note.promotionStatus}
+                                                    onChange={(e) =>
+                                                        updateStudentNoteState(
+                                                            row.student.id,
+                                                            (prev) => ({
+                                                                ...prev,
+                                                                promotionStatus: e.target
+                                                                    .value as PromotionStatus,
+                                                            })
+                                                        )
+                                                    }
+                                                    className="w-full px-3 py-2 rounded-lg border bg-background font-medium"
+                                                >
+                                                    <option value="PROSES">
+                                                        Dalam Proses Evaluasi
+                                                    </option>
+                                                    <option value="NAIK_KELAS">
+                                                        Naik Kelas
+                                                    </option>
+                                                    <option value="TINGGAL_KELAS">
+                                                        Tinggal Kelas
+                                                    </option>
+                                                    <option value="LULUS">
+                                                        Lulus dari Satuan Pendidikan
+                                                    </option>
+                                                    <option value="TIDAK_LULUS">
+                                                        Tidak Lulus
+                                                    </option>
+                                                </select>
+                                            </div>
+                                        )}
                                     </div>
-
-                                    <div>
-                                        <label className="mb-1 block text-xs font-bold text-foreground">
-                                            Tanggal Raport SAS
-                                        </label>
-                                        <input
-                                            type="date"
-                                            value={currentStudentNote.reportDateSas ?? ''}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    reportDateSas: e.target.value,
-                                                })
-                                            }
-                                            className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground"
-                                        />
-                                    </div>
-                                </div>
-
-                                {/* Saklar Publikasi ke Akun Siswa & Orang Tua */}
-                                <div className="flex flex-wrap gap-6 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-                                    <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-foreground">
-                                        <input
-                                            type="checkbox"
-                                            checked={currentStudentNote.isStsPublished}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    isStsPublished: e.target.checked,
-                                                })
-                                            }
-                                            className="h-4 w-4 rounded accent-emerald-600"
-                                        />
-                                        Publikasikan Raport STS ke Siswa & Orang Tua
-                                    </label>
-
-                                    <label className="inline-flex cursor-pointer items-center gap-2 text-xs font-semibold text-foreground">
-                                        <input
-                                            type="checkbox"
-                                            checked={currentStudentNote.isSasPublished}
-                                            onChange={(e) =>
-                                                updateActiveStudentNote({
-                                                    isSasPublished: e.target.checked,
-                                                })
-                                            }
-                                            className="h-4 w-4 rounded accent-emerald-600"
-                                        />
-                                        Publikasikan Raport SAS ke Siswa & Orang Tua
-                                    </label>
-                                </div>
-                            </>
-                        )}
-                    </div>
+                                </CardContent>
+                            </Card>
+                        );
+                    })}
                 </div>
             )}
 
             {/* ==================================================================== */}
-            {/* TAB 3: PERINGKAT KELAS KHUSUS GURU & WALI KELAS (RPC)                */}
+            {/* TAB 3: PERINGKAT KELAS (KHUSUS GURU & WALI KELAS)                    */}
             {/* ==================================================================== */}
-            {activeTab === 'PERINGKAT_KELAS' && !isStudentOrParentOnly && (
-                <div className="space-y-4">
-                    <div className="flex items-center justify-between rounded-xl border border-border/50 bg-card p-4 shadow-sm">
+            {activeTab === 'RANKING' && (
+                <Card className="border-none shadow-sm">
+                    <CardHeader className="border-b flex flex-row items-center justify-between">
                         <div>
-                            <h2 className="text-sm font-bold text-foreground">
-                                Peringkat Akademik Kelas (Khusus Internal Guru & Wali Kelas)
-                            </h2>
-                            <p className="text-xs text-muted-foreground">
-                                Data ini dilindungi RLS dan tidak ditampilkan pada akun Siswa
-                                maupun Orang Tua.
-                            </p>
+                            <CardTitle className="text-lg">
+                                Peringkat Kelas — Mode {examMode}
+                            </CardTitle>
+                            <CardDescription>
+                                Data peringkat internal khusus Guru, Wali Kelas, dan Pimpinan
+                                Sekolah (tidak ditampilkan di portal siswa/orang tua).
+                            </CardDescription>
                         </div>
-                        <div className="flex gap-2">
-                            {(['STS', 'SAS'] as ReportExamMode[]).map((mode) => (
-                                <button
-                                    key={mode}
-                                    type="button"
-                                    onClick={() => setRankingMode(mode)}
-                                    className={cn(
-                                        'rounded-lg px-3 py-1.5 text-xs font-semibold',
-                                        rankingMode === mode
-                                            ? 'bg-emerald-600 text-white'
-                                            : 'bg-muted text-foreground hover:bg-muted/80'
-                                    )}
-                                >
-                                    Mode {mode}
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+                        <button
+                            type="button"
+                            onClick={loadRankings}
+                            disabled={isLoadingRankings}
+                            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border text-xs font-medium hover:bg-muted"
+                        >
+                            <RefreshCw
+                                className={cn(
+                                    'w-3.5 h-3.5',
+                                    isLoadingRankings && 'animate-spin'
+                                )}
+                            />
+                            Muat Ulang
+                        </button>
+                    </CardHeader>
 
-                    <div className="overflow-x-auto rounded-xl border border-border/50 bg-card shadow-sm">
-                        <table className="min-w-full divide-y divide-border/50 text-sm">
-                            <thead className="bg-muted/30 text-xs font-semibold uppercase text-muted-foreground">
-                                <tr>
-                                    <th className="px-4 py-3 text-center">Peringkat</th>
-                                    <th className="px-4 py-3 text-left">NISN</th>
-                                    <th className="px-4 py-3 text-left">Nama Peserta Didik</th>
-                                    <th className="px-4 py-3 text-center">Mapel Dinilai</th>
-                                    <th className="px-4 py-3 text-center">Jumlah Nilai</th>
-                                    <th className="px-4 py-3 text-center">Rata-Rata</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-border/50">
-                                {rankings.map((row) => (
-                                    <tr
-                                        key={row.studentId}
-                                        className="hover:bg-muted/30 transition-colors"
-                                    >
-                                        <td className="px-4 py-3 text-center font-bold text-emerald-600">
-                                            {row.rank ? `#${row.rank}` : '-'}
-                                        </td>
-                                        <td className="px-4 py-3 text-muted-foreground">
-                                            {row.nisn}
-                                        </td>
-                                        <td className="px-4 py-3 font-medium text-foreground">
-                                            {row.fullName}
-                                        </td>
-                                        <td className="px-4 py-3 text-center">
-                                            {row.gradedSubjects}
-                                        </td>
-                                        <td className="px-4 py-3 text-center font-semibold">
-                                            {row.totalScore}
-                                        </td>
-                                        <td className="px-4 py-3 text-center font-bold text-emerald-600">
-                                            {row.averageScore}
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                    <CardContent className="p-0">
+                        {isLoadingRankings ? (
+                            <div className="p-12 flex flex-col items-center justify-center gap-2 text-muted-foreground">
+                                <Loader2 className="w-7 h-7 animate-spin text-primary" />
+                                <p className="text-sm">Menghitung peringkat kelas...</p>
+                            </div>
+                        ) : rankings.length === 0 ? (
+                            <div className="p-12 text-center text-sm text-muted-foreground">
+                                Belum ada data nilai untuk dihitung peringkatnya.
+                            </div>
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-sm text-left">
+                                    <thead className="bg-muted/50 text-xs uppercase text-muted-foreground border-b">
+                                        <tr>
+                                            <th className="px-6 py-3.5 w-24 text-center">
+                                                Peringkat
+                                            </th>
+                                            <th className="px-6 py-3.5">Nama Siswa</th>
+                                            <th className="px-6 py-3.5 text-center">Mapel Dinilai</th>
+                                            <th className="px-6 py-3.5 text-right">Total Nilai</th>
+                                            <th className="px-6 py-3.5 text-right">Rata-Rata</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {rankings.map((r) => (
+                                            <tr
+                                                key={r.studentId}
+                                                className="border-b last:border-0 hover:bg-muted/20"
+                                            >
+                                                <td className="px-6 py-3.5 text-center">
+                                                    {r.rank !== null ? (
+                                                        <span
+                                                            className={cn(
+                                                                'inline-flex items-center justify-center w-8 h-8 rounded-full font-bold text-xs',
+                                                                r.rank === 1
+                                                                    ? 'bg-amber-100 text-amber-800 border border-amber-300'
+                                                                    : r.rank === 2
+                                                                        ? 'bg-slate-200 text-slate-800'
+                                                                        : r.rank === 3
+                                                                            ? 'bg-orange-100 text-orange-800'
+                                                                            : 'bg-muted text-foreground'
+                                                            )}
+                                                        >
+                                                            #{r.rank}
+                                                        </span>
+                                                    ) : (
+                                                        '-'
+                                                    )}
+                                                </td>
+                                                <td className="px-6 py-3.5">
+                                                    <div className="font-semibold">{r.fullName}</div>
+                                                    <div className="text-xs text-muted-foreground font-mono">
+                                                        NISN: {r.nisn}
+                                                    </div>
+                                                </td>
+                                                <td className="px-6 py-3.5 text-center">
+                                                    {r.gradedSubjects} mapel
+                                                </td>
+                                                <td className="px-6 py-3.5 text-right font-mono">
+                                                    {r.totalScore.toFixed(2)}
+                                                </td>
+                                                <td className="px-6 py-3.5 text-right font-bold text-primary font-mono">
+                                                    {r.averageScore.toFixed(2)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
             )}
-        </motion.div>
+        </div>
     );
 }
-
-export default GradesAndReportPage;

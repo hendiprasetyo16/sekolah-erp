@@ -1,495 +1,719 @@
 // src/modules/grades/pages/PortalGradesPage.tsx
-import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { BookOpen, FileDown, Loader2, Lock } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+    Award,
+    BookOpen,
+    Calendar,
+    Download,
+    FileText,
+    GraduationCap,
+    Loader2,
+    Lock,
+    UserCheck,
+} from 'lucide-react';
 import { toast } from 'sonner';
-
+import {
+    Card,
+    CardContent,
+    CardDescription,
+    CardHeader,
+    CardTitle,
+} from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/utils/cn';
 import { supabase } from '@/services/supabase.client';
-import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { gradeService } from '../services/grade.service';
 import { generateCurriculumMerdekaReportPdf } from '../utils/reportPdfGenerator';
 import type {
     ClassReportContext,
     ReportExamMode,
+    StudentAchievementItem,
     StudentBasicProfile,
     StudentGradeRecord,
     StudentReportNoteRecord,
     SubjectOption,
 } from '../types/grade.types';
 
-interface PortalStudentItem extends StudentBasicProfile {
-    classId: string | null;
+interface LinkedStudentOption extends StudentBasicProfile {
+    schoolId: string;
+    relationship: string;
 }
 
-interface SemesterItem {
-    id: string;
-    type: 'GANJIL' | 'GENAP';
-    isActive: boolean;
-    academicYear: {
-        id: string;
-        name: string;
-    } | null;
+interface PublishedReportSummary {
+    note: StudentReportNoteRecord;
+    semesterType: 'GANJIL' | 'GENAP';
+    academicYearName: string;
+    className: string;
+    gradeLevel: number;
+    homeroomTeacherName: string;
+    homeroomTeacherNip: string | null;
 }
 
-export function PortalGradesPage() {
-    const { user, school } = useAuthStore();
-    const schoolInfo = school as { id?: string } | null;
+const CATEGORY_LABELS: Record<string, string> = {
+    UMUM: 'Kelompok Mata Pelajaran Umum',
+    PILIHAN: 'Kelompok Mata Pelajaran Pilihan',
+    KEJURUAN: 'Kelompok Mata Pelajaran Kejuruan',
+    MUATAN_LOKAL: 'Muatan Lokal',
+    KOKURIKULER: 'Kokurikuler / Projek',
+};
 
-    const [resolvedSchoolId, setResolvedSchoolId] = useState<string>(
-        schoolInfo?.id || user?.schoolId || ''
+export default function PortalGradesPage() {
+    const [linkedStudents, setLinkedStudents] = useState<LinkedStudentOption[]>(
+        []
     );
-    const [loading, setLoading] = useState<boolean>(true);
-    const [printingMode, setPrintingMode] = useState<ReportExamMode | null>(null);
-    const [students, setStudents] = useState<PortalStudentItem[]>([]);
     const [selectedStudentId, setSelectedStudentId] = useState<string>('');
-    const [semesters, setSemesters] = useState<SemesterItem[]>([]);
+
+    const [publishedReports, setPublishedReports] = useState<
+        PublishedReportSummary[]
+    >([]);
     const [selectedSemesterId, setSelectedSemesterId] = useState<string>('');
+    const [examMode, setExamMode] = useState<ReportExamMode>('SAS');
 
     const [subjects, setSubjects] = useState<SubjectOption[]>([]);
     const [grades, setGrades] = useState<StudentGradeRecord[]>([]);
-    const [reportNote, setReportNote] =
-        useState<StudentReportNoteRecord | null>(null);
-    const [errorMsg, setErrorMsg] = useState<string | null>(null);
+    const [achievements, setAchievements] = useState<StudentAchievementItem[]>(
+        []
+    );
 
-    // 1. Ambil daftar anak/siswa milik akun Siswa atau Orang Tua (disaring otomatis oleh RLS)
+    const [isLoadingInitial, setIsLoadingInitial] = useState<boolean>(true);
+    const [isLoadingReport, setIsLoadingReport] = useState<boolean>(false);
+    const [isDownloadingPdf, setIsDownloadingPdf] = useState<boolean>(false);
+
+    // 1. Ambil daftar siswa yang terhubung dengan akun Siswa / Orang Tua
     useEffect(() => {
-        let mounted = true;
-        async function loadPortalContext() {
-            setLoading(true);
+        let active = true;
+
+        const loadLinkedStudents = async () => {
+            setIsLoadingInitial(true);
             try {
                 const {
-                    data: { user: authUser },
+                    data: { user },
                 } = await supabase.auth.getUser();
+                if (!user) return;
 
-                if (!authUser) {
-                    if (mounted) setLoading(false);
-                    return;
+                const { data: links, error } = await supabase
+                    .from('user_student_links')
+                    .select(
+                        'relationship, isPrimary, student:students(id, schoolId, nis, nisn, fullName, gender, birthPlace, birthDate, religion, address)'
+                    )
+                    .eq('userId', user.id)
+                    .order('isPrimary', { ascending: false });
+
+                if (error) throw error;
+                if (!active) return;
+
+                const mapped: LinkedStudentOption[] = (links ?? [])
+                    .map(
+                        (row: Record<string, unknown>): LinkedStudentOption | null => {
+                            const st = row.student as Record<string, unknown> | null;
+                            if (!st) return null;
+                            return {
+                                id: String(st.id),
+                                schoolId: String(st.schoolId),
+                                nis: st.nis ? String(st.nis) : null,
+                                nisn: String(st.nisn ?? '-'),
+                                fullName: String(st.fullName ?? '-'),
+                                gender: String(st.gender ?? 'L'),
+                                birthPlace: String(st.birthPlace ?? '-'),
+                                birthDate: String(st.birthDate ?? ''),
+                                religion: st.religion ? String(st.religion) : null,
+                                address: String(st.address ?? '-'),
+                                relationship: String(row.relationship ?? 'SISWA'),
+                            };
+                        }
+                    )
+                    .filter((item): item is LinkedStudentOption => item !== null);
+
+                setLinkedStudents(mapped);
+                if (mapped.length > 0) {
+                    setSelectedStudentId(mapped[0].id);
                 }
-
-                let activeSchoolId = schoolInfo?.id || user?.schoolId || '';
-                if (!activeSchoolId) {
-                    const { data: profile } = await supabase
-                        .from('users')
-                        .select('schoolId')
-                        .eq('id', authUser.id)
-                        .maybeSingle();
-                    activeSchoolId = profile?.schoolId || '';
-                }
-
-                if (!mounted) return;
-                setResolvedSchoolId(activeSchoolId);
-
-                if (!activeSchoolId) {
-                    setLoading(false);
-                    return;
-                }
-
-                const [studentRes, semRes] = await Promise.all([
-                    supabase
-                        .from('students')
-                        .select(
-                            'id, nis, nisn, fullName, gender, birthPlace, birthDate, religion, address, classId'
-                        )
-                        .eq('schoolId', activeSchoolId)
-                        .order('fullName', { ascending: true }),
-                    supabase
-                        .from('semesters')
-                        .select('id, type, isActive, academicYear:academic_years(id, name)')
-                        .eq('schoolId', activeSchoolId),
-                ]);
-
-                if (!mounted) return;
-
-                if (studentRes.error) throw studentRes.error;
-                if (semRes.error) throw semRes.error;
-
-                const stList = (studentRes.data ?? []) as PortalStudentItem[];
-                const semList = (semRes.data ?? []).map((s: Record<string, unknown>) => {
-                    const ay = Array.isArray(s.academicYear)
-                        ? s.academicYear[0]
-                        : s.academicYear;
-                    return {
-                        id: String(s.id),
-                        type: (s.type as 'GANJIL' | 'GENAP') ?? 'GANJIL',
-                        isActive: Boolean(s.isActive),
-                        academicYear: ay
-                            ? {
-                                id: String((ay as Record<string, unknown>).id),
-                                name: String((ay as Record<string, unknown>).name),
-                            }
-                            : null,
-                    };
-                });
-
-                setStudents(stList);
-                setSemesters(semList);
-
-                if (stList[0]) setSelectedStudentId(stList[0].id);
-                const activeSem = semList.find((s) => s.isActive) ?? semList[0];
-                if (activeSem) setSelectedSemesterId(activeSem.id);
             } catch (err) {
-                if (mounted) {
-                    const msg =
-                        err instanceof Error
-                            ? err.message
-                            : 'Gagal memuat data raport siswa.';
-                    setErrorMsg(msg);
-                    toast.error(msg);
-                }
+                toast.error(
+                    err instanceof Error
+                        ? err.message
+                        : 'Gagal memuat data peserta didik.'
+                );
             } finally {
-                if (mounted) setLoading(false);
+                if (active) setIsLoadingInitial(false);
             }
-        }
-
-        loadPortalContext();
-        return () => {
-            mounted = false;
         };
-    }, [schoolInfo?.id, user?.schoolId]);
 
-    // 2. Muat nilai dan status publikasi raport saat semester / siswa berubah
+        void loadLinkedStudents();
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    const currentStudent = useMemo(
+        () => linkedStudents.find((s) => s.id === selectedStudentId) ?? null,
+        [linkedStudents, selectedStudentId]
+    );
+
+    // 2. Ambil daftar semester yang raportnya sudah dipublikasikan oleh Wali Kelas
     useEffect(() => {
-        let mounted = true;
-        async function loadGradesAndNote() {
-            if (!resolvedSchoolId || !selectedStudentId || !selectedSemesterId) return;
-            try {
-                const [bundleRes, noteRes] = await Promise.all([
-                    gradeService.getStudentCompleteReportBundle({
-                        schoolId: resolvedSchoolId,
-                        semesterId: selectedSemesterId,
-                        studentId: selectedStudentId,
-                    }),
-                    supabase
-                        .from('student_report_notes')
-                        .select('*')
-                        .eq('schoolId', resolvedSchoolId)
-                        .eq('semesterId', selectedSemesterId)
-                        .eq('studentId', selectedStudentId)
-                        .maybeSingle(),
-                ]);
-
-                if (!mounted) return;
-                setSubjects(bundleRes.data.subjects);
-                setGrades(bundleRes.data.grades);
-
-                if (noteRes.data) {
-                    const row = noteRes.data as Record<string, unknown>;
-                    const normalizedNote: StudentReportNoteRecord = {
-                        id: String(row.id),
-                        schoolId: String(row.schoolId),
-                        academicYearId: String(row.academicYearId ?? ''),
-                        semesterId: String(row.semesterId),
-                        classId: String(row.classId),
-                        studentId: String(row.studentId),
-                        extracurriculars: Array.isArray(row.extracurriculars)
-                            ? row.extracurriculars.map((ex: Record<string, unknown>) => ({
-                                name: String(ex.name ?? ''),
-                                predicate: String(ex.predicate ?? 'Baik'),
-                                description: String(ex.description ?? ''),
-                            }))
-                            : [],
-                        cocurricularNote: row.cocurricularNote
-                            ? String(row.cocurricularNote)
-                            : null,
-                        stsHomeroomNote: row.stsHomeroomNote
-                            ? String(row.stsHomeroomNote)
-                            : null,
-                        homeroomNote: row.homeroomNote ? String(row.homeroomNote) : null,
-                        stsSickDays: Number(row.stsSickDays ?? 0),
-                        stsPermissionDays: Number(row.stsPermissionDays ?? 0),
-                        stsAlphaDays: Number(row.stsAlphaDays ?? 0),
-                        sickDays: Number(row.sickDays ?? 0),
-                        permissionDays: Number(row.permissionDays ?? 0),
-                        alphaDays: Number(row.alphaDays ?? 0),
-                        promotionStatus:
-                            (row.promotionStatus as StudentReportNoteRecord['promotionStatus']) ??
-                            'PROSES',
-                        reportDateSts: row.reportDateSts ? String(row.reportDateSts) : null,
-                        reportDateSas: row.reportDateSas ? String(row.reportDateSas) : null,
-                        isStsPublished: Boolean(row.isStsPublished),
-                        isSasPublished: Boolean(row.isSasPublished),
-                    };
-                    setReportNote(normalizedNote);
-                } else {
-                    setReportNote(null);
-                }
-            } catch (err) {
-                if (mounted) {
-                    const msg =
-                        err instanceof Error ? err.message : 'Gagal memuat rincian nilai.';
-                    setErrorMsg(msg);
-                    toast.error(msg);
-                }
-            }
-        }
-
-        loadGradesAndNote();
-        return () => {
-            mounted = false;
-        };
-    }, [resolvedSchoolId, selectedStudentId, selectedSemesterId]);
-
-    const handleDownloadPortalPdf = async (mode: ReportExamMode) => {
-        const activeStudent = students.find((s) => s.id === selectedStudentId);
-        const activeSemester = semesters.find((s) => s.id === selectedSemesterId);
-        if (!activeStudent || !activeSemester || !reportNote || !resolvedSchoolId) {
+        if (!currentStudent) {
+            setPublishedReports([]);
             return;
         }
 
-        setPrintingMode(mode);
-        setErrorMsg(null);
-        try {
-            const [bundleRes, classRes] = await Promise.all([
-                gradeService.getStudentCompleteReportBundle({
-                    schoolId: resolvedSchoolId,
-                    semesterId: selectedSemesterId,
-                    studentId: selectedStudentId,
-                }),
-                activeStudent.classId
-                    ? supabase
-                        .from('classes')
-                        .select(
-                            'id, name, gradeLevel, major, homeroomTeacher:teachers(fullName, nip)'
-                        )
-                        .eq('id', activeStudent.classId)
-                        .single()
-                    : Promise.resolve({ data: null, error: null }),
-            ]);
+        let active = true;
+        const loadPublishedSemesters = async () => {
+            setIsLoadingReport(true);
+            try {
+                const { data, error } = await supabase
+                    .from('student_report_notes')
+                    .select(
+                        `
+            *,
+            semester:semesters(id, type),
+            academicYear:academic_years(id, name),
+            classInfo:classes(id, name, gradeLevel, homeroomTeacher:teachers(fullName, nip))
+          `
+                    )
+                    .eq('schoolId', currentStudent.schoolId)
+                    .eq('studentId', currentStudent.id)
+                    .or('isStsPublished.eq.true,isSasPublished.eq.true')
+                    .order('createdAt', { ascending: false });
 
-            const clsData = classRes.data as Record<string, unknown> | null;
-            const rawTeacher = clsData?.homeroomTeacher
-                ? Array.isArray(clsData.homeroomTeacher)
-                    ? clsData.homeroomTeacher[0]
-                    : clsData.homeroomTeacher
-                : null;
+                if (error) throw error;
+                if (!active) return;
+
+                const summaries: PublishedReportSummary[] = (data ?? []).map(
+                    (row: Record<string, unknown>) => {
+                        const sem = row.semester as { type?: 'GANJIL' | 'GENAP' } | null;
+                        const ay = row.academicYear as { name?: string } | null;
+                        const cls = row.classInfo as {
+                            name?: string;
+                            gradeLevel?: number;
+                            homeroomTeacher?: { fullName?: string; nip?: string | null };
+                        } | null;
+
+                        return {
+                            note: {
+                                id: String(row.id),
+                                schoolId: String(row.schoolId),
+                                academicYearId: String(row.academicYearId),
+                                semesterId: String(row.semesterId),
+                                classId: String(row.classId),
+                                studentId: String(row.studentId),
+                                extracurriculars: Array.isArray(row.extracurriculars)
+                                    ? row.extracurriculars
+                                    : [],
+                                cocurricularNote: row.cocurricularNote
+                                    ? String(row.cocurricularNote)
+                                    : null,
+                                stsHomeroomNote: row.stsHomeroomNote
+                                    ? String(row.stsHomeroomNote)
+                                    : null,
+                                homeroomNote: row.homeroomNote
+                                    ? String(row.homeroomNote)
+                                    : null,
+                                stsSickDays: Number(row.stsSickDays ?? 0),
+                                stsPermissionDays: Number(row.stsPermissionDays ?? 0),
+                                stsAlphaDays: Number(row.stsAlphaDays ?? 0),
+                                sickDays: Number(row.sickDays ?? 0),
+                                permissionDays: Number(row.permissionDays ?? 0),
+                                alphaDays: Number(row.alphaDays ?? 0),
+                                promotionStatus:
+                                    (row.promotionStatus as StudentReportNoteRecord['promotionStatus']) ??
+                                    'PROSES',
+                                reportDateSts: row.reportDateSts
+                                    ? String(row.reportDateSts)
+                                    : null,
+                                reportDateSas: row.reportDateSas
+                                    ? String(row.reportDateSas)
+                                    : null,
+                                isStsPublished: Boolean(row.isStsPublished),
+                                isSasPublished: Boolean(row.isSasPublished),
+                            },
+                            semesterType: sem?.type ?? 'GANJIL',
+                            academicYearName: ay?.name ?? '-',
+                            className: cls?.name ?? '-',
+                            gradeLevel: Number(cls?.gradeLevel ?? 1),
+                            homeroomTeacherName: cls?.homeroomTeacher?.fullName ?? '-',
+                            homeroomTeacherNip: cls?.homeroomTeacher?.nip ?? null,
+                        };
+                    }
+                );
+
+                setPublishedReports(summaries);
+                if (summaries.length > 0) {
+                    const first = summaries[0];
+                    setSelectedSemesterId(first.note.semesterId);
+                    setExamMode(first.note.isSasPublished ? 'SAS' : 'STS');
+                } else {
+                    setSelectedSemesterId('');
+                }
+            } catch (err) {
+                toast.error(
+                    err instanceof Error
+                        ? err.message
+                        : 'Gagal memuat riwayat raport siswa.'
+                );
+            } finally {
+                if (active) setIsLoadingReport(false);
+            }
+        };
+
+        void loadPublishedSemesters();
+        return () => {
+            active = false;
+        };
+    }, [currentStudent]);
+
+    const activeReportSummary = useMemo(
+        () =>
+            publishedReports.find((r) => r.note.semesterId === selectedSemesterId) ??
+            null,
+        [publishedReports, selectedSemesterId]
+    );
+
+    // 3. Muat Detail Nilai & Prestasi ketika Semester dipilih
+    useEffect(() => {
+        if (!currentStudent || !activeReportSummary) {
+            setSubjects([]);
+            setGrades([]);
+            setAchievements([]);
+            return;
+        }
+
+        if (
+            examMode === 'SAS' &&
+            !activeReportSummary.note.isSasPublished &&
+            activeReportSummary.note.isStsPublished
+        ) {
+            setExamMode('STS');
+        } else if (
+            examMode === 'STS' &&
+            !activeReportSummary.note.isStsPublished &&
+            activeReportSummary.note.isSasPublished
+        ) {
+            setExamMode('SAS');
+        }
+
+        let active = true;
+        const loadDetail = async () => {
+            setIsLoadingReport(true);
+            try {
+                const res = await gradeService.getStudentCompleteReportBundle({
+                    schoolId: currentStudent.schoolId,
+                    semesterId: activeReportSummary.note.semesterId,
+                    studentId: currentStudent.id,
+                });
+
+                if (!active) return;
+                setSubjects(res.data.subjects);
+                setGrades(res.data.grades);
+                setAchievements(res.data.achievements);
+            } catch (err) {
+                toast.error(
+                    err instanceof Error ? err.message : 'Gagal memuat rincian nilai.'
+                );
+            } finally {
+                if (active) setIsLoadingReport(false);
+            }
+        };
+
+        void loadDetail();
+        return () => {
+            active = false;
+        };
+    }, [currentStudent, activeReportSummary]);
+
+    const handleDownloadPdf = useCallback(async () => {
+        if (!currentStudent || !activeReportSummary) return;
+        setIsDownloadingPdf(true);
+        try {
+            const bundleRes = await gradeService.getStudentCompleteReportBundle({
+                schoolId: currentStudent.schoolId,
+                semesterId: activeReportSummary.note.semesterId,
+                studentId: currentStudent.id,
+            });
 
             const classContext: ClassReportContext = {
-                classId: activeStudent.classId ?? '',
-                className: clsData?.name ? String(clsData.name) : '-',
-                gradeLevel: clsData?.gradeLevel ? Number(clsData.gradeLevel) : 10,
-                major: clsData?.major ? String(clsData.major) : null,
-                academicYearName: activeSemester.academicYear?.name ?? '-',
-                semesterType: activeSemester.type,
-                homeroomTeacherName: rawTeacher
-                    ? String((rawTeacher as Record<string, unknown>).fullName)
-                    : 'Wali Kelas',
-                homeroomTeacherNip: rawTeacher
-                    ? ((rawTeacher as Record<string, unknown>).nip as string | null)
-                    : null,
+                classId: activeReportSummary.note.classId,
+                className: activeReportSummary.className,
+                gradeLevel: activeReportSummary.gradeLevel,
+                academicYearName: activeReportSummary.academicYearName,
+                semesterType: activeReportSummary.semesterType,
+                homeroomTeacherName: activeReportSummary.homeroomTeacherName,
+                homeroomTeacherNip: activeReportSummary.homeroomTeacherNip,
             };
 
             await generateCurriculumMerdekaReportPdf({
-                mode,
+                mode: examMode,
                 school: bundleRes.data.school,
                 classContext,
-                student: activeStudent,
+                student: currentStudent,
                 subjects: bundleRes.data.subjects,
                 grades: bundleRes.data.grades,
-                reportNote,
+                reportNote: activeReportSummary.note,
                 achievements: bundleRes.data.achievements,
             });
 
-            toast.success(`PDF Raport ${mode} berhasil diunduh.`);
+            toast.success(`Raport ${examMode} berhasil diunduh.`);
         } catch (err) {
-            const msg =
-                err instanceof Error ? err.message : 'Gagal mengunduh PDF Raport.';
-            setErrorMsg(msg);
-            toast.error(msg);
+            toast.error(
+                err instanceof Error ? err.message : 'Gagal mengunduh PDF raport.'
+            );
         } finally {
-            setPrintingMode(null);
+            setIsDownloadingPdf(false);
         }
-    };
+    }, [currentStudent, activeReportSummary, examMode]);
 
-    if (loading) {
+    const gradeMap = useMemo(() => {
+        const map = new Map<string, StudentGradeRecord>();
+        grades.forEach((g) => map.set(g.subjectId, g));
+        return map;
+    }, [grades]);
+
+    if (isLoadingInitial) {
         return (
-            <div className="flex flex-col items-center justify-center p-12 text-center">
-                <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mb-3" />
-                <p className="text-sm text-muted-foreground">
-                    Memuat data hasil belajar...
-                </p>
+            <div className="p-12 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Loader2 className="w-8 h-8 animate-spin text-primary" />
+                <p className="text-sm">Memuat portal hasil belajar...</p>
             </div>
         );
     }
 
-    const isStsReady = Boolean(reportNote?.isStsPublished);
-    const isSasReady = Boolean(reportNote?.isSasPublished);
-    const gradeMap = new Map(grades.map((g) => [g.subjectId, g]));
-
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="space-y-6"
-        >
-            <div className="flex flex-col justify-between gap-4 rounded-xl border border-border/50 bg-card p-5 shadow-sm md:flex-row md:items-center">
+        <div className="p-6 space-y-6">
+            {/* Header Portal */}
+            <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
-                    <h1 className="text-xl font-bold text-foreground">
-                        Hasil Belajar & E-Raport
+                    <h1 className="text-3xl font-bold tracking-tight text-foreground">
+                        Laporan Hasil Belajar (Raport)
                     </h1>
-                    <p className="text-sm text-muted-foreground mt-0.5">
-                        Pantau capaian kompetensi semester dan unduh dokumen PDF Raport
-                        resmi.
+                    <p className="text-muted-foreground mt-1">
+                        Pantau capaian kompetensi dan unduh dokumen raport resmi Kurikulum
+                        Merdeka.
                     </p>
                 </div>
 
-                <div className="flex flex-wrap gap-3">
-                    {students.length > 1 && (
+                {activeReportSummary && (
+                    <button
+                        type="button"
+                        onClick={handleDownloadPdf}
+                        disabled={isDownloadingPdf}
+                        className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 disabled:opacity-50"
+                    >
+                        {isDownloadingPdf ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                            <Download className="w-4 h-4" />
+                        )}
+                        Unduh Raport {examMode} (PDF)
+                    </button>
+                )}
+            </div>
+
+            {/* Pemilih Siswa & Pemilih Semester */}
+            <Card className="border-none shadow-sm">
+                <CardContent className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+                    <div>
+                        <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
+                            Peserta Didik
+                        </label>
                         <select
                             value={selectedStudentId}
                             onChange={(e) => setSelectedStudentId(e.target.value)}
-                            className="rounded-lg border border-border/50 bg-background px-3 py-2 text-sm text-foreground"
+                            className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
                         >
-                            {students.map((st) => (
+                            {linkedStudents.map((st) => (
                                 <option key={st.id} value={st.id}>
-                                    {st.fullName}
+                                    {st.fullName} (NISN: {st.nisn})
                                 </option>
                             ))}
                         </select>
-                    )}
-
-                    <select
-                        value={selectedSemesterId}
-                        onChange={(e) => setSelectedSemesterId(e.target.value)}
-                        className="rounded-lg border border-border/50 bg-background px-3 py-2 text-sm text-foreground"
-                    >
-                        {semesters.map((sem) => (
-                            <option key={sem.id} value={sem.id}>
-                                {sem.academicYear?.name ?? ''} - Semester {sem.type}
-                            </option>
-                        ))}
-                    </select>
-                </div>
-            </div>
-
-            {errorMsg && (
-                <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-700 dark:text-rose-300">
-                    {errorMsg}
-                </div>
-            )}
-
-            {/* Tombol Unduh Raport Sesuai Status Publikasi */}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div className="flex items-center justify-between rounded-xl border border-border/50 bg-card p-4 shadow-sm">
-                    <div>
-                        <h2 className="text-sm font-bold text-foreground">
-                            Raport Tengah Semester (STS)
-                        </h2>
-                        <p className="text-xs text-muted-foreground">
-                            {isStsReady
-                                ? 'Raport STS telah dipublikasikan oleh Wali Kelas.'
-                                : 'Menunggu publikasi dari Wali Kelas.'}
-                        </p>
                     </div>
-                    {isStsReady ? (
-                        <button
-                            type="button"
-                            disabled={printingMode === 'STS'}
-                            onClick={() => handleDownloadPortalPdf('STS')}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-amber-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-amber-700 disabled:opacity-50"
-                        >
-                            <FileDown className="h-4 w-4" />
-                            {printingMode === 'STS' ? 'Memproses...' : 'Unduh PDF STS'}
-                        </button>
-                    ) : (
-                        <span className="inline-flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                            <Lock className="h-3.5 w-3.5" />
-                            Belum Rilis
-                        </span>
-                    )}
-                </div>
 
-                <div className="flex items-center justify-between rounded-xl border border-border/50 bg-card p-4 shadow-sm">
                     <div>
-                        <h2 className="text-sm font-bold text-foreground">
-                            Raport Akhir Semester (SAS)
-                        </h2>
-                        <p className="text-xs text-muted-foreground">
-                            {isSasReady
-                                ? 'Raport Akhir Semester telah dipublikasikan oleh Wali Kelas.'
-                                : 'Menunggu publikasi dari Wali Kelas.'}
-                        </p>
-                    </div>
-                    {isSasReady ? (
-                        <button
-                            type="button"
-                            disabled={printingMode === 'SAS'}
-                            onClick={() => handleDownloadPortalPdf('SAS')}
-                            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
+                        <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
+                            Periode Raport Tersedia
+                        </label>
+                        <select
+                            value={selectedSemesterId}
+                            onChange={(e) => setSelectedSemesterId(e.target.value)}
+                            disabled={publishedReports.length === 0}
+                            className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
                         >
-                            <FileDown className="h-4 w-4" />
-                            {printingMode === 'SAS' ? 'Memproses...' : 'Unduh PDF SAS'}
-                        </button>
-                    ) : (
-                        <span className="inline-flex items-center gap-1 rounded-lg bg-muted px-3 py-1.5 text-xs font-medium text-muted-foreground">
-                            <Lock className="h-3.5 w-3.5" />
-                            Belum Rilis
-                        </span>
-                    )}
-                </div>
-            </div>
+                            {publishedReports.length === 0 ? (
+                                <option value="">Belum ada raport dipublikasikan</option>
+                            ) : (
+                                publishedReports.map((rep) => (
+                                    <option
+                                        key={rep.note.semesterId}
+                                        value={rep.note.semesterId}
+                                    >
+                                        TA {rep.academicYearName} — Semester {rep.semesterType} (
+                                        {rep.className})
+                                    </option>
+                                ))
+                            )}
+                        </select>
+                    </div>
 
-            {/* Tabel Pratinjau Nilai */}
-            {!isStsReady && !isSasReady ? (
-                <div className="rounded-xl border border-border/50 bg-card p-8 text-center text-sm text-muted-foreground shadow-sm">
-                    <BookOpen className="mx-auto mb-2 h-8 w-8 text-muted-foreground/70" />
-                    Nilai semester ini belum dipublikasikan oleh Wali Kelas.
+                    {activeReportSummary && (
+                        <div className="flex items-center gap-2">
+                            {activeReportSummary.note.isStsPublished && (
+                                <button
+                                    type="button"
+                                    onClick={() => setExamMode('STS')}
+                                    className={cn(
+                                        'flex-1 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors',
+                                        examMode === 'STS'
+                                            ? 'bg-primary text-primary-foreground border-primary'
+                                            : 'bg-background hover:bg-muted'
+                                    )}
+                                >
+                                    Raport STS
+                                </button>
+                            )}
+                            {activeReportSummary.note.isSasPublished && (
+                                <button
+                                    type="button"
+                                    onClick={() => setExamMode('SAS')}
+                                    className={cn(
+                                        'flex-1 px-3 py-2 rounded-lg text-xs font-semibold border transition-colors',
+                                        examMode === 'SAS'
+                                            ? 'bg-primary text-primary-foreground border-primary'
+                                            : 'bg-background hover:bg-muted'
+                                    )}
+                                >
+                                    Raport SAS
+                                </button>
+                            )}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Jika Belum Ada Raport yang Dipublikasikan */}
+            {!activeReportSummary ? (
+                <Card className="border-none shadow-sm">
+                    <CardContent className="p-12 text-center space-y-3">
+                        <Lock className="w-10 h-10 text-muted-foreground/50 mx-auto" />
+                        <h2 className="text-lg font-semibold">
+                            Raport Belum Dipublikasikan
+                        </h2>
+                        <p className="text-sm text-muted-foreground max-w-md mx-auto">
+                            Hasil penilaian tengah semester (STS) maupun akhir semester (SAS)
+                            akan tampil secara otomatis setelah Wali Kelas memublikasikan
+                            raport.
+                        </p>
+                    </CardContent>
+                </Card>
+            ) : isLoadingReport ? (
+                <div className="p-12 flex flex-col items-center justify-center gap-3 text-muted-foreground">
+                    <Loader2 className="w-7 h-7 animate-spin text-primary" />
+                    <p className="text-sm">Memuat rincian capaian kompetensi...</p>
                 </div>
             ) : (
-                <div className="overflow-x-auto rounded-xl border border-border/50 bg-card shadow-sm">
-                    <table className="min-w-full divide-y divide-border/50 text-sm">
-                        <thead className="bg-muted/30 text-xs font-semibold uppercase text-muted-foreground">
-                            <tr>
-                                <th className="px-4 py-3 text-center">No</th>
-                                <th className="px-4 py-3 text-left">Mata Pelajaran</th>
-                                {isStsReady && <th className="px-4 py-3 text-center">Nilai STS</th>}
-                                {isSasReady && (
-                                    <th className="px-4 py-3 text-center">Nilai Akhir</th>
-                                )}
-                                <th className="px-4 py-3 text-left">Capaian Kompetensi</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-border/50">
-                            {subjects.map((subj, idx) => {
-                                const g = gradeMap.get(subj.id);
-                                return (
-                                    <tr
-                                        key={subj.id}
-                                        className="hover:bg-muted/30 transition-colors"
-                                    >
-                                        <td className="px-4 py-3 text-center text-muted-foreground">
-                                            {idx + 1}
-                                        </td>
-                                        <td className="px-4 py-3 font-medium text-foreground">
-                                            {subj.name}
-                                        </td>
-                                        {isStsReady && (
-                                            <td className="px-4 py-3 text-center font-semibold text-amber-600">
-                                                {g?.stsScore !== null && g?.stsScore !== undefined
-                                                    ? g.stsScore
-                                                    : '-'}
-                                            </td>
-                                        )}
-                                        {isSasReady && (
-                                            <td className="px-4 py-3 text-center font-bold text-emerald-600">
-                                                {g?.finalScore !== null && g?.finalScore !== undefined
-                                                    ? g.finalScore
-                                                    : '-'}
-                                            </td>
-                                        )}
-                                        <td className="px-4 py-3 text-xs text-muted-foreground">
-                                            {isSasReady
-                                                ? g?.competencyDescription || '-'
-                                                : g?.stsCompetencyDescription || '-'}
-                                        </td>
+                <div className="space-y-6">
+                    {/* Kartu Identitas Ringkas */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <Card className="border-none shadow-sm">
+                            <CardContent className="p-5 flex items-center gap-3.5">
+                                <div className="p-3 rounded-xl bg-blue-500/10">
+                                    <GraduationCap className="w-5 h-5 text-blue-500" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-muted-foreground">Kelas &amp; TA</p>
+                                    <p className="font-bold text-sm">
+                                        {activeReportSummary.className} —{' '}
+                                        {activeReportSummary.academicYearName}
+                                    </p>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        <Card className="border-none shadow-sm">
+                            <CardContent className="p-5 flex items-center gap-3.5">
+                                <div className="p-3 rounded-xl bg-emerald-500/10">
+                                    <UserCheck className="w-5 h-5 text-emerald-500" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-muted-foreground">Wali Kelas</p>
+                                    <p className="font-bold text-sm">
+                                        {activeReportSummary.homeroomTeacherName}
+                                    </p>
+                                </div>
+                            </CardContent>
+                        </Card>
+
+                        <Card className="border-none shadow-sm">
+                            <CardContent className="p-5 flex items-center gap-3.5">
+                                <div className="p-3 rounded-xl bg-amber-500/10">
+                                    <Calendar className="w-5 h-5 text-amber-500" />
+                                </div>
+                                <div>
+                                    <p className="text-xs text-muted-foreground">
+                                        Ketidakhadiran ({examMode})
+                                    </p>
+                                    <p className="font-bold text-sm">
+                                        Sakit:{' '}
+                                        {examMode === 'STS'
+                                            ? activeReportSummary.note.stsSickDays
+                                            : activeReportSummary.note.sickDays}{' '}
+                                        | Izin:{' '}
+                                        {examMode === 'STS'
+                                            ? activeReportSummary.note.stsPermissionDays
+                                            : activeReportSummary.note.permissionDays}{' '}
+                                        | Alpha:{' '}
+                                        {examMode === 'STS'
+                                            ? activeReportSummary.note.stsAlphaDays
+                                            : activeReportSummary.note.alphaDays}
+                                    </p>
+                                </div>
+                            </CardContent>
+                        </Card>
+                    </div>
+
+                    {/* Tabel Nilai Mata Pelajaran */}
+                    <Card className="border-none shadow-sm">
+                        <CardHeader className="border-b">
+                            <CardTitle className="text-lg flex items-center gap-2">
+                                <BookOpen className="w-5 h-5 text-primary" />
+                                Nilai &amp; Capaian Kompetensi ({examMode})
+                            </CardTitle>
+                            <CardDescription>
+                                Kurikulum Merdeka — Semester {activeReportSummary.semesterType}
+                            </CardDescription>
+                        </CardHeader>
+                        <CardContent className="p-0 overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-muted/50 text-xs uppercase text-muted-foreground border-b">
+                                    <tr>
+                                        <th className="px-5 py-3.5 w-14 text-center">No</th>
+                                        <th className="px-5 py-3.5 w-64">Mata Pelajaran</th>
+                                        <th className="px-5 py-3.5 w-28 text-center">
+                                            {examMode === 'STS' ? 'Nilai STS' : 'Nilai Akhir'}
+                                        </th>
+                                        <th className="px-5 py-3.5">Capaian Kompetensi</th>
                                     </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
+                                </thead>
+                                <tbody>
+                                    {subjects.map((subj, idx) => {
+                                        const g = gradeMap.get(subj.id);
+                                        const rawScore =
+                                            examMode === 'STS'
+                                                ? g?.stsScore ?? g?.formativeAvg ?? null
+                                                : g?.finalScore ?? null;
+                                        const desc =
+                                            examMode === 'STS'
+                                                ? g?.stsCompetencyDescription ||
+                                                g?.competencyDescription ||
+                                                '-'
+                                                : g?.competencyDescription || '-';
+
+                                        return (
+                                            <tr
+                                                key={subj.id}
+                                                className="border-b last:border-0 hover:bg-muted/20 align-top"
+                                            >
+                                                <td className="px-5 py-4 text-center text-muted-foreground">
+                                                    {idx + 1}
+                                                </td>
+                                                <td className="px-5 py-4">
+                                                    <div className="font-semibold text-foreground">
+                                                        {subj.name}
+                                                    </div>
+                                                    <div className="text-xs text-muted-foreground mt-0.5">
+                                                        {CATEGORY_LABELS[subj.category] ?? subj.category}
+                                                    </div>
+                                                </td>
+                                                <td className="px-5 py-4 text-center">
+                                                    {rawScore !== null && rawScore !== undefined ? (
+                                                        <span className="inline-flex items-center justify-center px-3 py-1 rounded-lg bg-primary/10 text-primary font-bold">
+                                                            {Math.round(rawScore)}
+                                                        </span>
+                                                    ) : (
+                                                        <span className="text-muted-foreground">-</span>
+                                                    )}
+                                                </td>
+                                                <td className="px-5 py-4 text-xs leading-relaxed text-foreground/90">
+                                                    {desc}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                        </CardContent>
+                    </Card>
+
+                    {/* Ekstrakurikuler, Prestasi & Catatan Wali Kelas */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <Card className="border-none shadow-sm">
+                            <CardHeader className="pb-3 border-b">
+                                <CardTitle className="text-base flex items-center gap-2">
+                                    <FileText className="w-4 h-4 text-primary" />
+                                    Catatan Wali Kelas
+                                </CardTitle>
+                            </CardHeader>
+                            <CardContent className="p-5 text-sm leading-relaxed">
+                                {examMode === 'STS'
+                                    ? activeReportSummary.note.stsHomeroomNote ||
+                                    'Terus tingkatkan semangat belajar dan kedisiplinan di sekolah.'
+                                    : activeReportSummary.note.homeroomNote ||
+                                    'Pertahankan prestasi dan sikap baik yang telah dicapai selama semester ini.'}
+                            </CardContent>
+                        </Card>
+
+                        {examMode === 'SAS' && (
+                            <Card className="border-none shadow-sm">
+                                <CardHeader className="pb-3 border-b">
+                                    <CardTitle className="text-base flex items-center gap-2">
+                                        <Award className="w-4 h-4 text-amber-500" />
+                                        Ekstrakurikuler &amp; Prestasi
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="p-5 space-y-3 text-xs">
+                                    {activeReportSummary.note.extracurriculars.length > 0 ? (
+                                        <div className="space-y-2">
+                                            {activeReportSummary.note.extracurriculars.map(
+                                                (ex, i) => (
+                                                    <div
+                                                        key={i}
+                                                        className="p-2.5 rounded-lg border bg-muted/30 flex items-center justify-between gap-2"
+                                                    >
+                                                        <div>
+                                                            <p className="font-semibold text-sm">{ex.name}</p>
+                                                            <p className="text-muted-foreground">
+                                                                {ex.description}
+                                                            </p>
+                                                        </div>
+                                                        <Badge variant="outline">{ex.predicate}</Badge>
+                                                    </div>
+                                                )
+                                            )}
+                                        </div>
+                                    ) : (
+                                        <p className="text-muted-foreground">
+                                            Tidak ada catatan ekstrakurikuler pada semester ini.
+                                        </p>
+                                    )}
+
+                                    {achievements.length > 0 && (
+                                        <div className="pt-2 border-t space-y-1.5">
+                                            <p className="font-semibold text-foreground">
+                                                Prestasi Tercatat:
+                                            </p>
+                                            {achievements.map((ach) => (
+                                                <div key={ach.id} className="text-muted-foreground">
+                                                    • <strong>{ach.title}</strong> ({ach.level},{' '}
+                                                    {ach.year})
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </CardContent>
+                            </Card>
+                        )}
+                    </div>
                 </div>
             )}
-        </motion.div>
+        </div>
     );
 }
-
-export default PortalGradesPage;

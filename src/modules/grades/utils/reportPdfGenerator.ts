@@ -13,7 +13,7 @@ import type {
   SubjectOption,
 } from '../types/grade.types';
 
-interface GenerateReportPdfInput {
+export interface GenerateReportPdfInput {
   mode: ReportExamMode; // 'STS' atau 'SAS'
   school: SchoolReportProfile;
   classContext: ClassReportContext;
@@ -30,18 +30,33 @@ interface AutoTableDoc extends jsPDF {
   };
 }
 
+interface LoadedImageAsset {
+  dataUrl: string;
+  format: 'PNG' | 'JPEG';
+}
+
 /**
- * Mengonversi URL gambar (Supabase Storage) ke DataURL Base64 secara aman
+ * Mengonversi URL gambar (Supabase Storage) ke DataURL Base64 & mendeteksi formatnya
  */
-async function fetchImageAsDataUrl(url?: string | null): Promise<string | null> {
+async function fetchImageAsDataUrl(
+  url?: string | null
+): Promise<LoadedImageAsset | null> {
   if (!url || url.trim() === '') return null;
   try {
     const response = await fetch(url, { mode: 'cors' });
     if (!response.ok) return null;
     const blob = await response.blob();
-    return await new Promise<string | null>((resolve) => {
+    const format: 'PNG' | 'JPEG' =
+      blob.type.includes('jpeg') || blob.type.includes('jpg') ? 'JPEG' : 'PNG';
+
+    return await new Promise<LoadedImageAsset | null>((resolve) => {
       const reader = new FileReader();
-      reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+      reader.onloadend = () =>
+        resolve(
+          typeof reader.result === 'string'
+            ? { dataUrl: reader.result, format }
+            : null
+        );
       reader.onerror = () => resolve(null);
       reader.readAsDataURL(blob);
     });
@@ -67,7 +82,20 @@ function formatTanggalIndonesia(dateStr?: string | null): string {
   });
 }
 
-function formatPromotionLabel(status: PromotionStatus, gradeLevel: number): string {
+function getFaseKurikulumMerdeka(gradeLevel: number): string {
+  if (gradeLevel >= 1 && gradeLevel <= 2) return 'Fase A';
+  if (gradeLevel >= 3 && gradeLevel <= 4) return 'Fase B';
+  if (gradeLevel >= 5 && gradeLevel <= 6) return 'Fase C';
+  if (gradeLevel >= 7 && gradeLevel <= 9) return 'Fase D';
+  if (gradeLevel === 10) return 'Fase E';
+  if (gradeLevel === 11 || gradeLevel === 12) return 'Fase F';
+  return `Kelas ${gradeLevel}`;
+}
+
+function formatPromotionLabel(
+  status: PromotionStatus,
+  gradeLevel: number
+): string {
   switch (status) {
     case 'NAIK_KELAS':
       return `NAIK KE KELAS ${gradeLevel + 1}`;
@@ -82,8 +110,49 @@ function formatPromotionLabel(status: PromotionStatus, gradeLevel: number): stri
   }
 }
 
-export async function generateCurriculumMerdekaReportPdf(
-  input: GenerateReportPdfInput
+/**
+ * Mengelompokkan mata pelajaran berdasarkan kategori Kurikulum Merdeka
+ */
+function groupSubjectsByCategory(
+  subjects: SubjectOption[]
+): Array<{ groupTitle: string; items: SubjectOption[] }> {
+  const sorted = [...subjects].sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return a.name.localeCompare(b.name);
+  });
+
+  const groups = new Map<string, SubjectOption[]>();
+  sorted.forEach((subj) => {
+    const cat = (subj.category || 'UMUM').toUpperCase().trim();
+    let title = 'Kelompok Mata Pelajaran Umum';
+if (cat === 'PILIHAN') title = 'Kelompok Mata Pelajaran Pilihan';
+    else if (cat === 'MUATAN_LOKAL' || cat === 'MULOK') title = 'Muatan Lokal';
+    else if (cat === 'KEJURUAN') title = 'Kelompok Mata Pelajaran Kejuruan';
+    else if (cat === 'KOKURIKULER') title = 'Kokurikuler / Projek';
+    else if (cat !== 'UMUM') title = `Kelompok ${cat}`;
+
+    const list = groups.get(title) ?? [];
+    list.push(subj);
+    groups.set(title, list);
+  });
+
+  return Array.from(groups.entries()).map(([groupTitle, items]) => ({
+    groupTitle,
+    items,
+  }));
+}
+
+/**
+ * Merender satu raport siswa ke dalam instance jsPDF yang diberikan
+ */
+async function renderSingleReportIntoDoc(
+  doc: AutoTableDoc,
+  input: GenerateReportPdfInput,
+  preloadedSchoolAssets?: {
+    logoAsset: LoadedImageAsset | null;
+    signatureAsset: LoadedImageAsset | null;
+    stampAsset: LoadedImageAsset | null;
+  }
 ): Promise<void> {
   const {
     mode,
@@ -96,41 +165,46 @@ export async function generateCurriculumMerdekaReportPdf(
     achievements,
   } = input;
 
-  const doc = new jsPDF({
-    orientation: 'portrait',
-    unit: 'mm',
-    format: 'a4',
-  }) as AutoTableDoc;
-
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const marginX = 15;
   const contentWidth = pageWidth - marginX * 2;
 
-  // Muat gambar aset sekolah secara paralel
-  const [logoBase64, signatureBase64, stampBase64] = await Promise.all([
-    fetchImageAsDataUrl(school.logoUrl),
-    fetchImageAsDataUrl(school.principalSignatureUrl),
-    fetchImageAsDataUrl(school.schoolStampUrl),
-  ]);
+  const assets =
+    preloadedSchoolAssets ??
+    (await (async () => {
+      const [logoAsset, signatureAsset, stampAsset] = await Promise.all([
+        fetchImageAsDataUrl(school.logoUrl),
+        fetchImageAsDataUrl(school.principalSignatureUrl),
+        fetchImageAsDataUrl(school.schoolStampUrl),
+      ]);
+      return { logoAsset, signatureAsset, stampAsset };
+    })());
 
   let cursorY = 14;
 
-  // ==========================================================================
   // 1. KOP SURAT SEKOLAH
-  // ==========================================================================
-  if (logoBase64) {
+  if (assets.logoAsset) {
     try {
-      doc.addImage(logoBase64, 'PNG', marginX, cursorY - 2, 18, 18);
+      doc.addImage(
+        assets.logoAsset.dataUrl,
+        assets.logoAsset.format,
+        marginX,
+        cursorY - 2,
+        18,
+        18
+      );
     } catch {
       // Abaikan jika format gambar tidak didukung
     }
   }
 
-  const headerCenterX = logoBase64 ? pageWidth / 2 + 6 : pageWidth / 2;
+  const headerCenterX = assets.logoAsset ? pageWidth / 2 + 6 : pageWidth / 2;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.text(school.name.toUpperCase(), headerCenterX, cursorY + 3, { align: 'center' });
+  doc.text(school.name.toUpperCase(), headerCenterX, cursorY + 3, {
+    align: 'center',
+  });
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
@@ -139,9 +213,9 @@ export async function generateCurriculumMerdekaReportPdf(
   }`;
   doc.text(addressLine, headerCenterX, cursorY + 8, { align: 'center' });
 
-  const contactLine = `NPSN: ${school.npsn}${school.phone ? ` | Telp: ${school.phone}` : ''}${
-    school.email ? ` | Email: ${school.email}` : ''
-  }`;
+  const contactLine = `NPSN: ${school.npsn}${
+    school.phone ? ` | Telp: ${school.phone}` : ''
+  }${school.email ? ` | Email: ${school.email}` : ''}`;
   doc.text(contactLine, headerCenterX, cursorY + 12.5, { align: 'center' });
 
   cursorY += 17;
@@ -152,9 +226,7 @@ export async function generateCurriculumMerdekaReportPdf(
 
   cursorY += 7;
 
-  // ==========================================================================
   // 2. JUDUL RAPORT
-  // ==========================================================================
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
   const titleText =
@@ -165,30 +237,40 @@ export async function generateCurriculumMerdekaReportPdf(
 
   doc.setFontSize(9.5);
   doc.setFont('helvetica', 'normal');
-  doc.text('KURIKULUM MERDEKA', pageWidth / 2, cursorY + 4.5, { align: 'center' });
+  doc.text('KURIKULUM MERDEKA', pageWidth / 2, cursorY + 4.5, {
+    align: 'center',
+  });
 
   cursorY += 10;
 
-  // ==========================================================================
-  // 3. IDENTITAS PESERTA DIDIK (2 KOLOM)
-  // ==========================================================================
+  // 3. IDENTITAS PESERTA DIDIK
   doc.setFontSize(9);
   const leftColX = marginX;
   const leftValX = marginX + 34;
   const rightColX = pageWidth / 2 + 6;
   const rightValX = rightColX + 32;
 
-  const faseLabel =
-    classContext.gradeLevel === 10
-      ? 'Fase E'
-      : classContext.gradeLevel >= 11
-      ? 'Fase F'
-      : `Kelas ${classContext.gradeLevel}`;
+  const faseLabel = getFaseKurikulumMerdeka(classContext.gradeLevel);
 
   const identityRows: Array<[string, string, string, string]> = [
-    ['Nama Peserta Didik', student.fullName, 'Kelas / Fase', `${classContext.className} (${faseLabel})`],
-    ['NIS / NISN', `${student.nis || '-'} / ${student.nisn}`, 'Semester', classContext.semesterType],
-    ['Satuan Pendidikan', school.name, 'Tahun Ajaran', classContext.academicYearName],
+    [
+      'Nama Peserta Didik',
+      student.fullName,
+      'Kelas / Fase',
+      `${classContext.className} (${faseLabel})`,
+    ],
+    [
+      'NIS / NISN',
+      `${student.nis || '-'} / ${student.nisn}`,
+      'Semester',
+      classContext.semesterType,
+    ],
+    [
+      'Satuan Pendidikan',
+      school.name,
+      'Tahun Ajaran',
+      classContext.academicYearName,
+    ],
   ];
 
   identityRows.forEach(([lLabel, lVal, rLabel, rVal]) => {
@@ -209,9 +291,7 @@ export async function generateCurriculumMerdekaReportPdf(
 
   cursorY += 3;
 
-  // ==========================================================================
-  // 4. TABEL NILAI & CAPAIAN KOMPETENSI (A. INTRAKURIKULER)
-  // ==========================================================================
+  // 4. TABEL NILAI & CAPAIAN KOMPETENSI (DIKELOMPOKKAN BERDASARKAN KATEGORI)
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text('A. NILAI MATA PELAJARAN & CAPAIAN KOMPETENSI', marginX, cursorY);
@@ -220,27 +300,65 @@ export async function generateCurriculumMerdekaReportPdf(
   const gradeBySubject = new Map<string, StudentGradeRecord>();
   grades.forEach((g) => gradeBySubject.set(g.subjectId, g));
 
-  const tableRows = subjects.map((subj, idx) => {
-    const g = gradeBySubject.get(subj.id);
-    const scoreValue =
-      mode === 'STS'
-        ? g?.stsScore ?? g?.formativeAvg ?? null
-        : g?.finalScore ?? null;
+  const groupedSubjects = groupSubjectsByCategory(subjects);
+  const tableRows: Array<
+    Array<
+      | string
+      | { content: string; colSpan: number; styles?: Record<string, unknown> }
+    >
+  > = [];
+  let rowIndex = 1;
 
-    const scoreDisplay = scoreValue !== null && scoreValue !== undefined ? String(Math.round(scoreValue)) : '-';
-    const descDisplay =
-      mode === 'STS'
-        ? g?.stsCompetencyDescription || g?.competencyDescription || '-'
-        : g?.competencyDescription || '-';
+  groupedSubjects.forEach((group) => {
+    if (groupedSubjects.length > 1) {
+      tableRows.push([
+        {
+          content: group.groupTitle,
+          colSpan: 4,
+          styles: {
+            fillColor: [241, 245, 249],
+            fontStyle: 'bold',
+            textColor: [30, 41, 59],
+          },
+        },
+      ]);
+    }
 
-    return [String(idx + 1), subj.name, scoreDisplay, descDisplay];
+    group.items.forEach((subj) => {
+      const g = gradeBySubject.get(subj.id);
+      const scoreValue =
+        mode === 'STS'
+          ? g?.stsScore ?? g?.formativeAvg ?? null
+          : g?.finalScore ?? null;
+
+      const scoreDisplay =
+        scoreValue !== null && scoreValue !== undefined
+          ? String(Math.round(scoreValue))
+          : '-';
+      const descDisplay =
+        mode === 'STS'
+          ? g?.stsCompetencyDescription || g?.competencyDescription || '-'
+          : g?.competencyDescription || '-';
+
+      tableRows.push([String(rowIndex++), subj.name, scoreDisplay, descDisplay]);
+    });
   });
 
   autoTable(doc, {
     startY: cursorY,
     margin: { left: marginX, right: marginX },
-    head: [['No', 'Mata Pelajaran', mode === 'STS' ? 'Nilai STS' : 'Nilai Akhir', 'Capaian Kompetensi']],
-    body: tableRows.length > 0 ? tableRows : [['-', 'Belum ada mata pelajaran aktif', '-', '-']],
+    head: [
+      [
+        'No',
+        'Mata Pelajaran',
+        mode === 'STS' ? 'Nilai STS' : 'Nilai Akhir',
+        'Capaian Kompetensi',
+      ],
+    ],
+    body:
+      tableRows.length > 0
+        ? tableRows
+        : [['-', 'Belum ada mata pelajaran aktif', '-', '-']],
     theme: 'grid',
     styles: {
       font: 'helvetica',
@@ -267,7 +385,6 @@ export async function generateCurriculumMerdekaReportPdf(
 
   cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
 
-  // Helper cek sisa halaman sebelum menggambar blok baru
   const ensureSpace = (neededMm: number) => {
     if (cursorY + neededMm > pageHeight - 15) {
       doc.addPage();
@@ -275,9 +392,7 @@ export async function generateCurriculumMerdekaReportPdf(
     }
   };
 
-  // ==========================================================================
-  // 5. EKSTRAKURIKULER & KOKURIKULER (KHUSUS RAPORT SAS / AKHIR)
-  // ==========================================================================
+  // 5. EKSTRAKURIKULER, KOKURIKULER & PRESTASI (KHUSUS SAS)
   if (mode === 'SAS') {
     ensureSpace(32);
     doc.setFont('helvetica', 'bold');
@@ -301,8 +416,17 @@ export async function generateCurriculumMerdekaReportPdf(
       head: [['No', 'Kegiatan Ekstrakurikuler', 'Predikat', 'Keterangan']],
       body: extraRows,
       theme: 'grid',
-      styles: { fontSize: 8.5, cellPadding: 2.2, lineColor: [120, 120, 120], lineWidth: 0.2 },
-      headStyles: { fillColor: [51, 65, 85], textColor: [255, 255, 255], halign: 'center' },
+      styles: {
+        fontSize: 8.5,
+        cellPadding: 2.2,
+        lineColor: [120, 120, 120],
+        lineWidth: 0.2,
+      },
+      headStyles: {
+        fillColor: [51, 65, 85],
+        textColor: [255, 255, 255],
+        halign: 'center',
+      },
       columnStyles: {
         0: { cellWidth: 10, halign: 'center' },
         1: { cellWidth: 52 },
@@ -313,12 +437,18 @@ export async function generateCurriculumMerdekaReportPdf(
 
     cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
 
-    // Kokurikuler / Projek P5
-    if (reportNote.cocurricularNote && reportNote.cocurricularNote.trim() !== '') {
+    if (
+      reportNote.cocurricularNote &&
+      reportNote.cocurricularNote.trim() !== ''
+    ) {
       ensureSpace(22);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9.5);
-      doc.text('C. CATATAN KOKURIKULER / PROJEK PENGUATAN PROFIL PELAJAR PANCASILA', marginX, cursorY);
+      doc.text(
+        'C. CATATAN KOKURIKULER / PROJEK PENGUATAN PROFIL PELAJAR PANCASILA',
+        marginX,
+        cursorY
+      );
       cursorY += 2.5;
 
       autoTable(doc, {
@@ -326,13 +456,17 @@ export async function generateCurriculumMerdekaReportPdf(
         margin: { left: marginX, right: marginX },
         body: [[reportNote.cocurricularNote]],
         theme: 'grid',
-        styles: { fontSize: 8.5, cellPadding: 3, lineColor: [120, 120, 120], lineWidth: 0.2 },
+        styles: {
+          fontSize: 8.5,
+          cellPadding: 3,
+          lineColor: [120, 120, 120],
+          lineWidth: 0.2,
+        },
       });
 
       cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
     }
 
-    // Prestasi Siswa (jika ada dan showOnReport = true)
     if (achievements.length > 0) {
       ensureSpace(26);
       doc.setFont('helvetica', 'bold');
@@ -352,8 +486,17 @@ export async function generateCurriculumMerdekaReportPdf(
         head: [['No', 'Jenis / Nama Prestasi', 'Tingkat & Penyelenggara']],
         body: achRows,
         theme: 'grid',
-        styles: { fontSize: 8.5, cellPadding: 2.2, lineColor: [120, 120, 120], lineWidth: 0.2 },
-        headStyles: { fillColor: [51, 65, 85], textColor: [255, 255, 255], halign: 'center' },
+        styles: {
+          fontSize: 8.5,
+          cellPadding: 2.2,
+          lineColor: [120, 120, 120],
+          lineWidth: 0.2,
+        },
+        headStyles: {
+          fillColor: [51, 65, 85],
+          textColor: [255, 255, 255],
+          halign: 'center',
+        },
         columnStyles: {
           0: { cellWidth: 10, halign: 'center' },
           1: { cellWidth: 80 },
@@ -365,36 +508,56 @@ export async function generateCurriculumMerdekaReportPdf(
     }
   }
 
-  // ==========================================================================
-  // 6. KETIDAKHADIRAN & CATATAN WALI KELAS (BERDAMPINGAN)
-  // ==========================================================================
+  // 6. KETIDAKHADIRAN & CATATAN WALI KELAS
   ensureSpace(34);
-  const sectionLetter = mode === 'STS' ? 'B' : achievements.length > 0 ? 'E' : 'D';
+  const sectionLetter =
+    mode === 'STS' ? 'B' : achievements.length > 0 ? 'E' : 'D';
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.text(`${sectionLetter}. KETIDAKHADIRAN & CATATAN WALI KELAS`, marginX, cursorY);
+  doc.text(
+    `${sectionLetter}. KETIDAKHADIRAN & CATATAN WALI KELAS`,
+    marginX,
+    cursorY
+  );
   cursorY += 2.5;
 
   const sakit = mode === 'STS' ? reportNote.stsSickDays : reportNote.sickDays;
-  const izin = mode === 'STS' ? reportNote.stsPermissionDays : reportNote.permissionDays;
-  const alpha = mode === 'STS' ? reportNote.stsAlphaDays : reportNote.alphaDays;
+  const izin =
+    mode === 'STS' ? reportNote.stsPermissionDays : reportNote.permissionDays;
+  const alpha =
+    mode === 'STS' ? reportNote.stsAlphaDays : reportNote.alphaDays;
   const walasNote =
     mode === 'STS'
-      ? reportNote.stsHomeroomNote || 'Terus tingkatkan semangat belajar dan kedisiplinan di sekolah.'
-      : reportNote.homeroomNote || 'Pertahankan prestasi dan sikap baik yang telah dicapai selama semester ini.';
+      ? reportNote.stsHomeroomNote ||
+        'Terus tingkatkan semangat belajar dan kedisiplinan di sekolah.'
+      : reportNote.homeroomNote ||
+        'Pertahankan prestasi dan sikap baik yang telah dicapai selama semester ini.';
 
   autoTable(doc, {
     startY: cursorY,
     margin: { left: marginX, right: marginX },
     head: [['Rekap Ketidakhadiran', 'Hari', 'Catatan Wali Kelas']],
     body: [
-      ['Sakit', `${sakit} hari`, { content: walasNote, rowSpan: 3, styles: { valign: 'top' } }],
+      [
+        'Sakit',
+        `${sakit} hari`,
+        { content: walasNote, rowSpan: 3, styles: { valign: 'top' } },
+      ],
       ['Izin', `${izin} hari`],
       ['Tanpa Keterangan (Alpha)', `${alpha} hari`],
     ],
     theme: 'grid',
-    styles: { fontSize: 8.5, cellPadding: 2.3, lineColor: [120, 120, 120], lineWidth: 0.2 },
-    headStyles: { fillColor: [51, 65, 85], textColor: [255, 255, 255], halign: 'center' },
+    styles: {
+      fontSize: 8.5,
+      cellPadding: 2.3,
+      lineColor: [120, 120, 120],
+      lineWidth: 0.2,
+    },
+    headStyles: {
+      fillColor: [51, 65, 85],
+      textColor: [255, 255, 255],
+      halign: 'center',
+    },
     columnStyles: {
       0: { cellWidth: 48 },
       1: { cellWidth: 22, halign: 'center' },
@@ -404,9 +567,7 @@ export async function generateCurriculumMerdekaReportPdf(
 
   cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
 
-  // ==========================================================================
   // 7. KEPUTUSAN KENAIKAN KELAS / KELULUSAN (KHUSUS SAS SEMESTER GENAP)
-  // ==========================================================================
   if (mode === 'SAS' && classContext.semesterType === 'GENAP') {
     ensureSpace(18);
     autoTable(doc, {
@@ -433,9 +594,7 @@ export async function generateCurriculumMerdekaReportPdf(
     cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
   }
 
-  // ==========================================================================
   // 8. BLOK TANDA TANGAN (ORANG TUA, WALI KELAS & KEPALA SEKOLAH + STEMPEL)
-  // ==========================================================================
   ensureSpace(46);
   const reportDateFormatted = formatTanggalIndonesia(
     mode === 'STS' ? reportNote.reportDateSts : reportNote.reportDateSas
@@ -444,7 +603,6 @@ export async function generateCurriculumMerdekaReportPdf(
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
 
-  // Baris 1: Orang Tua/Wali & Wali Kelas
   doc.text('Mengetahui,', marginX, cursorY + 4);
   doc.text('Orang Tua / Wali Peserta Didik,', marginX, cursorY + 8.5);
 
@@ -459,9 +617,12 @@ export async function generateCurriculumMerdekaReportPdf(
   doc.text(classContext.homeroomTeacherName, rightSignX, cursorY);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.text(`NIP/NBM. ${classContext.homeroomTeacherNip || '-'}`, rightSignX, cursorY + 4);
+  doc.text(
+    `NIP/NBM. ${classContext.homeroomTeacherNip || '-'}`,
+    rightSignX,
+    cursorY + 4
+  );
 
-  // Baris 2: Mengetahui Kepala Sekolah (Khusus SAS / Raport Akhir)
   if (mode === 'SAS') {
     cursorY += 9;
     ensureSpace(34);
@@ -470,17 +631,30 @@ export async function generateCurriculumMerdekaReportPdf(
     doc.text('Mengetahui,', centerSignX, cursorY);
     doc.text('Kepala Sekolah,', centerSignX, cursorY + 4.5);
 
-    // Tempelkan TTD Kepala Sekolah & Stempel Sekolah jika tersedia
-    if (signatureBase64) {
+    if (assets.signatureAsset) {
       try {
-        doc.addImage(signatureBase64, 'PNG', centerSignX + 4, cursorY + 5, 36, 16);
+        doc.addImage(
+          assets.signatureAsset.dataUrl,
+          assets.signatureAsset.format,
+          centerSignX + 4,
+          cursorY + 5,
+          36,
+          16
+        );
       } catch {
         // Fallback jika gagal render gambar
       }
     }
-    if (stampBase64) {
+    if (assets.stampAsset) {
       try {
-        doc.addImage(stampBase64, 'PNG', centerSignX - 8, cursorY + 3, 22, 22);
+        doc.addImage(
+          assets.stampAsset.dataUrl,
+          assets.stampAsset.format,
+          centerSignX - 8,
+          cursorY + 3,
+          22,
+          22
+        );
       } catch {
         // Fallback jika gagal render gambar
       }
@@ -488,14 +662,74 @@ export async function generateCurriculumMerdekaReportPdf(
 
     cursorY += 22;
     doc.setFont('helvetica', 'bold');
-    doc.text(school.principalName || '( ........................................ )', centerSignX, cursorY);
+    doc.text(
+      school.principalName || '( ........................................ )',
+      centerSignX,
+      cursorY
+    );
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(8);
-    doc.text(`NIP/NBM. ${school.principalNip || '-'}`, centerSignX, cursorY + 4);
+    doc.text(
+      `NIP/NBM. ${school.principalNip || '-'}`,
+      centerSignX,
+      cursorY + 4
+    );
+  }
+}
+
+/**
+ * Mengunduh PDF Raport untuk 1 siswa
+ */
+export async function generateCurriculumMerdekaReportPdf(
+  input: GenerateReportPdfInput
+): Promise<void> {
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  }) as AutoTableDoc;
+
+  await renderSingleReportIntoDoc(doc, input);
+
+  const cleanStudentName = input.student.fullName.replace(/[^a-zA-Z0-9]+/g, '_');
+  const fileName = `Raport_${input.mode}_${input.classContext.className}_${cleanStudentName}.pdf`;
+  doc.save(fileName);
+}
+
+/**
+ * Mengunduh gabungan 1 PDF berisi seluruh raport siswa dalam 1 kelas (1 siswa mulai di halaman baru)
+ */
+export async function generateClassBatchReportPdf(
+  inputs: GenerateReportPdfInput[]
+): Promise<void> {
+  if (inputs.length === 0) return;
+
+  const doc = new jsPDF({
+    orientation: 'portrait',
+    unit: 'mm',
+    format: 'a4',
+  }) as AutoTableDoc;
+
+  // Muat aset sekolah 1 kali saja untuk mempercepat cetak massal satu kelas
+  const firstSchool = inputs[0].school;
+  const [logoAsset, signatureAsset, stampAsset] = await Promise.all([
+    fetchImageAsDataUrl(firstSchool.logoUrl),
+    fetchImageAsDataUrl(firstSchool.principalSignatureUrl),
+    fetchImageAsDataUrl(firstSchool.schoolStampUrl),
+  ]);
+
+  for (let i = 0; i < inputs.length; i++) {
+    if (i > 0) {
+      doc.addPage('a4', 'portrait');
+    }
+    await renderSingleReportIntoDoc(doc, inputs[i], {
+      logoAsset,
+      signatureAsset,
+      stampAsset,
+    });
   }
 
-  // Simpan file PDF otomatis
-  const cleanStudentName = student.fullName.replace(/[^a-zA-Z0-9]+/g, '_');
-  const fileName = `Raport_${mode}_${classContext.className}_${cleanStudentName}.pdf`;
+  const first = inputs[0];
+  const fileName = `Raport_${first.mode}_Kelas_${first.classContext.className}_Semua_Siswa.pdf`;
   doc.save(fileName);
 }
