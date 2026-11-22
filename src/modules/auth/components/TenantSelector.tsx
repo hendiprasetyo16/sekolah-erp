@@ -49,7 +49,7 @@ import {
 } from '@/components/ui/select';
 
 // ============================================================================
-// TIPE DATA (Selaras dengan ERP_Sekolah_v17)
+// TIPE DATA
 // ============================================================================
 
 interface SchoolTenantRow {
@@ -62,6 +62,10 @@ interface SchoolTenantRow {
     city?: string | null;
     province?: string | null;
     logoUrl?: string | null;
+    principalName?: string | null;
+    principalNip?: string | null;
+    principalSignatureUrl?: string | null;
+    schoolStampUrl?: string | null;
 }
 
 interface AcademicYearRow {
@@ -81,6 +85,9 @@ interface SupabaseErrorShape {
 
 type AuthStoreState = ReturnType<typeof useAuthStore.getState>;
 type ErrorContext = 'fetch' | 'create' | 'select';
+
+const SCHOOL_TENANT_SELECT_FIELDS =
+    'id, name, npsn, level, type, address, city, province, logoUrl, principalName, principalNip, principalSignatureUrl, schoolStampUrl';
 
 // ============================================================================
 // FUNGSI BANTU
@@ -228,6 +235,7 @@ export function TenantSelector() {
     const { theme, setTheme, locale: currentLocale, setLocale } = useUIStore();
 
     const [schools, setSchools] = useState<SchoolTenantRow[]>([]);
+    const [brokenLogoIds, setBrokenLogoIds] = useState<Record<string, boolean>>({});
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [selectingSchoolId, setSelectingSchoolId] = useState<string | null>(null);
     const [fetchError, setFetchError] = useState<string>('');
@@ -285,13 +293,14 @@ export function TenantSelector() {
         try {
             const { data, error } = await supabase
                 .from('schools')
-                .select('id, name, npsn, level, type, address, city, province, logoUrl')
+                .select(SCHOOL_TENANT_SELECT_FIELDS)
                 .order('name', { ascending: true });
 
             if (error) {
                 throw error;
             }
 
+            setBrokenLogoIds({});
             setSchools((data as SchoolTenantRow[] | null) ?? []);
         } catch (err: unknown) {
             setFetchError(formatFriendlyError(err, isId, 'fetch'));
@@ -408,7 +417,7 @@ export function TenantSelector() {
                     city: newSchoolCity.trim() || '-',
                     province: newSchoolProvince.trim() || '-',
                 })
-                .select('id, name, npsn, level, type, address, city, province, logoUrl')
+                .select(SCHOOL_TENANT_SELECT_FIELDS)
                 .single();
 
             if (schoolError || !createdSchool) {
@@ -719,7 +728,7 @@ export function TenantSelector() {
                                 className="h-52 animate-pulse rounded-2xl border border-border bg-card p-5"
                             >
                                 <div className="flex items-center justify-between">
-                                    <div className="h-11 w-11 rounded-xl bg-muted" />
+                                    <div className="h-12 w-12 rounded-xl bg-muted" />
                                     <div className="h-5 w-14 rounded-md bg-muted" />
                                 </div>
                                 <div className="mt-4 h-5 w-3/4 rounded bg-muted" />
@@ -779,6 +788,8 @@ export function TenantSelector() {
                                     schoolItem,
                                     isId ? 'Lokasi belum dilengkapi' : 'Location not specified'
                                 );
+                                const hasValidLogo =
+                                    Boolean(schoolItem.logoUrl) && !brokenLogoIds[schoolItem.id];
 
                                 return (
                                     <div
@@ -804,15 +815,23 @@ export function TenantSelector() {
 
                                         <div>
                                             <div className="flex items-start justify-between gap-3">
-                                                {schoolItem.logoUrl ? (
-                                                    <img
-                                                        src={schoolItem.logoUrl}
-                                                        alt={schoolItem.name}
-                                                        className="h-11 w-11 rounded-xl border border-border object-cover"
-                                                    />
+                                                {hasValidLogo ? (
+                                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-xl border border-border bg-white p-1.5 shadow-2xs">
+                                                        <img
+                                                            src={schoolItem.logoUrl!}
+                                                            alt={schoolItem.name}
+                                                            onError={() =>
+                                                                setBrokenLogoIds((prev) => ({
+                                                                    ...prev,
+                                                                    [schoolItem.id]: true,
+                                                                }))
+                                                            }
+                                                            className="h-full w-full object-contain"
+                                                        />
+                                                    </div>
                                                 ) : (
-                                                    <div className="flex h-11 w-11 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-700 transition-colors group-hover:bg-emerald-600 group-hover:text-white dark:text-emerald-300">
-                                                        <School size={21} />
+                                                    <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-emerald-500/20 bg-emerald-500/10 text-emerald-700 transition-colors group-hover:bg-emerald-600 group-hover:text-white dark:text-emerald-300">
+                                                        <School size={22} />
                                                     </div>
                                                 )}
 

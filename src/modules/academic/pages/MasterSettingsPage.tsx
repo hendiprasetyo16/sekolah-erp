@@ -1,4 +1,4 @@
-//src/modules/academic/pages/MasterSettingsPage.tsx
+// src/modules/academic/pages/MasterSettingsPage.tsx
 import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { useLocation } from 'react-router-dom';
@@ -10,6 +10,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Card, CardContent } from '@/components/ui/card';
 
 import { SchoolProfileSection } from './SchoolProfilePage';
+import { SchoolBrandingTab } from '../components/SchoolBrandingTab';
 import { AcademicYearPage } from './AcademicYearPage';
 import { ClassListPage } from './ClassListPage';
 import { AttendanceSettingsTab } from '@/modules/attendance/components/AttendanceSettingsTab';
@@ -26,11 +27,7 @@ export function MasterSettingsPage() {
     const isId = locale === 'id';
 
     const role = user?.role;
-
-    // SUPER_ADMIN & ADMIN melihat 4 tab (termasuk Profil Sekolah & Pengaturan Presensi).
-    // Role lain (KEPALA_SEKOLAH / OPERATOR) hanya melihat 2 tab (Tahun Ajaran & Kelas).
     const canAccessSchoolProfile = role === 'SUPER_ADMIN' || role === 'ADMIN';
-
     const hasSchool = Boolean(authSchool?.id);
 
     const requestedTab = location.state?.tab as string | undefined;
@@ -40,6 +37,7 @@ export function MasterSettingsPage() {
         }
         if (requestedTab === 'kelas') return 'kelas';
         if (requestedTab === 'tahun-ajaran') return 'tahun-ajaran';
+        if (requestedTab === 'branding' && canAccessSchoolProfile) return 'branding';
         if (requestedTab === 'presensi' && canAccessSchoolProfile) return 'presensi';
         if (requestedTab === 'sekolah' && canAccessSchoolProfile) return 'sekolah';
         return canAccessSchoolProfile ? 'sekolah' : 'tahun-ajaran';
@@ -47,12 +45,14 @@ export function MasterSettingsPage() {
 
     const [activeTab, setActiveTab] = useState<string>(defaultTab);
 
-    // Pengaman: pastikan tab aktif tidak pernah mengarah ke tab yang terkunci/tersembunyi
     const resolvedActiveTab = (() => {
         if (!hasSchool && canAccessSchoolProfile) {
             return activeTab === 'presensi' ? 'presensi' : 'sekolah';
         }
-        if (!canAccessSchoolProfile && (activeTab === 'sekolah' || activeTab === 'presensi')) {
+        if (
+            !canAccessSchoolProfile &&
+            (activeTab === 'sekolah' || activeTab === 'branding' || activeTab === 'presensi')
+        ) {
             return 'tahun-ajaran';
         }
         return activeTab;
@@ -62,12 +62,13 @@ export function MasterSettingsPage() {
         title: isId ? 'Master Akademik' : 'Master Academic',
         desc: canAccessSchoolProfile
             ? isId
-                ? 'Pengaturan Profil Sekolah, Lokasi GPS, Jam & Hari Kerja Presensi, Tahun Ajaran, dan Data Kelas.'
-                : 'Configure School Profile, Attendance GPS & Schedule, Academic Years, and Classes.'
+                ? 'Pengaturan Profil Sekolah, Logo, TTD & Stempel, Presensi GPS, Tahun Ajaran, dan Data Kelas.'
+                : 'Configure School Profile, Logo, Signature & Stamp, Attendance GPS, Academic Years, and Classes.'
             : isId
                 ? 'Pengaturan Tahun Ajaran, Periode Semester, dan Rombongan Belajar (Kelas).'
                 : 'Configure Academic Years, Semester Periods, and Classes.',
         tabSchool: isId ? 'Profil Sekolah' : 'School Profile',
+        tabBranding: isId ? 'Logo, TTD & Stempel' : 'Logo, Signature & Stamp',
         tabAttendance: isId ? 'Pengaturan Presensi' : 'Attendance Settings',
         tabAy: isId ? 'Tahun Ajaran & Semester' : 'Academic Year & Semester',
         tabClass: isId ? 'Data Kelas' : 'Class Data',
@@ -103,6 +104,15 @@ export function MasterSettingsPage() {
                             </TabsTrigger>
                         )}
                         {canAccessSchoolProfile && (
+                            <TabsTrigger
+                                value="branding"
+                                disabled={!hasSchool}
+                                className={TAB_TRIGGER_CLASS}
+                            >
+                                {t.tabBranding}
+                            </TabsTrigger>
+                        )}
+                        {canAccessSchoolProfile && (
                             <TabsTrigger value="presensi" className={TAB_TRIGGER_CLASS}>
                                 {t.tabAttendance}
                             </TabsTrigger>
@@ -128,6 +138,10 @@ export function MasterSettingsPage() {
                     <>
                         <TabsContent value="sekolah" className="mt-6">
                             <SchoolProfileSection />
+                        </TabsContent>
+
+                        <TabsContent value="branding" className="mt-6">
+                            <SchoolBrandingTab />
                         </TabsContent>
 
                         <TabsContent value="presensi" className="mt-6">
