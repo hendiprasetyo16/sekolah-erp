@@ -40,6 +40,61 @@ Sistem ERP dan Manajemen Sekolah Indonesia *multi-tenant* untuk jenjang **TK, SD
 
 ---
 
+## Arsitektur & Struktur Aplikasi (`sekolah-erp`)
+
+Aplikasi ini dibangun menggunakan **React + TypeScript + Vite**, terintegrasi dengan **Supabase** (PostgreSQL, Auth, RLS, Storage, Edge Functions), serta mendukung build Android via **Capacitor**.
+
+### Diagram Alur Sistem
+
+```mermaid
+graph TD
+    subgraph Frontend ["Frontend (Vite + React + TypeScript)"]
+        UI["Pages & Components (Tailwind CSS)"]
+        Store["State Management (src/stores)"]
+        Services["Module Services (src/modules/*/services)"]
+        PDF["PDF Generator (jsPDF + AutoTable)"]
+        UI --> Store
+        UI --> Services
+        UI --> PDF
+    end
+
+    subgraph Supabase ["Backend (Supabase)"]
+        Auth["Supabase Auth & Multi-Role JWT"]
+        DB[("PostgreSQL + RLS Multi-Tenant")]
+        RPC["Server-Side RPC Functions"]
+        Storage["Storage Buckets (selfies, attachments, school-assets)"]
+        Edge["Edge Functions (create-user, send-whatsapp, dll)"]
+    end
+
+    Services --> Auth
+    Services --> DB
+    Services --> RPC
+    Services --> Storage
+    Services --> Edge
+
+sekolah-erp/
+├── android/                  # Project native Android (Capacitor)
+├── supabase/
+│   └── functions/            # Supabase Edge Functions (user management & WA gateway)
+├── src/
+│   ├── app/                  # Konfigurasi utama aplikasi & provider
+│   ├── assets/               # Aset statis (gambar, ikon)
+│   ├── components/           # Komponen UI global & layouts (MainLayout)
+│   ├── config/               # Konfigurasi environment & client Supabase
+│   ├── constants/            # Konstanta global aplikasi
+│   ├── hooks/                # Custom React hooks global
+│   ├── modules/              # Fitur bisnis berbasis modul (Domain-Driven)
+│   │   ├── academic/         # Manajemen Kelas, Mapel, Tahun Ajaran & Jadwal
+│   │   ├── admin/            # Manajemen Sekolah, User & Pengaturan Tenant
+│   │   ├── attendance/       # Presensi GPS Guru, Presensi Siswa & Kiosk
+│   │   └── grades/           # Modul Nilai & Raport Kurikulum Merdeka (Baru)
+│   ├── routes/               # Definisi routing & proteksi role (src/routes/index.tsx)
+│   ├── services/             # Layanan API umum
+│   ├── stores/               # Global state (Zustand / Context)
+│   ├── types/                # Definisi tipe TypeScript global
+│   └── utils/                # Fungsi helper umum
+└── supabase_schema.sql       # Skema database PostgreSQL lengkap (v22.2)
+
 ## 🗄️ Skema Database Supabase (26 Tabel — v13.1)
 
 Seluruh definisi tabel, *trigger*, fungsi RPC, dan kebijakan RLS tersimpan dalam satu file skema utama [`supabase_schema.sql`](supabase_schema.sql):

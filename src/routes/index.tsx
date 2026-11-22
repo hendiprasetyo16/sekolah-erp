@@ -13,7 +13,6 @@ import {
 import { StudentListPage } from '@/modules/students/pages/StudentListPage';
 import { StudentFormPage } from '@/modules/students/pages/StudentFormPage';
 import { StudentDetailPage } from '@/modules/students/pages/StudentDetailPage';
-// [BARU] Import halaman cetak kartu pelajar
 import { StudentCardPrintPage } from '@/modules/students/pages/StudentCardPrintPage';
 import { TeacherListPage } from '@/modules/teachers/pages/TeacherListPage';
 import TeacherFormPage from '@/modules/teachers/pages/TeacherFormPage';
@@ -42,16 +41,21 @@ import { DailyQuotesManagePage } from '@/modules/attendance/pages/DailyQuotesMan
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
+// [BARU] Grades & Report module (Kurikulum Merdeka)
+import { GradesAndReportPage } from '@/modules/grades/pages/GradesAndReportPage';
+import { PortalGradesPage } from '@/modules/grades/pages/PortalGradesPage';
+
 import { UserManagementPage } from '@/modules/admin/pages/UserManagementPage';
 import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswordPage';
 import { ProfilePage } from '@/modules/profile/pages/ProfilePage';
 
 // ============================================================================
-// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v17)
+// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v22.2)
 // ============================================================================
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 const CLASS_EDITOR_ROLES = CORE_ADMIN_ROLES;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
+const GRADES_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
 const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
 const LIBRARY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_PERPUS'] as const;
@@ -61,7 +65,6 @@ const REPORT_ROLES = [...CORE_ADMIN_ROLES, 'BENDAHARA'] as const;
 const ATTENDANCE_RECAP_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
 
-// Ditambahkan 'SUPER_ADMIN' agar dapat menguji halaman Presensi GPS
 const ATTENDANCE_GPS_ROLES = [
   'SUPER_ADMIN',
   'KEPALA_SEKOLAH',
@@ -91,11 +94,6 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-/**
- * Satpam Rute Per-Role (Mendukung Multi-Role / Tugas Tambahan):
- * Mengecek Role Utama + Additional Roles + Tugas Tambahan Dapodik
- * agar selaras 100% dengan tampilan menu di Sidebar.tsx.
- */
 function RoleRoute({
   allowedRoles,
   children,
@@ -118,9 +116,6 @@ function RoleRoute({
   return <>{children}</>;
 }
 
-/**
- * Pengarah Dasbor Otomatis berdasarkan role pengguna yang sedang login.
- */
 function DashboardGate() {
   const role = useAuthStore((state) => state.user?.role);
 
@@ -152,9 +147,8 @@ export function AppRouter() {
           }
         />
 
-        {/* RUTE TERLINDUNGI (MainLayout otomatis menampilkan TenantSelector jika SUPER_ADMIN belum memilih sekolah) */}
+        {/* RUTE TERLINDUNGI */}
         <Route element={<ProtectedRoute><MainLayout /></ProtectedRoute>}>
-          {/* Dashboard Otomatis Sesuai Role + Profil Pribadi */}
           <Route path="/dashboard" element={<DashboardGate />} />
           <Route path="/profile" element={<ProfilePage />} />
 
@@ -172,6 +166,15 @@ export function AppRouter() {
             element={
               <RoleRoute allowedRoles={PORTAL_ROLES}>
                 <PortalAttendancePage />
+              </RoleRoute>
+            }
+          />
+          {/* [BARU] Portal Nilai & E-Raport Siswa/Orang Tua */}
+          <Route
+            path="/portal/grades"
+            element={
+              <RoleRoute allowedRoles={PORTAL_ROLES}>
+                <PortalGradesPage />
               </RoleRoute>
             }
           />
@@ -210,6 +213,16 @@ export function AppRouter() {
             }
           />
 
+          {/* [BARU] Modul Nilai & Raport Kurikulum Merdeka */}
+          <Route
+            path="/grades"
+            element={
+              <RoleRoute allowedRoles={GRADES_STAFF_ROLES}>
+                <GradesAndReportPage />
+              </RoleRoute>
+            }
+          />
+
           {/* Students */}
           <Route
             path="/students"
@@ -227,7 +240,6 @@ export function AppRouter() {
               </RoleRoute>
             }
           />
-          {/* [BARU] Rute Cetak Kartu Pelajar (Wajib di atas /students/:id) */}
           <Route
             path="/students/print-cards"
             element={
@@ -376,7 +388,6 @@ export function AppRouter() {
               </RoleRoute>
             }
           />
-
           <Route
             path="/attendance/quotes"
             element={

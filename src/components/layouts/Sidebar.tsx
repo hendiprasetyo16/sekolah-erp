@@ -27,7 +27,8 @@ import {
   UserCheck,
   ScanLine,
   Sparkles,
-  Barcode, // [BARU] Ikon untuk menu Kartu Pelajar
+  Barcode,
+  FileSpreadsheet, // [BARU] Ikon untuk menu Nilai & Raport
   X,
 } from 'lucide-react';
 
@@ -56,6 +57,7 @@ interface NavGroup {
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 const DAILY_QUOTES_ROLES = ['SUPER_ADMIN', 'ADMIN'] as const;
 const ACADEMIC_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU', 'STAFF_TU'] as const;
+const GRADES_STAFF_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const STUDENT_ATTENDANCE_ROLES = [...CORE_ADMIN_ROLES, 'WALI_KELAS', 'GURU'] as const;
 const FINANCE_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'BENDAHARA'] as const;
 const INVENTORY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_SARPRAS'] as const;
@@ -63,7 +65,6 @@ const LIBRARY_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'STAFF_PERPUS']
 const TU_ROLES = [...CORE_ADMIN_ROLES, 'STAFF_TU'] as const;
 const PORTAL_ROLES = ['SISWA', 'ORANG_TUA'] as const;
 
-// Ditambahkan 'SUPER_ADMIN' agar dapat menguji halaman Presensi GPS
 const ATTENDANCE_STAFF_ROLES = [
   'SUPER_ADMIN',
   'KEPALA_SEKOLAH',
@@ -157,6 +158,13 @@ export function Sidebar() {
           href: '/portal/attendance',
           allowedRoles: PORTAL_ROLES,
         },
+        // [BARU] Menu Nilai & E-Raport Portal Siswa/Orang Tua
+        {
+          label: locale === 'id' ? 'Nilai & E-Raport' : 'Grades & E-Report',
+          icon: <FileSpreadsheet size={17} />,
+          href: '/portal/grades',
+          allowedRoles: PORTAL_ROLES,
+        },
         {
           label: locale === 'id' ? 'Tagihan & Pembayaran' : 'Bills & Payments',
           icon: <Wallet size={17} />,
@@ -181,7 +189,6 @@ export function Sidebar() {
           href: '/students',
           allowedRoles: ACADEMIC_STAFF_ROLES,
         },
-        // [BARU] Menu Cetak Kartu Pelajar (Hanya Admin, Kepsek, Operator, & Staff TU)
         {
           label: locale === 'id' ? 'Kartu Pelajar' : 'Student Cards',
           icon: <Barcode size={17} />,
@@ -199,6 +206,13 @@ export function Sidebar() {
           icon: <Calendar size={17} />,
           href: '/schedules',
           allowedRoles: ACADEMIC_STAFF_ROLES,
+        },
+        // [BARU] Menu Nilai & Raport Kurikulum Merdeka (Guru, Wali Kelas & Admin)
+        {
+          label: locale === 'id' ? 'Nilai & Raport' : 'Grades & Reports',
+          icon: <FileSpreadsheet size={17} />,
+          href: '/grades',
+          allowedRoles: GRADES_STAFF_ROLES,
         },
       ],
     },
@@ -318,7 +332,6 @@ export function Sidebar() {
     },
   ];
 
-  // Gabungkan Role Utama + Additional Roles + Tugas Tambahan Dapodik dari kedua sumber
   const effectiveUserRoles = useMemo(() => {
     const combined = new Set<string>([
       ...getEffectiveRoles(user),

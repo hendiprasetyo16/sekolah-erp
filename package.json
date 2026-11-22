@@ -34,6 +34,8 @@
     "dayjs": "^1.11.21",
     "framer-motion": "^12.40.0",
     "html5-qrcode": "^2.3.8",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.9",
     "leaflet": "^1.9.4",
     "leaflet-geosearch": "^5.1.0",
     "lucide-react": "^1.17.0",
