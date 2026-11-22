@@ -1,6 +1,8 @@
 // src/modules/grades/pages/GradesAndReportPage.tsx
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+    Award,
+    BookOpen,
     Calendar,
     CheckCircle2,
     ClipboardCheck,
@@ -8,14 +10,16 @@ import {
     FileSpreadsheet,
     FileText,
     Loader2,
+    Pencil,
     Plus,
     RefreshCw,
     Save,
+    Search,
     Sparkles,
     Trash2,
     Trophy,
     Users,
-    Wand2,
+    X,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -79,6 +83,93 @@ interface StudentCrossSubjectGrade {
 }
 
 type ActiveTab = 'GRADES' | 'NOTES' | 'RANKING';
+type P5LevelCode = 'MB' | 'SB' | 'BSH' | 'SAB';
+
+/**
+ * Daftar Tema Resmi Projek Penguatan Profil Pelajar Pancasila (P5)
+ * sesuai Panduan Pembelajaran dan Asesmen Kurikulum Merdeka.
+ */
+const P5_OFFICIAL_THEMES: string[] = [
+    'Gaya Hidup Berkelanjutan',
+    'Kearifan Lokal',
+    'Bhinneka Tunggal Ika',
+    'Bangunlah Jiwa dan Raganya',
+    'Suara Demokrasi',
+    'Rekayasa dan Teknologi',
+    'Kewirausahaan',
+    'Kebekerjaan',
+];
+
+/**
+ * 6 Dimensi Resmi Profil Pelajar Pancasila
+ */
+const P5_DIMENSIONS: { id: string; shortLabel: string; fullLabel: string }[] = [
+    {
+        id: 'BERIMAN',
+        shortLabel: 'Beriman & Berakhlak Mulia',
+        fullLabel: 'Beriman, Bertakwa kepada Tuhan YME, dan Berakhlak Mulia',
+    },
+    {
+        id: 'GLOBAL',
+        shortLabel: 'Berkebinekaan Global',
+        fullLabel: 'Berkebinekaan Global',
+    },
+    {
+        id: 'GOTONG_ROYONG',
+        shortLabel: 'Bergotong Royong',
+        fullLabel: 'Bergotong Royong',
+    },
+    {
+        id: 'MANDIRI',
+        shortLabel: 'Mandiri',
+        fullLabel: 'Mandiri',
+    },
+    {
+        id: 'BERNALAR_KRITIS',
+        shortLabel: 'Bernalar Kritis',
+        fullLabel: 'Bernalar Kritis',
+    },
+    {
+        id: 'KREATIF',
+        shortLabel: 'Kreatif',
+        fullLabel: 'Kreatif',
+    },
+];
+
+/**
+ * 4 Predikat Capaian Perkembangan Kokurikuler / P5 Kurikulum Merdeka
+ */
+const P5_LEVEL_OPTIONS: {
+    code: P5LevelCode;
+    label: string;
+    fullTitle: string;
+    badgeClass: string;
+}[] = [
+        {
+            code: 'SAB',
+            label: 'SAB — Sangat Berkembang',
+            fullTitle: 'Sangat Berkembang (SAB)',
+            badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300',
+        },
+        {
+            code: 'BSH',
+            label: 'BSH — Berkembang Sesuai Harapan',
+            fullTitle: 'Berkembang Sesuai Harapan (BSH)',
+            badgeClass: 'bg-blue-100 text-blue-800 border-blue-300',
+        },
+        {
+            code: 'SB',
+            label: 'SB — Sedang Berkembang',
+            fullTitle: 'Sedang Berkembang (SB)',
+            badgeClass: 'bg-amber-100 text-amber-800 border-amber-300',
+        },
+        {
+            code: 'MB',
+            label: 'MB — Mulai Berkembang',
+            fullTitle: 'Mulai Berkembang (MB)',
+            badgeClass: 'bg-rose-100 text-rose-800 border-rose-300',
+        },
+    ];
 
 function clampScore(raw: string): number | null {
     const trimmed = raw.trim();
@@ -149,8 +240,71 @@ function buildAutoDescription(
 }
 
 /**
- * Generator Catatan Wali Kelas otomatis berdasarkan capaian nilai seluruh mapel,
- * kehadiran, dan kegiatan ekstrakurikuler siswa.
+ * Menyusun paragraf deskriptif Kokurikuler / Projek P5 sesuai format resmi
+ * Raport Kurikulum Merdeka (Tema + Kegiatan + Dimensi + Capaian MB/SB/BSH/SAB).
+ */
+function composeP5Narrative(params: {
+    studentName: string;
+    theme: string;
+    activityTitle: string;
+    dimensions: string[];
+    level: P5LevelCode;
+}): string {
+    const firstName =
+        params.studentName.trim().split(' ')[0] || params.studentName;
+    const levelObj =
+        P5_LEVEL_OPTIONS.find((l) => l.code === params.level) ??
+        P5_LEVEL_OPTIONS[1];
+
+    const dimList =
+        params.dimensions.length > 0
+            ? params.dimensions.join(', ')
+            : 'Bergotong Royong, Bernalar Kritis, dan Kreatif';
+
+    const activityClause = params.activityTitle.trim()
+        ? ` melalui kegiatan "${params.activityTitle.trim()}"`
+        : '';
+
+    const behaviorTail: Record<P5LevelCode, string> = {
+        SAB: 'dengan menunjukkan inisiatif tinggi, konsistensi kolaborasi, serta mampu menjadi teladan dalam kelompok.',
+        BSH: 'melalui partisipasi aktif dalam diskusi kelompok dan penyelesaian produk projek sesuai target yang ditetapkan.',
+        SB: 'dan mulai menunjukkan keterlibatan positif dalam tahapan projek, namun masih memerlukan penguatan pada konsistensi kerja mandiri.',
+        MB: 'dengan pendampingan bertahap dari fasilitator untuk menumbuhkan keberanian berpendapat dan kerja sama kelompok.',
+    };
+
+    return `Dalam kegiatan Kokurikuler / Projek Penguatan Profil Pelajar Pancasila (P5) bertema "${params.theme}"${activityClause}, ananda ${firstName} menunjukkan capaian ${levelObj.fullTitle} pada dimensi ${dimList} ${behaviorTail[params.level]}`;
+}
+
+/**
+ * Mendeteksi kode predikat P5 (SAB/BSH/SB/MB) dari teks cocurricularNote yang sudah tersimpan.
+ */
+function detectP5LevelFromText(text?: string | null): P5LevelCode {
+    if (!text) return 'BSH';
+    if (text.includes('(SAB)') || text.includes('Sangat Berkembang')) return 'SAB';
+    if (text.includes('(MB)') || text.includes('Mulai Berkembang')) return 'MB';
+    if (text.includes('(SB)') || text.includes('Sedang Berkembang')) return 'SB';
+    return 'BSH';
+}
+
+/**
+ * Menghitung rekomendasi predikat P5 otomatis dari rata-rata capaian nilai siswa.
+ */
+function inferP5LevelFromScores(
+    subjectScores: { subjectName: string; score: number }[]
+): P5LevelCode {
+    if (subjectScores.length === 0) return 'BSH';
+    const avg =
+        subjectScores.reduce((acc, item) => acc + item.score, 0) /
+        subjectScores.length;
+    if (avg >= 88) return 'SAB';
+    if (avg >= 75) return 'BSH';
+    if (avg >= 65) return 'SB';
+    return 'MB';
+}
+
+/**
+ * Generator Catatan Wali Kelas otomatis berdasarkan nilai seluruh mapel,
+ * rekap kehadiran, dan keaktifan ekstrakurikuler.
  */
 function buildAutoHomeroomNote(params: {
     studentName: string;
@@ -241,31 +395,6 @@ function buildAutoHomeroomNote(params: {
     return parts.join(' ');
 }
 
-/**
- * Generator deskripsi Kokurikuler / Projek P5 sesuai format Kurikulum Merdeka.
- */
-function buildAutoCocurricularNote(params: {
-    studentName: string;
-    subjectScores: { subjectName: string; score: number }[];
-}): string {
-    const firstName =
-        params.studentName.trim().split(' ')[0] || params.studentName;
-    const avg =
-        params.subjectScores.length > 0
-            ? params.subjectScores.reduce((acc, s) => acc + s.score, 0) /
-            params.subjectScores.length
-            : 82;
-
-    const levelLabel =
-        avg >= 88
-            ? 'Sangat Berkembang (SAB)'
-            : avg >= 75
-                ? 'Berkembang Sesuai Harapan (BSH)'
-                : 'Sedang Berkembang (SB)';
-
-    return `Dalam kegiatan kokurikuler / Projek Penguatan Profil Pelajar Pancasila (P5), ananda ${firstName} menunjukkan capaian ${levelLabel} pada dimensi Bergotong Royong, Bernalar Kritis, dan Kreatif melalui partisipasi aktif dalam diskusi kelompok dan penyelesaian produk projek.`;
-}
-
 export default function GradesAndReportPage() {
     const authUser = useAuthStore((state) => state.user);
     const authSchool = useAuthStore((state) => state.school);
@@ -303,7 +432,7 @@ export default function GradesAndReportPage() {
     const [isLoadingSheet, setIsLoadingSheet] = useState<boolean>(false);
     const [isSavingGrades, setIsSavingGrades] = useState<boolean>(false);
 
-    // State Data Tab 2: Catatan Wali Kelas & Publikasi
+    // State Data Tab 2: Catatan Wali Kelas, Kokurikuler P5 & Publikasi
     const [notesMap, setNotesMap] = useState<
         Map<string, StudentReportNoteRecord>
     >(new Map());
@@ -313,9 +442,27 @@ export default function GradesAndReportPage() {
     const [classReportDate, setClassReportDate] = useState<string>(() =>
         new Date().toISOString().slice(0, 10)
     );
+    const [noteSearchQuery, setNoteSearchQuery] = useState<string>('');
+    const [hasUnsavedNotes, setHasUnsavedNotes] = useState<boolean>(false);
+
+    // Master Konfigurasi Projek P5 Tingkat Kelas
+    const [p5Theme, setP5Theme] = useState<string>(P5_OFFICIAL_THEMES[0]);
+    const [p5ActivityTitle, setP5ActivityTitle] = useState<string>('');
+    const [p5Dimensions, setP5Dimensions] = useState<string[]>([
+        'Bergotong Royong',
+        'Bernalar Kritis',
+        'Kreatif',
+    ]);
+    const [p5LevelByStudent, setP5LevelByStudent] = useState<
+        Record<string, P5LevelCode>
+    >({});
+
+    // Drawer / Modal Detail Siswa (Ekskul & Edit Narasi Lengkap)
+    const [detailStudentRow, setDetailStudentRow] =
+        useState<GradeSheetRow | null>(null);
+
     const [isSyncingAttendance, setIsSyncingAttendance] =
         useState<boolean>(false);
-    const [savingStudentId, setSavingStudentId] = useState<string | null>(null);
     const [isSavingAllNotes, setIsSavingAllNotes] = useState<boolean>(false);
     const [isPublishingBatch, setIsPublishingBatch] = useState<boolean>(false);
     const [printingStudentId, setPrintingStudentId] = useState<string | null>(
@@ -538,6 +685,17 @@ export default function GradesAndReportPage() {
             setTpCount(Math.max(3, maxExistingTp));
             setGradeRows(rows);
             setNotesMap(notesRes.data);
+            setHasUnsavedNotes(false);
+
+            // Pulihkan predikat P5 (SAB/BSH/SB/MB) dari data tersimpan
+            const detectedLevels: Record<string, P5LevelCode> = {};
+            rows.forEach((r) => {
+                const existing = notesRes.data.get(r.student.id);
+                detectedLevels[r.student.id] = detectP5LevelFromText(
+                    existing?.cocurricularNote
+                );
+            });
+            setP5LevelByStudent(detectedLevels);
         } catch (err) {
             toast.error(
                 err instanceof Error ? err.message : 'Gagal memuat lembar nilai.'
@@ -569,7 +727,7 @@ export default function GradesAndReportPage() {
         }
     }, [notesMap, examMode]);
 
-    // 5. Muat Nilai Seluruh Mapel untuk Generator Catatan Otomatis di Tab 2
+    // 5. Muat Nilai Seluruh Mapel untuk Generator Catatan & P5 Otomatis di Tab 2
     const loadAllClassGradesForNotes = useCallback(async () => {
         if (!resolvedSchoolId || !selectedSemesterId || !selectedClassId) return;
         const { data } = await supabase
@@ -874,6 +1032,7 @@ export default function GradesAndReportPage() {
         studentId: string,
         updater: (prev: StudentReportNoteRecord) => StudentReportNoteRecord
     ) => {
+        setHasUnsavedNotes(true);
         setNotesMap((prev) => {
             const next = new Map(prev);
             const current = getOrInitStudentNote(studentId);
@@ -882,9 +1041,10 @@ export default function GradesAndReportPage() {
         });
     };
 
-    // Terapkan tanggal raport kelas ke semua siswa di memori
+    // Terapkan tanggal raport kelas ke semua siswa
     const handleClassReportDateChange = (newDate: string) => {
         setClassReportDate(newDate);
+        setHasUnsavedNotes(true);
         setNotesMap((prev) => {
             const next = new Map(prev);
             gradeRows.forEach((row) => {
@@ -901,7 +1061,40 @@ export default function GradesAndReportPage() {
         });
     };
 
-    // Ambil daftar nilai semua mapel milik 1 siswa untuk generator catatan otomatis
+    // Toggle pilihan Dimensi Profil Pelajar Pancasila kelas
+    const toggleP5Dimension = (shortLabel: string) => {
+        setP5Dimensions((prev) =>
+            prev.includes(shortLabel)
+                ? prev.filter((d) => d !== shortLabel)
+                : [...prev, shortLabel]
+        );
+    };
+
+    // Ubah predikat P5 (MB / SB / BSH / SAB) pada 1 siswa & langsung susun narasi resminya
+    const handleStudentP5LevelChange = (
+        row: GradeSheetRow,
+        newLevel: P5LevelCode
+    ) => {
+        setP5LevelByStudent((prev) => ({
+            ...prev,
+            [row.student.id]: newLevel,
+        }));
+
+        const narrative = composeP5Narrative({
+            studentName: row.student.fullName,
+            theme: p5Theme,
+            activityTitle: p5ActivityTitle,
+            dimensions: p5Dimensions,
+            level: newLevel,
+        });
+
+        updateStudentNoteState(row.student.id, (prev) => ({
+            ...prev,
+            cocurricularNote: narrative,
+        }));
+    };
+
+    // Ambil daftar nilai semua mapel milik 1 siswa untuk generator otomatis
     const getStudentSubjectScores = useCallback(
         (studentId: string): { subjectName: string; score: number }[] => {
             const subjectNameById = new Map(subjects.map((s) => [s.id, s.name]));
@@ -926,10 +1119,16 @@ export default function GradesAndReportPage() {
         [classAllGrades, subjects, examMode]
     );
 
-    // Generate catatan otomatis untuk 1 siswa
+    // Generate catatan wali kelas & narasi P5 otomatis untuk 1 siswa
     const handleGenerateSingleStudentNotes = (row: GradeSheetRow) => {
         const current = getOrInitStudentNote(row.student.id);
         const subjectScores = getStudentSubjectScores(row.student.id);
+        const inferredLevel = inferP5LevelFromScores(subjectScores);
+
+        setP5LevelByStudent((prev) => ({
+            ...prev,
+            [row.student.id]: inferredLevel,
+        }));
 
         const autoHomeroom = buildAutoHomeroomNote({
             studentName: row.student.fullName,
@@ -946,9 +1145,12 @@ export default function GradesAndReportPage() {
             extracurriculars: current.extracurriculars,
         });
 
-        const autoCocurricular = buildAutoCocurricularNote({
+        const autoP5 = composeP5Narrative({
             studentName: row.student.fullName,
-            subjectScores,
+            theme: p5Theme,
+            activityTitle: p5ActivityTitle,
+            dimensions: p5Dimensions,
+            level: inferredLevel,
         });
 
         updateStudentNoteState(row.student.id, (prev) => ({
@@ -957,27 +1159,27 @@ export default function GradesAndReportPage() {
                 examMode === 'STS' ? autoHomeroom : prev.stsHomeroomNote,
             homeroomNote:
                 examMode === 'SAS' ? autoHomeroom : prev.homeroomNote,
-            cocurricularNote:
-                examMode === 'SAS' && !prev.cocurricularNote?.trim()
-                    ? autoCocurricular
-                    : prev.cocurricularNote,
+            cocurricularNote: examMode === 'SAS' ? autoP5 : prev.cocurricularNote,
         }));
 
         toast.success(
-            `Catatan otomatis untuk ${row.student.fullName} berhasil dibuat.`
+            `Catatan & P5 (${inferredLevel}) untuk ${row.student.fullName} berhasil dibuat.`
         );
     };
 
-    // Generate catatan otomatis untuk SELURUH SISWA di kelas
+    // Generate catatan wali kelas & P5 otomatis untuk SELURUH SISWA di kelas
     const handleGenerateAllClassNotes = (overwriteExisting: boolean) => {
         if (gradeRows.length === 0) return;
 
         let updatedCount = 0;
+        const nextLevels: Record<string, P5LevelCode> = { ...p5LevelByStudent };
+
         setNotesMap((prev) => {
             const next = new Map(prev);
             gradeRows.forEach((row) => {
                 const current = getOrInitStudentNote(row.student.id);
                 const subjectScores = getStudentSubjectScores(row.student.id);
+                const inferredLevel = inferP5LevelFromScores(subjectScores);
 
                 const existingNote =
                     examMode === 'STS'
@@ -986,12 +1188,16 @@ export default function GradesAndReportPage() {
 
                 const shouldFillHomeroom =
                     overwriteExisting || !existingNote?.trim();
-                const shouldFillCocurricular =
+                const shouldFillP5 =
                     examMode === 'SAS' &&
                     (overwriteExisting || !current.cocurricularNote?.trim());
 
-                if (shouldFillHomeroom || shouldFillCocurricular) {
+                if (shouldFillHomeroom || shouldFillP5) {
                     updatedCount += 1;
+                }
+
+                if (shouldFillP5) {
+                    nextLevels[row.student.id] = inferredLevel;
                 }
 
                 const autoHomeroom = buildAutoHomeroomNote({
@@ -1013,9 +1219,12 @@ export default function GradesAndReportPage() {
                     extracurriculars: current.extracurriculars,
                 });
 
-                const autoCocurricular = buildAutoCocurricularNote({
+                const autoP5 = composeP5Narrative({
                     studentName: row.student.fullName,
-                    subjectScores,
+                    theme: p5Theme,
+                    activityTitle: p5ActivityTitle,
+                    dimensions: p5Dimensions,
+                    level: inferredLevel,
                 });
 
                 next.set(row.student.id, {
@@ -1028,37 +1237,39 @@ export default function GradesAndReportPage() {
                         examMode === 'SAS' && shouldFillHomeroom
                             ? autoHomeroom
                             : current.homeroomNote,
-                    cocurricularNote: shouldFillCocurricular
-                        ? autoCocurricular
+                    cocurricularNote: shouldFillP5
+                        ? autoP5
                         : current.cocurricularNote,
                 });
             });
             return next;
         });
 
+        setP5LevelByStudent(nextLevels);
+        setHasUnsavedNotes(true);
         toast.success(
-            `Catatan otomatis ${examMode} berhasil dibuat untuk ${updatedCount} siswa. Jangan lupa klik "Simpan Semua Catatan".`
+            `Catatan & Kokurikuler P5 berhasil dibuat untuk ${updatedCount} siswa. Klik "Simpan Semua Catatan" untuk menyimpan ke database.`
         );
     };
 
-    const handleSaveSingleNote = async (studentId: string) => {
-        const note = getOrInitStudentNote(studentId);
-        setSavingStudentId(studentId);
-        try {
-            const res = await gradeService.saveStudentReportNote(
-                note,
-                authUser?.id
-            );
-            toast.success(res.message);
-        } catch (err) {
-            toast.error(
-                err instanceof Error
-                    ? err.message
-                    : 'Gagal menyimpan catatan raport.'
-            );
-        } finally {
-            setSavingStudentId(null);
-        }
+    // Terapkan status kenaikan kelas / kelulusan massal untuk satu kelas
+    const handleBulkPromotionStatus = (status: PromotionStatus) => {
+        if (gradeRows.length === 0) return;
+        setHasUnsavedNotes(true);
+        setNotesMap((prev) => {
+            const next = new Map(prev);
+            gradeRows.forEach((row) => {
+                const current = getOrInitStudentNote(row.student.id);
+                next.set(row.student.id, {
+                    ...current,
+                    promotionStatus: status,
+                });
+            });
+            return next;
+        });
+        toast.success(
+            `Status evaluasi seluruh siswa diubah ke "${status.replace('_', ' ')}".`
+        );
     };
 
     // Simpan seluruh catatan siswa satu kelas sekaligus
@@ -1070,6 +1281,7 @@ export default function GradesAndReportPage() {
                 const note = getOrInitStudentNote(row.student.id);
                 await gradeService.saveStudentReportNote(note, authUser?.id);
             }
+            setHasUnsavedNotes(false);
             toast.success(
                 `Seluruh catatan raport ${examMode} (${gradeRows.length} siswa) berhasil disimpan.`
             );
@@ -1255,6 +1467,18 @@ export default function GradesAndReportPage() {
         }
     };
 
+    // Filter baris siswa pada Tab 2 berdasarkan pencarian nama/NISN
+    const filteredNoteRows = useMemo(() => {
+        const q = noteSearchQuery.trim().toLowerCase();
+        if (!q) return gradeRows;
+        return gradeRows.filter(
+            (r) =>
+                r.student.fullName.toLowerCase().includes(q) ||
+                r.student.nisn.toLowerCase().includes(q) ||
+                (r.student.nis ?? '').toLowerCase().includes(q)
+        );
+    }, [gradeRows, noteSearchQuery]);
+
     return (
         <div className="p-6 space-y-6">
             {/* Header Halaman */}
@@ -1265,7 +1489,7 @@ export default function GradesAndReportPage() {
                     </h1>
                     <p className="text-muted-foreground mt-1">
                         Kelola nilai formatif, STS, SAS, deskripsi capaian kompetensi,
-                        catatan wali kelas, hingga cetak PDF raport resmi.
+                        kokurikuler P5, catatan wali kelas, hingga cetak PDF raport resmi.
                     </p>
                 </div>
 
@@ -1407,7 +1631,7 @@ export default function GradesAndReportPage() {
                     )}
                 >
                     <ClipboardCheck className="w-4 h-4" />
-                    2. Catatan Wali Kelas, Publikasi &amp; Cetak PDF
+                    2. Kokurikuler P5, Catatan Wali Kelas &amp; PDF
                 </button>
 
                 <button
@@ -1773,20 +1997,153 @@ export default function GradesAndReportPage() {
             )}
 
             {/* ==================================================================== */}
-            {/* TAB 2: CATATAN WALI KELAS, EKSTRAKURIKULER, PUBLIKASI & CETAK PDF    */}
+            {/* TAB 2: KOKURIKULER P5, CATATAN WALI KELAS, PUBLIKASI & CETAK PDF     */}
             {/* ==================================================================== */}
             {activeTab === 'NOTES' && (
                 <div className="space-y-4">
-                    {/* Panel Pengaturan & Aksi Satu Kelas */}
+                    {/* TINGKAT 1: PANEL KONFIGURASI KELAS & AKSI MASSAL */}
                     <Card className="border-none shadow-sm">
+                        <CardHeader className="pb-3 border-b">
+                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                                <div>
+                                    <CardTitle className="text-lg flex items-center gap-2">
+                                        <span>
+                                            Pengaturan Raport Kelas ({examMode})
+                                        </span>
+                                        {hasUnsavedNotes && (
+                                            <Badge className="bg-amber-500 text-white text-[11px]">
+                                                Perubahan Belum Disimpan
+                                            </Badge>
+                                        )}
+                                    </CardTitle>
+                                    <CardDescription>
+                                        Atur tanggal raport, Tema &amp; Dimensi Projek P5 sekali
+                                        untuk seluruh kelas, lalu gunakan tabel cepat di bawah.
+                                    </CardDescription>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <button
+                                        type="button"
+                                        onClick={handleSaveAllNotesBatch}
+                                        disabled={isSavingAllNotes || gradeRows.length === 0}
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50 shadow-2xs"
+                                    >
+                                        {isSavingAllNotes ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <Save className="w-4 h-4" />
+                                        )}
+                                        Simpan Semua Catatan ({gradeRows.length} Siswa)
+                                    </button>
+
+                                    <button
+                                        type="button"
+                                        onClick={handlePrintEntireClassPdf}
+                                        disabled={isPrintingBatch || gradeRows.length === 0}
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 disabled:opacity-50 shadow-2xs"
+                                    >
+                                        {isPrintingBatch ? (
+                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                        ) : (
+                                            <Download className="w-4 h-4" />
+                                        )}
+                                        Unduh PDF Satu Kelas ({gradeRows.length} Siswa)
+                                    </button>
+                                </div>
+                            </div>
+                        </CardHeader>
+
                         <CardContent className="p-5 space-y-4">
-                            {/* Baris 1: Tanggal Raport Seragam Satu Kelas & Generator Catatan Otomatis */}
-                            <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b">
-                                <div className="flex flex-wrap items-center gap-3">
-                                    <div className="flex items-center gap-2 bg-muted/50 px-3 py-2 rounded-lg border">
-                                        <Calendar className="w-4 h-4 text-primary" />
-                                        <span className="text-xs font-semibold">
-                                            Tanggal Raport ({examMode}):
+                            {/* Master Konfigurasi Projek P5 Kelas (Tampil pada Mode SAS) */}
+                            {examMode === 'SAS' && (
+                                <div className="p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
+                                    <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">
+                                        <Award className="w-4 h-4" />
+                                        <span>
+                                            Master Kokurikuler / Projek Penguatan Profil Pelajar
+                                            Pancasila (P5) Kelas Ini
+                                        </span>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                                        <div>
+                                            <label className="block font-semibold mb-1 text-foreground">
+                                                1. Tema Projek P5 (Kurikulum Merdeka)
+                                            </label>
+                                            <select
+                                                value={p5Theme}
+                                                onChange={(e) => setP5Theme(e.target.value)}
+                                                className="w-full px-3 py-2 rounded-lg border bg-background font-medium"
+                                            >
+                                                {P5_OFFICIAL_THEMES.map((theme) => (
+                                                    <option key={theme} value={theme}>
+                                                        {theme}
+                                                    </option>
+                                                ))}
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label className="block font-semibold mb-1 text-foreground">
+                                                2. Judul Kegiatan Spesifik{' '}
+                                                <span className="text-muted-foreground font-normal">
+                                                    (Opsional)
+                                                </span>
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={p5ActivityTitle}
+                                                onChange={(e) =>
+                                                    setP5ActivityTitle(e.target.value)
+                                                }
+                                                placeholder="Misal: Pengolahan Sampah Organik & Karya Daur Ulang"
+                                                className="w-full px-3 py-2 rounded-lg border bg-background"
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="text-xs space-y-1.5">
+                                        <label className="block font-semibold text-foreground">
+                                            3. Dimensi Profil Pelajar Pancasila yang Diamati:
+                                        </label>
+                                        <div className="flex flex-wrap gap-2">
+                                            {P5_DIMENSIONS.map((dim) => {
+                                                const active = p5Dimensions.includes(
+                                                    dim.shortLabel
+                                                );
+                                                return (
+                                                    <button
+                                                        key={dim.id}
+                                                        type="button"
+                                                        onClick={() =>
+                                                            toggleP5Dimension(dim.shortLabel)
+                                                        }
+                                                        className={cn(
+                                                            'px-3 py-1.5 rounded-full border text-xs font-medium transition-colors',
+                                                            active
+                                                                ? 'bg-indigo-600 text-white border-indigo-600'
+                                                                : 'bg-background text-muted-foreground hover:bg-muted'
+                                                        )}
+                                                    >
+                                                        {active ? '✓ ' : '+ '}
+                                                        {dim.shortLabel}
+                                                    </button>
+                                                );
+                                            })}
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Toolbar Aksi Massal Satu Kelas */}
+                            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+                                <div className="flex flex-wrap items-center gap-2.5">
+                                    {/* Tanggal Raport Seragam */}
+                                    <div className="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg border text-xs">
+                                        <Calendar className="w-3.5 h-3.5 text-primary" />
+                                        <span className="font-semibold">
+                                            Tgl Raport ({examMode}):
                                         </span>
                                         <input
                                             type="date"
@@ -1798,48 +2155,61 @@ export default function GradesAndReportPage() {
                                         />
                                     </div>
 
+                                    {/* Tombol Generate Otomatis Satu Kelas */}
                                     <button
                                         type="button"
-                                        onClick={() => handleGenerateAllClassNotes(false)}
+                                        onClick={() => handleGenerateAllClassNotes(true)}
                                         disabled={gradeRows.length === 0}
-                                        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300 disabled:opacity-50"
+                                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300 disabled:opacity-50"
                                     >
-                                        <Sparkles className="w-4 h-4 text-amber-500" />
-                                        Generate Catatan Otomatis (Isi yang Kosong)
+                                        <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                                        Auto-Generate Catatan &amp; P5 Semua Siswa
                                     </button>
-                                </div>
 
-                                <button
-                                    type="button"
-                                    onClick={handleSaveAllNotesBatch}
-                                    disabled={isSavingAllNotes || gradeRows.length === 0}
-                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 disabled:opacity-50"
-                                >
-                                    {isSavingAllNotes ? (
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                    ) : (
-                                        <Save className="w-4 h-4" />
-                                    )}
-                                    Simpan Semua Catatan ({gradeRows.length} Siswa)
-                                </button>
-                            </div>
-
-                            {/* Baris 2: Sinkronisasi Absensi, Publikasi Massal & Cetak PDF Satu Kelas */}
-                            <div className="flex flex-wrap items-center justify-between gap-3">
-                                <div className="flex flex-wrap items-center gap-2.5">
+                                    {/* Sinkronisasi Absensi */}
                                     <button
                                         type="button"
                                         onClick={handleSyncDailyAttendance}
                                         disabled={isSyncingAttendance || !selectedClassId}
-                                        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border bg-card text-xs font-medium hover:bg-muted disabled:opacity-50"
+                                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border bg-card text-xs font-medium hover:bg-muted disabled:opacity-50"
                                     >
                                         {isSyncingAttendance ? (
-                                            <Loader2 className="w-4 h-4 animate-spin" />
+                                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                         ) : (
-                                            <RefreshCw className="w-4 h-4 text-blue-500" />
+                                            <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
                                         )}
-                                        Sinkronkan Absensi Harian
+                                        Sinkron Absensi
                                     </button>
+                                </div>
+
+                                <div className="flex flex-wrap items-center gap-2">
+                                    {/* Set Status Kenaikan Massal (Saat SAS) */}
+                                    {examMode === 'SAS' && (
+                                        <select
+                                            defaultValue=""
+                                            onChange={(e) => {
+                                                if (!e.target.value) return;
+                                                handleBulkPromotionStatus(
+                                                    e.target.value as PromotionStatus
+                                                );
+                                                e.target.value = '';
+                                            }}
+                                            className="px-3 py-2 rounded-lg border bg-background text-xs font-medium"
+                                        >
+                                            <option value="" disabled>
+                                                Set Status Kenaikan Massal...
+                                            </option>
+                                            <option value="NAIK_KELAS">
+                                                Semua: Naik Kelas
+                                            </option>
+                                            <option value="LULUS">
+                                                Semua: Lulus Satuan Pendidikan
+                                            </option>
+                                            <option value="PROSES">
+                                                Semua: Dalam Proses Evaluasi
+                                            </option>
+                                        </select>
+                                    )}
 
                                     <button
                                         type="button"
@@ -1849,341 +2219,526 @@ export default function GradesAndReportPage() {
                                         disabled={
                                             isPublishingBatch || gradeRows.length === 0
                                         }
-                                        className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300 disabled:opacity-50"
+                                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300 disabled:opacity-50"
                                     >
-                                        <CheckCircle2 className="w-4 h-4" />
-                                        Publikasikan Semua Raport {examMode}
+                                        <CheckCircle2 className="w-3.5 h-3.5" />
+                                        Publikasikan Semua {examMode}
                                     </button>
                                 </div>
-
-                                <button
-                                    type="button"
-                                    onClick={handlePrintEntireClassPdf}
-                                    disabled={isPrintingBatch || gradeRows.length === 0}
-                                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold hover:opacity-90 disabled:opacity-50"
-                                >
-                                    {isPrintingBatch ? (
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                    ) : (
-                                        <Download className="w-4 h-4" />
-                                    )}
-                                    Unduh PDF Raport {examMode} Satu Kelas ({gradeRows.length}{' '}
-                                    Siswa)
-                                </button>
                             </div>
                         </CardContent>
                     </Card>
 
-                    {/* Daftar Kartu Per Siswa (Fokus sesuai Mode STS / SAS yang dipilih) */}
-                    {gradeRows.map((row, idx) => {
-                        const note = getOrInitStudentNote(row.student.id);
-                        const isSavingThis = savingStudentId === row.student.id;
-                        const isPrintingThis = printingStudentId === row.student.id;
-                        const isPublishedCurrentMode =
-                            examMode === 'STS'
-                                ? note.isStsPublished
-                                : note.isSasPublished;
+                    {/* TINGKAT 2: TABEL INPUT PADAT (COMPACT SPREADSHEET TABLE) */}
+                    <Card className="border-none shadow-sm">
+                        <CardHeader className="py-3.5 px-5 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div className="text-xs text-muted-foreground">
+                                Menampilkan <strong>{filteredNoteRows.length}</strong> dari{' '}
+                                <strong>{gradeRows.length}</strong> siswa. Edit langsung di
+                                tabel, lalu klik <strong>Simpan Semua Catatan</strong> di atas.
+                            </div>
 
-                        return (
-                            <Card key={row.student.id} className="border-none shadow-sm">
-                                <CardHeader className="pb-3 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                    <div className="flex items-center gap-3">
+                            <div className="relative">
+                                <Search className="w-3.5 h-3.5 text-muted-foreground absolute left-3 top-1/2 -translate-y-1/2" />
+                                <input
+                                    type="text"
+                                    value={noteSearchQuery}
+                                    onChange={(e) => setNoteSearchQuery(e.target.value)}
+                                    placeholder="Filter nama / NISN siswa..."
+                                    className="pl-8 pr-3 py-1.5 text-xs rounded-lg border bg-background w-full sm:w-56"
+                                />
+                            </div>
+                        </CardHeader>
+
+                        <CardContent className="p-0">
+                            {filteredNoteRows.length === 0 ? (
+                                <div className="p-10 text-center text-sm text-muted-foreground">
+                                    Tidak ada data siswa yang cocok dengan filter.
+                                </div>
+                            ) : (
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-xs text-left border-collapse">
+                                        <thead className="bg-muted/60 text-muted-foreground uppercase border-b">
+                                            <tr>
+                                                <th className="px-3 py-3 w-10 text-center">
+                                                    No
+                                                </th>
+                                                <th className="px-3 py-3 min-w-43.75">
+                                                    Nama Siswa
+                                                </th>
+                                                <th className="px-2 py-3 w-36 text-center">
+                                                    Absensi (S / I / A)
+                                                </th>
+                                                {examMode === 'SAS' && (
+                                                    <th className="px-3 py-3 min-w-50">
+                                                        Capaian P5 (MB/SB/BSH/SAB)
+                                                    </th>
+                                                )}
+                                                <th className="px-3 py-3 min-w-65">
+                                                    Catatan Wali Kelas ({examMode})
+                                                </th>
+                                                <th className="px-3 py-3 min-w-41.25">
+                                                    Ekskul &amp; Status
+                                                </th>
+                                                <th className="px-3 py-3 w-28 text-center">
+                                                    Publikasi
+                                                </th>
+                                                <th className="px-3 py-3 w-24 text-right">
+                                                    Aksi
+                                                </th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {filteredNoteRows.map((row, idx) => {
+                                                const note = getOrInitStudentNote(
+                                                    row.student.id
+                                                );
+                                                const p5Code =
+                                                    p5LevelByStudent[row.student.id] ??
+                                                    'BSH';
+                                                const p5Meta =
+                                                    P5_LEVEL_OPTIONS.find(
+                                                        (o) => o.code === p5Code
+                                                    ) ?? P5_LEVEL_OPTIONS[1];
+                                                const isPublished =
+                                                    examMode === 'STS'
+                                                        ? note.isStsPublished
+                                                        : note.isSasPublished;
+                                                const isPrintingThis =
+                                                    printingStudentId === row.student.id;
+
+                                                return (
+                                                    <tr
+                                                        key={row.student.id}
+                                                        className="border-b last:border-0 hover:bg-muted/20 align-top"
+                                                    >
+                                                        {/* Nomor */}
+                                                        <td className="px-3 py-3 text-center text-muted-foreground font-mono">
+                                                            {idx + 1}
+                                                        </td>
+
+                                                        {/* Identitas Siswa */}
+                                                        <td className="px-3 py-3">
+                                                            <div className="font-semibold text-foreground text-sm leading-snug">
+                                                                {row.student.fullName}
+                                                            </div>
+                                                            <div className="text-[11px] text-muted-foreground font-mono mt-0.5">
+                                                                NISN: {row.student.nisn}
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Absensi Padat S / I / A */}
+                                                        <td className="px-2 py-3">
+                                                            <div className="grid grid-cols-3 gap-1">
+                                                                <input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    title="Sakit"
+                                                                    value={
+                                                                        examMode === 'STS'
+                                                                            ? note.stsSickDays
+                                                                            : note.sickDays
+                                                                    }
+                                                                    onChange={(e) => {
+                                                                        const val = Math.max(
+                                                                            0,
+                                                                            Number(
+                                                                                e.target.value
+                                                                            ) || 0
+                                                                        );
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                stsSickDays:
+                                                                                    examMode ===
+                                                                                        'STS'
+                                                                                        ? val
+                                                                                        : prev.stsSickDays,
+                                                                                sickDays:
+                                                                                    examMode ===
+                                                                                        'SAS'
+                                                                                        ? val
+                                                                                        : prev.sickDays,
+                                                                            })
+                                                                        );
+                                                                    }}
+                                                                    className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    title="Izin"
+                                                                    value={
+                                                                        examMode === 'STS'
+                                                                            ? note.stsPermissionDays
+                                                                            : note.permissionDays
+                                                                    }
+                                                                    onChange={(e) => {
+                                                                        const val = Math.max(
+                                                                            0,
+                                                                            Number(
+                                                                                e.target.value
+                                                                            ) || 0
+                                                                        );
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                stsPermissionDays:
+                                                                                    examMode ===
+                                                                                        'STS'
+                                                                                        ? val
+                                                                                        : prev.stsPermissionDays,
+                                                                                permissionDays:
+                                                                                    examMode ===
+                                                                                        'SAS'
+                                                                                        ? val
+                                                                                        : prev.permissionDays,
+                                                                            })
+                                                                        );
+                                                                    }}
+                                                                    className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
+                                                                />
+                                                                <input
+                                                                    type="number"
+                                                                    min={0}
+                                                                    title="Alpha"
+                                                                    value={
+                                                                        examMode === 'STS'
+                                                                            ? note.stsAlphaDays
+                                                                            : note.alphaDays
+                                                                    }
+                                                                    onChange={(e) => {
+                                                                        const val = Math.max(
+                                                                            0,
+                                                                            Number(
+                                                                                e.target.value
+                                                                            ) || 0
+                                                                        );
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                stsAlphaDays:
+                                                                                    examMode ===
+                                                                                        'STS'
+                                                                                        ? val
+                                                                                        : prev.stsAlphaDays,
+                                                                                alphaDays:
+                                                                                    examMode ===
+                                                                                        'SAS'
+                                                                                        ? val
+                                                                                        : prev.alphaDays,
+                                                                            })
+                                                                        );
+                                                                    }}
+                                                                    className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
+                                                                />
+                                                            </div>
+                                                            <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-muted-foreground mt-0.5">
+                                                                <span>S</span>
+                                                                <span>I</span>
+                                                                <span>A</span>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Kolom Kokurikuler / Projek P5 (Mode SAS) */}
+                                                        {examMode === 'SAS' && (
+                                                            <td className="px-3 py-3 space-y-1.5">
+                                                                <select
+                                                                    value={p5Code}
+                                                                    onChange={(e) =>
+                                                                        handleStudentP5LevelChange(
+                                                                            row,
+                                                                            e.target
+                                                                                .value as P5LevelCode
+                                                                        )
+                                                                    }
+                                                                    className={cn(
+                                                                        'w-full px-2 py-1.5 rounded-lg border text-xs font-semibold',
+                                                                        p5Meta.badgeClass
+                                                                    )}
+                                                                >
+                                                                    {P5_LEVEL_OPTIONS.map(
+                                                                        (opt) => (
+                                                                            <option
+                                                                                key={opt.code}
+                                                                                value={opt.code}
+                                                                            >
+                                                                                {opt.label}
+                                                                            </option>
+                                                                        )
+                                                                    )}
+                                                                </select>
+                                                                <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                                                                    {note.cocurricularNote?.trim() ||
+                                                                        'Belum ada narasi P5 (pilih predikat di atas)'}
+                                                                </p>
+                                                            </td>
+                                                        )}
+
+                                                        {/* Catatan Wali Kelas Inline */}
+                                                        <td className="px-3 py-3">
+                                                            <div className="flex items-start gap-1.5">
+                                                                <textarea
+                                                                    rows={2}
+                                                                    value={
+                                                                        examMode === 'STS'
+                                                                            ? (note.stsHomeroomNote ??
+                                                                                '')
+                                                                            : (note.homeroomNote ??
+                                                                                '')
+                                                                    }
+                                                                    onChange={(e) =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                stsHomeroomNote:
+                                                                                    examMode ===
+                                                                                        'STS'
+                                                                                        ? e.target
+                                                                                            .value
+                                                                                        : prev.stsHomeroomNote,
+                                                                                homeroomNote:
+                                                                                    examMode ===
+                                                                                        'SAS'
+                                                                                        ? e.target
+                                                                                            .value
+                                                                                        : prev.homeroomNote,
+                                                                            })
+                                                                        )
+                                                                    }
+                                                                    placeholder="Tulis atau klik ikon ✨..."
+                                                                    className="w-full p-2 rounded-lg border bg-background text-xs resize-y"
+                                                                />
+                                                                <button
+                                                                    type="button"
+                                                                    title="Generate Catatan & P5 Otomatis untuk siswa ini"
+                                                                    onClick={() =>
+                                                                        handleGenerateSingleStudentNotes(
+                                                                            row
+                                                                        )
+                                                                    }
+                                                                    className="p-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 shrink-0"
+                                                                >
+                                                                    <Sparkles className="w-3.5 h-3.5" />
+                                                                </button>
+                                                            </div>
+                                                        </td>
+
+                                                        {/* Ringkasan Ekskul & Status Kenaikan */}
+                                                        <td className="px-3 py-3 space-y-1.5">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    setDetailStudentRow(row)
+                                                                }
+                                                                className="w-full inline-flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border bg-background hover:bg-muted text-xs font-medium"
+                                                            >
+                                                                <span>
+                                                                    Ekskul (
+                                                                    {
+                                                                        note.extracurriculars
+                                                                            .length
+                                                                    }
+                                                                    ) &amp; Narasi
+                                                                </span>
+                                                                <Pencil className="w-3 h-3 text-muted-foreground" />
+                                                            </button>
+
+                                                            {examMode === 'SAS' && (
+                                                                <select
+                                                                    value={note.promotionStatus}
+                                                                    onChange={(e) =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                promotionStatus:
+                                                                                    e.target
+                                                                                        .value as PromotionStatus,
+                                                                            })
+                                                                        )
+                                                                    }
+                                                                    className="w-full px-2 py-1 rounded border bg-muted/40 text-[11px] font-medium"
+                                                                >
+                                                                    <option value="PROSES">
+                                                                        Proses Evaluasi
+                                                                    </option>
+                                                                    <option value="NAIK_KELAS">
+                                                                        Naik Kelas
+                                                                    </option>
+                                                                    <option value="TINGGAL_KELAS">
+                                                                        Tinggal Kelas
+                                                                    </option>
+                                                                    <option value="LULUS">
+                                                                        Lulus
+                                                                    </option>
+                                                                    <option value="TIDAK_LULUS">
+                                                                        Tidak Lulus
+                                                                    </option>
+                                                                </select>
+                                                            )}
+                                                        </td>
+
+                                                        {/* Status Publikasi */}
+                                                        <td className="px-3 py-3 text-center">
+                                                            <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-muted/30 cursor-pointer text-[11px] font-semibold">
+                                                                <input
+                                                                    type="checkbox"
+                                                                    checked={isPublished}
+                                                                    onChange={(e) =>
+                                                                        updateStudentNoteState(
+                                                                            row.student.id,
+                                                                            (prev) => ({
+                                                                                ...prev,
+                                                                                isStsPublished:
+                                                                                    examMode ===
+                                                                                        'STS'
+                                                                                        ? e.target
+                                                                                            .checked
+                                                                                        : prev.isStsPublished,
+                                                                                isSasPublished:
+                                                                                    examMode ===
+                                                                                        'SAS'
+                                                                                        ? e.target
+                                                                                            .checked
+                                                                                        : prev.isSasPublished,
+                                                                            })
+                                                                        )
+                                                                    }
+                                                                />
+                                                                <span>
+                                                                    {isPublished
+                                                                        ? 'Terbit'
+                                                                        : 'Draft'}
+                                                                </span>
+                                                            </label>
+                                                        </td>
+
+                                                        {/* Unduh PDF Per Siswa */}
+                                                        <td className="px-3 py-3 text-right">
+                                                            <button
+                                                                type="button"
+                                                                onClick={() =>
+                                                                    handlePrintSingleStudentPdf(
+                                                                        row
+                                                                    )
+                                                                }
+                                                                disabled={isPrintingThis}
+                                                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-muted disabled:opacity-50"
+                                                            >
+                                                                {isPrintingThis ? (
+                                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                                                ) : (
+                                                                    <FileText className="w-3.5 h-3.5 text-red-500" />
+                                                                )}
+                                                                PDF
+                                                            </button>
+                                                        </td>
+                                                    </tr>
+                                                );
+                                            })}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            )}
+                        </CardContent>
+                    </Card>
+                </div>
+            )}
+
+            {/* ==================================================================== */}
+            {/* MODAL DETAIL SISWA: EKSTRAKURIKULER & SUNTING NARASI LENGKAP P5      */}
+            {/* ==================================================================== */}
+            {detailStudentRow && (
+                <div
+                    className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
+                    onClick={() => setDetailStudentRow(null)}
+                >
+                    <div
+                        className="bg-card border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        {(() => {
+                            const note = getOrInitStudentNote(
+                                detailStudentRow.student.id
+                            );
+                            return (
+                                <>
+                                    <div className="px-6 py-4 border-b flex items-center justify-between sticky top-0 bg-card z-10">
                                         <div>
-                                            <CardTitle className="text-base flex items-center gap-2">
-                                                <span>
-                                                    {idx + 1}. {row.student.fullName}
-                                                </span>
-                                                <Badge
-                                                    variant="outline"
-                                                    className={cn(
-                                                        'text-[11px]',
-                                                        isPublishedCurrentMode
-                                                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
-                                                            : 'bg-muted text-muted-foreground'
-                                                    )}
-                                                >
-                                                    {isPublishedCurrentMode
-                                                        ? `Terbit (${examMode})`
-                                                        : `Draft (${examMode})`}
-                                                </Badge>
-                                            </CardTitle>
-                                            <CardDescription>
-                                                NIS: {row.student.nis || '-'} | NISN:{' '}
-                                                {row.student.nisn}
-                                            </CardDescription>
+                                            <h3 className="text-lg font-bold">
+                                                {detailStudentRow.student.fullName}
+                                            </h3>
+                                            <p className="text-xs text-muted-foreground">
+                                                NIS: {detailStudentRow.student.nis || '-'} |
+                                                NISN: {detailStudentRow.student.nisn}
+                                            </p>
                                         </div>
-                                    </div>
-
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <label className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border bg-muted/40 cursor-pointer">
-                                            <input
-                                                type="checkbox"
-                                                checked={isPublishedCurrentMode}
-                                                onChange={(e) =>
-                                                    updateStudentNoteState(
-                                                        row.student.id,
-                                                        (prev) => ({
-                                                            ...prev,
-                                                            isStsPublished:
-                                                                examMode === 'STS'
-                                                                    ? e.target.checked
-                                                                    : prev.isStsPublished,
-                                                            isSasPublished:
-                                                                examMode === 'SAS'
-                                                                    ? e.target.checked
-                                                                    : prev.isSasPublished,
-                                                        })
-                                                    )
-                                                }
-                                            />
-                                            <span>Publikasi {examMode}</span>
-                                        </label>
-
                                         <button
                                             type="button"
-                                            onClick={() =>
-                                                handleGenerateSingleStudentNotes(row)
-                                            }
-                                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-amber-200 bg-amber-50/70 text-amber-800 text-xs font-medium hover:bg-amber-100 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-300"
+                                            onClick={() => setDetailStudentRow(null)}
+                                            className="p-1.5 rounded-lg hover:bg-muted"
                                         >
-                                            <Wand2 className="w-3.5 h-3.5" />
-                                            Auto Catatan
-                                        </button>
-
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                handleSaveSingleNote(row.student.id)
-                                            }
-                                            disabled={isSavingThis}
-                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:opacity-90 disabled:opacity-50"
-                                        >
-                                            {isSavingThis ? (
-                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                            ) : (
-                                                <Save className="w-3.5 h-3.5" />
-                                            )}
-                                            Simpan
-                                        </button>
-
-                                        <button
-                                            type="button"
-                                            onClick={() =>
-                                                handlePrintSingleStudentPdf(row)
-                                            }
-                                            disabled={isPrintingThis}
-                                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium hover:bg-muted disabled:opacity-50"
-                                        >
-                                            {isPrintingThis ? (
-                                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                            ) : (
-                                                <FileText className="w-3.5 h-3.5 text-red-500" />
-                                            )}
-                                            PDF {examMode}
+                                            <X className="w-4 h-4" />
                                         </button>
                                     </div>
-                                </CardHeader>
 
-                                <CardContent className="p-5 space-y-4">
-                                    {/* Baris Ketidakhadiran & Catatan Wali Kelas (Sesuai Mode Aktif) */}
-                                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 text-xs">
-                                        {/* Ketidakhadiran 3 Kolom Ringkas */}
-                                        <div className="lg:col-span-3 grid grid-cols-3 gap-2">
-                                            <div>
-                                                <label className="block font-medium mb-1">
-                                                    Sakit ({examMode})
+                                    <div className="p-6 space-y-5 text-xs">
+                                        {/* Narasi Lengkap Kokurikuler / Projek P5 */}
+                                        <div className="space-y-1.5">
+                                            <div className="flex items-center justify-between">
+                                                <label className="font-bold text-sm">
+                                                    Deskripsi Kokurikuler / Projek P5 (Raport)
                                                 </label>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    value={
-                                                        examMode === 'STS'
-                                                            ? note.stsSickDays
-                                                            : note.sickDays
-                                                    }
-                                                    onChange={(e) => {
-                                                        const val = Math.max(
-                                                            0,
-                                                            Number(e.target.value) || 0
-                                                        );
-                                                        updateStudentNoteState(
-                                                            row.student.id,
-                                                            (prev) => ({
-                                                                ...prev,
-                                                                stsSickDays:
-                                                                    examMode === 'STS'
-                                                                        ? val
-                                                                        : prev.stsSickDays,
-                                                                sickDays:
-                                                                    examMode === 'SAS'
-                                                                        ? val
-                                                                        : prev.sickDays,
-                                                            })
-                                                        );
-                                                    }}
-                                                    className="w-full px-2.5 py-2 rounded-lg border bg-background text-center font-semibold"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block font-medium mb-1">
-                                                    Izin ({examMode})
-                                                </label>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    value={
-                                                        examMode === 'STS'
-                                                            ? note.stsPermissionDays
-                                                            : note.permissionDays
-                                                    }
-                                                    onChange={(e) => {
-                                                        const val = Math.max(
-                                                            0,
-                                                            Number(e.target.value) || 0
-                                                        );
-                                                        updateStudentNoteState(
-                                                            row.student.id,
-                                                            (prev) => ({
-                                                                ...prev,
-                                                                stsPermissionDays:
-                                                                    examMode === 'STS'
-                                                                        ? val
-                                                                        : prev.stsPermissionDays,
-                                                                permissionDays:
-                                                                    examMode === 'SAS'
-                                                                        ? val
-                                                                        : prev.permissionDays,
-                                                            })
-                                                        );
-                                                    }}
-                                                    className="w-full px-2.5 py-2 rounded-lg border bg-background text-center font-semibold"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block font-medium mb-1">
-                                                    Alpha ({examMode})
-                                                </label>
-                                                <input
-                                                    type="number"
-                                                    min={0}
-                                                    value={
-                                                        examMode === 'STS'
-                                                            ? note.stsAlphaDays
-                                                            : note.alphaDays
-                                                    }
-                                                    onChange={(e) => {
-                                                        const val = Math.max(
-                                                            0,
-                                                            Number(e.target.value) || 0
-                                                        );
-                                                        updateStudentNoteState(
-                                                            row.student.id,
-                                                            (prev) => ({
-                                                                ...prev,
-                                                                stsAlphaDays:
-                                                                    examMode === 'STS'
-                                                                        ? val
-                                                                        : prev.stsAlphaDays,
-                                                                alphaDays:
-                                                                    examMode === 'SAS'
-                                                                        ? val
-                                                                        : prev.alphaDays,
-                                                            })
-                                                        );
-                                                    }}
-                                                    className="w-full px-2.5 py-2 rounded-lg border bg-background text-center font-semibold"
-                                                />
-                                            </div>
-                                        </div>
-
-                                        {/* Catatan Wali Kelas (STS atau SAS) */}
-                                        <div
-                                            className={cn(
-                                                examMode === 'SAS'
-                                                    ? 'lg:col-span-5'
-                                                    : 'lg:col-span-9'
-                                            )}
-                                        >
-                                            <label className="block font-semibold mb-1">
-                                                Catatan Wali Kelas ({examMode})
-                                            </label>
-                                            <textarea
-                                                rows={2}
-                                                value={
-                                                    examMode === 'STS'
-                                                        ? (note.stsHomeroomNote ?? '')
-                                                        : (note.homeroomNote ?? '')
-                                                }
-                                                onChange={(e) =>
-                                                    updateStudentNoteState(
-                                                        row.student.id,
-                                                        (prev) => ({
-                                                            ...prev,
-                                                            stsHomeroomNote:
-                                                                examMode === 'STS'
-                                                                    ? e.target.value
-                                                                    : prev.stsHomeroomNote,
-                                                            homeroomNote:
-                                                                examMode === 'SAS'
-                                                                    ? e.target.value
-                                                                    : prev.homeroomNote,
-                                                        })
-                                                    )
-                                                }
-                                                placeholder={
-                                                    examMode === 'STS'
-                                                        ? 'Catatan motivasi tengah semester...'
-                                                        : 'Catatan evaluasi akhir semester...'
-                                                }
-                                                className="w-full p-2.5 rounded-lg border bg-background"
-                                            />
-                                        </div>
-
-                                        {/* Catatan Kokurikuler / Projek P5 (Tampil pada SAS) */}
-                                        {examMode === 'SAS' && (
-                                            <div className="lg:col-span-4">
-                                                <label className="block font-semibold mb-1">
-                                                    Catatan Kokurikuler / Projek P5
-                                                </label>
-                                                <textarea
-                                                    rows={2}
-                                                    value={note.cocurricularNote ?? ''}
-                                                    onChange={(e) =>
-                                                        updateStudentNoteState(
-                                                            row.student.id,
-                                                            (prev) => ({
-                                                                ...prev,
-                                                                cocurricularNote:
-                                                                    e.target.value,
-                                                            })
+                                                <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                        handleStudentP5LevelChange(
+                                                            detailStudentRow,
+                                                            p5LevelByStudent[
+                                                            detailStudentRow.student.id
+                                                            ] ?? 'BSH'
                                                         )
                                                     }
-                                                    placeholder="Contoh: Capaian Berkembang Sesuai Harapan (BSH) dalam dimensi Bergotong Royong & Bernalar Kritis..."
-                                                    className="w-full p-2.5 rounded-lg border bg-background"
-                                                />
+                                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded border bg-indigo-50 text-indigo-700 font-medium hover:bg-indigo-100"
+                                                >
+                                                    <Sparkles className="w-3 h-3" />
+                                                    Susun Ulang dari Master P5 Kelas
+                                                </button>
                                             </div>
-                                        )}
-                                    </div>
+                                            <textarea
+                                                rows={4}
+                                                value={note.cocurricularNote ?? ''}
+                                                onChange={(e) =>
+                                                    updateStudentNoteState(
+                                                        detailStudentRow.student.id,
+                                                        (prev) => ({
+                                                            ...prev,
+                                                            cocurricularNote: e.target.value,
+                                                        })
+                                                    )
+                                                }
+                                                placeholder="Narasi capaian Projek Penguatan Profil Pelajar Pancasila..."
+                                                className="w-full p-3 rounded-xl border bg-background text-xs leading-relaxed"
+                                            />
+                                        </div>
 
-                                    {/* Ekstrakurikuler & Keputusan Kenaikan Kelas */}
-                                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 pt-3 border-t text-xs">
-                                        <div
-                                            className={cn(
-                                                examMode === 'SAS'
-                                                    ? 'lg:col-span-2'
-                                                    : 'lg:col-span-3',
-                                                'space-y-2'
-                                            )}
-                                        >
+                                        {/* Kegiatan Ekstrakurikuler */}
+                                        <div className="space-y-2.5 pt-3 border-t">
                                             <div className="flex items-center justify-between">
-                                                <span className="font-semibold">
+                                                <span className="font-bold text-sm flex items-center gap-1.5">
+                                                    <BookOpen className="w-4 h-4 text-primary" />
                                                     Kegiatan Ekstrakurikuler
                                                 </span>
                                                 <button
                                                     type="button"
                                                     onClick={() =>
                                                         updateStudentNoteState(
-                                                            row.student.id,
+                                                            detailStudentRow.student.id,
                                                             (prev) => ({
                                                                 ...prev,
                                                                 extracurriculars: [
@@ -2197,7 +2752,7 @@ export default function GradesAndReportPage() {
                                                             })
                                                         )
                                                     }
-                                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded border hover:bg-muted font-medium"
+                                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-medium"
                                                 >
                                                     <Plus className="w-3.5 h-3.5" />
                                                     Tambah Ekskul
@@ -2205,9 +2760,9 @@ export default function GradesAndReportPage() {
                                             </div>
 
                                             {note.extracurriculars.length === 0 ? (
-                                                <p className="text-muted-foreground italic">
-                                                    Belum ada kegiatan ekstrakurikuler yang
-                                                    ditambahkan.
+                                                <p className="text-muted-foreground italic py-2">
+                                                    Belum ada kegiatan ekstrakurikuler untuk
+                                                    siswa ini.
                                                 </p>
                                             ) : (
                                                 <div className="space-y-2">
@@ -2225,7 +2780,8 @@ export default function GradesAndReportPage() {
                                                                     value={ex.name}
                                                                     onChange={(e) =>
                                                                         updateStudentNoteState(
-                                                                            row.student.id,
+                                                                            detailStudentRow
+                                                                                .student.id,
                                                                             (prev) => {
                                                                                 const list = [
                                                                                     ...prev.extracurriculars,
@@ -2244,13 +2800,14 @@ export default function GradesAndReportPage() {
                                                                         )
                                                                     }
                                                                     placeholder="Nama Ekskul (mis. Pramuka)"
-                                                                    className="col-span-4 px-2.5 py-1.5 rounded border bg-background"
+                                                                    className="col-span-4 px-2.5 py-2 rounded-lg border bg-background"
                                                                 />
                                                                 <select
                                                                     value={ex.predicate}
                                                                     onChange={(e) =>
                                                                         updateStudentNoteState(
-                                                                            row.student.id,
+                                                                            detailStudentRow
+                                                                                .student.id,
                                                                             (prev) => {
                                                                                 const list = [
                                                                                     ...prev.extracurriculars,
@@ -2269,7 +2826,7 @@ export default function GradesAndReportPage() {
                                                                             }
                                                                         )
                                                                     }
-                                                                    className="col-span-3 px-2 py-1.5 rounded border bg-background"
+                                                                    className="col-span-3 px-2 py-2 rounded-lg border bg-background"
                                                                 >
                                                                     <option value="Sangat Baik">
                                                                         Sangat Baik
@@ -2286,7 +2843,8 @@ export default function GradesAndReportPage() {
                                                                     value={ex.description}
                                                                     onChange={(e) =>
                                                                         updateStudentNoteState(
-                                                                            row.student.id,
+                                                                            detailStudentRow
+                                                                                .student.id,
                                                                             (prev) => {
                                                                                 const list = [
                                                                                     ...prev.extracurriculars,
@@ -2306,13 +2864,14 @@ export default function GradesAndReportPage() {
                                                                         )
                                                                     }
                                                                     placeholder="Keterangan singkat..."
-                                                                    className="col-span-4 px-2.5 py-1.5 rounded border bg-background"
+                                                                    className="col-span-4 px-2.5 py-2 rounded-lg border bg-background"
                                                                 />
                                                                 <button
                                                                     type="button"
                                                                     onClick={() =>
                                                                         updateStudentNoteState(
-                                                                            row.student.id,
+                                                                            detailStudentRow
+                                                                                .student.id,
                                                                             (prev) => ({
                                                                                 ...prev,
                                                                                 extracurriculars:
@@ -2327,9 +2886,9 @@ export default function GradesAndReportPage() {
                                                                             })
                                                                         )
                                                                     }
-                                                                    className="col-span-1 p-1.5 text-red-500 hover:bg-red-50 rounded"
+                                                                    className="col-span-1 p-2 text-red-500 hover:bg-red-50 rounded-lg"
                                                                 >
-                                                                    <Trash2 className="w-3.5 h-3.5" />
+                                                                    <Trash2 className="w-4 h-4" />
                                                                 </button>
                                                             </div>
                                                         )
@@ -2337,50 +2896,21 @@ export default function GradesAndReportPage() {
                                                 </div>
                                             )}
                                         </div>
-
-                                        {examMode === 'SAS' && (
-                                            <div>
-                                                <label className="block font-semibold mb-1.5">
-                                                    Keputusan Kenaikan / Kelulusan (Semester
-                                                    Genap)
-                                                </label>
-                                                <select
-                                                    value={note.promotionStatus}
-                                                    onChange={(e) =>
-                                                        updateStudentNoteState(
-                                                            row.student.id,
-                                                            (prev) => ({
-                                                                ...prev,
-                                                                promotionStatus: e.target
-                                                                    .value as PromotionStatus,
-                                                            })
-                                                        )
-                                                    }
-                                                    className="w-full px-3 py-2 rounded-lg border bg-background font-medium"
-                                                >
-                                                    <option value="PROSES">
-                                                        Dalam Proses Evaluasi
-                                                    </option>
-                                                    <option value="NAIK_KELAS">
-                                                        Naik Kelas
-                                                    </option>
-                                                    <option value="TINGGAL_KELAS">
-                                                        Tinggal Kelas
-                                                    </option>
-                                                    <option value="LULUS">
-                                                        Lulus dari Satuan Pendidikan
-                                                    </option>
-                                                    <option value="TIDAK_LULUS">
-                                                        Tidak Lulus
-                                                    </option>
-                                                </select>
-                                            </div>
-                                        )}
                                     </div>
-                                </CardContent>
-                            </Card>
-                        );
-                    })}
+
+                                    <div className="px-6 py-4 border-t bg-muted/30 flex items-center justify-end">
+                                        <button
+                                            type="button"
+                                            onClick={() => setDetailStudentRow(null)}
+                                            className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold"
+                                        >
+                                            Selesai
+                                        </button>
+                                    </div>
+                                </>
+                            );
+                        })()}
+                    </div>
                 </div>
             )}
 
