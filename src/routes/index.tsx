@@ -41,7 +41,10 @@ import { DailyQuotesManagePage } from '@/modules/attendance/pages/DailyQuotesMan
 import { MasterSettingsPage } from '@/modules/academic/pages/MasterSettingsPage';
 import { ClassFormPage } from '@/modules/academic/pages/ClassFormPage';
 
-// [BARU] Grades & Report module (Kurikulum Merdeka)
+// [BARU] Subjects module (Master Mata Pelajaran)
+import SubjectsPage from '@/modules/subjects/pages/SubjectsPage';
+
+// Grades & Report module (Kurikulum Merdeka)
 import { GradesAndReportPage } from '@/modules/grades/pages/GradesAndReportPage';
 import { PortalGradesPage } from '@/modules/grades/pages/PortalGradesPage';
 
@@ -169,7 +172,6 @@ export function AppRouter() {
               </RoleRoute>
             }
           />
-          {/* [BARU] Portal Nilai & E-Raport Siswa/Orang Tua */}
           <Route
             path="/portal/grades"
             element={
@@ -196,6 +198,15 @@ export function AppRouter() {
               </RoleRoute>
             }
           />
+          {/* [BARU] Master Mata Pelajaran */}
+          <Route
+            path="/academic/subjects"
+            element={
+              <RoleRoute allowedRoles={GRADES_STAFF_ROLES}>
+                <SubjectsPage />
+              </RoleRoute>
+            }
+          />
           <Route
             path="/academic/classes/new"
             element={
@@ -213,7 +224,7 @@ export function AppRouter() {
             }
           />
 
-          {/* [BARU] Modul Nilai & Raport Kurikulum Merdeka */}
+          {/* Modul Nilai & Raport Kurikulum Merdeka */}
           <Route
             path="/grades"
             element={

@@ -28,7 +28,7 @@ import {
   ScanLine,
   Sparkles,
   Barcode,
-  FileSpreadsheet, // [BARU] Ikon untuk menu Nilai & Raport
+  FileSpreadsheet,
   X,
 } from 'lucide-react';
 
@@ -158,7 +158,6 @@ export function Sidebar() {
           href: '/portal/attendance',
           allowedRoles: PORTAL_ROLES,
         },
-        // [BARU] Menu Nilai & E-Raport Portal Siswa/Orang Tua
         {
           label: locale === 'id' ? 'Nilai & E-Raport' : 'Grades & E-Report',
           icon: <FileSpreadsheet size={17} />,
@@ -182,6 +181,13 @@ export function Sidebar() {
           icon: <Building2 size={17} />,
           href: '/academic/master-data',
           allowedRoles: CORE_ADMIN_ROLES,
+        },
+        // [BARU] Menu Master Mata Pelajaran
+        {
+          label: locale === 'id' ? 'Mata Pelajaran' : 'Subjects',
+          icon: <BookOpen size={17} />,
+          href: '/academic/subjects',
+          allowedRoles: GRADES_STAFF_ROLES,
         },
         {
           label: t('sidebar.students'),
@@ -207,7 +213,6 @@ export function Sidebar() {
           href: '/schedules',
           allowedRoles: ACADEMIC_STAFF_ROLES,
         },
-        // [BARU] Menu Nilai & Raport Kurikulum Merdeka (Guru, Wali Kelas & Admin)
         {
           label: locale === 'id' ? 'Nilai & Raport' : 'Grades & Reports',
           icon: <FileSpreadsheet size={17} />,
