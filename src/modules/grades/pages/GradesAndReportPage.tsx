@@ -1,5 +1,5 @@
 // src/modules/grades/pages/GradesAndReportPage.tsx
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ArrowDown,
     ArrowUp,
@@ -90,9 +90,8 @@ interface StudentCrossSubjectGrade {
 type ActiveTab = 'GRADES' | 'NOTES' | 'RANKING';
 type P5LevelCode = 'MB' | 'SB' | 'BSH' | 'SAB';
 
-/**
- * Daftar Tema Resmi Projek Penguatan Profil Pelajar Pancasila (P5)
- */
+const ID_COLLATOR = new Intl.Collator('id', { sensitivity: 'base' });
+
 const P5_THEMES: { id: string; idLabel: string; enLabel: string }[] = [
     {
         id: 'SUSTAINABLE',
@@ -414,8 +413,528 @@ function buildAutoHomeroomNote(params: {
     return parts.join(' ');
 }
 
+function createDefaultNoteRecord(params: {
+    schoolId: string;
+    academicYearId: string;
+    semesterId: string;
+    classId: string;
+    studentId: string;
+    reportDate: string;
+}): StudentReportNoteRecord {
+    return {
+        schoolId: params.schoolId,
+        academicYearId: params.academicYearId,
+        semesterId: params.semesterId,
+        classId: params.classId,
+        studentId: params.studentId,
+        extracurriculars: [],
+        cocurricularNote: '',
+        stsHomeroomNote: '',
+        homeroomNote: '',
+        stsSickDays: 0,
+        stsPermissionDays: 0,
+        stsAlphaDays: 0,
+        sickDays: 0,
+        permissionDays: 0,
+        alphaDays: 0,
+        promotionStatus: 'PROSES',
+        reportDateSts: params.reportDate,
+        reportDateSas: params.reportDate,
+        isStsPublished: false,
+        isSasPublished: false,
+    };
+}
+
+function sortRowsByName(
+    rows: GradeSheetRow[],
+    order: 'asc' | 'desc'
+): GradeSheetRow[] {
+    const copy = [...rows];
+    copy.sort((a, b) => {
+        const cmp = ID_COLLATOR.compare(a.student.fullName, b.student.fullName);
+        return order === 'asc' ? cmp : -cmp;
+    });
+    return copy;
+}
+
+// ============================================================================
+// KOMPONEN BARIS MEMOIZED TAB 1 (MENCEGAH LAG SAAT INPUT NILAI)
+// ============================================================================
+interface GradeSheetTableRowProps {
+    row: GradeSheetRow;
+    index: number;
+    tpCount: number;
+    placeholderDescSts: string;
+    placeholderDescSas: string;
+    onTpChange: (studentId: string, tpIndex: number, rawValue: string) => void;
+    onExamChange: (
+        studentId: string,
+        field: 'stsScore' | 'sasScore' | 'finalScore',
+        rawValue: string
+    ) => void;
+    onDescChange: (
+        studentId: string,
+        field: 'stsCompetencyDescription' | 'competencyDescription',
+        value: string
+    ) => void;
+}
+
+const GradeSheetTableRow = React.memo(function GradeSheetTableRow({
+    row,
+    index,
+    tpCount,
+    placeholderDescSts,
+    placeholderDescSas,
+    onTpChange,
+    onExamChange,
+    onDescChange,
+}: GradeSheetTableRowProps) {
+    const studentId = row.student.id;
+
+    return (
+        <tr className="border-b hover:bg-muted/20 align-top">
+            <td className="px-3 py-3 text-center text-muted-foreground">
+                {index + 1}
+            </td>
+            <td className="px-3 py-3">
+                <div className="font-semibold text-foreground text-sm">
+                    {row.student.fullName}
+                </div>
+                <div className="text-[11px] text-muted-foreground font-mono">
+                    NISN: {row.student.nisn}
+                </div>
+            </td>
+
+            {Array.from({ length: tpCount }).map((_, tpIdx) => {
+                const val = row.grade.formativeScores[tpIdx];
+                return (
+                    <td
+                        key={tpIdx}
+                        className="px-1.5 py-2.5 text-center bg-blue-50/20 dark:bg-blue-950/10"
+                    >
+                        <input
+                            type="number"
+                            min={0}
+                            max={100}
+                            step="0.01"
+                            value={
+                                val !== undefined && !Number.isNaN(val) ? val : ''
+                            }
+                            onChange={(e) =>
+                                onTpChange(studentId, tpIdx, e.target.value)
+                            }
+                            className="w-14 px-1.5 py-1.5 text-center rounded border bg-background font-medium"
+                        />
+                    </td>
+                );
+            })}
+
+            <td className="px-2 py-3 text-center font-semibold">
+                {row.grade.formativeAvg !== null
+                    ? row.grade.formativeAvg.toFixed(1)
+                    : '-'}
+            </td>
+
+            <td className="px-1.5 py-2.5 text-center bg-amber-50/20 dark:bg-amber-950/10">
+                <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={row.grade.stsScore ?? ''}
+                    onChange={(e) =>
+                        onExamChange(studentId, 'stsScore', e.target.value)
+                    }
+                    className="w-16 px-1.5 py-1.5 text-center rounded border bg-background font-semibold"
+                />
+            </td>
+
+            <td className="px-1.5 py-2.5 text-center bg-emerald-50/20 dark:bg-emerald-950/10">
+                <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={row.grade.sasScore ?? ''}
+                    onChange={(e) =>
+                        onExamChange(studentId, 'sasScore', e.target.value)
+                    }
+                    className="w-16 px-1.5 py-1.5 text-center rounded border bg-background font-semibold"
+                />
+            </td>
+
+            <td className="px-1.5 py-2.5 text-center">
+                <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step="0.01"
+                    value={row.grade.finalScore ?? ''}
+                    onChange={(e) =>
+                        onExamChange(studentId, 'finalScore', e.target.value)
+                    }
+                    className="w-16 px-1.5 py-1.5 text-center rounded border border-primary/40 bg-primary/5 font-bold text-primary"
+                />
+            </td>
+
+            <td className="px-2 py-3 text-center">
+                {row.grade.predicate ? (
+                    <Badge variant="outline" className="font-bold">
+                        {row.grade.predicate}
+                    </Badge>
+                ) : (
+                    '-'
+                )}
+            </td>
+
+            <td className="px-2 py-2.5">
+                <textarea
+                    rows={2}
+                    value={row.grade.stsCompetencyDescription ?? ''}
+                    onChange={(e) =>
+                        onDescChange(
+                            studentId,
+                            'stsCompetencyDescription',
+                            e.target.value
+                        )
+                    }
+                    placeholder={placeholderDescSts}
+                    className="w-full p-2 rounded border bg-background text-xs resize-y"
+                />
+            </td>
+
+            <td className="px-2 py-2.5">
+                <textarea
+                    rows={2}
+                    value={row.grade.competencyDescription ?? ''}
+                    onChange={(e) =>
+                        onDescChange(
+                            studentId,
+                            'competencyDescription',
+                            e.target.value
+                        )
+                    }
+                    placeholder={placeholderDescSas}
+                    className="w-full p-2 rounded border bg-background text-xs resize-y"
+                />
+            </td>
+        </tr>
+    );
+});
+
+// ============================================================================
+// KOMPONEN BARIS MEMOIZED TAB 2 (MENCEGAH LAG SAAT INPUT CATATAN WALI KELAS)
+// ============================================================================
+interface StudentNoteTableRowProps {
+    row: GradeSheetRow;
+    index: number;
+    note: StudentReportNoteRecord;
+    examMode: ReportExamMode;
+    p5Code: P5LevelCode;
+    isPrintingThis: boolean;
+    p5LevelOptions: { code: P5LevelCode; label: string }[];
+    labels: {
+        attSickTitle: string;
+        attPermTitle: string;
+        attAlphaTitle: string;
+        attSickShort: string;
+        attPermShort: string;
+        attAlphaShort: string;
+        p5EmptyPreview: string;
+        homeroomNotePlaceholder: string;
+        btnAutoSingleTooltip: string;
+        ekskulBtnText: string;
+        promoProses: string;
+        promoNaik: string;
+        promoTinggal: string;
+        promoLulus: string;
+        promoTidakLulus: string;
+        statusPublished: string;
+        statusDraft: string;
+        btnPdf: string;
+    };
+    onUpdateNote: (
+        studentId: string,
+        updater: (prev: StudentReportNoteRecord) => StudentReportNoteRecord
+    ) => void;
+    onP5LevelChange: (row: GradeSheetRow, newLevel: P5LevelCode) => void;
+    onGenerateSingle: (row: GradeSheetRow) => void;
+    onOpenDetail: (row: GradeSheetRow) => void;
+    onPrintSingle: (row: GradeSheetRow) => void;
+}
+
+const StudentNoteTableRow = React.memo(function StudentNoteTableRow({
+    row,
+    index,
+    note,
+    examMode,
+    p5Code,
+    isPrintingThis,
+    p5LevelOptions,
+    labels,
+    onUpdateNote,
+    onP5LevelChange,
+    onGenerateSingle,
+    onOpenDetail,
+    onPrintSingle,
+}: StudentNoteTableRowProps) {
+    const studentId = row.student.id;
+    const p5Meta =
+        P5_LEVEL_META.find((o) => o.code === p5Code) ?? P5_LEVEL_META[1];
+    const isPublished =
+        examMode === 'STS' ? note.isStsPublished : note.isSasPublished;
+
+    return (
+        <tr className="border-b last:border-0 hover:bg-muted/20 align-top">
+            <td className="px-3 py-3 text-center text-muted-foreground font-mono">
+                {index + 1}
+            </td>
+
+            <td className="px-3 py-3">
+                <div className="font-semibold text-foreground text-sm leading-snug">
+                    {row.student.fullName}
+                </div>
+                <div className="text-[11px] text-muted-foreground font-mono mt-0.5">
+                    NISN: {row.student.nisn}
+                </div>
+            </td>
+
+            <td className="px-2 py-3">
+                <div className="grid grid-cols-3 gap-1">
+                    <input
+                        type="number"
+                        min={0}
+                        title={labels.attSickTitle}
+                        value={
+                            examMode === 'STS'
+                                ? note.stsSickDays
+                                : note.sickDays
+                        }
+                        onChange={(e) => {
+                            const val = Math.max(
+                                0,
+                                Number(e.target.value) || 0
+                            );
+                            onUpdateNote(studentId, (prev) => ({
+                                ...prev,
+                                stsSickDays:
+                                    examMode === 'STS' ? val : prev.stsSickDays,
+                                sickDays:
+                                    examMode === 'SAS' ? val : prev.sickDays,
+                            }));
+                        }}
+                        className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
+                    />
+                    <input
+                        type="number"
+                        min={0}
+                        title={labels.attPermTitle}
+                        value={
+                            examMode === 'STS'
+                                ? note.stsPermissionDays
+                                : note.permissionDays
+                        }
+                        onChange={(e) => {
+                            const val = Math.max(
+                                0,
+                                Number(e.target.value) || 0
+                            );
+                            onUpdateNote(studentId, (prev) => ({
+                                ...prev,
+                                stsPermissionDays:
+                                    examMode === 'STS'
+                                        ? val
+                                        : prev.stsPermissionDays,
+                                permissionDays:
+                                    examMode === 'SAS'
+                                        ? val
+                                        : prev.permissionDays,
+                            }));
+                        }}
+                        className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
+                    />
+                    <input
+                        type="number"
+                        min={0}
+                        title={labels.attAlphaTitle}
+                        value={
+                            examMode === 'STS'
+                                ? note.stsAlphaDays
+                                : note.alphaDays
+                        }
+                        onChange={(e) => {
+                            const val = Math.max(
+                                0,
+                                Number(e.target.value) || 0
+                            );
+                            onUpdateNote(studentId, (prev) => ({
+                                ...prev,
+                                stsAlphaDays:
+                                    examMode === 'STS'
+                                        ? val
+                                        : prev.stsAlphaDays,
+                                alphaDays:
+                                    examMode === 'SAS' ? val : prev.alphaDays,
+                            }));
+                        }}
+                        className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
+                    />
+                </div>
+                <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-muted-foreground mt-0.5">
+                    <span>{labels.attSickShort}</span>
+                    <span>{labels.attPermShort}</span>
+                    <span>{labels.attAlphaShort}</span>
+                </div>
+            </td>
+
+            {examMode === 'SAS' && (
+                <td className="px-3 py-3 space-y-1.5">
+                    <select
+                        value={p5Code}
+                        onChange={(e) =>
+                            onP5LevelChange(
+                                row,
+                                e.target.value as P5LevelCode
+                            )
+                        }
+                        className={cn(
+                            'w-full px-2 py-1.5 rounded-lg border text-xs font-semibold',
+                            p5Meta.badgeClass
+                        )}
+                    >
+                        {p5LevelOptions.map((opt) => (
+                            <option key={opt.code} value={opt.code}>
+                                {opt.label}
+                            </option>
+                        ))}
+                    </select>
+                    <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
+                        {note.cocurricularNote?.trim() ||
+                            labels.p5EmptyPreview}
+                    </p>
+                </td>
+            )}
+
+            <td className="px-3 py-3">
+                <div className="flex items-start gap-1.5">
+                    <textarea
+                        rows={2}
+                        value={
+                            examMode === 'STS'
+                                ? (note.stsHomeroomNote ?? '')
+                                : (note.homeroomNote ?? '')
+                        }
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            onUpdateNote(studentId, (prev) => ({
+                                ...prev,
+                                stsHomeroomNote:
+                                    examMode === 'STS'
+                                        ? val
+                                        : prev.stsHomeroomNote,
+                                homeroomNote:
+                                    examMode === 'SAS'
+                                        ? val
+                                        : prev.homeroomNote,
+                            }));
+                        }}
+                        placeholder={labels.homeroomNotePlaceholder}
+                        className="w-full p-2 rounded-lg border bg-background text-xs resize-y"
+                    />
+                    <button
+                        type="button"
+                        title={labels.btnAutoSingleTooltip}
+                        onClick={() => onGenerateSingle(row)}
+                        className="p-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 shrink-0"
+                    >
+                        <Sparkles className="w-3.5 h-3.5" />
+                    </button>
+                </div>
+            </td>
+
+            <td className="px-3 py-3 space-y-1.5">
+                <button
+                    type="button"
+                    onClick={() => onOpenDetail(row)}
+                    className="w-full inline-flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border bg-background hover:bg-muted text-xs font-medium"
+                >
+                    <span>{labels.ekskulBtnText}</span>
+                    <Pencil className="w-3 h-3 text-muted-foreground" />
+                </button>
+
+                {examMode === 'SAS' && (
+                    <select
+                        value={note.promotionStatus}
+                        onChange={(e) => {
+                            const status = e.target.value as PromotionStatus;
+                            onUpdateNote(studentId, (prev) => ({
+                                ...prev,
+                                promotionStatus: status,
+                            }));
+                        }}
+                        className="w-full px-2 py-1 rounded border bg-muted/40 text-[11px] font-medium"
+                    >
+                        <option value="PROSES">{labels.promoProses}</option>
+                        <option value="NAIK_KELAS">{labels.promoNaik}</option>
+                        <option value="TINGGAL_KELAS">
+                            {labels.promoTinggal}
+                        </option>
+                        <option value="LULUS">{labels.promoLulus}</option>
+                        <option value="TIDAK_LULUS">
+                            {labels.promoTidakLulus}
+                        </option>
+                    </select>
+                )}
+            </td>
+
+            <td className="px-3 py-3 text-center">
+                <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-muted/30 cursor-pointer text-[11px] font-semibold">
+                    <input
+                        type="checkbox"
+                        checked={isPublished}
+                        onChange={(e) => {
+                            const checked = e.target.checked;
+                            onUpdateNote(studentId, (prev) => ({
+                                ...prev,
+                                isStsPublished:
+                                    examMode === 'STS'
+                                        ? checked
+                                        : prev.isStsPublished,
+                                isSasPublished:
+                                    examMode === 'SAS'
+                                        ? checked
+                                        : prev.isSasPublished,
+                            }));
+                        }}
+                    />
+                    <span>
+                        {isPublished
+                            ? labels.statusPublished
+                            : labels.statusDraft}
+                    </span>
+                </label>
+            </td>
+
+            <td className="px-3 py-3 text-right">
+                <button
+                    type="button"
+                    onClick={() => onPrintSingle(row)}
+                    disabled={isPrintingThis}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-muted disabled:opacity-50"
+                >
+                    {isPrintingThis ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                        <FileText className="w-3.5 h-3.5 text-red-500" />
+                    )}
+                    {labels.btnPdf}
+                </button>
+            </td>
+        </tr>
+    );
+});
+
 export default function GradesAndReportPage() {
-    // Perbaikan TS2339: gunakan `locale` sesuai tipe kembalian useTranslation()
     const { t, locale } = useTranslation();
     const activeLang: 'id' | 'en' = locale === 'en' ? 'en' : 'id';
 
@@ -432,6 +951,9 @@ export default function GradesAndReportPage() {
         [t]
     );
 
+    const trRef = useRef(tr);
+    trRef.current = tr;
+
     const authUser = useAuthStore((state) => state.user);
     const authSchool = useAuthStore((state) => state.school);
 
@@ -440,6 +962,7 @@ export default function GradesAndReportPage() {
 
     const { isElementaryHomeroomRestricted, homeroomClassIds } =
         useTeacherScope(resolvedSchoolId);
+    const homeroomClassIdsKey = homeroomClassIds.join(',');
 
     // Filter Akademik
     const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
@@ -454,14 +977,21 @@ export default function GradesAndReportPage() {
     const [examMode, setExamMode] = useState<ReportExamMode>('SAS');
     const [activeTab, setActiveTab] = useState<ActiveTab>('GRADES');
 
-    // State Pengurutan Abjad Kolom Student Name / Nama Siswa
+    // Pengurutan Abjad Kolom Student Name / Nama Siswa
     const [nameSortOrder, setNameSortOrder] = useState<'asc' | 'desc'>('asc');
+    const nameSortOrderRef = useRef(nameSortOrder);
+    nameSortOrderRef.current = nameSortOrder;
+
     const [rankingNameSort, setRankingNameSort] = useState<'asc' | 'desc' | null>(
         null
     );
 
     const handleToggleNameSort = useCallback(() => {
-        setNameSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+        setNameSortOrder((prev) => {
+            const next = prev === 'asc' ? 'desc' : 'asc';
+            setGradeRows((rows) => sortRowsByName(rows, next));
+            return next;
+        });
     }, []);
 
     const handleToggleRankingNameSort = useCallback(() => {
@@ -478,6 +1008,8 @@ export default function GradesAndReportPage() {
         sts: 30,
         sas: 30,
     });
+    const weightsRef = useRef(weights);
+    weightsRef.current = weights;
 
     const [tpCount, setTpCount] = useState<number>(3);
 
@@ -496,6 +1028,9 @@ export default function GradesAndReportPage() {
     const [classReportDate, setClassReportDate] = useState<string>(() =>
         new Date().toISOString().slice(0, 10)
     );
+    const classReportDateRef = useRef(classReportDate);
+    classReportDateRef.current = classReportDate;
+
     const [noteSearchQuery, setNoteSearchQuery] = useState<string>('');
     const [hasUnsavedNotes, setHasUnsavedNotes] = useState<boolean>(false);
 
@@ -511,7 +1046,7 @@ export default function GradesAndReportPage() {
         Record<string, P5LevelCode>
     >({});
 
-    // Modal Detail Siswa (Ekskul & Edit Narasi Lengkap)
+    // Modal Detail Siswa
     const [detailStudentRow, setDetailStudentRow] =
         useState<GradeSheetRow | null>(null);
 
@@ -527,6 +1062,21 @@ export default function GradesAndReportPage() {
     // State Data Tab 3: Peringkat Kelas
     const [rankings, setRankings] = useState<ClassRankingRow[]>([]);
     const [isLoadingRankings, setIsLoadingRankings] = useState<boolean>(false);
+
+    const scopeRef = useRef({
+        schoolId: resolvedSchoolId,
+        yearId: selectedYearId,
+        semesterId: selectedSemesterId,
+        classId: selectedClassId,
+        examMode,
+    });
+    scopeRef.current = {
+        schoolId: resolvedSchoolId,
+        yearId: selectedYearId,
+        semesterId: selectedSemesterId,
+        classId: selectedClassId,
+        examMode,
+    };
 
     // 1. Resolusi School ID & Teacher ID
     useEffect(() => {
@@ -615,8 +1165,8 @@ export default function GradesAndReportPage() {
                 if (activeSem) setSelectedSemesterId(activeSem.id);
             }
 
-            if (subjList.length > 0 && !selectedSubjectId) {
-                setSelectedSubjectId(subjList[0].id);
+            if (subjList.length > 0) {
+                setSelectedSubjectId((prev) => prev || subjList[0].id);
             }
         };
 
@@ -642,7 +1192,7 @@ export default function GradesAndReportPage() {
         }
     }, [filteredSemesters, selectedSemesterId]);
 
-    // 3. Muat Daftar Kelas
+    // 3. Muat Daftar Kelas (stabilized dependencies)
     useEffect(() => {
         if (!resolvedSchoolId || !selectedYearId) return;
         let active = true;
@@ -676,16 +1226,19 @@ export default function GradesAndReportPage() {
                 }
             );
 
-            if (isElementaryHomeroomRestricted && homeroomClassIds.length > 0) {
-                mapped = mapped.filter((c) => homeroomClassIds.includes(c.id));
+            const allowedIds = homeroomClassIdsKey
+                ? homeroomClassIdsKey.split(',')
+                : [];
+            if (isElementaryHomeroomRestricted && allowedIds.length > 0) {
+                mapped = mapped.filter((c) => allowedIds.includes(c.id));
             }
 
             setClasses(mapped);
-            if (mapped.length > 0 && !mapped.some((c) => c.id === selectedClassId)) {
-                setSelectedClassId(mapped[0].id);
-            } else if (mapped.length === 0) {
-                setSelectedClassId('');
-            }
+            setSelectedClassId((prev) => {
+                if (mapped.length === 0) return '';
+                if (mapped.some((c) => c.id === prev)) return prev;
+                return mapped[0].id;
+            });
         };
 
         void loadClasses();
@@ -696,7 +1249,7 @@ export default function GradesAndReportPage() {
         resolvedSchoolId,
         selectedYearId,
         isElementaryHomeroomRestricted,
-        homeroomClassIds,
+        homeroomClassIdsKey,
     ]);
 
     // 4. Muat Lembar Nilai & Catatan Wali Kelas
@@ -731,27 +1284,58 @@ export default function GradesAndReportPage() {
                 }),
             ]);
 
-            const rows = sheetRes.data;
-            const maxExistingTp = rows.reduce(
+            const sortedRows = sortRowsByName(
+                sheetRes.data,
+                nameSortOrderRef.current
+            );
+            const maxExistingTp = sortedRows.reduce(
                 (max, r) => Math.max(max, r.grade.formativeScores.length),
                 3
             );
             setTpCount(Math.max(3, maxExistingTp));
-            setGradeRows(rows);
-            setNotesMap(notesRes.data);
-            setHasUnsavedNotes(false);
+            setGradeRows(sortedRows);
 
+            // Pre-populate notesMap untuk seluruh siswa agar referensi objek stabil
+            const hydratedMap = new Map<string, StudentReportNoteRecord>();
             const detectedLevels: Record<string, P5LevelCode> = {};
-            rows.forEach((r) => {
+
+            sortedRows.forEach((r) => {
                 const existing = notesRes.data.get(r.student.id);
+                const noteRecord =
+                    existing ??
+                    createDefaultNoteRecord({
+                        schoolId: resolvedSchoolId,
+                        academicYearId: selectedYearId,
+                        semesterId: selectedSemesterId,
+                        classId: selectedClassId,
+                        studentId: r.student.id,
+                        reportDate: classReportDateRef.current,
+                    });
+                hydratedMap.set(r.student.id, noteRecord);
                 detectedLevels[r.student.id] = detectP5LevelFromText(
-                    existing?.cocurricularNote
+                    noteRecord.cocurricularNote
                 );
             });
+
+            const firstExisting = Array.from(notesRes.data.values())[0];
+            if (firstExisting) {
+                const savedDate =
+                    scopeRef.current.examMode === 'STS'
+                        ? firstExisting.reportDateSts
+                        : firstExisting.reportDateSas;
+                if (savedDate) {
+                    setClassReportDate(savedDate);
+                }
+            }
+
+            setNotesMap(hydratedMap);
             setP5LevelByStudent(detectedLevels);
+            setHasUnsavedNotes(false);
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : tr('grades.errLoadSheet')
+                err instanceof Error
+                    ? err.message
+                    : trRef.current('grades.errLoadSheet')
             );
         } finally {
             setIsLoadingSheet(false);
@@ -763,22 +1347,11 @@ export default function GradesAndReportPage() {
         selectedClassId,
         selectedSubjectId,
         teacherId,
-        tr,
     ]);
 
     useEffect(() => {
         void loadGradeAndNotesData();
     }, [loadGradeAndNotesData]);
-
-    useEffect(() => {
-        const firstNote = Array.from(notesMap.values())[0];
-        if (!firstNote) return;
-        const savedDate =
-            examMode === 'STS' ? firstNote.reportDateSts : firstNote.reportDateSas;
-        if (savedDate) {
-            setClassReportDate(savedDate);
-        }
-    }, [notesMap, examMode]);
 
     // 5. Muat Nilai Seluruh Mapel untuk Generator Catatan & P5 Otomatis di Tab 2
     const loadAllClassGradesForNotes = useCallback(async () => {
@@ -838,12 +1411,14 @@ export default function GradesAndReportPage() {
             setRankings(res.data);
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : tr('grades.errLoadRanking')
+                err instanceof Error
+                    ? err.message
+                    : trRef.current('grades.errLoadRanking')
             );
         } finally {
             setIsLoadingRankings(false);
         }
-    }, [resolvedSchoolId, selectedSemesterId, selectedClassId, examMode, tr]);
+    }, [resolvedSchoolId, selectedSemesterId, selectedClassId, examMode]);
 
     useEffect(() => {
         if (activeTab === 'RANKING') {
@@ -851,113 +1426,129 @@ export default function GradesAndReportPage() {
         }
     }, [activeTab, loadRankings]);
 
-    const handleFormativeTpChange = (
-        studentId: string,
-        tpIndex: number,
-        rawValue: string
-    ) => {
-        const parsedVal = clampScore(rawValue);
-        setGradeRows((prev) =>
-            prev.map((row) => {
-                if (row.student.id !== studentId) return row;
+    // Handler Input Tab 1 (Referensi stabil agar React.memo bekerja maksimal)
+    const handleFormativeTpChange = useCallback(
+        (studentId: string, tpIndex: number, rawValue: string) => {
+            const parsedVal = clampScore(rawValue);
+            setGradeRows((prev) =>
+                prev.map((row) => {
+                    if (row.student.id !== studentId) return row;
 
-                const nextScores = [...row.grade.formativeScores];
-                while (nextScores.length <= tpIndex) {
-                    nextScores.push(Number.NaN);
-                }
-                nextScores[tpIndex] = parsedVal === null ? Number.NaN : parsedVal;
+                    const nextScores = [...row.grade.formativeScores];
+                    while (nextScores.length <= tpIndex) {
+                        nextScores.push(Number.NaN);
+                    }
+                    nextScores[tpIndex] =
+                        parsedVal === null ? Number.NaN : parsedVal;
 
-                const cleanedScores = nextScores.filter((n) => !Number.isNaN(n));
-                const nextAvg = computeFormativeAverage(cleanedScores);
-                const nextFinal = row.isManualFinalScore
-                    ? row.grade.finalScore
-                    : computeWeightedFinalScore(
-                        nextAvg,
-                        row.grade.stsScore,
-                        row.grade.sasScore,
-                        weights
-                    );
+                    // Hapus slot NaN di bagian paling belakang saja agar posisi TP tidak bergeser
+                    while (
+                        nextScores.length > 0 &&
+                        Number.isNaN(nextScores[nextScores.length - 1])
+                    ) {
+                        nextScores.pop();
+                    }
 
-                return {
-                    ...row,
-                    grade: {
-                        ...row.grade,
-                        formativeScores: cleanedScores,
-                        formativeAvg: nextAvg,
-                        finalScore: nextFinal,
-                        predicate: computePredicate(nextFinal),
-                    },
-                };
-            })
-        );
-    };
+                    const nextAvg = computeFormativeAverage(nextScores);
+                    const nextFinal = row.isManualFinalScore
+                        ? row.grade.finalScore
+                        : computeWeightedFinalScore(
+                            nextAvg,
+                            row.grade.stsScore,
+                            row.grade.sasScore,
+                            weightsRef.current
+                        );
 
-    const handleExamScoreChange = (
-        studentId: string,
-        field: 'stsScore' | 'sasScore' | 'finalScore',
-        rawValue: string
-    ) => {
-        const parsedVal = clampScore(rawValue);
-        setGradeRows((prev) =>
-            prev.map((row) => {
-                if (row.student.id !== studentId) return row;
-
-                if (field === 'finalScore') {
                     return {
                         ...row,
-                        isManualFinalScore: parsedVal !== null,
                         grade: {
                             ...row.grade,
-                            finalScore: parsedVal,
-                            predicate: computePredicate(parsedVal),
+                            formativeScores: nextScores,
+                            formativeAvg: nextAvg,
+                            finalScore: nextFinal,
+                            predicate: computePredicate(nextFinal),
                         },
                     };
-                }
+                })
+            );
+        },
+        []
+    );
 
-                const nextSts = field === 'stsScore' ? parsedVal : row.grade.stsScore;
-                const nextSas = field === 'sasScore' ? parsedVal : row.grade.sasScore;
-                const nextFinal = row.isManualFinalScore
-                    ? row.grade.finalScore
-                    : computeWeightedFinalScore(
-                        row.grade.formativeAvg,
-                        nextSts,
-                        nextSas,
-                        weights
-                    );
+    const handleExamScoreChange = useCallback(
+        (
+            studentId: string,
+            field: 'stsScore' | 'sasScore' | 'finalScore',
+            rawValue: string
+        ) => {
+            const parsedVal = clampScore(rawValue);
+            setGradeRows((prev) =>
+                prev.map((row) => {
+                    if (row.student.id !== studentId) return row;
 
-                return {
-                    ...row,
-                    grade: {
-                        ...row.grade,
-                        stsScore: nextSts,
-                        sasScore: nextSas,
-                        finalScore: nextFinal,
-                        predicate: computePredicate(nextFinal),
-                    },
-                };
-            })
-        );
-    };
+                    if (field === 'finalScore') {
+                        return {
+                            ...row,
+                            isManualFinalScore: parsedVal !== null,
+                            grade: {
+                                ...row.grade,
+                                finalScore: parsedVal,
+                                predicate: computePredicate(parsedVal),
+                            },
+                        };
+                    }
 
-    const handleDescriptionChange = (
-        studentId: string,
-        field: 'stsCompetencyDescription' | 'competencyDescription',
-        value: string
-    ) => {
-        setGradeRows((prev) =>
-            prev.map((row) =>
-                row.student.id === studentId
-                    ? {
+                    const nextSts =
+                        field === 'stsScore' ? parsedVal : row.grade.stsScore;
+                    const nextSas =
+                        field === 'sasScore' ? parsedVal : row.grade.sasScore;
+                    const nextFinal = row.isManualFinalScore
+                        ? row.grade.finalScore
+                        : computeWeightedFinalScore(
+                            row.grade.formativeAvg,
+                            nextSts,
+                            nextSas,
+                            weightsRef.current
+                        );
+
+                    return {
                         ...row,
                         grade: {
                             ...row.grade,
-                            [field]: value,
+                            stsScore: nextSts,
+                            sasScore: nextSas,
+                            finalScore: nextFinal,
+                            predicate: computePredicate(nextFinal),
                         },
-                    }
-                    : row
-            )
-        );
-    };
+                    };
+                })
+            );
+        },
+        []
+    );
+
+    const handleDescriptionChange = useCallback(
+        (
+            studentId: string,
+            field: 'stsCompetencyDescription' | 'competencyDescription',
+            value: string
+        ) => {
+            setGradeRows((prev) =>
+                prev.map((row) =>
+                    row.student.id === studentId
+                        ? {
+                            ...row,
+                            grade: {
+                                ...row.grade,
+                                [field]: value,
+                            },
+                        }
+                        : row
+                )
+            );
+        },
+        []
+    );
 
     const handleRecalculateAll = () => {
         setGradeRows((prev) =>
@@ -1000,9 +1591,10 @@ export default function GradesAndReportPage() {
                             row.grade.stsCompetencyDescription?.trim()
                                 ? row.grade.stsCompetencyDescription
                                 : buildAutoDescription(subjName, stsBasis, true),
-                        competencyDescription: row.grade.competencyDescription?.trim()
-                            ? row.grade.competencyDescription
-                            : buildAutoDescription(subjName, sasBasis, false),
+                        competencyDescription:
+                            row.grade.competencyDescription?.trim()
+                                ? row.grade.competencyDescription
+                                : buildAutoDescription(subjName, sasBasis, false),
                     },
                 };
             })
@@ -1014,7 +1606,12 @@ export default function GradesAndReportPage() {
         if (gradeRows.length === 0) return;
         setIsSavingGrades(true);
         try {
-            const records = gradeRows.map((r) => r.grade);
+            const records = gradeRows.map((r) => ({
+                ...r.grade,
+                formativeScores: r.grade.formativeScores.filter(
+                    (n) => !Number.isNaN(n)
+                ),
+            }));
             const res = await gradeService.saveSubjectGradesBatch(records);
             toast.success(res.message);
             await loadGradeAndNotesData();
@@ -1027,82 +1624,48 @@ export default function GradesAndReportPage() {
         }
     };
 
-    const getOrInitStudentNote = useCallback(
-        (studentId: string): StudentReportNoteRecord => {
-            const existing = notesMap.get(studentId);
-            if (existing) {
-                return {
-                    ...existing,
-                    reportDateSts:
-                        examMode === 'STS'
-                            ? classReportDate || existing.reportDateSts
-                            : existing.reportDateSts,
-                    reportDateSas:
-                        examMode === 'SAS'
-                            ? classReportDate || existing.reportDateSas
-                            : existing.reportDateSas,
-                };
-            }
-            return {
-                schoolId: resolvedSchoolId,
-                academicYearId: selectedYearId,
-                semesterId: selectedSemesterId,
-                classId: selectedClassId,
-                studentId,
-                extracurriculars: [],
-                cocurricularNote: '',
-                stsHomeroomNote: '',
-                homeroomNote: '',
-                stsSickDays: 0,
-                stsPermissionDays: 0,
-                stsAlphaDays: 0,
-                sickDays: 0,
-                permissionDays: 0,
-                alphaDays: 0,
-                promotionStatus: 'PROSES',
-                reportDateSts: classReportDate,
-                reportDateSas: classReportDate,
-                isStsPublished: false,
-                isSasPublished: false,
-            };
+    // Handler Input Tab 2 (Referensi stabil agar React.memo bekerja maksimal)
+    const updateStudentNoteState = useCallback(
+        (
+            studentId: string,
+            updater: (prev: StudentReportNoteRecord) => StudentReportNoteRecord
+        ) => {
+            setHasUnsavedNotes(true);
+            setNotesMap((prev) => {
+                const next = new Map(prev);
+                const current =
+                    prev.get(studentId) ??
+                    createDefaultNoteRecord({
+                        schoolId: scopeRef.current.schoolId,
+                        academicYearId: scopeRef.current.yearId,
+                        semesterId: scopeRef.current.semesterId,
+                        classId: scopeRef.current.classId,
+                        studentId,
+                        reportDate: classReportDateRef.current,
+                    });
+                next.set(studentId, updater(current));
+                return next;
+            });
         },
-        [
-            notesMap,
-            examMode,
-            classReportDate,
-            resolvedSchoolId,
-            selectedYearId,
-            selectedSemesterId,
-            selectedClassId,
-        ]
+        []
     );
-
-    const updateStudentNoteState = (
-        studentId: string,
-        updater: (prev: StudentReportNoteRecord) => StudentReportNoteRecord
-    ) => {
-        setHasUnsavedNotes(true);
-        setNotesMap((prev) => {
-            const next = new Map(prev);
-            const current = getOrInitStudentNote(studentId);
-            next.set(studentId, updater(current));
-            return next;
-        });
-    };
 
     const handleClassReportDateChange = (newDate: string) => {
         setClassReportDate(newDate);
         setHasUnsavedNotes(true);
         setNotesMap((prev) => {
             const next = new Map(prev);
-            gradeRows.forEach((row) => {
-                const current = getOrInitStudentNote(row.student.id);
-                next.set(row.student.id, {
+            prev.forEach((current, sId) => {
+                next.set(sId, {
                     ...current,
                     reportDateSts:
-                        examMode === 'STS' ? newDate || null : current.reportDateSts,
+                        examMode === 'STS'
+                            ? newDate || null
+                            : current.reportDateSts,
                     reportDateSas:
-                        examMode === 'SAS' ? newDate || null : current.reportDateSas,
+                        examMode === 'SAS'
+                            ? newDate || null
+                            : current.reportDateSas,
                 });
             });
             return next;
@@ -1117,28 +1680,39 @@ export default function GradesAndReportPage() {
         );
     };
 
-    const handleStudentP5LevelChange = (
-        row: GradeSheetRow,
-        newLevel: P5LevelCode
-    ) => {
-        setP5LevelByStudent((prev) => ({
-            ...prev,
-            [row.student.id]: newLevel,
-        }));
-
-        const narrative = composeP5Narrative({
-            studentName: row.student.fullName,
-            theme: p5Theme,
-            activityTitle: p5ActivityTitle,
-            dimensions: p5Dimensions,
-            level: newLevel,
-        });
-
-        updateStudentNoteState(row.student.id, (prev) => ({
-            ...prev,
-            cocurricularNote: narrative,
-        }));
+    const p5ConfigRef = useRef({
+        theme: p5Theme,
+        activityTitle: p5ActivityTitle,
+        dimensions: p5Dimensions,
+    });
+    p5ConfigRef.current = {
+        theme: p5Theme,
+        activityTitle: p5ActivityTitle,
+        dimensions: p5Dimensions,
     };
+
+    const handleStudentP5LevelChange = useCallback(
+        (row: GradeSheetRow, newLevel: P5LevelCode) => {
+            setP5LevelByStudent((prev) => ({
+                ...prev,
+                [row.student.id]: newLevel,
+            }));
+
+            const narrative = composeP5Narrative({
+                studentName: row.student.fullName,
+                theme: p5ConfigRef.current.theme,
+                activityTitle: p5ConfigRef.current.activityTitle,
+                dimensions: p5ConfigRef.current.dimensions,
+                level: newLevel,
+            });
+
+            updateStudentNoteState(row.student.id, (prev) => ({
+                ...prev,
+                cocurricularNote: narrative,
+            }));
+        },
+        [updateStudentNoteState]
+    );
 
     const getStudentSubjectScores = useCallback(
         (studentId: string): { subjectName: string; score: number }[] => {
@@ -1164,55 +1738,61 @@ export default function GradesAndReportPage() {
         [classAllGrades, subjects, examMode]
     );
 
-    const handleGenerateSingleStudentNotes = (row: GradeSheetRow) => {
-        const current = getOrInitStudentNote(row.student.id);
-        const subjectScores = getStudentSubjectScores(row.student.id);
-        const inferredLevel = inferP5LevelFromScores(subjectScores);
+    const handleGenerateSingleStudentNotes = useCallback(
+        (row: GradeSheetRow) => {
+            const subjectScores = getStudentSubjectScores(row.student.id);
+            const inferredLevel = inferP5LevelFromScores(subjectScores);
+            const mode = scopeRef.current.examMode;
 
-        setP5LevelByStudent((prev) => ({
-            ...prev,
-            [row.student.id]: inferredLevel,
-        }));
+            setP5LevelByStudent((prev) => ({
+                ...prev,
+                [row.student.id]: inferredLevel,
+            }));
 
-        const autoHomeroom = buildAutoHomeroomNote({
-            studentName: row.student.fullName,
-            mode: examMode,
-            subjectScores,
-            sickDays:
-                examMode === 'STS' ? current.stsSickDays : current.sickDays,
-            permissionDays:
-                examMode === 'STS'
-                    ? current.stsPermissionDays
-                    : current.permissionDays,
-            alphaDays:
-                examMode === 'STS' ? current.stsAlphaDays : current.alphaDays,
-            extracurriculars: current.extracurriculars,
-        });
+            updateStudentNoteState(row.student.id, (prev) => {
+                const autoHomeroom = buildAutoHomeroomNote({
+                    studentName: row.student.fullName,
+                    mode,
+                    subjectScores,
+                    sickDays:
+                        mode === 'STS' ? prev.stsSickDays : prev.sickDays,
+                    permissionDays:
+                        mode === 'STS'
+                            ? prev.stsPermissionDays
+                            : prev.permissionDays,
+                    alphaDays:
+                        mode === 'STS' ? prev.stsAlphaDays : prev.alphaDays,
+                    extracurriculars: prev.extracurriculars,
+                });
 
-        const autoP5 = composeP5Narrative({
-            studentName: row.student.fullName,
-            theme: p5Theme,
-            activityTitle: p5ActivityTitle,
-            dimensions: p5Dimensions,
-            level: inferredLevel,
-        });
+                const autoP5 = composeP5Narrative({
+                    studentName: row.student.fullName,
+                    theme: p5ConfigRef.current.theme,
+                    activityTitle: p5ConfigRef.current.activityTitle,
+                    dimensions: p5ConfigRef.current.dimensions,
+                    level: inferredLevel,
+                });
 
-        updateStudentNoteState(row.student.id, (prev) => ({
-            ...prev,
-            stsHomeroomNote:
-                examMode === 'STS' ? autoHomeroom : prev.stsHomeroomNote,
-            homeroomNote:
-                examMode === 'SAS' ? autoHomeroom : prev.homeroomNote,
-            cocurricularNote: examMode === 'SAS' ? autoP5 : prev.cocurricularNote,
-        }));
+                return {
+                    ...prev,
+                    stsHomeroomNote:
+                        mode === 'STS' ? autoHomeroom : prev.stsHomeroomNote,
+                    homeroomNote:
+                        mode === 'SAS' ? autoHomeroom : prev.homeroomNote,
+                    cocurricularNote:
+                        mode === 'SAS' ? autoP5 : prev.cocurricularNote,
+                };
+            });
 
-        toast.success(
-            tr('grades.toastSingleGenerated', {
-                level: inferredLevel,
-                name: row.student.fullName,
-            })
-        );
-    };
+            toast.success(
+                trRef.current('grades.toastSingleGenerated', {
+                    level: inferredLevel,
+                    name: row.student.fullName,
+                })
+            );
+        },
+        [getStudentSubjectScores, updateStudentNoteState]
+    );
 
     const handleGenerateAllClassNotes = (overwriteExisting: boolean) => {
         if (gradeRows.length === 0) return;
@@ -1223,7 +1803,16 @@ export default function GradesAndReportPage() {
         setNotesMap((prev) => {
             const next = new Map(prev);
             gradeRows.forEach((row) => {
-                const current = getOrInitStudentNote(row.student.id);
+                const current =
+                    prev.get(row.student.id) ??
+                    createDefaultNoteRecord({
+                        schoolId: resolvedSchoolId,
+                        academicYearId: selectedYearId,
+                        semesterId: selectedSemesterId,
+                        classId: selectedClassId,
+                        studentId: row.student.id,
+                        reportDate: classReportDate,
+                    });
                 const subjectScores = getStudentSubjectScores(row.student.id);
                 const inferredLevel = inferP5LevelFromScores(subjectScores);
 
@@ -1303,9 +1892,8 @@ export default function GradesAndReportPage() {
         setHasUnsavedNotes(true);
         setNotesMap((prev) => {
             const next = new Map(prev);
-            gradeRows.forEach((row) => {
-                const current = getOrInitStudentNote(row.student.id);
-                next.set(row.student.id, {
+            prev.forEach((current, sId) => {
+                next.set(sId, {
                     ...current,
                     promotionStatus: status,
                 });
@@ -1324,8 +1912,30 @@ export default function GradesAndReportPage() {
         setIsSavingAllNotes(true);
         try {
             for (const row of gradeRows) {
-                const note = getOrInitStudentNote(row.student.id);
-                await gradeService.saveStudentReportNote(note, authUser?.id);
+                const note =
+                    notesMap.get(row.student.id) ??
+                    createDefaultNoteRecord({
+                        schoolId: resolvedSchoolId,
+                        academicYearId: selectedYearId,
+                        semesterId: selectedSemesterId,
+                        classId: selectedClassId,
+                        studentId: row.student.id,
+                        reportDate: classReportDate,
+                    });
+                await gradeService.saveStudentReportNote(
+                    {
+                        ...note,
+                        reportDateSts:
+                            examMode === 'STS'
+                                ? classReportDate || note.reportDateSts
+                                : note.reportDateSts,
+                        reportDateSas:
+                            examMode === 'SAS'
+                                ? classReportDate || note.reportDateSas
+                                : note.reportDateSas,
+                    },
+                    authUser?.id
+                );
             }
             setHasUnsavedNotes(false);
             toast.success(
@@ -1381,11 +1991,6 @@ export default function GradesAndReportPage() {
             return;
         setIsPublishingBatch(true);
         try {
-            const syncedMap = new Map<string, StudentReportNoteRecord>();
-            gradeRows.forEach((r) => {
-                syncedMap.set(r.student.id, getOrInitStudentNote(r.student.id));
-            });
-
             const studentIds = gradeRows.map((r) => r.student.id);
             const res = await gradeService.publishClassReportsBatch({
                 schoolId: resolvedSchoolId,
@@ -1393,7 +1998,7 @@ export default function GradesAndReportPage() {
                 semesterId: selectedSemesterId,
                 classId: selectedClassId,
                 studentIds,
-                existingNotesMap: syncedMap,
+                existingNotesMap: notesMap,
                 mode,
                 isPublished: publish,
                 updatedBy: authUser?.id,
@@ -1435,55 +2040,68 @@ export default function GradesAndReportPage() {
         selectedSemesterId,
     ]);
 
-    // Daftar siswa terurut berdasarkan abjad (A-Z atau Z-A)
-    const sortedGradeRows = useMemo(() => {
-        const copy = [...gradeRows];
-        copy.sort((a, b) => {
-            const cmp = a.student.fullName.localeCompare(b.student.fullName, 'id', {
-                sensitivity: 'base',
-            });
-            return nameSortOrder === 'asc' ? cmp : -cmp;
-        });
-        return copy;
-    }, [gradeRows, nameSortOrder]);
+    const currentClassContextRef = useRef(currentClassContext);
+    currentClassContextRef.current = currentClassContext;
 
-    const handlePrintSingleStudentPdf = async (row: GradeSheetRow) => {
-        if (!resolvedSchoolId || !selectedSemesterId || !currentClassContext)
-            return;
-        setPrintingStudentId(row.student.id);
-        try {
-            const bundleRes = await gradeService.getStudentCompleteReportBundle({
-                schoolId: resolvedSchoolId,
-                semesterId: selectedSemesterId,
-                studentId: row.student.id,
-            });
+    const notesMapRef = useRef(notesMap);
+    notesMapRef.current = notesMap;
 
-            await generateCurriculumMerdekaReportPdf({
-                mode: examMode,
-                lang: activeLang,
-                school: bundleRes.data.school,
-                classContext: currentClassContext,
-                student: row.student,
-                subjects: bundleRes.data.subjects,
-                grades: bundleRes.data.grades,
-                reportNote: getOrInitStudentNote(row.student.id),
-                achievements: bundleRes.data.achievements,
-            });
+    const handlePrintSingleStudentPdf = useCallback(
+        async (row: GradeSheetRow) => {
+            const { schoolId, semesterId, examMode: mode } = scopeRef.current;
+            const ctx = currentClassContextRef.current;
+            if (!schoolId || !semesterId || !ctx) return;
 
-            toast.success(
-                tr('grades.toastSinglePdfDownloaded', {
-                    mode: examMode,
-                    name: row.student.fullName,
-                })
-            );
-        } catch (err) {
-            toast.error(
-                err instanceof Error ? err.message : tr('grades.errPrintPdf')
-            );
-        } finally {
-            setPrintingStudentId(null);
-        }
-    };
+            setPrintingStudentId(row.student.id);
+            try {
+                const bundleRes =
+                    await gradeService.getStudentCompleteReportBundle({
+                        schoolId,
+                        semesterId,
+                        studentId: row.student.id,
+                    });
+
+                const note =
+                    notesMapRef.current.get(row.student.id) ??
+                    createDefaultNoteRecord({
+                        schoolId,
+                        academicYearId: scopeRef.current.yearId,
+                        semesterId,
+                        classId: scopeRef.current.classId,
+                        studentId: row.student.id,
+                        reportDate: classReportDateRef.current,
+                    });
+
+                await generateCurriculumMerdekaReportPdf({
+                    mode,
+                    lang: activeLang,
+                    school: bundleRes.data.school,
+                    classContext: ctx,
+                    student: row.student,
+                    subjects: bundleRes.data.subjects,
+                    grades: bundleRes.data.grades,
+                    reportNote: note,
+                    achievements: bundleRes.data.achievements,
+                });
+
+                toast.success(
+                    trRef.current('grades.toastSinglePdfDownloaded', {
+                        mode,
+                        name: row.student.fullName,
+                    })
+                );
+            } catch (err) {
+                toast.error(
+                    err instanceof Error
+                        ? err.message
+                        : trRef.current('grades.errPrintPdf')
+                );
+            } finally {
+                setPrintingStudentId(null);
+            }
+        },
+        [activeLang]
+    );
 
     const handlePrintEntireClassPdf = async () => {
         if (
@@ -1491,13 +2109,13 @@ export default function GradesAndReportPage() {
             !selectedSemesterId ||
             !selectedClassId ||
             !currentClassContext ||
-            sortedGradeRows.length === 0
+            gradeRows.length === 0
         )
             return;
 
         setIsPrintingBatch(true);
         try {
-            const studentIds = sortedGradeRows.map((r) => r.student.id);
+            const studentIds = gradeRows.map((r) => r.student.id);
             const batchRes = await gradeService.getClassCompleteReportBundles({
                 schoolId: resolvedSchoolId,
                 semesterId: selectedSemesterId,
@@ -1505,7 +2123,7 @@ export default function GradesAndReportPage() {
                 studentIds,
             });
 
-            const inputs = sortedGradeRows.map((row) => ({
+            const inputs = gradeRows.map((row) => ({
                 mode: examMode,
                 lang: activeLang,
                 school: batchRes.data.school,
@@ -1513,7 +2131,16 @@ export default function GradesAndReportPage() {
                 student: row.student,
                 subjects: batchRes.data.subjects,
                 grades: batchRes.data.gradesByStudent.get(row.student.id) ?? [],
-                reportNote: getOrInitStudentNote(row.student.id),
+                reportNote:
+                    notesMap.get(row.student.id) ??
+                    createDefaultNoteRecord({
+                        schoolId: resolvedSchoolId,
+                        academicYearId: selectedYearId,
+                        semesterId: selectedSemesterId,
+                        classId: selectedClassId,
+                        studentId: row.student.id,
+                        reportDate: classReportDate,
+                    }),
                 achievements:
                     batchRes.data.achievementsByStudent.get(row.student.id) ?? [],
             }));
@@ -1538,26 +2165,59 @@ export default function GradesAndReportPage() {
 
     const filteredNoteRows = useMemo(() => {
         const q = noteSearchQuery.trim().toLowerCase();
-        if (!q) return sortedGradeRows;
-        return sortedGradeRows.filter(
+        if (!q) return gradeRows;
+        return gradeRows.filter(
             (r) =>
                 r.student.fullName.toLowerCase().includes(q) ||
                 r.student.nisn.toLowerCase().includes(q) ||
                 (r.student.nis ?? '').toLowerCase().includes(q)
         );
-    }, [sortedGradeRows, noteSearchQuery]);
+    }, [gradeRows, noteSearchQuery]);
 
     const displayedRankings = useMemo(() => {
         if (!rankingNameSort) return rankings;
         const copy = [...rankings];
         copy.sort((a, b) => {
-            const cmp = a.fullName.localeCompare(b.fullName, 'id', {
-                sensitivity: 'base',
-            });
+            const cmp = ID_COLLATOR.compare(a.fullName, b.fullName);
             return rankingNameSort === 'asc' ? cmp : -cmp;
         });
         return copy;
     }, [rankings, rankingNameSort]);
+
+    const p5LevelOptions = useMemo(
+        () =>
+            P5_LEVEL_META.map((opt) => ({
+                code: opt.code,
+                label: tr(opt.labelKey),
+            })),
+        [tr]
+    );
+
+    const staticNoteRowLabels = useMemo(
+        () => ({
+            attSickTitle: tr('grades.attSickTitle'),
+            attPermTitle: tr('grades.attPermTitle'),
+            attAlphaTitle: tr('grades.attAlphaTitle'),
+            attSickShort: tr('grades.attSickShort'),
+            attPermShort: tr('grades.attPermShort'),
+            attAlphaShort: tr('grades.attAlphaShort'),
+            p5EmptyPreview: tr('grades.p5EmptyPreview'),
+            homeroomNotePlaceholder: tr('grades.homeroomNotePlaceholder'),
+            btnAutoSingleTooltip: tr('grades.btnAutoSingleTooltip'),
+            promoProses: tr('grades.promoProses'),
+            promoNaik: tr('grades.promoNaik'),
+            promoTinggal: tr('grades.promoTinggal'),
+            promoLulus: tr('grades.promoLulus'),
+            promoTidakLulus: tr('grades.promoTidakLulus'),
+            statusPublished: tr('grades.statusPublished'),
+            statusDraft: tr('grades.statusDraft'),
+            btnPdf: tr('grades.btnPdf'),
+        }),
+        [tr]
+    );
+
+    const placeholderDescSts = tr('grades.placeholderDescSts');
+    const placeholderDescSas = tr('grades.placeholderDescSas');
 
     return (
         <div className="p-6 space-y-6">
@@ -1865,7 +2525,7 @@ export default function GradesAndReportPage() {
                                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
                                 <p className="text-sm">{tr('grades.loadingSheet')}</p>
                             </div>
-                        ) : sortedGradeRows.length === 0 ? (
+                        ) : gradeRows.length === 0 ? (
                             <div className="p-12 text-center space-y-2 text-muted-foreground">
                                 <Users className="w-10 h-10 mx-auto opacity-40" />
                                 <p className="font-medium text-foreground">
@@ -1934,161 +2594,18 @@ export default function GradesAndReportPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {sortedGradeRows.map((row, idx) => (
-                                            <tr
+                                        {gradeRows.map((row, idx) => (
+                                            <GradeSheetTableRow
                                                 key={row.student.id}
-                                                className="border-b hover:bg-muted/20 align-top"
-                                            >
-                                                <td className="px-3 py-3 text-center text-muted-foreground">
-                                                    {idx + 1}
-                                                </td>
-                                                <td className="px-3 py-3">
-                                                    <div className="font-semibold text-foreground text-sm">
-                                                        {row.student.fullName}
-                                                    </div>
-                                                    <div className="text-[11px] text-muted-foreground font-mono">
-                                                        NISN: {row.student.nisn}
-                                                    </div>
-                                                </td>
-
-                                                {/* Kolom Input TP 1..N */}
-                                                {Array.from({ length: tpCount }).map((_, tpIdx) => {
-                                                    const val = row.grade.formativeScores[tpIdx];
-                                                    return (
-                                                        <td
-                                                            key={tpIdx}
-                                                            className="px-1.5 py-2.5 text-center bg-blue-50/20 dark:bg-blue-950/10"
-                                                        >
-                                                            <input
-                                                                type="number"
-                                                                min={0}
-                                                                max={100}
-                                                                step="0.01"
-                                                                value={
-                                                                    val !== undefined && !Number.isNaN(val)
-                                                                        ? val
-                                                                        : ''
-                                                                }
-                                                                onChange={(e) =>
-                                                                    handleFormativeTpChange(
-                                                                        row.student.id,
-                                                                        tpIdx,
-                                                                        e.target.value
-                                                                    )
-                                                                }
-                                                                className="w-14 px-1.5 py-1.5 text-center rounded border bg-background font-medium"
-                                                            />
-                                                        </td>
-                                                    );
-                                                })}
-
-                                                <td className="px-2 py-3 text-center font-semibold">
-                                                    {row.grade.formativeAvg !== null
-                                                        ? row.grade.formativeAvg.toFixed(1)
-                                                        : '-'}
-                                                </td>
-
-                                                {/* Nilai STS */}
-                                                <td className="px-1.5 py-2.5 text-center bg-amber-50/20 dark:bg-amber-950/10">
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        max={100}
-                                                        step="0.01"
-                                                        value={row.grade.stsScore ?? ''}
-                                                        onChange={(e) =>
-                                                            handleExamScoreChange(
-                                                                row.student.id,
-                                                                'stsScore',
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                        className="w-16 px-1.5 py-1.5 text-center rounded border bg-background font-semibold"
-                                                    />
-                                                </td>
-
-                                                {/* Nilai SAS */}
-                                                <td className="px-1.5 py-2.5 text-center bg-emerald-50/20 dark:bg-emerald-950/10">
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        max={100}
-                                                        step="0.01"
-                                                        value={row.grade.sasScore ?? ''}
-                                                        onChange={(e) =>
-                                                            handleExamScoreChange(
-                                                                row.student.id,
-                                                                'sasScore',
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                        className="w-16 px-1.5 py-1.5 text-center rounded border bg-background font-semibold"
-                                                    />
-                                                </td>
-
-                                                {/* Nilai Akhir */}
-                                                <td className="px-1.5 py-2.5 text-center">
-                                                    <input
-                                                        type="number"
-                                                        min={0}
-                                                        max={100}
-                                                        step="0.01"
-                                                        value={row.grade.finalScore ?? ''}
-                                                        onChange={(e) =>
-                                                            handleExamScoreChange(
-                                                                row.student.id,
-                                                                'finalScore',
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                        className="w-16 px-1.5 py-1.5 text-center rounded border border-primary/40 bg-primary/5 font-bold text-primary"
-                                                    />
-                                                </td>
-
-                                                <td className="px-2 py-3 text-center">
-                                                    {row.grade.predicate ? (
-                                                        <Badge variant="outline" className="font-bold">
-                                                            {row.grade.predicate}
-                                                        </Badge>
-                                                    ) : (
-                                                        '-'
-                                                    )}
-                                                </td>
-
-                                                {/* Deskripsi STS */}
-                                                <td className="px-2 py-2.5">
-                                                    <textarea
-                                                        rows={2}
-                                                        value={row.grade.stsCompetencyDescription ?? ''}
-                                                        onChange={(e) =>
-                                                            handleDescriptionChange(
-                                                                row.student.id,
-                                                                'stsCompetencyDescription',
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                        placeholder={tr('grades.placeholderDescSts')}
-                                                        className="w-full p-2 rounded border bg-background text-xs resize-y"
-                                                    />
-                                                </td>
-
-                                                {/* Deskripsi SAS / Akhir */}
-                                                <td className="px-2 py-2.5">
-                                                    <textarea
-                                                        rows={2}
-                                                        value={row.grade.competencyDescription ?? ''}
-                                                        onChange={(e) =>
-                                                            handleDescriptionChange(
-                                                                row.student.id,
-                                                                'competencyDescription',
-                                                                e.target.value
-                                                            )
-                                                        }
-                                                        placeholder={tr('grades.placeholderDescSas')}
-                                                        className="w-full p-2 rounded border bg-background text-xs resize-y"
-                                                    />
-                                                </td>
-                                            </tr>
+                                                row={row}
+                                                index={idx}
+                                                tpCount={tpCount}
+                                                placeholderDescSts={placeholderDescSts}
+                                                placeholderDescSas={placeholderDescSas}
+                                                onTpChange={handleFormativeTpChange}
+                                                onExamChange={handleExamScoreChange}
+                                                onDescChange={handleDescriptionChange}
+                                            />
                                         ))}
                                     </tbody>
                                 </table>
@@ -2103,7 +2620,6 @@ export default function GradesAndReportPage() {
             {/* ==================================================================== */}
             {activeTab === 'NOTES' && (
                 <div className="space-y-4">
-                    {/* TINGKAT 1: PANEL KONFIGURASI KELAS & AKSI MASSAL */}
                     <Card className="border-none shadow-sm">
                         <CardHeader className="pb-3 border-b">
                             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -2162,7 +2678,6 @@ export default function GradesAndReportPage() {
                         </CardHeader>
 
                         <CardContent className="p-5 space-y-4">
-                            {/* Master Konfigurasi Projek P5 Kelas (Tampil pada Mode SAS) */}
                             {examMode === 'SAS' && (
                                 <div className="p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
                                     <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">
@@ -2247,10 +2762,8 @@ export default function GradesAndReportPage() {
                                 </div>
                             )}
 
-                            {/* Toolbar Aksi Massal Satu Kelas */}
                             <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                                 <div className="flex flex-wrap items-center gap-2.5">
-                                    {/* Tanggal Raport Seragam */}
                                     <div className="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg border text-xs">
                                         <Calendar className="w-3.5 h-3.5 text-primary" />
                                         <span className="font-semibold">
@@ -2268,7 +2781,6 @@ export default function GradesAndReportPage() {
                                         />
                                     </div>
 
-                                    {/* Tombol Generate Otomatis Satu Kelas */}
                                     <button
                                         type="button"
                                         onClick={() => handleGenerateAllClassNotes(true)}
@@ -2279,7 +2791,6 @@ export default function GradesAndReportPage() {
                                         {tr('grades.btnAutoAllNotes')}
                                     </button>
 
-                                    {/* Sinkronisasi Absensi */}
                                     <button
                                         type="button"
                                         onClick={handleSyncDailyAttendance}
@@ -2296,7 +2807,6 @@ export default function GradesAndReportPage() {
                                 </div>
 
                                 <div className="flex flex-wrap items-center gap-2">
-                                    {/* Set Status Kenaikan Massal (Saat SAS) */}
                                     {examMode === 'SAS' && (
                                         <select
                                             defaultValue=""
@@ -2342,7 +2852,6 @@ export default function GradesAndReportPage() {
                         </CardContent>
                     </Card>
 
-                    {/* TINGKAT 2: TABEL INPUT PADAT (COMPACT SPREADSHEET TABLE) */}
                     <Card className="border-none shadow-sm">
                         <CardHeader className="py-3.5 px-5 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="text-xs text-muted-foreground">
@@ -2422,359 +2931,61 @@ export default function GradesAndReportPage() {
                                         </thead>
                                         <tbody>
                                             {filteredNoteRows.map((row, idx) => {
-                                                const note = getOrInitStudentNote(
-                                                    row.student.id
-                                                );
-                                                const p5Code =
-                                                    p5LevelByStudent[row.student.id] ??
-                                                    'BSH';
-                                                const p5Meta =
-                                                    P5_LEVEL_META.find(
-                                                        (o) => o.code === p5Code
-                                                    ) ?? P5_LEVEL_META[1];
-                                                const isPublished =
-                                                    examMode === 'STS'
-                                                        ? note.isStsPublished
-                                                        : note.isSasPublished;
-                                                const isPrintingThis =
-                                                    printingStudentId === row.student.id;
+                                                const note =
+                                                    notesMap.get(row.student.id) ??
+                                                    createDefaultNoteRecord({
+                                                        schoolId: resolvedSchoolId,
+                                                        academicYearId: selectedYearId,
+                                                        semesterId: selectedSemesterId,
+                                                        classId: selectedClassId,
+                                                        studentId: row.student.id,
+                                                        reportDate: classReportDate,
+                                                    });
 
                                                 return (
-                                                    <tr
+                                                    <StudentNoteTableRow
                                                         key={row.student.id}
-                                                        className="border-b last:border-0 hover:bg-muted/20 align-top"
-                                                    >
-                                                        {/* Nomor */}
-                                                        <td className="px-3 py-3 text-center text-muted-foreground font-mono">
-                                                            {idx + 1}
-                                                        </td>
-
-                                                        {/* Identitas Siswa */}
-                                                        <td className="px-3 py-3">
-                                                            <div className="font-semibold text-foreground text-sm leading-snug">
-                                                                {row.student.fullName}
-                                                            </div>
-                                                            <div className="text-[11px] text-muted-foreground font-mono mt-0.5">
-                                                                NISN: {row.student.nisn}
-                                                            </div>
-                                                        </td>
-
-                                                        {/* Absensi Padat S / I / A */}
-                                                        <td className="px-2 py-3">
-                                                            <div className="grid grid-cols-3 gap-1">
-                                                                <input
-                                                                    type="number"
-                                                                    min={0}
-                                                                    title={tr('grades.attSickTitle')}
-                                                                    value={
-                                                                        examMode === 'STS'
-                                                                            ? note.stsSickDays
-                                                                            : note.sickDays
-                                                                    }
-                                                                    onChange={(e) => {
-                                                                        const val = Math.max(
-                                                                            0,
-                                                                            Number(
-                                                                                e.target.value
-                                                                            ) || 0
-                                                                        );
-                                                                        updateStudentNoteState(
-                                                                            row.student.id,
-                                                                            (prev) => ({
-                                                                                ...prev,
-                                                                                stsSickDays:
-                                                                                    examMode ===
-                                                                                        'STS'
-                                                                                        ? val
-                                                                                        : prev.stsSickDays,
-                                                                                sickDays:
-                                                                                    examMode ===
-                                                                                        'SAS'
-                                                                                        ? val
-                                                                                        : prev.sickDays,
-                                                                            })
-                                                                        );
-                                                                    }}
-                                                                    className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    min={0}
-                                                                    title={tr('grades.attPermTitle')}
-                                                                    value={
-                                                                        examMode === 'STS'
-                                                                            ? note.stsPermissionDays
-                                                                            : note.permissionDays
-                                                                    }
-                                                                    onChange={(e) => {
-                                                                        const val = Math.max(
-                                                                            0,
-                                                                            Number(
-                                                                                e.target.value
-                                                                            ) || 0
-                                                                        );
-                                                                        updateStudentNoteState(
-                                                                            row.student.id,
-                                                                            (prev) => ({
-                                                                                ...prev,
-                                                                                stsPermissionDays:
-                                                                                    examMode ===
-                                                                                        'STS'
-                                                                                        ? val
-                                                                                        : prev.stsPermissionDays,
-                                                                                permissionDays:
-                                                                                    examMode ===
-                                                                                        'SAS'
-                                                                                        ? val
-                                                                                        : prev.permissionDays,
-                                                                            })
-                                                                        );
-                                                                    }}
-                                                                    className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
-                                                                />
-                                                                <input
-                                                                    type="number"
-                                                                    min={0}
-                                                                    title={tr('grades.attAlphaTitle')}
-                                                                    value={
-                                                                        examMode === 'STS'
-                                                                            ? note.stsAlphaDays
-                                                                            : note.alphaDays
-                                                                    }
-                                                                    onChange={(e) => {
-                                                                        const val = Math.max(
-                                                                            0,
-                                                                            Number(
-                                                                                e.target.value
-                                                                            ) || 0
-                                                                        );
-                                                                        updateStudentNoteState(
-                                                                            row.student.id,
-                                                                            (prev) => ({
-                                                                                ...prev,
-                                                                                stsAlphaDays:
-                                                                                    examMode ===
-                                                                                        'STS'
-                                                                                        ? val
-                                                                                        : prev.stsAlphaDays,
-                                                                                alphaDays:
-                                                                                    examMode ===
-                                                                                        'SAS'
-                                                                                        ? val
-                                                                                        : prev.alphaDays,
-                                                                            })
-                                                                        );
-                                                                    }}
-                                                                    className="w-10 px-1 py-1.5 text-center rounded border bg-background font-semibold"
-                                                                />
-                                                            </div>
-                                                            <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-muted-foreground mt-0.5">
-                                                                <span>{tr('grades.attSickShort')}</span>
-                                                                <span>{tr('grades.attPermShort')}</span>
-                                                                <span>{tr('grades.attAlphaShort')}</span>
-                                                            </div>
-                                                        </td>
-
-                                                        {/* Kolom Kokurikuler / Projek P5 (Mode SAS) */}
-                                                        {examMode === 'SAS' && (
-                                                            <td className="px-3 py-3 space-y-1.5">
-                                                                <select
-                                                                    value={p5Code}
-                                                                    onChange={(e) =>
-                                                                        handleStudentP5LevelChange(
-                                                                            row,
-                                                                            e.target
-                                                                                .value as P5LevelCode
-                                                                        )
-                                                                    }
-                                                                    className={cn(
-                                                                        'w-full px-2 py-1.5 rounded-lg border text-xs font-semibold',
-                                                                        p5Meta.badgeClass
-                                                                    )}
-                                                                >
-                                                                    {P5_LEVEL_META.map((opt) => (
-                                                                        <option
-                                                                            key={opt.code}
-                                                                            value={opt.code}
-                                                                        >
-                                                                            {tr(opt.labelKey)}
-                                                                        </option>
-                                                                    ))}
-                                                                </select>
-                                                                <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
-                                                                    {note.cocurricularNote?.trim() ||
-                                                                        tr('grades.p5EmptyPreview')}
-                                                                </p>
-                                                            </td>
-                                                        )}
-
-                                                        {/* Catatan Wali Kelas Inline */}
-                                                        <td className="px-3 py-3">
-                                                            <div className="flex items-start gap-1.5">
-                                                                <textarea
-                                                                    rows={2}
-                                                                    value={
-                                                                        examMode === 'STS'
-                                                                            ? (note.stsHomeroomNote ??
-                                                                                '')
-                                                                            : (note.homeroomNote ??
-                                                                                '')
-                                                                    }
-                                                                    onChange={(e) =>
-                                                                        updateStudentNoteState(
-                                                                            row.student.id,
-                                                                            (prev) => ({
-                                                                                ...prev,
-                                                                                stsHomeroomNote:
-                                                                                    examMode ===
-                                                                                        'STS'
-                                                                                        ? e.target
-                                                                                            .value
-                                                                                        : prev.stsHomeroomNote,
-                                                                                homeroomNote:
-                                                                                    examMode ===
-                                                                                        'SAS'
-                                                                                        ? e.target
-                                                                                            .value
-                                                                                        : prev.homeroomNote,
-                                                                            })
-                                                                        )
-                                                                    }
-                                                                    placeholder={tr(
-                                                                        'grades.homeroomNotePlaceholder'
-                                                                    )}
-                                                                    className="w-full p-2 rounded-lg border bg-background text-xs resize-y"
-                                                                />
-                                                                <button
-                                                                    type="button"
-                                                                    title={tr(
-                                                                        'grades.btnAutoSingleTooltip'
-                                                                    )}
-                                                                    onClick={() =>
-                                                                        handleGenerateSingleStudentNotes(
-                                                                            row
-                                                                        )
-                                                                    }
-                                                                    className="p-2 rounded-lg border border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 shrink-0"
-                                                                >
-                                                                    <Sparkles className="w-3.5 h-3.5" />
-                                                                </button>
-                                                            </div>
-                                                        </td>
-
-                                                        {/* Ringkasan Ekskul & Status Kenaikan */}
-                                                        <td className="px-3 py-3 space-y-1.5">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() =>
-                                                                    setDetailStudentRow(row)
+                                                        row={row}
+                                                        index={idx}
+                                                        note={note}
+                                                        examMode={examMode}
+                                                        p5Code={
+                                                            p5LevelByStudent[
+                                                            row.student.id
+                                                            ] ?? 'BSH'
+                                                        }
+                                                        isPrintingThis={
+                                                            printingStudentId ===
+                                                            row.student.id
+                                                        }
+                                                        p5LevelOptions={p5LevelOptions}
+                                                        labels={{
+                                                            ...staticNoteRowLabels,
+                                                            ekskulBtnText: tr(
+                                                                'grades.ekskulAndNarrativeBtn',
+                                                                {
+                                                                    count: note
+                                                                        .extracurriculars
+                                                                        .length,
                                                                 }
-                                                                className="w-full inline-flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border bg-background hover:bg-muted text-xs font-medium"
-                                                            >
-                                                                <span>
-                                                                    {tr(
-                                                                        'grades.ekskulAndNarrativeBtn',
-                                                                        {
-                                                                            count: note
-                                                                                .extracurriculars
-                                                                                .length,
-                                                                        }
-                                                                    )}
-                                                                </span>
-                                                                <Pencil className="w-3 h-3 text-muted-foreground" />
-                                                            </button>
-
-                                                            {examMode === 'SAS' && (
-                                                                <select
-                                                                    value={note.promotionStatus}
-                                                                    onChange={(e) =>
-                                                                        updateStudentNoteState(
-                                                                            row.student.id,
-                                                                            (prev) => ({
-                                                                                ...prev,
-                                                                                promotionStatus:
-                                                                                    e.target
-                                                                                        .value as PromotionStatus,
-                                                                            })
-                                                                        )
-                                                                    }
-                                                                    className="w-full px-2 py-1 rounded border bg-muted/40 text-[11px] font-medium"
-                                                                >
-                                                                    <option value="PROSES">
-                                                                        {tr('grades.promoProses')}
-                                                                    </option>
-                                                                    <option value="NAIK_KELAS">
-                                                                        {tr('grades.promoNaik')}
-                                                                    </option>
-                                                                    <option value="TINGGAL_KELAS">
-                                                                        {tr('grades.promoTinggal')}
-                                                                    </option>
-                                                                    <option value="LULUS">
-                                                                        {tr('grades.promoLulus')}
-                                                                    </option>
-                                                                    <option value="TIDAK_LULUS">
-                                                                        {tr('grades.promoTidakLulus')}
-                                                                    </option>
-                                                                </select>
-                                                            )}
-                                                        </td>
-
-                                                        {/* Status Publikasi */}
-                                                        <td className="px-3 py-3 text-center">
-                                                            <label className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border bg-muted/30 cursor-pointer text-[11px] font-semibold">
-                                                                <input
-                                                                    type="checkbox"
-                                                                    checked={isPublished}
-                                                                    onChange={(e) =>
-                                                                        updateStudentNoteState(
-                                                                            row.student.id,
-                                                                            (prev) => ({
-                                                                                ...prev,
-                                                                                isStsPublished:
-                                                                                    examMode ===
-                                                                                        'STS'
-                                                                                        ? e.target
-                                                                                            .checked
-                                                                                        : prev.isStsPublished,
-                                                                                isSasPublished:
-                                                                                    examMode ===
-                                                                                        'SAS'
-                                                                                        ? e.target
-                                                                                            .checked
-                                                                                        : prev.isSasPublished,
-                                                                            })
-                                                                        )
-                                                                    }
-                                                                />
-                                                                <span>
-                                                                    {isPublished
-                                                                        ? tr('grades.statusPublished')
-                                                                        : tr('grades.statusDraft')}
-                                                                </span>
-                                                            </label>
-                                                        </td>
-
-                                                        {/* Unduh PDF Per Siswa */}
-                                                        <td className="px-3 py-3 text-right">
-                                                            <button
-                                                                type="button"
-                                                                onClick={() =>
-                                                                    handlePrintSingleStudentPdf(
-                                                                        row
-                                                                    )
-                                                                }
-                                                                disabled={isPrintingThis}
-                                                                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium hover:bg-muted disabled:opacity-50"
-                                                            >
-                                                                {isPrintingThis ? (
-                                                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                                                ) : (
-                                                                    <FileText className="w-3.5 h-3.5 text-red-500" />
-                                                                )}
-                                                                {tr('grades.btnPdf')}
-                                                            </button>
-                                                        </td>
-                                                    </tr>
+                                                            ),
+                                                        }}
+                                                        onUpdateNote={
+                                                            updateStudentNoteState
+                                                        }
+                                                        onP5LevelChange={
+                                                            handleStudentP5LevelChange
+                                                        }
+                                                        onGenerateSingle={
+                                                            handleGenerateSingleStudentNotes
+                                                        }
+                                                        onOpenDetail={
+                                                            setDetailStudentRow
+                                                        }
+                                                        onPrintSingle={
+                                                            handlePrintSingleStudentPdf
+                                                        }
+                                                    />
                                                 );
                                             })}
                                         </tbody>
@@ -2799,9 +3010,16 @@ export default function GradesAndReportPage() {
                         onClick={(e) => e.stopPropagation()}
                     >
                         {(() => {
-                            const note = getOrInitStudentNote(
-                                detailStudentRow.student.id
-                            );
+                            const note =
+                                notesMap.get(detailStudentRow.student.id) ??
+                                createDefaultNoteRecord({
+                                    schoolId: resolvedSchoolId,
+                                    academicYearId: selectedYearId,
+                                    semesterId: selectedSemesterId,
+                                    classId: selectedClassId,
+                                    studentId: detailStudentRow.student.id,
+                                    reportDate: classReportDate,
+                                });
                             return (
                                 <>
                                     <div className="px-6 py-4 border-b flex items-center justify-between sticky top-0 bg-card z-10">
@@ -2824,7 +3042,6 @@ export default function GradesAndReportPage() {
                                     </div>
 
                                     <div className="p-6 space-y-5 text-xs">
-                                        {/* Narasi Lengkap Kokurikuler / Projek P5 */}
                                         <div className="space-y-1.5">
                                             <div className="flex items-center justify-between">
                                                 <label className="font-bold text-sm">
@@ -2863,7 +3080,6 @@ export default function GradesAndReportPage() {
                                             />
                                         </div>
 
-                                        {/* Kegiatan Ekstrakurikuler */}
                                         <div className="space-y-2.5 pt-3 border-t">
                                             <div className="flex items-center justify-between">
                                                 <span className="font-bold text-sm flex items-center gap-1.5">
