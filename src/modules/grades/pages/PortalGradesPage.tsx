@@ -9,6 +9,7 @@ import {
     GraduationCap,
     Loader2,
     Lock,
+    Sparkles,
     UserCheck,
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -22,6 +23,8 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/utils/cn';
 import { supabase } from '@/services/supabase.client';
+import { useTranslation } from '@/hooks/useTranslation';
+import type { TranslationKey } from '@/constants/translations';
 import { gradeService } from '../services/grade.service';
 import { generateCurriculumMerdekaReportPdf } from '../utils/reportPdfGenerator';
 import type {
@@ -49,15 +52,31 @@ interface PublishedReportSummary {
     homeroomTeacherNip: string | null;
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-    UMUM: 'Kelompok Mata Pelajaran Umum',
-    PILIHAN: 'Kelompok Mata Pelajaran Pilihan',
-    KEJURUAN: 'Kelompok Mata Pelajaran Kejuruan',
-    MUATAN_LOKAL: 'Muatan Lokal',
-    KOKURIKULER: 'Kokurikuler / Projek',
+const CATEGORY_KEY_MAP: Record<string, TranslationKey> = {
+    UMUM: 'portalGrades.cat_UMUM',
+    PILIHAN: 'portalGrades.cat_PILIHAN',
+    KEJURUAN: 'portalGrades.cat_KEJURUAN',
+    MUATAN_LOKAL: 'portalGrades.cat_MUATAN_LOKAL',
+    KOKURIKULER: 'portalGrades.cat_KOKURIKULER',
 };
 
 export default function PortalGradesPage() {
+    const { t, locale } = useTranslation();
+    const activeLang: 'id' | 'en' = locale === 'en' ? 'en' : 'id';
+
+    const tr = useCallback(
+        (key: TranslationKey, vars?: Record<string, string | number>): string => {
+            let text = String(t(key));
+            if (vars) {
+                Object.entries(vars).forEach(([k, v]) => {
+                    text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+                });
+            }
+            return text;
+        },
+        [t]
+    );
+
     const [linkedStudents, setLinkedStudents] = useState<LinkedStudentOption[]>(
         []
     );
@@ -132,7 +151,7 @@ export default function PortalGradesPage() {
                 toast.error(
                     err instanceof Error
                         ? err.message
-                        : 'Gagal memuat data peserta didik.'
+                        : tr('portalGrades.errLoadStudents')
                 );
             } finally {
                 if (active) setIsLoadingInitial(false);
@@ -143,7 +162,7 @@ export default function PortalGradesPage() {
         return () => {
             active = false;
         };
-    }, []);
+    }, [tr]);
 
     const currentStudent = useMemo(
         () => linkedStudents.find((s) => s.id === selectedStudentId) ?? null,
@@ -249,7 +268,7 @@ export default function PortalGradesPage() {
                 toast.error(
                     err instanceof Error
                         ? err.message
-                        : 'Gagal memuat riwayat raport siswa.'
+                        : tr('portalGrades.errLoadReports')
                 );
             } finally {
                 if (active) setIsLoadingReport(false);
@@ -260,7 +279,7 @@ export default function PortalGradesPage() {
         return () => {
             active = false;
         };
-    }, [currentStudent]);
+    }, [currentStudent, tr]);
 
     const activeReportSummary = useMemo(
         () =>
@@ -308,7 +327,9 @@ export default function PortalGradesPage() {
                 setAchievements(res.data.achievements);
             } catch (err) {
                 toast.error(
-                    err instanceof Error ? err.message : 'Gagal memuat rincian nilai.'
+                    err instanceof Error
+                        ? err.message
+                        : tr('portalGrades.errLoadDetail')
                 );
             } finally {
                 if (active) setIsLoadingReport(false);
@@ -319,7 +340,7 @@ export default function PortalGradesPage() {
         return () => {
             active = false;
         };
-    }, [currentStudent, activeReportSummary]);
+    }, [currentStudent, activeReportSummary, tr]);
 
     const handleDownloadPdf = useCallback(async () => {
         if (!currentStudent || !activeReportSummary) return;
@@ -343,6 +364,7 @@ export default function PortalGradesPage() {
 
             await generateCurriculumMerdekaReportPdf({
                 mode: examMode,
+                lang: activeLang,
                 school: bundleRes.data.school,
                 classContext,
                 student: currentStudent,
@@ -352,15 +374,19 @@ export default function PortalGradesPage() {
                 achievements: bundleRes.data.achievements,
             });
 
-            toast.success(`Raport ${examMode} berhasil diunduh.`);
+            toast.success(
+                tr('portalGrades.toastPdfDownloaded', { mode: examMode })
+            );
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : 'Gagal mengunduh PDF raport.'
+                err instanceof Error
+                    ? err.message
+                    : tr('portalGrades.errDownloadPdf')
             );
         } finally {
             setIsDownloadingPdf(false);
         }
-    }, [currentStudent, activeReportSummary, examMode]);
+    }, [currentStudent, activeReportSummary, examMode, activeLang, tr]);
 
     const gradeMap = useMemo(() => {
         const map = new Map<string, StudentGradeRecord>();
@@ -372,7 +398,7 @@ export default function PortalGradesPage() {
         return (
             <div className="p-12 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                <p className="text-sm">Memuat portal hasil belajar...</p>
+                <p className="text-sm">{tr('common.loading')}</p>
             </div>
         );
     }
@@ -383,11 +409,10 @@ export default function PortalGradesPage() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight text-foreground">
-                        Laporan Hasil Belajar (Raport)
+                        {tr('portalGrades.pageTitle')}
                     </h1>
                     <p className="text-muted-foreground mt-1">
-                        Pantau capaian kompetensi dan unduh dokumen raport resmi Kurikulum
-                        Merdeka.
+                        {tr('portalGrades.pageSubtitle')}
                     </p>
                 </div>
 
@@ -403,7 +428,7 @@ export default function PortalGradesPage() {
                         ) : (
                             <Download className="w-4 h-4" />
                         )}
-                        Unduh Raport {examMode} (PDF)
+                        {tr('portalGrades.btnDownloadPdf', { mode: examMode })}
                     </button>
                 )}
             </div>
@@ -413,7 +438,7 @@ export default function PortalGradesPage() {
                 <CardContent className="p-5 grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
                     <div>
                         <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                            Peserta Didik
+                            {tr('portalGrades.labelStudent')}
                         </label>
                         <select
                             value={selectedStudentId}
@@ -430,7 +455,7 @@ export default function PortalGradesPage() {
 
                     <div>
                         <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                            Periode Raport Tersedia
+                            {tr('portalGrades.labelPeriod')}
                         </label>
                         <select
                             value={selectedSemesterId}
@@ -439,15 +464,20 @@ export default function PortalGradesPage() {
                             className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
                         >
                             {publishedReports.length === 0 ? (
-                                <option value="">Belum ada raport dipublikasikan</option>
+                                <option value="">
+                                    {tr('portalGrades.noPublishedOption')}
+                                </option>
                             ) : (
                                 publishedReports.map((rep) => (
                                     <option
                                         key={rep.note.semesterId}
                                         value={rep.note.semesterId}
                                     >
-                                        TA {rep.academicYearName} — Semester {rep.semesterType} (
-                                        {rep.className})
+                                        {tr('portalGrades.periodOptionLabel', {
+                                            year: rep.academicYearName,
+                                            semester: rep.semesterType,
+                                            className: rep.className,
+                                        })}
                                     </option>
                                 ))
                             )}
@@ -467,7 +497,7 @@ export default function PortalGradesPage() {
                                             : 'bg-background hover:bg-muted'
                                     )}
                                 >
-                                    Raport STS
+                                    {tr('portalGrades.btnReportSts')}
                                 </button>
                             )}
                             {activeReportSummary.note.isSasPublished && (
@@ -481,7 +511,7 @@ export default function PortalGradesPage() {
                                             : 'bg-background hover:bg-muted'
                                     )}
                                 >
-                                    Raport SAS
+                                    {tr('portalGrades.btnReportSas')}
                                 </button>
                             )}
                         </div>
@@ -495,19 +525,17 @@ export default function PortalGradesPage() {
                     <CardContent className="p-12 text-center space-y-3">
                         <Lock className="w-10 h-10 text-muted-foreground/50 mx-auto" />
                         <h2 className="text-lg font-semibold">
-                            Raport Belum Dipublikasikan
+                            {tr('portalGrades.emptyTitle')}
                         </h2>
                         <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                            Hasil penilaian tengah semester (STS) maupun akhir semester (SAS)
-                            akan tampil secara otomatis setelah Wali Kelas memublikasikan
-                            raport.
+                            {tr('portalGrades.emptyDesc')}
                         </p>
                     </CardContent>
                 </Card>
             ) : isLoadingReport ? (
                 <div className="p-12 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                     <Loader2 className="w-7 h-7 animate-spin text-primary" />
-                    <p className="text-sm">Memuat rincian capaian kompetensi...</p>
+                    <p className="text-sm">{tr('portalGrades.loadingDetail')}</p>
                 </div>
             ) : (
                 <div className="space-y-6">
@@ -519,7 +547,9 @@ export default function PortalGradesPage() {
                                     <GraduationCap className="w-5 h-5 text-blue-500" />
                                 </div>
                                 <div>
-                                    <p className="text-xs text-muted-foreground">Kelas &amp; TA</p>
+                                    <p className="text-xs text-muted-foreground">
+                                        {tr('portalGrades.cardClassYear')}
+                                    </p>
                                     <p className="font-bold text-sm">
                                         {activeReportSummary.className} —{' '}
                                         {activeReportSummary.academicYearName}
@@ -534,7 +564,9 @@ export default function PortalGradesPage() {
                                     <UserCheck className="w-5 h-5 text-emerald-500" />
                                 </div>
                                 <div>
-                                    <p className="text-xs text-muted-foreground">Wali Kelas</p>
+                                    <p className="text-xs text-muted-foreground">
+                                        {tr('portalGrades.cardHomeroom')}
+                                    </p>
                                     <p className="font-bold text-sm">
                                         {activeReportSummary.homeroomTeacherName}
                                     </p>
@@ -549,18 +581,20 @@ export default function PortalGradesPage() {
                                 </div>
                                 <div>
                                     <p className="text-xs text-muted-foreground">
-                                        Ketidakhadiran ({examMode})
+                                        {tr('portalGrades.cardAbsence', {
+                                            mode: examMode,
+                                        })}
                                     </p>
                                     <p className="font-bold text-sm">
-                                        Sakit:{' '}
+                                        {tr('portalGrades.sickLabel')}:{' '}
                                         {examMode === 'STS'
                                             ? activeReportSummary.note.stsSickDays
                                             : activeReportSummary.note.sickDays}{' '}
-                                        | Izin:{' '}
+                                        | {tr('portalGrades.permLabel')}:{' '}
                                         {examMode === 'STS'
                                             ? activeReportSummary.note.stsPermissionDays
                                             : activeReportSummary.note.permissionDays}{' '}
-                                        | Alpha:{' '}
+                                        | {tr('portalGrades.alphaLabel')}:{' '}
                                         {examMode === 'STS'
                                             ? activeReportSummary.note.stsAlphaDays
                                             : activeReportSummary.note.alphaDays}
@@ -575,22 +609,32 @@ export default function PortalGradesPage() {
                         <CardHeader className="border-b">
                             <CardTitle className="text-lg flex items-center gap-2">
                                 <BookOpen className="w-5 h-5 text-primary" />
-                                Nilai &amp; Capaian Kompetensi ({examMode})
+                                {tr('portalGrades.tableTitle', { mode: examMode })}
                             </CardTitle>
                             <CardDescription>
-                                Kurikulum Merdeka — Semester {activeReportSummary.semesterType}
+                                {tr('portalGrades.tableSubtitle', {
+                                    semester: activeReportSummary.semesterType,
+                                })}
                             </CardDescription>
                         </CardHeader>
                         <CardContent className="p-0 overflow-x-auto">
                             <table className="w-full text-sm text-left">
                                 <thead className="bg-muted/50 text-xs uppercase text-muted-foreground border-b">
                                     <tr>
-                                        <th className="px-5 py-3.5 w-14 text-center">No</th>
-                                        <th className="px-5 py-3.5 w-64">Mata Pelajaran</th>
-                                        <th className="px-5 py-3.5 w-28 text-center">
-                                            {examMode === 'STS' ? 'Nilai STS' : 'Nilai Akhir'}
+                                        <th className="px-5 py-3.5 w-14 text-center">
+                                            {tr('portalGrades.colNo')}
                                         </th>
-                                        <th className="px-5 py-3.5">Capaian Kompetensi</th>
+                                        <th className="px-5 py-3.5 w-64">
+                                            {tr('portalGrades.colSubject')}
+                                        </th>
+                                        <th className="px-5 py-3.5 w-28 text-center">
+                                            {examMode === 'STS'
+                                                ? tr('portalGrades.colScoreSts')
+                                                : tr('portalGrades.colScoreSas')}
+                                        </th>
+                                        <th className="px-5 py-3.5">
+                                            {tr('portalGrades.colCompetency')}
+                                        </th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -598,14 +642,16 @@ export default function PortalGradesPage() {
                                         const g = gradeMap.get(subj.id);
                                         const rawScore =
                                             examMode === 'STS'
-                                                ? g?.stsScore ?? g?.formativeAvg ?? null
-                                                : g?.finalScore ?? null;
+                                                ? (g?.stsScore ?? g?.formativeAvg ?? null)
+                                                : (g?.finalScore ?? null);
                                         const desc =
                                             examMode === 'STS'
                                                 ? g?.stsCompetencyDescription ||
                                                 g?.competencyDescription ||
                                                 '-'
                                                 : g?.competencyDescription || '-';
+
+                                        const catKey = CATEGORY_KEY_MAP[subj.category];
 
                                         return (
                                             <tr
@@ -620,16 +666,19 @@ export default function PortalGradesPage() {
                                                         {subj.name}
                                                     </div>
                                                     <div className="text-xs text-muted-foreground mt-0.5">
-                                                        {CATEGORY_LABELS[subj.category] ?? subj.category}
+                                                        {catKey ? tr(catKey) : subj.category}
                                                     </div>
                                                 </td>
                                                 <td className="px-5 py-4 text-center">
-                                                    {rawScore !== null && rawScore !== undefined ? (
+                                                    {rawScore !== null &&
+                                                        rawScore !== undefined ? (
                                                         <span className="inline-flex items-center justify-center px-3 py-1 rounded-lg bg-primary/10 text-primary font-bold">
                                                             {Math.round(rawScore)}
                                                         </span>
                                                     ) : (
-                                                        <span className="text-muted-foreground">-</span>
+                                                        <span className="text-muted-foreground">
+                                                            -
+                                                        </span>
                                                     )}
                                                 </td>
                                                 <td className="px-5 py-4 text-xs leading-relaxed text-foreground/90">
@@ -643,21 +692,38 @@ export default function PortalGradesPage() {
                         </CardContent>
                     </Card>
 
+                    {/* Kokurikuler / Projek P5 (Mode SAS) */}
+                    {examMode === 'SAS' &&
+                        activeReportSummary.note.cocurricularNote &&
+                        activeReportSummary.note.cocurricularNote.trim() !== '' && (
+                            <Card className="border-none shadow-sm">
+                                <CardHeader className="pb-3 border-b">
+                                    <CardTitle className="text-base flex items-center gap-2">
+                                        <Sparkles className="w-4 h-4 text-indigo-500" />
+                                        {tr('portalGrades.p5CardTitle')}
+                                    </CardTitle>
+                                </CardHeader>
+                                <CardContent className="p-5 text-sm leading-relaxed">
+                                    {activeReportSummary.note.cocurricularNote}
+                                </CardContent>
+                            </Card>
+                        )}
+
                     {/* Ekstrakurikuler, Prestasi & Catatan Wali Kelas */}
                     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
                         <Card className="border-none shadow-sm">
                             <CardHeader className="pb-3 border-b">
                                 <CardTitle className="text-base flex items-center gap-2">
                                     <FileText className="w-4 h-4 text-primary" />
-                                    Catatan Wali Kelas
+                                    {tr('portalGrades.noteCardTitle')}
                                 </CardTitle>
                             </CardHeader>
                             <CardContent className="p-5 text-sm leading-relaxed">
                                 {examMode === 'STS'
                                     ? activeReportSummary.note.stsHomeroomNote ||
-                                    'Terus tingkatkan semangat belajar dan kedisiplinan di sekolah.'
+                                    tr('portalGrades.defaultNoteSts')
                                     : activeReportSummary.note.homeroomNote ||
-                                    'Pertahankan prestasi dan sikap baik yang telah dicapai selama semester ini.'}
+                                    tr('portalGrades.defaultNoteSas')}
                             </CardContent>
                         </Card>
 
@@ -666,11 +732,12 @@ export default function PortalGradesPage() {
                                 <CardHeader className="pb-3 border-b">
                                     <CardTitle className="text-base flex items-center gap-2">
                                         <Award className="w-4 h-4 text-amber-500" />
-                                        Ekstrakurikuler &amp; Prestasi
+                                        {tr('portalGrades.ekskulCardTitle')}
                                     </CardTitle>
                                 </CardHeader>
                                 <CardContent className="p-5 space-y-3 text-xs">
-                                    {activeReportSummary.note.extracurriculars.length > 0 ? (
+                                    {activeReportSummary.note.extracurriculars.length >
+                                        0 ? (
                                         <div className="space-y-2">
                                             {activeReportSummary.note.extracurriculars.map(
                                                 (ex, i) => (
@@ -679,29 +746,36 @@ export default function PortalGradesPage() {
                                                         className="p-2.5 rounded-lg border bg-muted/30 flex items-center justify-between gap-2"
                                                     >
                                                         <div>
-                                                            <p className="font-semibold text-sm">{ex.name}</p>
+                                                            <p className="font-semibold text-sm">
+                                                                {ex.name}
+                                                            </p>
                                                             <p className="text-muted-foreground">
                                                                 {ex.description}
                                                             </p>
                                                         </div>
-                                                        <Badge variant="outline">{ex.predicate}</Badge>
+                                                        <Badge variant="outline">
+                                                            {ex.predicate}
+                                                        </Badge>
                                                     </div>
                                                 )
                                             )}
                                         </div>
                                     ) : (
                                         <p className="text-muted-foreground">
-                                            Tidak ada catatan ekstrakurikuler pada semester ini.
+                                            {tr('portalGrades.emptyEkskul')}
                                         </p>
                                     )}
 
                                     {achievements.length > 0 && (
                                         <div className="pt-2 border-t space-y-1.5">
                                             <p className="font-semibold text-foreground">
-                                                Prestasi Tercatat:
+                                                {tr('portalGrades.achievementsTitle')}
                                             </p>
                                             {achievements.map((ach) => (
-                                                <div key={ach.id} className="text-muted-foreground">
+                                                <div
+                                                    key={ach.id}
+                                                    className="text-muted-foreground"
+                                                >
                                                     • <strong>{ach.title}</strong> ({ach.level},{' '}
                                                     {ach.year})
                                                 </div>

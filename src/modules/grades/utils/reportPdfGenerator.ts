@@ -15,6 +15,7 @@ import type {
 
 export interface GenerateReportPdfInput {
   mode: ReportExamMode; // 'STS' atau 'SAS'
+  lang?: 'id' | 'en';
   school: SchoolReportProfile;
   classContext: ClassReportContext;
   student: StudentBasicProfile;
@@ -65,37 +66,73 @@ async function fetchImageAsDataUrl(
   }
 }
 
-function formatTanggalIndonesia(dateStr?: string | null): string {
+/**
+ * Memformat tanggal YYYY-MM-DD secara lokal agar tidak tergeser oleh konversi UTC
+ */
+function formatTanggalRaport(
+  dateStr?: string | null,
+  lang: 'id' | 'en' = 'id'
+): string {
+  const locale = lang === 'en' ? 'en-US' : 'id-ID';
   if (!dateStr) {
-    return new Date().toLocaleDateString('id-ID', {
+    return new Date().toLocaleDateString(locale, {
       day: 'numeric',
       month: 'long',
       year: 'numeric',
     });
   }
-  const parsed = new Date(dateStr);
+
+  const isoMatch = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateStr.trim());
+  const parsed = isoMatch
+    ? new Date(
+        Number(isoMatch[1]),
+        Number(isoMatch[2]) - 1,
+        Number(isoMatch[3])
+      )
+    : new Date(dateStr);
+
   if (Number.isNaN(parsed.getTime())) return dateStr;
-  return parsed.toLocaleDateString('id-ID', {
+  return parsed.toLocaleDateString(locale, {
     day: 'numeric',
     month: 'long',
     year: 'numeric',
   });
 }
 
-function getFaseKurikulumMerdeka(gradeLevel: number): string {
-  if (gradeLevel >= 1 && gradeLevel <= 2) return 'Fase A';
-  if (gradeLevel >= 3 && gradeLevel <= 4) return 'Fase B';
-  if (gradeLevel >= 5 && gradeLevel <= 6) return 'Fase C';
-  if (gradeLevel >= 7 && gradeLevel <= 9) return 'Fase D';
-  if (gradeLevel === 10) return 'Fase E';
-  if (gradeLevel === 11 || gradeLevel === 12) return 'Fase F';
-  return `Kelas ${gradeLevel}`;
+function getFaseKurikulumMerdeka(
+  gradeLevel: number,
+  lang: 'id' | 'en' = 'id'
+): string {
+  const prefix = lang === 'en' ? 'Phase' : 'Fase';
+  if (gradeLevel >= 1 && gradeLevel <= 2) return `${prefix} A`;
+  if (gradeLevel >= 3 && gradeLevel <= 4) return `${prefix} B`;
+  if (gradeLevel >= 5 && gradeLevel <= 6) return `${prefix} C`;
+  if (gradeLevel >= 7 && gradeLevel <= 9) return `${prefix} D`;
+  if (gradeLevel === 10) return `${prefix} E`;
+  if (gradeLevel === 11 || gradeLevel === 12) return `${prefix} F`;
+  return lang === 'en' ? `Grade ${gradeLevel}` : `Kelas ${gradeLevel}`;
 }
 
 function formatPromotionLabel(
   status: PromotionStatus,
-  gradeLevel: number
+  gradeLevel: number,
+  lang: 'id' | 'en' = 'id'
 ): string {
+  if (lang === 'en') {
+    switch (status) {
+      case 'NAIK_KELAS':
+        return `PROMOTED TO GRADE ${gradeLevel + 1}`;
+      case 'TINGGAL_KELAS':
+        return `RETAINED IN GRADE ${gradeLevel}`;
+      case 'LULUS':
+        return 'GRADUATED FROM EDUCATIONAL UNIT';
+      case 'TIDAK_LULUS':
+        return 'NOT GRADUATED';
+      default:
+        return 'UNDER SEMESTER EVALUATION';
+    }
+  }
+
   switch (status) {
     case 'NAIK_KELAS':
       return `NAIK KE KELAS ${gradeLevel + 1}`;
@@ -114,7 +151,8 @@ function formatPromotionLabel(
  * Mengelompokkan mata pelajaran berdasarkan kategori Kurikulum Merdeka
  */
 function groupSubjectsByCategory(
-  subjects: SubjectOption[]
+  subjects: SubjectOption[],
+  lang: 'id' | 'en' = 'id'
 ): Array<{ groupTitle: string; items: SubjectOption[] }> {
   const sorted = [...subjects].sort((a, b) => {
     if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
@@ -124,12 +162,26 @@ function groupSubjectsByCategory(
   const groups = new Map<string, SubjectOption[]>();
   sorted.forEach((subj) => {
     const cat = (subj.category || 'UMUM').toUpperCase().trim();
-    let title = 'Kelompok Mata Pelajaran Umum';
-if (cat === 'PILIHAN') title = 'Kelompok Mata Pelajaran Pilihan';
-    else if (cat === 'MUATAN_LOKAL' || cat === 'MULOK') title = 'Muatan Lokal';
-    else if (cat === 'KEJURUAN') title = 'Kelompok Mata Pelajaran Kejuruan';
-    else if (cat === 'KOKURIKULER') title = 'Kokurikuler / Projek';
-    else if (cat !== 'UMUM') title = `Kelompok ${cat}`;
+    let title =
+      lang === 'en'
+        ? 'General / Compulsory Subjects'
+        : 'Kelompok Mata Pelajaran Umum';
+
+    if (cat === 'PILIHAN') {
+      title =
+        lang === 'en' ? 'Elective Subjects' : 'Kelompok Mata Pelajaran Pilihan';
+    } else if (cat === 'MUATAN_LOKAL' || cat === 'MULOK') {
+      title = lang === 'en' ? 'Local Content' : 'Muatan Lokal';
+    } else if (cat === 'KEJURUAN') {
+      title =
+        lang === 'en'
+          ? 'Vocational / Specialization Subjects'
+          : 'Kelompok Mata Pelajaran Kejuruan';
+    } else if (cat === 'KOKURIKULER') {
+      title = lang === 'en' ? 'Co-curricular / Project' : 'Kokurikuler / Projek';
+    } else if (cat !== 'UMUM') {
+      title = lang === 'en' ? `Group ${cat}` : `Kelompok ${cat}`;
+    }
 
     const list = groups.get(title) ?? [];
     list.push(subj);
@@ -156,6 +208,7 @@ async function renderSingleReportIntoDoc(
 ): Promise<void> {
   const {
     mode,
+    lang = 'id',
     school,
     classContext,
     student,
@@ -165,6 +218,7 @@ async function renderSingleReportIntoDoc(
     achievements,
   } = input;
 
+  const isEn = lang === 'en';
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const marginX = 15;
@@ -213,8 +267,9 @@ async function renderSingleReportIntoDoc(
   }`;
   doc.text(addressLine, headerCenterX, cursorY + 8, { align: 'center' });
 
+  const phoneLabel = isEn ? 'Phone' : 'Telp';
   const contactLine = `NPSN: ${school.npsn}${
-    school.phone ? ` | Telp: ${school.phone}` : ''
+    school.phone ? ` | ${phoneLabel}: ${school.phone}` : ''
   }${school.email ? ` | Email: ${school.email}` : ''}`;
   doc.text(contactLine, headerCenterX, cursorY + 12.5, { align: 'center' });
 
@@ -231,15 +286,24 @@ async function renderSingleReportIntoDoc(
   doc.setFontSize(11);
   const titleText =
     mode === 'STS'
-      ? 'LAPORAN HASIL BELAJAR TENGAH SEMESTER (STS)'
-      : 'LAPORAN HASIL BELAJAR AKHIR SEMESTER (SAS)';
+      ? isEn
+        ? 'MID-SEMESTER LEARNING REPORT CARD (STS)'
+        : 'LAPORAN HASIL BELAJAR TENGAH SEMESTER (STS)'
+      : isEn
+        ? 'END-OF-SEMESTER LEARNING REPORT CARD (SAS)'
+        : 'LAPORAN HASIL BELAJAR AKHIR SEMESTER (SAS)';
   doc.text(titleText, pageWidth / 2, cursorY, { align: 'center' });
 
   doc.setFontSize(9.5);
   doc.setFont('helvetica', 'normal');
-  doc.text('KURIKULUM MERDEKA', pageWidth / 2, cursorY + 4.5, {
-    align: 'center',
-  });
+  doc.text(
+    isEn ? 'MERDEKA CURRICULUM' : 'KURIKULUM MERDEKA',
+    pageWidth / 2,
+    cursorY + 4.5,
+    {
+      align: 'center',
+    }
+  );
 
   cursorY += 10;
 
@@ -250,13 +314,13 @@ async function renderSingleReportIntoDoc(
   const rightColX = pageWidth / 2 + 6;
   const rightValX = rightColX + 32;
 
-  const faseLabel = getFaseKurikulumMerdeka(classContext.gradeLevel);
+  const faseLabel = getFaseKurikulumMerdeka(classContext.gradeLevel, lang);
 
   const identityRows: Array<[string, string, string, string]> = [
     [
-      'Nama Peserta Didik',
+      isEn ? 'Student Name' : 'Nama Peserta Didik',
       student.fullName,
-      'Kelas / Fase',
+      isEn ? 'Class / Phase' : 'Kelas / Fase',
       `${classContext.className} (${faseLabel})`,
     ],
     [
@@ -266,9 +330,9 @@ async function renderSingleReportIntoDoc(
       classContext.semesterType,
     ],
     [
-      'Satuan Pendidikan',
+      isEn ? 'School Name' : 'Satuan Pendidikan',
       school.name,
-      'Tahun Ajaran',
+      isEn ? 'Academic Year' : 'Tahun Ajaran',
       classContext.academicYearName,
     ],
   ];
@@ -291,16 +355,22 @@ async function renderSingleReportIntoDoc(
 
   cursorY += 3;
 
-  // 4. TABEL NILAI & CAPAIAN KOMPETENSI (DIKELOMPOKKAN BERDASARKAN KATEGORI)
+  // 4. TABEL NILAI & CAPAIAN KOMPETENSI
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
-  doc.text('A. NILAI MATA PELAJARAN & CAPAIAN KOMPETENSI', marginX, cursorY);
+  doc.text(
+    isEn
+      ? 'A. SUBJECT GRADES & COMPETENCY ACHIEVEMENTS'
+      : 'A. NILAI MATA PELAJARAN & CAPAIAN KOMPETENSI',
+    marginX,
+    cursorY
+  );
   cursorY += 2.5;
 
   const gradeBySubject = new Map<string, StudentGradeRecord>();
   grades.forEach((g) => gradeBySubject.set(g.subjectId, g));
 
-  const groupedSubjects = groupSubjectsByCategory(subjects);
+  const groupedSubjects = groupSubjectsByCategory(subjects, lang);
   const tableRows: Array<
     Array<
       | string
@@ -328,8 +398,8 @@ async function renderSingleReportIntoDoc(
       const g = gradeBySubject.get(subj.id);
       const scoreValue =
         mode === 'STS'
-          ? g?.stsScore ?? g?.formativeAvg ?? null
-          : g?.finalScore ?? null;
+          ? (g?.stsScore ?? g?.formativeAvg ?? null)
+          : (g?.finalScore ?? null);
 
       const scoreDisplay =
         scoreValue !== null && scoreValue !== undefined
@@ -350,15 +420,30 @@ async function renderSingleReportIntoDoc(
     head: [
       [
         'No',
-        'Mata Pelajaran',
-        mode === 'STS' ? 'Nilai STS' : 'Nilai Akhir',
-        'Capaian Kompetensi',
+        isEn ? 'Subject' : 'Mata Pelajaran',
+        mode === 'STS'
+          ? isEn
+            ? 'STS Score'
+            : 'Nilai STS'
+          : isEn
+            ? 'Final Score'
+            : 'Nilai Akhir',
+        isEn ? 'Competency Achievement' : 'Capaian Kompetensi',
       ],
     ],
     body:
       tableRows.length > 0
         ? tableRows
-        : [['-', 'Belum ada mata pelajaran aktif', '-', '-']],
+        : [
+            [
+              '-',
+              isEn
+                ? 'No active subjects recorded'
+                : 'Belum ada mata pelajaran aktif',
+              '-',
+              '-',
+            ],
+          ],
     theme: 'grid',
     styles: {
       font: 'helvetica',
@@ -392,12 +477,16 @@ async function renderSingleReportIntoDoc(
     }
   };
 
-  // 5. EKSTRAKURIKULER, KOKURIKULER & PRESTASI (KHUSUS SAS)
+  // 5. EKSTRAKURIKULER, KOKURIKULER P5 & PRESTASI (KHUSUS SAS)
   if (mode === 'SAS') {
     ensureSpace(32);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
-    doc.text('B. KEGIATAN EKSTRAKURIKULER', marginX, cursorY);
+    doc.text(
+      isEn ? 'B. EXTRACURRICULAR ACTIVITIES' : 'B. KEGIATAN EKSTRAKURIKULER',
+      marginX,
+      cursorY
+    );
     cursorY += 2.5;
 
     const extraRows =
@@ -408,12 +497,28 @@ async function renderSingleReportIntoDoc(
             ex.predicate || '-',
             ex.description || '-',
           ])
-        : [['1', '-', '-', 'Tidak mengikuti kegiatan ekstrakurikuler']];
+        : [
+            [
+              '1',
+              '-',
+              '-',
+              isEn
+                ? 'Did not participate in extracurricular activities'
+                : 'Tidak mengikuti kegiatan ekstrakurikuler',
+            ],
+          ];
 
     autoTable(doc, {
       startY: cursorY,
       margin: { left: marginX, right: marginX },
-      head: [['No', 'Kegiatan Ekstrakurikuler', 'Predikat', 'Keterangan']],
+      head: [
+        [
+          'No',
+          isEn ? 'Extracurricular Activity' : 'Kegiatan Ekstrakurikuler',
+          isEn ? 'Predicate' : 'Predikat',
+          isEn ? 'Remarks' : 'Keterangan',
+        ],
+      ],
       body: extraRows,
       theme: 'grid',
       styles: {
@@ -437,53 +542,70 @@ async function renderSingleReportIntoDoc(
 
     cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
 
-    if (
-      reportNote.cocurricularNote &&
-      reportNote.cocurricularNote.trim() !== ''
-    ) {
-      ensureSpace(22);
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(9.5);
-      doc.text(
-        'C. CATATAN KOKURIKULER / PROJEK PENGUATAN PROFIL PELAJAR PANCASILA',
-        marginX,
-        cursorY
-      );
-      cursorY += 2.5;
+    // Bagian C selalu dirender pada mode SAS agar penomoran sub-bab tetap konsisten
+    ensureSpace(22);
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(9.5);
+    doc.text(
+      isEn
+        ? 'C. CO-CURRICULAR / PANCASILA STUDENT PROFILE PROJECT (P5)'
+        : 'C. KOKURIKULER / PROJEK PENGUATAN PROFIL PELAJAR PANCASILA (P5)',
+      marginX,
+      cursorY
+    );
+    cursorY += 2.5;
 
-      autoTable(doc, {
-        startY: cursorY,
-        margin: { left: marginX, right: marginX },
-        body: [[reportNote.cocurricularNote]],
-        theme: 'grid',
-        styles: {
-          fontSize: 8.5,
-          cellPadding: 3,
-          lineColor: [120, 120, 120],
-          lineWidth: 0.2,
-        },
-      });
+    const p5BodyText =
+      reportNote.cocurricularNote && reportNote.cocurricularNote.trim() !== ''
+        ? reportNote.cocurricularNote
+        : isEn
+          ? 'No P5 project achievement description recorded for this semester.'
+          : 'Belum ada catatan capaian projek P5 pada semester ini.';
 
-      cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
-    }
+    autoTable(doc, {
+      startY: cursorY,
+      margin: { left: marginX, right: marginX },
+      body: [[p5BodyText]],
+      theme: 'grid',
+      styles: {
+        fontSize: 8.5,
+        cellPadding: 3,
+        lineColor: [120, 120, 120],
+        lineWidth: 0.2,
+      },
+    });
+
+    cursorY = (doc.lastAutoTable?.finalY ?? cursorY) + 6;
 
     if (achievements.length > 0) {
       ensureSpace(26);
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(9.5);
-      doc.text('D. PRESTASI PESERTA DIDIK', marginX, cursorY);
+      doc.text(
+        isEn ? 'D. STUDENT ACHIEVEMENTS' : 'D. PRESTASI PESERTA DIDIK',
+        marginX,
+        cursorY
+      );
       cursorY += 2.5;
 
       const achRows = achievements.map((ach, idx) => [
         String(idx + 1),
         `${ach.title}${ach.rank ? ` (${ach.rank})` : ''}`,
-        `${ach.category} - Tingkat ${ach.level} (${ach.year})`,
+        isEn
+          ? `${ach.category} - ${ach.level} Level (${ach.year})`
+          : `${ach.category} - Tingkat ${ach.level} (${ach.year})`,
       ]);
 
       autoTable(doc, {
         startY: cursorY,
         margin: { left: marginX, right: marginX },
-        head: [['No', 'Jenis / Nama Prestasi', 'Tingkat & Penyelenggara']],
+        head: [
+          [
+            'No',
+            isEn ? 'Achievement Title' : 'Jenis / Nama Prestasi',
+            isEn ? 'Level & Year' : 'Tingkat & Penyelenggara',
+          ],
+        ],
         body: achRows,
         theme: 'grid',
         styles: {
@@ -515,7 +637,9 @@ async function renderSingleReportIntoDoc(
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.text(
-    `${sectionLetter}. KETIDAKHADIRAN & CATATAN WALI KELAS`,
+    isEn
+      ? `${sectionLetter}. ATTENDANCE & HOMEROOM TEACHER NOTES`
+      : `${sectionLetter}. KETIDAKHADIRAN & CATATAN WALI KELAS`,
     marginX,
     cursorY
   );
@@ -529,22 +653,37 @@ async function renderSingleReportIntoDoc(
   const walasNote =
     mode === 'STS'
       ? reportNote.stsHomeroomNote ||
-        'Terus tingkatkan semangat belajar dan kedisiplinan di sekolah.'
+        (isEn
+          ? 'Keep up your enthusiasm for learning and discipline at school.'
+          : 'Terus tingkatkan semangat belajar dan kedisiplinan di sekolah.')
       : reportNote.homeroomNote ||
-        'Pertahankan prestasi dan sikap baik yang telah dicapai selama semester ini.';
+        (isEn
+          ? 'Maintain the good achievements and character demonstrated throughout this semester.'
+          : 'Pertahankan prestasi dan sikap baik yang telah dicapai selama semester ini.');
+
+  const dayUnit = isEn ? 'days' : 'hari';
 
   autoTable(doc, {
     startY: cursorY,
     margin: { left: marginX, right: marginX },
-    head: [['Rekap Ketidakhadiran', 'Hari', 'Catatan Wali Kelas']],
+    head: [
+      [
+        isEn ? 'Attendance Summary' : 'Rekap Ketidakhadiran',
+        isEn ? 'Days' : 'Hari',
+        isEn ? 'Homeroom Teacher Notes' : 'Catatan Wali Kelas',
+      ],
+    ],
     body: [
       [
-        'Sakit',
-        `${sakit} hari`,
+        isEn ? 'Sick' : 'Sakit',
+        `${sakit} ${dayUnit}`,
         { content: walasNote, rowSpan: 3, styles: { valign: 'top' } },
       ],
-      ['Izin', `${izin} hari`],
-      ['Tanpa Keterangan (Alpha)', `${alpha} hari`],
+      [isEn ? 'Permission' : 'Izin', `${izin} ${dayUnit}`],
+      [
+        isEn ? 'Unexcused (Alpha)' : 'Tanpa Keterangan (Alpha)',
+        `${alpha} ${dayUnit}`,
+      ],
     ],
     theme: 'grid',
     styles: {
@@ -570,17 +709,22 @@ async function renderSingleReportIntoDoc(
   // 7. KEPUTUSAN KENAIKAN KELAS / KELULUSAN (KHUSUS SAS SEMESTER GENAP)
   if (mode === 'SAS' && classContext.semesterType === 'GENAP') {
     ensureSpace(18);
+    const decisionText = isEn
+      ? `Decision: Based on the achievement of all competencies in the odd and even semesters, the student is declared: ${formatPromotionLabel(
+          reportNote.promotionStatus,
+          classContext.gradeLevel,
+          lang
+        )}`
+      : `Keputusan: Berdasarkan pencapaian seluruh kompetensi pada semester ganjil dan genap, peserta didik ditetapkan: ${formatPromotionLabel(
+          reportNote.promotionStatus,
+          classContext.gradeLevel,
+          lang
+        )}`;
+
     autoTable(doc, {
       startY: cursorY,
       margin: { left: marginX, right: marginX },
-      body: [
-        [
-          `Keputusan: Berdasarkan pencapaian seluruh kompetensi pada semester ganjil dan genap, peserta didik ditetapkan: ${formatPromotionLabel(
-            reportNote.promotionStatus,
-            classContext.gradeLevel
-          )}`,
-        ],
-      ],
+      body: [[decisionText]],
       theme: 'grid',
       styles: {
         fontSize: 8.5,
@@ -596,19 +740,28 @@ async function renderSingleReportIntoDoc(
 
   // 8. BLOK TANDA TANGAN (ORANG TUA, WALI KELAS & KEPALA SEKOLAH + STEMPEL)
   ensureSpace(46);
-  const reportDateFormatted = formatTanggalIndonesia(
-    mode === 'STS' ? reportNote.reportDateSts : reportNote.reportDateSas
+  const reportDateFormatted = formatTanggalRaport(
+    mode === 'STS' ? reportNote.reportDateSts : reportNote.reportDateSas,
+    lang
   );
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
 
-  doc.text('Mengetahui,', marginX, cursorY + 4);
-  doc.text('Orang Tua / Wali Peserta Didik,', marginX, cursorY + 8.5);
+  doc.text(isEn ? 'Acknowledged by,' : 'Mengetahui,', marginX, cursorY + 4);
+  doc.text(
+    isEn ? 'Parent / Legal Guardian,' : 'Orang Tua / Wali Peserta Didik,',
+    marginX,
+    cursorY + 8.5
+  );
 
   const rightSignX = pageWidth - marginX - 62;
   doc.text(`${school.city}, ${reportDateFormatted}`, rightSignX, cursorY + 4);
-  doc.text('Wali Kelas,', rightSignX, cursorY + 8.5);
+  doc.text(
+    isEn ? 'Homeroom Teacher,' : 'Wali Kelas,',
+    rightSignX,
+    cursorY + 8.5
+  );
 
   cursorY += 25;
   doc.text('( ........................................ )', marginX, cursorY);
@@ -628,8 +781,12 @@ async function renderSingleReportIntoDoc(
     ensureSpace(34);
     const centerSignX = pageWidth / 2 - 30;
     doc.setFontSize(9);
-    doc.text('Mengetahui,', centerSignX, cursorY);
-    doc.text('Kepala Sekolah,', centerSignX, cursorY + 4.5);
+    doc.text(isEn ? 'Approved by,' : 'Mengetahui,', centerSignX, cursorY);
+    doc.text(
+      isEn ? 'School Principal,' : 'Kepala Sekolah,',
+      centerSignX,
+      cursorY + 4.5
+    );
 
     if (assets.signatureAsset) {
       try {
@@ -697,7 +854,7 @@ export async function generateCurriculumMerdekaReportPdf(
 }
 
 /**
- * Mengunduh gabungan 1 PDF berisi seluruh raport siswa dalam 1 kelas (1 siswa mulai di halaman baru)
+ * Mengunduh gabungan 1 PDF berisi seluruh raport siswa dalam 1 kelas
  */
 export async function generateClassBatchReportPdf(
   inputs: GenerateReportPdfInput[]
@@ -710,7 +867,6 @@ export async function generateClassBatchReportPdf(
     format: 'a4',
   }) as AutoTableDoc;
 
-  // Muat aset sekolah 1 kali saja untuk mempercepat cetak massal satu kelas
   const firstSchool = inputs[0].school;
   const [logoAsset, signatureAsset, stampAsset] = await Promise.all([
     fetchImageAsDataUrl(firstSchool.logoUrl),

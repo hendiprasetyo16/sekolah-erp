@@ -34,6 +34,8 @@ import { cn } from '@/utils/cn';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
+import { useTranslation } from '@/hooks/useTranslation';
+import type { TranslationKey } from '@/constants/translations';
 import {
     gradeService,
     type GradeSheetRow,
@@ -87,85 +89,114 @@ type P5LevelCode = 'MB' | 'SB' | 'BSH' | 'SAB';
 
 /**
  * Daftar Tema Resmi Projek Penguatan Profil Pelajar Pancasila (P5)
- * sesuai Panduan Pembelajaran dan Asesmen Kurikulum Merdeka.
  */
-const P5_OFFICIAL_THEMES: string[] = [
-    'Gaya Hidup Berkelanjutan',
-    'Kearifan Lokal',
-    'Bhinneka Tunggal Ika',
-    'Bangunlah Jiwa dan Raganya',
-    'Suara Demokrasi',
-    'Rekayasa dan Teknologi',
-    'Kewirausahaan',
-    'Kebekerjaan',
-];
-
-/**
- * 6 Dimensi Resmi Profil Pelajar Pancasila
- */
-const P5_DIMENSIONS: { id: string; shortLabel: string; fullLabel: string }[] = [
+const P5_THEMES: { id: string; idLabel: string; enLabel: string }[] = [
     {
-        id: 'BERIMAN',
-        shortLabel: 'Beriman & Berakhlak Mulia',
-        fullLabel: 'Beriman, Bertakwa kepada Tuhan YME, dan Berakhlak Mulia',
+        id: 'SUSTAINABLE',
+        idLabel: 'Gaya Hidup Berkelanjutan',
+        enLabel: 'Sustainable Lifestyle (Gaya Hidup Berkelanjutan)',
     },
     {
-        id: 'GLOBAL',
-        shortLabel: 'Berkebinekaan Global',
-        fullLabel: 'Berkebinekaan Global',
+        id: 'LOCAL_WISDOM',
+        idLabel: 'Kearifan Lokal',
+        enLabel: 'Local Wisdom (Kearifan Lokal)',
     },
     {
-        id: 'GOTONG_ROYONG',
-        shortLabel: 'Bergotong Royong',
-        fullLabel: 'Bergotong Royong',
+        id: 'DIVERSITY',
+        idLabel: 'Bhinneka Tunggal Ika',
+        enLabel: 'Unity in Diversity (Bhinneka Tunggal Ika)',
     },
     {
-        id: 'MANDIRI',
-        shortLabel: 'Mandiri',
-        fullLabel: 'Mandiri',
+        id: 'BODY_SOUL',
+        idLabel: 'Bangunlah Jiwa dan Raganya',
+        enLabel: 'Build Soul and Body (Bangunlah Jiwa dan Raganya)',
     },
     {
-        id: 'BERNALAR_KRITIS',
-        shortLabel: 'Bernalar Kritis',
-        fullLabel: 'Bernalar Kritis',
+        id: 'DEMOCRACY',
+        idLabel: 'Suara Demokrasi',
+        enLabel: 'Voice of Democracy (Suara Demokrasi)',
     },
     {
-        id: 'KREATIF',
-        shortLabel: 'Kreatif',
-        fullLabel: 'Kreatif',
+        id: 'ENGINEERING',
+        idLabel: 'Rekayasa dan Teknologi',
+        enLabel: 'Engineering and Technology (Rekayasa dan Teknologi)',
+    },
+    {
+        id: 'ENTREPRENEURSHIP',
+        idLabel: 'Kewirausahaan',
+        enLabel: 'Entrepreneurship (Kewirausahaan)',
+    },
+    {
+        id: 'EMPLOYABILITY',
+        idLabel: 'Kebekerjaan',
+        enLabel: 'Work Readiness (Kebekerjaan)',
     },
 ];
 
-/**
- * 4 Predikat Capaian Perkembangan Kokurikuler / P5 Kurikulum Merdeka
- */
-const P5_LEVEL_OPTIONS: {
+const P5_DIMENSION_KEYS: {
+    id: string;
+    key: TranslationKey;
+    idText: string;
+}[] = [
+        {
+            id: 'BERIMAN',
+            key: 'grades.p5Dim_BERIMAN',
+            idText: 'Beriman & Berakhlak Mulia',
+        },
+        {
+            id: 'GLOBAL',
+            key: 'grades.p5Dim_GLOBAL',
+            idText: 'Berkebinekaan Global',
+        },
+        {
+            id: 'GOTONG_ROYONG',
+            key: 'grades.p5Dim_GOTONG_ROYONG',
+            idText: 'Bergotong Royong',
+        },
+        {
+            id: 'MANDIRI',
+            key: 'grades.p5Dim_MANDIRI',
+            idText: 'Mandiri',
+        },
+        {
+            id: 'BERNALAR_KRITIS',
+            key: 'grades.p5Dim_BERNALAR_KRITIS',
+            idText: 'Bernalar Kritis',
+        },
+        {
+            id: 'KREATIF',
+            key: 'grades.p5Dim_KREATIF',
+            idText: 'Kreatif',
+        },
+    ];
+
+const P5_LEVEL_META: {
     code: P5LevelCode;
-    label: string;
+    labelKey: TranslationKey;
     fullTitle: string;
     badgeClass: string;
 }[] = [
         {
             code: 'SAB',
-            label: 'SAB — Sangat Berkembang',
+            labelKey: 'grades.p5Level_SAB',
             fullTitle: 'Sangat Berkembang (SAB)',
             badgeClass: 'bg-emerald-100 text-emerald-800 border-emerald-300',
         },
         {
             code: 'BSH',
-            label: 'BSH — Berkembang Sesuai Harapan',
+            labelKey: 'grades.p5Level_BSH',
             fullTitle: 'Berkembang Sesuai Harapan (BSH)',
             badgeClass: 'bg-blue-100 text-blue-800 border-blue-300',
         },
         {
             code: 'SB',
-            label: 'SB — Sedang Berkembang',
+            labelKey: 'grades.p5Level_SB',
             fullTitle: 'Sedang Berkembang (SB)',
             badgeClass: 'bg-amber-100 text-amber-800 border-amber-300',
         },
         {
             code: 'MB',
-            label: 'MB — Mulai Berkembang',
+            labelKey: 'grades.p5Level_MB',
             fullTitle: 'Mulai Berkembang (MB)',
             badgeClass: 'bg-rose-100 text-rose-800 border-rose-300',
         },
@@ -239,10 +270,6 @@ function buildAutoDescription(
     return `Memerlukan bimbingan dan pendampingan lebih intensif untuk mencapai ketuntasan kompetensi ${subjectName} pada ${periodLabel}.`;
 }
 
-/**
- * Menyusun paragraf deskriptif Kokurikuler / Projek P5 sesuai format resmi
- * Raport Kurikulum Merdeka (Tema + Kegiatan + Dimensi + Capaian MB/SB/BSH/SAB).
- */
 function composeP5Narrative(params: {
     studentName: string;
     theme: string;
@@ -253,8 +280,7 @@ function composeP5Narrative(params: {
     const firstName =
         params.studentName.trim().split(' ')[0] || params.studentName;
     const levelObj =
-        P5_LEVEL_OPTIONS.find((l) => l.code === params.level) ??
-        P5_LEVEL_OPTIONS[1];
+        P5_LEVEL_META.find((l) => l.code === params.level) ?? P5_LEVEL_META[1];
 
     const dimList =
         params.dimensions.length > 0
@@ -275,9 +301,6 @@ function composeP5Narrative(params: {
     return `Dalam kegiatan Kokurikuler / Projek Penguatan Profil Pelajar Pancasila (P5) bertema "${params.theme}"${activityClause}, ananda ${firstName} menunjukkan capaian ${levelObj.fullTitle} pada dimensi ${dimList} ${behaviorTail[params.level]}`;
 }
 
-/**
- * Mendeteksi kode predikat P5 (SAB/BSH/SB/MB) dari teks cocurricularNote yang sudah tersimpan.
- */
 function detectP5LevelFromText(text?: string | null): P5LevelCode {
     if (!text) return 'BSH';
     if (text.includes('(SAB)') || text.includes('Sangat Berkembang')) return 'SAB';
@@ -286,9 +309,6 @@ function detectP5LevelFromText(text?: string | null): P5LevelCode {
     return 'BSH';
 }
 
-/**
- * Menghitung rekomendasi predikat P5 otomatis dari rata-rata capaian nilai siswa.
- */
 function inferP5LevelFromScores(
     subjectScores: { subjectName: string; score: number }[]
 ): P5LevelCode {
@@ -302,10 +322,6 @@ function inferP5LevelFromScores(
     return 'MB';
 }
 
-/**
- * Generator Catatan Wali Kelas otomatis berdasarkan nilai seluruh mapel,
- * rekap kehadiran, dan keaktifan ekstrakurikuler.
- */
 function buildAutoHomeroomNote(params: {
     studentName: string;
     mode: ReportExamMode;
@@ -396,6 +412,22 @@ function buildAutoHomeroomNote(params: {
 }
 
 export default function GradesAndReportPage() {
+    const { t, locale } = useTranslation();
+    const activeLang: 'id' | 'en' = locale === 'en' ? 'en' : 'id';
+
+    const tr = useCallback(
+        (key: TranslationKey, vars?: Record<string, string | number>): string => {
+            let text = String(t(key));
+            if (vars) {
+                Object.entries(vars).forEach(([k, v]) => {
+                    text = text.replace(new RegExp(`\\{${k}\\}`, 'g'), String(v));
+                });
+            }
+            return text;
+        },
+        [t]
+    );
+
     const authUser = useAuthStore((state) => state.user);
     const authSchool = useAuthStore((state) => state.school);
 
@@ -446,7 +478,7 @@ export default function GradesAndReportPage() {
     const [hasUnsavedNotes, setHasUnsavedNotes] = useState<boolean>(false);
 
     // Master Konfigurasi Projek P5 Tingkat Kelas
-    const [p5Theme, setP5Theme] = useState<string>(P5_OFFICIAL_THEMES[0]);
+    const [p5Theme, setP5Theme] = useState<string>(P5_THEMES[0].idLabel);
     const [p5ActivityTitle, setP5ActivityTitle] = useState<string>('');
     const [p5Dimensions, setP5Dimensions] = useState<string[]>([
         'Bergotong Royong',
@@ -457,7 +489,7 @@ export default function GradesAndReportPage() {
         Record<string, P5LevelCode>
     >({});
 
-    // Drawer / Modal Detail Siswa (Ekskul & Edit Narasi Lengkap)
+    // Modal Detail Siswa (Ekskul & Edit Narasi Lengkap)
     const [detailStudentRow, setDetailStudentRow] =
         useState<GradeSheetRow | null>(null);
 
@@ -687,7 +719,6 @@ export default function GradesAndReportPage() {
             setNotesMap(notesRes.data);
             setHasUnsavedNotes(false);
 
-            // Pulihkan predikat P5 (SAB/BSH/SB/MB) dari data tersimpan
             const detectedLevels: Record<string, P5LevelCode> = {};
             rows.forEach((r) => {
                 const existing = notesRes.data.get(r.student.id);
@@ -698,7 +729,7 @@ export default function GradesAndReportPage() {
             setP5LevelByStudent(detectedLevels);
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : 'Gagal memuat lembar nilai.'
+                err instanceof Error ? err.message : tr('grades.errLoadSheet')
             );
         } finally {
             setIsLoadingSheet(false);
@@ -710,13 +741,13 @@ export default function GradesAndReportPage() {
         selectedClassId,
         selectedSubjectId,
         teacherId,
+        tr,
     ]);
 
     useEffect(() => {
         void loadGradeAndNotesData();
     }, [loadGradeAndNotesData]);
 
-    // Sinkronisasi Tanggal Raport Kelas dari data yang sudah tersimpan saat mode STS/SAS berganti
     useEffect(() => {
         const firstNote = Array.from(notesMap.values())[0];
         if (!firstNote) return;
@@ -785,12 +816,12 @@ export default function GradesAndReportPage() {
             setRankings(res.data);
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : 'Gagal memuat peringkat kelas.'
+                err instanceof Error ? err.message : tr('grades.errLoadRanking')
             );
         } finally {
             setIsLoadingRankings(false);
         }
-    }, [resolvedSchoolId, selectedSemesterId, selectedClassId, examMode]);
+    }, [resolvedSchoolId, selectedSemesterId, selectedClassId, examMode, tr]);
 
     useEffect(() => {
         if (activeTab === 'RANKING') {
@@ -798,7 +829,6 @@ export default function GradesAndReportPage() {
         }
     }, [activeTab, loadRankings]);
 
-    // Handler Perubahan Nilai Formatif (TP ke-i)
     const handleFormativeTpChange = (
         studentId: string,
         tpIndex: number,
@@ -927,7 +957,7 @@ export default function GradesAndReportPage() {
                 };
             })
         );
-        toast.success('Seluruh nilai akhir berhasil dihitung ulang sesuai bobot.');
+        toast.success(tr('grades.toastRecalculated'));
     };
 
     const handleAutoFillDescriptions = () => {
@@ -955,9 +985,7 @@ export default function GradesAndReportPage() {
                 };
             })
         );
-        toast.success(
-            'Deskripsi capaian kompetensi otomatis berhasil diisi untuk kolom yang masih kosong.'
-        );
+        toast.success(tr('grades.toastAutoDescFilled'));
     };
 
     const handleSaveAllGrades = async () => {
@@ -970,14 +998,13 @@ export default function GradesAndReportPage() {
             await loadGradeAndNotesData();
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : 'Gagal menyimpan data nilai.'
+                err instanceof Error ? err.message : tr('grades.errSaveGrades')
             );
         } finally {
             setIsSavingGrades(false);
         }
     };
 
-    // Helper Catatan Raport per Siswa (otomatis memakai classReportDate)
     const getOrInitStudentNote = useCallback(
         (studentId: string): StudentReportNoteRecord => {
             const existing = notesMap.get(studentId);
@@ -1041,7 +1068,6 @@ export default function GradesAndReportPage() {
         });
     };
 
-    // Terapkan tanggal raport kelas ke semua siswa
     const handleClassReportDateChange = (newDate: string) => {
         setClassReportDate(newDate);
         setHasUnsavedNotes(true);
@@ -1061,16 +1087,14 @@ export default function GradesAndReportPage() {
         });
     };
 
-    // Toggle pilihan Dimensi Profil Pelajar Pancasila kelas
-    const toggleP5Dimension = (shortLabel: string) => {
+    const toggleP5Dimension = (idLabel: string) => {
         setP5Dimensions((prev) =>
-            prev.includes(shortLabel)
-                ? prev.filter((d) => d !== shortLabel)
-                : [...prev, shortLabel]
+            prev.includes(idLabel)
+                ? prev.filter((d) => d !== idLabel)
+                : [...prev, idLabel]
         );
     };
 
-    // Ubah predikat P5 (MB / SB / BSH / SAB) pada 1 siswa & langsung susun narasi resminya
     const handleStudentP5LevelChange = (
         row: GradeSheetRow,
         newLevel: P5LevelCode
@@ -1094,7 +1118,6 @@ export default function GradesAndReportPage() {
         }));
     };
 
-    // Ambil daftar nilai semua mapel milik 1 siswa untuk generator otomatis
     const getStudentSubjectScores = useCallback(
         (studentId: string): { subjectName: string; score: number }[] => {
             const subjectNameById = new Map(subjects.map((s) => [s.id, s.name]));
@@ -1119,7 +1142,6 @@ export default function GradesAndReportPage() {
         [classAllGrades, subjects, examMode]
     );
 
-    // Generate catatan wali kelas & narasi P5 otomatis untuk 1 siswa
     const handleGenerateSingleStudentNotes = (row: GradeSheetRow) => {
         const current = getOrInitStudentNote(row.student.id);
         const subjectScores = getStudentSubjectScores(row.student.id);
@@ -1163,11 +1185,13 @@ export default function GradesAndReportPage() {
         }));
 
         toast.success(
-            `Catatan & P5 (${inferredLevel}) untuk ${row.student.fullName} berhasil dibuat.`
+            tr('grades.toastSingleGenerated', {
+                level: inferredLevel,
+                name: row.student.fullName,
+            })
         );
     };
 
-    // Generate catatan wali kelas & P5 otomatis untuk SELURUH SISWA di kelas
     const handleGenerateAllClassNotes = (overwriteExisting: boolean) => {
         if (gradeRows.length === 0) return;
 
@@ -1248,11 +1272,10 @@ export default function GradesAndReportPage() {
         setP5LevelByStudent(nextLevels);
         setHasUnsavedNotes(true);
         toast.success(
-            `Catatan & Kokurikuler P5 berhasil dibuat untuk ${updatedCount} siswa. Klik "Simpan Semua Catatan" untuk menyimpan ke database.`
+            tr('grades.toastAllGenerated', { count: updatedCount })
         );
     };
 
-    // Terapkan status kenaikan kelas / kelulusan massal untuk satu kelas
     const handleBulkPromotionStatus = (status: PromotionStatus) => {
         if (gradeRows.length === 0) return;
         setHasUnsavedNotes(true);
@@ -1268,11 +1291,12 @@ export default function GradesAndReportPage() {
             return next;
         });
         toast.success(
-            `Status evaluasi seluruh siswa diubah ke "${status.replace('_', ' ')}".`
+            tr('grades.toastBulkPromoUpdated', {
+                status: status.replace('_', ' '),
+            })
         );
     };
 
-    // Simpan seluruh catatan siswa satu kelas sekaligus
     const handleSaveAllNotesBatch = async () => {
         if (gradeRows.length === 0) return;
         setIsSavingAllNotes(true);
@@ -1283,14 +1307,17 @@ export default function GradesAndReportPage() {
             }
             setHasUnsavedNotes(false);
             toast.success(
-                `Seluruh catatan raport ${examMode} (${gradeRows.length} siswa) berhasil disimpan.`
+                tr('grades.toastAllNotesSaved', {
+                    mode: examMode,
+                    count: gradeRows.length,
+                })
             );
             await loadGradeAndNotesData();
         } catch (err) {
             toast.error(
                 err instanceof Error
                     ? err.message
-                    : 'Gagal menyimpan semua catatan kelas.'
+                    : tr('grades.errSaveAllNotes')
             );
         } finally {
             setIsSavingAllNotes(false);
@@ -1312,7 +1339,7 @@ export default function GradesAndReportPage() {
             toast.error(
                 err instanceof Error
                     ? err.message
-                    : 'Gagal menyinkronkan data kehadiran.'
+                    : tr('grades.errSyncAttendance')
             );
         } finally {
             setIsSyncingAttendance(false);
@@ -1355,7 +1382,7 @@ export default function GradesAndReportPage() {
             toast.error(
                 err instanceof Error
                     ? err.message
-                    : 'Gagal memperbarui publikasi raport kelas.'
+                    : tr('grades.errPublishBatch')
             );
         } finally {
             setIsPublishingBatch(false);
@@ -1399,6 +1426,7 @@ export default function GradesAndReportPage() {
 
             await generateCurriculumMerdekaReportPdf({
                 mode: examMode,
+                lang: activeLang,
                 school: bundleRes.data.school,
                 classContext: currentClassContext,
                 student: row.student,
@@ -1409,11 +1437,14 @@ export default function GradesAndReportPage() {
             });
 
             toast.success(
-                `PDF Raport ${examMode} untuk ${row.student.fullName} berhasil diunduh.`
+                tr('grades.toastSinglePdfDownloaded', {
+                    mode: examMode,
+                    name: row.student.fullName,
+                })
             );
         } catch (err) {
             toast.error(
-                err instanceof Error ? err.message : 'Gagal mencetak PDF raport.'
+                err instanceof Error ? err.message : tr('grades.errPrintPdf')
             );
         } finally {
             setPrintingStudentId(null);
@@ -1442,6 +1473,7 @@ export default function GradesAndReportPage() {
 
             const inputs = gradeRows.map((row) => ({
                 mode: examMode,
+                lang: activeLang,
                 school: batchRes.data.school,
                 classContext: currentClassContext,
                 student: row.student,
@@ -1454,20 +1486,22 @@ export default function GradesAndReportPage() {
 
             await generateClassBatchReportPdf(inputs);
             toast.success(
-                `PDF Raport ${examMode} untuk ${inputs.length} siswa berhasil diunduh.`
+                tr('grades.toastClassPdfDownloaded', {
+                    mode: examMode,
+                    count: inputs.length,
+                })
             );
         } catch (err) {
             toast.error(
                 err instanceof Error
                     ? err.message
-                    : 'Gagal mencetak PDF satu kelas.'
+                    : tr('grades.errPrintClassPdf')
             );
         } finally {
             setIsPrintingBatch(false);
         }
     };
 
-    // Filter baris siswa pada Tab 2 berdasarkan pencarian nama/NISN
     const filteredNoteRows = useMemo(() => {
         const q = noteSearchQuery.trim().toLowerCase();
         if (!q) return gradeRows;
@@ -1485,11 +1519,10 @@ export default function GradesAndReportPage() {
             <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight text-foreground">
-                        Penilaian &amp; Raport Kurikulum Merdeka
+                        {tr('grades.pageTitle')}
                     </h1>
                     <p className="text-muted-foreground mt-1">
-                        Kelola nilai formatif, STS, SAS, deskripsi capaian kompetensi,
-                        kokurikuler P5, catatan wali kelas, hingga cetak PDF raport resmi.
+                        {tr('grades.pageSubtitle')}
                     </p>
                 </div>
 
@@ -1505,7 +1538,7 @@ export default function GradesAndReportPage() {
                                 : 'text-muted-foreground hover:text-foreground'
                         )}
                     >
-                        Tengah Semester (STS)
+                        {tr('grades.modeSts')}
                     </button>
                     <button
                         type="button"
@@ -1517,7 +1550,7 @@ export default function GradesAndReportPage() {
                                 : 'text-muted-foreground hover:text-foreground'
                         )}
                     >
-                        Akhir Semester (SAS)
+                        {tr('grades.modeSas')}
                     </button>
                 </div>
             </div>
@@ -1527,7 +1560,7 @@ export default function GradesAndReportPage() {
                 <CardContent className="p-5 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                     <div>
                         <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                            Tahun Ajaran
+                            {tr('grades.filterYear')}
                         </label>
                         <select
                             value={selectedYearId}
@@ -1536,7 +1569,7 @@ export default function GradesAndReportPage() {
                         >
                             {academicYears.map((ay) => (
                                 <option key={ay.id} value={ay.id}>
-                                    {ay.name} {ay.isActive ? '(Aktif)' : ''}
+                                    {ay.name} {ay.isActive ? tr('grades.activeTag') : ''}
                                 </option>
                             ))}
                         </select>
@@ -1544,7 +1577,7 @@ export default function GradesAndReportPage() {
 
                     <div>
                         <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                            Semester
+                            {tr('grades.filterSemester')}
                         </label>
                         <select
                             value={selectedSemesterId}
@@ -1553,7 +1586,8 @@ export default function GradesAndReportPage() {
                         >
                             {filteredSemesters.map((sem) => (
                                 <option key={sem.id} value={sem.id}>
-                                    Semester {sem.type} {sem.isActive ? '(Aktif)' : ''}
+                                    {tr('grades.semesterPrefix')} {sem.type}{' '}
+                                    {sem.isActive ? tr('grades.activeTag') : ''}
                                 </option>
                             ))}
                         </select>
@@ -1561,7 +1595,7 @@ export default function GradesAndReportPage() {
 
                     <div>
                         <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                            Kelas / Rombel
+                            {tr('grades.filterClass')}
                         </label>
                         <select
                             value={selectedClassId}
@@ -1569,11 +1603,12 @@ export default function GradesAndReportPage() {
                             className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
                         >
                             {classes.length === 0 ? (
-                                <option value="">Belum ada kelas</option>
+                                <option value="">{tr('grades.noClasses')}</option>
                             ) : (
                                 classes.map((cls) => (
                                     <option key={cls.id} value={cls.id}>
-                                        {cls.name} (Wali: {cls.homeroomTeacherName})
+                                        {cls.name} ({tr('grades.homeroomPrefix')}:{' '}
+                                        {cls.homeroomTeacherName})
                                     </option>
                                 ))
                             )}
@@ -1582,7 +1617,7 @@ export default function GradesAndReportPage() {
 
                     <div>
                         <label className="block text-xs font-semibold uppercase text-muted-foreground mb-1.5">
-                            Mata Pelajaran
+                            {tr('grades.filterSubject')}
                         </label>
                         <select
                             value={selectedSubjectId}
@@ -1590,7 +1625,7 @@ export default function GradesAndReportPage() {
                             className="w-full px-3 py-2 text-sm rounded-lg border bg-background"
                         >
                             {subjects.length === 0 ? (
-                                <option value="">Belum ada mata pelajaran</option>
+                                <option value="">{tr('grades.noSubjects')}</option>
                             ) : (
                                 subjects.map((subj) => (
                                     <option key={subj.id} value={subj.id}>
@@ -1617,7 +1652,7 @@ export default function GradesAndReportPage() {
                     )}
                 >
                     <FileSpreadsheet className="w-4 h-4" />
-                    1. Input Nilai &amp; Capaian Kompetensi
+                    {tr('grades.tabGrades')}
                 </button>
 
                 <button
@@ -1631,7 +1666,7 @@ export default function GradesAndReportPage() {
                     )}
                 >
                     <ClipboardCheck className="w-4 h-4" />
-                    2. Kokurikuler P5, Catatan Wali Kelas &amp; PDF
+                    {tr('grades.tabNotes')}
                 </button>
 
                 <button
@@ -1645,7 +1680,7 @@ export default function GradesAndReportPage() {
                     )}
                 >
                     <Trophy className="w-4 h-4" />
-                    3. Peringkat Kelas (Khusus Guru)
+                    {tr('grades.tabRanking')}
                 </button>
             </div>
 
@@ -1658,11 +1693,10 @@ export default function GradesAndReportPage() {
                         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                             <div>
                                 <CardTitle className="text-lg">
-                                    Lembar Penilaian Mata Pelajaran
+                                    {tr('grades.sheetTitle')}
                                 </CardTitle>
                                 <CardDescription>
-                                    Nilai Akhir otomatis dihitung dari komponen yang sudah terisi
-                                    (STS tidak turun jika SAS masih kosong).
+                                    {tr('grades.sheetSubtitle')}
                                 </CardDescription>
                             </div>
 
@@ -1674,7 +1708,7 @@ export default function GradesAndReportPage() {
                                     className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border bg-card text-sm font-medium hover:bg-muted disabled:opacity-50"
                                 >
                                     <Sparkles className="w-4 h-4 text-amber-500" />
-                                    Isi Deskripsi Otomatis
+                                    {tr('grades.btnAutoDesc')}
                                 </button>
 
                                 <button
@@ -1688,7 +1722,7 @@ export default function GradesAndReportPage() {
                                     ) : (
                                         <Save className="w-4 h-4" />
                                     )}
-                                    Simpan Semua Nilai
+                                    {tr('grades.btnSaveGrades')}
                                 </button>
                             </div>
                         </div>
@@ -1697,10 +1731,10 @@ export default function GradesAndReportPage() {
                         <div className="flex flex-wrap items-center justify-between gap-4 p-3 rounded-xl bg-muted/40 border text-xs">
                             <div className="flex flex-wrap items-center gap-3">
                                 <span className="font-semibold text-foreground">
-                                    Bobot Nilai (%):
+                                    {tr('grades.weightsLabel')}
                                 </span>
                                 <label className="inline-flex items-center gap-1.5">
-                                    <span>Formatif</span>
+                                    <span>{tr('grades.weightFormative')}</span>
                                     <input
                                         type="number"
                                         min={0}
@@ -1716,7 +1750,7 @@ export default function GradesAndReportPage() {
                                     />
                                 </label>
                                 <label className="inline-flex items-center gap-1.5">
-                                    <span>STS</span>
+                                    <span>{tr('grades.weightSts')}</span>
                                     <input
                                         type="number"
                                         min={0}
@@ -1732,7 +1766,7 @@ export default function GradesAndReportPage() {
                                     />
                                 </label>
                                 <label className="inline-flex items-center gap-1.5">
-                                    <span>SAS</span>
+                                    <span>{tr('grades.weightSas')}</span>
                                     <input
                                         type="number"
                                         min={0}
@@ -1752,13 +1786,13 @@ export default function GradesAndReportPage() {
                                     onClick={handleRecalculateAll}
                                     className="px-2.5 py-1 rounded border bg-background hover:bg-muted font-medium"
                                 >
-                                    Hitung Ulang
+                                    {tr('grades.btnRecalculate')}
                                 </button>
                             </div>
 
                             <div className="flex items-center gap-2">
                                 <span className="font-semibold text-foreground">
-                                    Kolom Nilai TP:
+                                    {tr('grades.tpColumnsLabel')}
                                 </span>
                                 <button
                                     type="button"
@@ -1783,16 +1817,16 @@ export default function GradesAndReportPage() {
                         {isLoadingSheet ? (
                             <div className="p-12 flex flex-col items-center justify-center gap-3 text-muted-foreground">
                                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                                <p className="text-sm">Memuat daftar siswa dan nilai...</p>
+                                <p className="text-sm">{tr('grades.loadingSheet')}</p>
                             </div>
                         ) : gradeRows.length === 0 ? (
                             <div className="p-12 text-center space-y-2 text-muted-foreground">
                                 <Users className="w-10 h-10 mx-auto opacity-40" />
                                 <p className="font-medium text-foreground">
-                                    Tidak ada siswa aktif pada kelas terpilih
+                                    {tr('grades.emptyStudentsTitle')}
                                 </p>
                                 <p className="text-xs">
-                                    Pastikan kelas dan mata pelajaran sudah dipilih dengan benar.
+                                    {tr('grades.emptyStudentsDesc')}
                                 </p>
                             </div>
                         ) : (
@@ -1800,8 +1834,12 @@ export default function GradesAndReportPage() {
                                 <table className="w-full text-xs text-left border-collapse">
                                     <thead className="bg-muted/60 text-muted-foreground uppercase border-b">
                                         <tr>
-                                            <th className="px-3 py-3 w-10 text-center">No</th>
-                                            <th className="px-3 py-3 min-w-45">Nama Siswa</th>
+                                            <th className="px-3 py-3 w-10 text-center">
+                                                {tr('grades.colNo')}
+                                            </th>
+                                            <th className="px-3 py-3 min-w-45">
+                                                {tr('grades.colStudentName')}
+                                            </th>
                                             {Array.from({ length: tpCount }).map((_, idx) => (
                                                 <th
                                                     key={idx}
@@ -1811,7 +1849,7 @@ export default function GradesAndReportPage() {
                                                 </th>
                                             ))}
                                             <th className="px-2 py-3 w-16 text-center font-bold">
-                                                Rata TP
+                                                {tr('grades.colTpAvg')}
                                             </th>
                                             <th className="px-2 py-3 w-20 text-center bg-amber-50/50 dark:bg-amber-950/20">
                                                 STS
@@ -1820,14 +1858,16 @@ export default function GradesAndReportPage() {
                                                 SAS
                                             </th>
                                             <th className="px-2 py-3 w-20 text-center font-bold">
-                                                Nilai Akhir
+                                                {tr('grades.colFinalScore')}
                                             </th>
-                                            <th className="px-2 py-3 w-14 text-center">Pred</th>
-                                            <th className="px-3 py-3 min-w-57.5">
-                                                Deskripsi Capaian Kompetensi (STS)
+                                            <th className="px-2 py-3 w-14 text-center">
+                                                {tr('grades.colPred')}
                                             </th>
                                             <th className="px-3 py-3 min-w-57.5">
-                                                Deskripsi Capaian Kompetensi (SAS / Akhir)
+                                                {tr('grades.colDescSts')}
+                                            </th>
+                                            <th className="px-3 py-3 min-w-57.5">
+                                                {tr('grades.colDescSas')}
                                             </th>
                                         </tr>
                                     </thead>
@@ -1965,7 +2005,7 @@ export default function GradesAndReportPage() {
                                                                 e.target.value
                                                             )
                                                         }
-                                                        placeholder="Capaian tengah semester..."
+                                                        placeholder={tr('grades.placeholderDescSts')}
                                                         className="w-full p-2 rounded border bg-background text-xs resize-y"
                                                     />
                                                 </td>
@@ -1982,7 +2022,7 @@ export default function GradesAndReportPage() {
                                                                 e.target.value
                                                             )
                                                         }
-                                                        placeholder="Capaian akhir semester..."
+                                                        placeholder={tr('grades.placeholderDescSas')}
                                                         className="w-full p-2 rounded border bg-background text-xs resize-y"
                                                     />
                                                 </td>
@@ -2008,17 +2048,18 @@ export default function GradesAndReportPage() {
                                 <div>
                                     <CardTitle className="text-lg flex items-center gap-2">
                                         <span>
-                                            Pengaturan Raport Kelas ({examMode})
+                                            {tr('grades.classSettingsTitle', {
+                                                mode: examMode,
+                                            })}
                                         </span>
                                         {hasUnsavedNotes && (
                                             <Badge className="bg-amber-500 text-white text-[11px]">
-                                                Perubahan Belum Disimpan
+                                                {tr('grades.unsavedBadge')}
                                             </Badge>
                                         )}
                                     </CardTitle>
                                     <CardDescription>
-                                        Atur tanggal raport, Tema &amp; Dimensi Projek P5 sekali
-                                        untuk seluruh kelas, lalu gunakan tabel cepat di bawah.
+                                        {tr('grades.classSettingsSubtitle')}
                                     </CardDescription>
                                 </div>
 
@@ -2034,7 +2075,9 @@ export default function GradesAndReportPage() {
                                         ) : (
                                             <Save className="w-4 h-4" />
                                         )}
-                                        Simpan Semua Catatan ({gradeRows.length} Siswa)
+                                        {tr('grades.btnSaveAllNotes', {
+                                            count: gradeRows.length,
+                                        })}
                                     </button>
 
                                     <button
@@ -2048,7 +2091,9 @@ export default function GradesAndReportPage() {
                                         ) : (
                                             <Download className="w-4 h-4" />
                                         )}
-                                        Unduh PDF Satu Kelas ({gradeRows.length} Siswa)
+                                        {tr('grades.btnDownloadClassPdf', {
+                                            count: gradeRows.length,
+                                        })}
                                     </button>
                                 </div>
                             </div>
@@ -2060,25 +2105,27 @@ export default function GradesAndReportPage() {
                                 <div className="p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/80 dark:border-indigo-900/60 space-y-3">
                                     <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wide text-indigo-800 dark:text-indigo-300">
                                         <Award className="w-4 h-4" />
-                                        <span>
-                                            Master Kokurikuler / Projek Penguatan Profil Pelajar
-                                            Pancasila (P5) Kelas Ini
-                                        </span>
+                                        <span>{tr('grades.p5MasterTitle')}</span>
                                     </div>
 
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                                         <div>
                                             <label className="block font-semibold mb-1 text-foreground">
-                                                1. Tema Projek P5 (Kurikulum Merdeka)
+                                                {tr('grades.p5ThemeLabel')}
                                             </label>
                                             <select
                                                 value={p5Theme}
                                                 onChange={(e) => setP5Theme(e.target.value)}
                                                 className="w-full px-3 py-2 rounded-lg border bg-background font-medium"
                                             >
-                                                {P5_OFFICIAL_THEMES.map((theme) => (
-                                                    <option key={theme} value={theme}>
-                                                        {theme}
+                                                {P5_THEMES.map((theme) => (
+                                                    <option
+                                                        key={theme.id}
+                                                        value={theme.idLabel}
+                                                    >
+                                                        {activeLang === 'en'
+                                                            ? theme.enLabel
+                                                            : theme.idLabel}
                                                     </option>
                                                 ))}
                                             </select>
@@ -2086,9 +2133,9 @@ export default function GradesAndReportPage() {
 
                                         <div>
                                             <label className="block font-semibold mb-1 text-foreground">
-                                                2. Judul Kegiatan Spesifik{' '}
+                                                {tr('grades.p5ActivityLabel')}{' '}
                                                 <span className="text-muted-foreground font-normal">
-                                                    (Opsional)
+                                                    {tr('grades.p5Optional')}
                                                 </span>
                                             </label>
                                             <input
@@ -2097,7 +2144,9 @@ export default function GradesAndReportPage() {
                                                 onChange={(e) =>
                                                     setP5ActivityTitle(e.target.value)
                                                 }
-                                                placeholder="Misal: Pengolahan Sampah Organik & Karya Daur Ulang"
+                                                placeholder={tr(
+                                                    'grades.p5ActivityPlaceholder'
+                                                )}
                                                 className="w-full px-3 py-2 rounded-lg border bg-background"
                                             />
                                         </div>
@@ -2105,19 +2154,19 @@ export default function GradesAndReportPage() {
 
                                     <div className="text-xs space-y-1.5">
                                         <label className="block font-semibold text-foreground">
-                                            3. Dimensi Profil Pelajar Pancasila yang Diamati:
+                                            {tr('grades.p5DimensionsLabel')}
                                         </label>
                                         <div className="flex flex-wrap gap-2">
-                                            {P5_DIMENSIONS.map((dim) => {
+                                            {P5_DIMENSION_KEYS.map((dim) => {
                                                 const active = p5Dimensions.includes(
-                                                    dim.shortLabel
+                                                    dim.idText
                                                 );
                                                 return (
                                                     <button
                                                         key={dim.id}
                                                         type="button"
                                                         onClick={() =>
-                                                            toggleP5Dimension(dim.shortLabel)
+                                                            toggleP5Dimension(dim.idText)
                                                         }
                                                         className={cn(
                                                             'px-3 py-1.5 rounded-full border text-xs font-medium transition-colors',
@@ -2127,7 +2176,7 @@ export default function GradesAndReportPage() {
                                                         )}
                                                     >
                                                         {active ? '✓ ' : '+ '}
-                                                        {dim.shortLabel}
+                                                        {tr(dim.key)}
                                                     </button>
                                                 );
                                             })}
@@ -2143,7 +2192,9 @@ export default function GradesAndReportPage() {
                                     <div className="flex items-center gap-2 bg-muted/50 px-3 py-1.5 rounded-lg border text-xs">
                                         <Calendar className="w-3.5 h-3.5 text-primary" />
                                         <span className="font-semibold">
-                                            Tgl Raport ({examMode}):
+                                            {tr('grades.reportDateLabel', {
+                                                mode: examMode,
+                                            })}
                                         </span>
                                         <input
                                             type="date"
@@ -2163,7 +2214,7 @@ export default function GradesAndReportPage() {
                                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 text-amber-800 text-xs font-semibold hover:bg-amber-100 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300 disabled:opacity-50"
                                     >
                                         <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                                        Auto-Generate Catatan &amp; P5 Semua Siswa
+                                        {tr('grades.btnAutoAllNotes')}
                                     </button>
 
                                     {/* Sinkronisasi Absensi */}
@@ -2178,7 +2229,7 @@ export default function GradesAndReportPage() {
                                         ) : (
                                             <RefreshCw className="w-3.5 h-3.5 text-blue-500" />
                                         )}
-                                        Sinkron Absensi
+                                        {tr('grades.btnSyncAttendance')}
                                     </button>
                                 </div>
 
@@ -2197,16 +2248,16 @@ export default function GradesAndReportPage() {
                                             className="px-3 py-2 rounded-lg border bg-background text-xs font-medium"
                                         >
                                             <option value="" disabled>
-                                                Set Status Kenaikan Massal...
+                                                {tr('grades.bulkPromotionPlaceholder')}
                                             </option>
                                             <option value="NAIK_KELAS">
-                                                Semua: Naik Kelas
+                                                {tr('grades.promoAllNaik')}
                                             </option>
                                             <option value="LULUS">
-                                                Semua: Lulus Satuan Pendidikan
+                                                {tr('grades.promoAllLulus')}
                                             </option>
                                             <option value="PROSES">
-                                                Semua: Dalam Proses Evaluasi
+                                                {tr('grades.promoAllProses')}
                                             </option>
                                         </select>
                                     )}
@@ -2222,7 +2273,7 @@ export default function GradesAndReportPage() {
                                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 text-xs font-semibold hover:bg-emerald-100 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-300 disabled:opacity-50"
                                     >
                                         <CheckCircle2 className="w-3.5 h-3.5" />
-                                        Publikasikan Semua {examMode}
+                                        {tr('grades.btnPublishAll', { mode: examMode })}
                                     </button>
                                 </div>
                             </div>
@@ -2233,9 +2284,10 @@ export default function GradesAndReportPage() {
                     <Card className="border-none shadow-sm">
                         <CardHeader className="py-3.5 px-5 border-b flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                             <div className="text-xs text-muted-foreground">
-                                Menampilkan <strong>{filteredNoteRows.length}</strong> dari{' '}
-                                <strong>{gradeRows.length}</strong> siswa. Edit langsung di
-                                tabel, lalu klik <strong>Simpan Semua Catatan</strong> di atas.
+                                {tr('grades.showingCount', {
+                                    shown: filteredNoteRows.length,
+                                    total: gradeRows.length,
+                                })}
                             </div>
 
                             <div className="relative">
@@ -2244,7 +2296,7 @@ export default function GradesAndReportPage() {
                                     type="text"
                                     value={noteSearchQuery}
                                     onChange={(e) => setNoteSearchQuery(e.target.value)}
-                                    placeholder="Filter nama / NISN siswa..."
+                                    placeholder={tr('grades.searchStudentPlaceholder')}
                                     className="pl-8 pr-3 py-1.5 text-xs rounded-lg border bg-background w-full sm:w-56"
                                 />
                             </div>
@@ -2253,7 +2305,7 @@ export default function GradesAndReportPage() {
                         <CardContent className="p-0">
                             {filteredNoteRows.length === 0 ? (
                                 <div className="p-10 text-center text-sm text-muted-foreground">
-                                    Tidak ada data siswa yang cocok dengan filter.
+                                    {tr('grades.noFilteredStudents')}
                                 </div>
                             ) : (
                                 <div className="overflow-x-auto">
@@ -2261,30 +2313,32 @@ export default function GradesAndReportPage() {
                                         <thead className="bg-muted/60 text-muted-foreground uppercase border-b">
                                             <tr>
                                                 <th className="px-3 py-3 w-10 text-center">
-                                                    No
+                                                    {tr('grades.colNo')}
                                                 </th>
                                                 <th className="px-3 py-3 min-w-43.75">
-                                                    Nama Siswa
+                                                    {tr('grades.colStudentName')}
                                                 </th>
                                                 <th className="px-2 py-3 w-36 text-center">
-                                                    Absensi (S / I / A)
+                                                    {tr('grades.colAttendance')}
                                                 </th>
                                                 {examMode === 'SAS' && (
                                                     <th className="px-3 py-3 min-w-50">
-                                                        Capaian P5 (MB/SB/BSH/SAB)
+                                                        {tr('grades.colP5Achievement')}
                                                     </th>
                                                 )}
                                                 <th className="px-3 py-3 min-w-65">
-                                                    Catatan Wali Kelas ({examMode})
+                                                    {tr('grades.colHomeroomNote', {
+                                                        mode: examMode,
+                                                    })}
                                                 </th>
                                                 <th className="px-3 py-3 min-w-41.25">
-                                                    Ekskul &amp; Status
+                                                    {tr('grades.colEkskulStatus')}
                                                 </th>
                                                 <th className="px-3 py-3 w-28 text-center">
-                                                    Publikasi
+                                                    {tr('grades.colPublish')}
                                                 </th>
                                                 <th className="px-3 py-3 w-24 text-right">
-                                                    Aksi
+                                                    {tr('grades.colAction')}
                                                 </th>
                                             </tr>
                                         </thead>
@@ -2297,9 +2351,9 @@ export default function GradesAndReportPage() {
                                                     p5LevelByStudent[row.student.id] ??
                                                     'BSH';
                                                 const p5Meta =
-                                                    P5_LEVEL_OPTIONS.find(
+                                                    P5_LEVEL_META.find(
                                                         (o) => o.code === p5Code
-                                                    ) ?? P5_LEVEL_OPTIONS[1];
+                                                    ) ?? P5_LEVEL_META[1];
                                                 const isPublished =
                                                     examMode === 'STS'
                                                         ? note.isStsPublished
@@ -2333,7 +2387,7 @@ export default function GradesAndReportPage() {
                                                                 <input
                                                                     type="number"
                                                                     min={0}
-                                                                    title="Sakit"
+                                                                    title={tr('grades.attSickTitle')}
                                                                     value={
                                                                         examMode === 'STS'
                                                                             ? note.stsSickDays
@@ -2368,7 +2422,7 @@ export default function GradesAndReportPage() {
                                                                 <input
                                                                     type="number"
                                                                     min={0}
-                                                                    title="Izin"
+                                                                    title={tr('grades.attPermTitle')}
                                                                     value={
                                                                         examMode === 'STS'
                                                                             ? note.stsPermissionDays
@@ -2403,7 +2457,7 @@ export default function GradesAndReportPage() {
                                                                 <input
                                                                     type="number"
                                                                     min={0}
-                                                                    title="Alpha"
+                                                                    title={tr('grades.attAlphaTitle')}
                                                                     value={
                                                                         examMode === 'STS'
                                                                             ? note.stsAlphaDays
@@ -2437,9 +2491,9 @@ export default function GradesAndReportPage() {
                                                                 />
                                                             </div>
                                                             <div className="grid grid-cols-3 gap-1 text-[10px] text-center text-muted-foreground mt-0.5">
-                                                                <span>S</span>
-                                                                <span>I</span>
-                                                                <span>A</span>
+                                                                <span>{tr('grades.attSickShort')}</span>
+                                                                <span>{tr('grades.attPermShort')}</span>
+                                                                <span>{tr('grades.attAlphaShort')}</span>
                                                             </div>
                                                         </td>
 
@@ -2460,20 +2514,18 @@ export default function GradesAndReportPage() {
                                                                         p5Meta.badgeClass
                                                                     )}
                                                                 >
-                                                                    {P5_LEVEL_OPTIONS.map(
-                                                                        (opt) => (
-                                                                            <option
-                                                                                key={opt.code}
-                                                                                value={opt.code}
-                                                                            >
-                                                                                {opt.label}
-                                                                            </option>
-                                                                        )
-                                                                    )}
+                                                                    {P5_LEVEL_META.map((opt) => (
+                                                                        <option
+                                                                            key={opt.code}
+                                                                            value={opt.code}
+                                                                        >
+                                                                            {tr(opt.labelKey)}
+                                                                        </option>
+                                                                    ))}
                                                                 </select>
                                                                 <p className="text-[11px] text-muted-foreground line-clamp-2 leading-relaxed">
                                                                     {note.cocurricularNote?.trim() ||
-                                                                        'Belum ada narasi P5 (pilih predikat di atas)'}
+                                                                        tr('grades.p5EmptyPreview')}
                                                                 </p>
                                                             </td>
                                                         )}
@@ -2510,12 +2562,16 @@ export default function GradesAndReportPage() {
                                                                             })
                                                                         )
                                                                     }
-                                                                    placeholder="Tulis atau klik ikon ✨..."
+                                                                    placeholder={tr(
+                                                                        'grades.homeroomNotePlaceholder'
+                                                                    )}
                                                                     className="w-full p-2 rounded-lg border bg-background text-xs resize-y"
                                                                 />
                                                                 <button
                                                                     type="button"
-                                                                    title="Generate Catatan & P5 Otomatis untuk siswa ini"
+                                                                    title={tr(
+                                                                        'grades.btnAutoSingleTooltip'
+                                                                    )}
                                                                     onClick={() =>
                                                                         handleGenerateSingleStudentNotes(
                                                                             row
@@ -2538,12 +2594,14 @@ export default function GradesAndReportPage() {
                                                                 className="w-full inline-flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-lg border bg-background hover:bg-muted text-xs font-medium"
                                                             >
                                                                 <span>
-                                                                    Ekskul (
-                                                                    {
-                                                                        note.extracurriculars
-                                                                            .length
-                                                                    }
-                                                                    ) &amp; Narasi
+                                                                    {tr(
+                                                                        'grades.ekskulAndNarrativeBtn',
+                                                                        {
+                                                                            count: note
+                                                                                .extracurriculars
+                                                                                .length,
+                                                                        }
+                                                                    )}
                                                                 </span>
                                                                 <Pencil className="w-3 h-3 text-muted-foreground" />
                                                             </button>
@@ -2565,19 +2623,19 @@ export default function GradesAndReportPage() {
                                                                     className="w-full px-2 py-1 rounded border bg-muted/40 text-[11px] font-medium"
                                                                 >
                                                                     <option value="PROSES">
-                                                                        Proses Evaluasi
+                                                                        {tr('grades.promoProses')}
                                                                     </option>
                                                                     <option value="NAIK_KELAS">
-                                                                        Naik Kelas
+                                                                        {tr('grades.promoNaik')}
                                                                     </option>
                                                                     <option value="TINGGAL_KELAS">
-                                                                        Tinggal Kelas
+                                                                        {tr('grades.promoTinggal')}
                                                                     </option>
                                                                     <option value="LULUS">
-                                                                        Lulus
+                                                                        {tr('grades.promoLulus')}
                                                                     </option>
                                                                     <option value="TIDAK_LULUS">
-                                                                        Tidak Lulus
+                                                                        {tr('grades.promoTidakLulus')}
                                                                     </option>
                                                                 </select>
                                                             )}
@@ -2612,8 +2670,8 @@ export default function GradesAndReportPage() {
                                                                 />
                                                                 <span>
                                                                     {isPublished
-                                                                        ? 'Terbit'
-                                                                        : 'Draft'}
+                                                                        ? tr('grades.statusPublished')
+                                                                        : tr('grades.statusDraft')}
                                                                 </span>
                                                             </label>
                                                         </td>
@@ -2635,7 +2693,7 @@ export default function GradesAndReportPage() {
                                                                 ) : (
                                                                     <FileText className="w-3.5 h-3.5 text-red-500" />
                                                                 )}
-                                                                PDF
+                                                                {tr('grades.btnPdf')}
                                                             </button>
                                                         </td>
                                                     </tr>
@@ -2692,7 +2750,7 @@ export default function GradesAndReportPage() {
                                         <div className="space-y-1.5">
                                             <div className="flex items-center justify-between">
                                                 <label className="font-bold text-sm">
-                                                    Deskripsi Kokurikuler / Projek P5 (Raport)
+                                                    {tr('grades.modalP5Label')}
                                                 </label>
                                                 <button
                                                     type="button"
@@ -2707,7 +2765,7 @@ export default function GradesAndReportPage() {
                                                     className="inline-flex items-center gap-1 px-2.5 py-1 rounded border bg-indigo-50 text-indigo-700 font-medium hover:bg-indigo-100"
                                                 >
                                                     <Sparkles className="w-3 h-3" />
-                                                    Susun Ulang dari Master P5 Kelas
+                                                    {tr('grades.btnRebuildP5')}
                                                 </button>
                                             </div>
                                             <textarea
@@ -2722,7 +2780,7 @@ export default function GradesAndReportPage() {
                                                         })
                                                     )
                                                 }
-                                                placeholder="Narasi capaian Projek Penguatan Profil Pelajar Pancasila..."
+                                                placeholder={tr('grades.modalP5Placeholder')}
                                                 className="w-full p-3 rounded-xl border bg-background text-xs leading-relaxed"
                                             />
                                         </div>
@@ -2732,7 +2790,7 @@ export default function GradesAndReportPage() {
                                             <div className="flex items-center justify-between">
                                                 <span className="font-bold text-sm flex items-center gap-1.5">
                                                     <BookOpen className="w-4 h-4 text-primary" />
-                                                    Kegiatan Ekstrakurikuler
+                                                    {tr('grades.modalEkskulTitle')}
                                                 </span>
                                                 <button
                                                     type="button"
@@ -2755,14 +2813,13 @@ export default function GradesAndReportPage() {
                                                     className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground font-medium"
                                                 >
                                                     <Plus className="w-3.5 h-3.5" />
-                                                    Tambah Ekskul
+                                                    {tr('grades.btnAddEkskul')}
                                                 </button>
                                             </div>
 
                                             {note.extracurriculars.length === 0 ? (
                                                 <p className="text-muted-foreground italic py-2">
-                                                    Belum ada kegiatan ekstrakurikuler untuk
-                                                    siswa ini.
+                                                    {tr('grades.modalEkskulEmpty')}
                                                 </p>
                                             ) : (
                                                 <div className="space-y-2">
@@ -2799,7 +2856,9 @@ export default function GradesAndReportPage() {
                                                                             }
                                                                         )
                                                                     }
-                                                                    placeholder="Nama Ekskul (mis. Pramuka)"
+                                                                    placeholder={tr(
+                                                                        'grades.ekskulNamePlaceholder'
+                                                                    )}
                                                                     className="col-span-4 px-2.5 py-2 rounded-lg border bg-background"
                                                                 />
                                                                 <select
@@ -2829,13 +2888,13 @@ export default function GradesAndReportPage() {
                                                                     className="col-span-3 px-2 py-2 rounded-lg border bg-background"
                                                                 >
                                                                     <option value="Sangat Baik">
-                                                                        Sangat Baik
+                                                                        {tr('grades.predSangatBaik')}
                                                                     </option>
                                                                     <option value="Baik">
-                                                                        Baik
+                                                                        {tr('grades.predBaik')}
                                                                     </option>
                                                                     <option value="Cukup">
-                                                                        Cukup
+                                                                        {tr('grades.predCukup')}
                                                                     </option>
                                                                 </select>
                                                                 <input
@@ -2863,7 +2922,9 @@ export default function GradesAndReportPage() {
                                                                             }
                                                                         )
                                                                     }
-                                                                    placeholder="Keterangan singkat..."
+                                                                    placeholder={tr(
+                                                                        'grades.ekskulDescPlaceholder'
+                                                                    )}
                                                                     className="col-span-4 px-2.5 py-2 rounded-lg border bg-background"
                                                                 />
                                                                 <button
@@ -2904,7 +2965,7 @@ export default function GradesAndReportPage() {
                                             onClick={() => setDetailStudentRow(null)}
                                             className="px-4 py-2 rounded-lg bg-primary text-primary-foreground text-xs font-semibold"
                                         >
-                                            Selesai
+                                            {tr('grades.btnDone')}
                                         </button>
                                     </div>
                                 </>
@@ -2922,11 +2983,10 @@ export default function GradesAndReportPage() {
                     <CardHeader className="border-b flex flex-row items-center justify-between">
                         <div>
                             <CardTitle className="text-lg">
-                                Peringkat Kelas — Mode {examMode}
+                                {tr('grades.rankingTitle', { mode: examMode })}
                             </CardTitle>
                             <CardDescription>
-                                Data peringkat internal khusus Guru, Wali Kelas, dan Pimpinan
-                                Sekolah (tidak ditampilkan di portal siswa/orang tua).
+                                {tr('grades.rankingSubtitle')}
                             </CardDescription>
                         </div>
                         <button
@@ -2941,7 +3001,7 @@ export default function GradesAndReportPage() {
                                     isLoadingRankings && 'animate-spin'
                                 )}
                             />
-                            Muat Ulang
+                            {tr('grades.btnReload')}
                         </button>
                     </CardHeader>
 
@@ -2949,11 +3009,11 @@ export default function GradesAndReportPage() {
                         {isLoadingRankings ? (
                             <div className="p-12 flex flex-col items-center justify-center gap-2 text-muted-foreground">
                                 <Loader2 className="w-7 h-7 animate-spin text-primary" />
-                                <p className="text-sm">Menghitung peringkat kelas...</p>
+                                <p className="text-sm">{tr('grades.loadingRanking')}</p>
                             </div>
                         ) : rankings.length === 0 ? (
                             <div className="p-12 text-center text-sm text-muted-foreground">
-                                Belum ada data nilai untuk dihitung peringkatnya.
+                                {tr('grades.emptyRanking')}
                             </div>
                         ) : (
                             <div className="overflow-x-auto">
@@ -2961,12 +3021,20 @@ export default function GradesAndReportPage() {
                                     <thead className="bg-muted/50 text-xs uppercase text-muted-foreground border-b">
                                         <tr>
                                             <th className="px-6 py-3.5 w-24 text-center">
-                                                Peringkat
+                                                {tr('grades.colRank')}
                                             </th>
-                                            <th className="px-6 py-3.5">Nama Siswa</th>
-                                            <th className="px-6 py-3.5 text-center">Mapel Dinilai</th>
-                                            <th className="px-6 py-3.5 text-right">Total Nilai</th>
-                                            <th className="px-6 py-3.5 text-right">Rata-Rata</th>
+                                            <th className="px-6 py-3.5">
+                                                {tr('grades.colStudentName')}
+                                            </th>
+                                            <th className="px-6 py-3.5 text-center">
+                                                {tr('grades.colGradedSubjects')}
+                                            </th>
+                                            <th className="px-6 py-3.5 text-right">
+                                                {tr('grades.colTotalScore')}
+                                            </th>
+                                            <th className="px-6 py-3.5 text-right">
+                                                {tr('grades.colAverage')}
+                                            </th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -3002,7 +3070,7 @@ export default function GradesAndReportPage() {
                                                     </div>
                                                 </td>
                                                 <td className="px-6 py-3.5 text-center">
-                                                    {r.gradedSubjects} mapel
+                                                    {r.gradedSubjects} {tr('grades.subjectsUnit')}
                                                 </td>
                                                 <td className="px-6 py-3.5 text-right font-mono">
                                                     {r.totalScore.toFixed(2)}

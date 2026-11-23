@@ -27,6 +27,7 @@ import { Badge } from '@/components/ui/badge';
 import { cn } from '@/utils/cn';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTranslation } from '@/hooks/useTranslation';
 import type {
     SubjectItem,
     SubjectCategory,
@@ -41,43 +42,6 @@ import {
     deleteAllSubjectsBySchool,
     seedDefaultMerdekaSubjects,
 } from '../services/subject.service';
-
-const CATEGORY_OPTIONS: {
-    value: SubjectCategory;
-    label: string;
-    badgeClass: string;
-}[] = [
-        {
-            value: 'UMUM',
-            label: 'Kelompok Umum / Wajib',
-            badgeClass:
-                'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300',
-        },
-        {
-            value: 'PILIHAN',
-            label: 'Mata Pelajaran Pilihan',
-            badgeClass:
-                'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300',
-        },
-        {
-            value: 'KEJURUAN',
-            label: 'Kejuruan / Peminatan',
-            badgeClass:
-                'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300',
-        },
-        {
-            value: 'MUATAN_LOKAL',
-            label: 'Muatan Lokal',
-            badgeClass:
-                'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300',
-        },
-        {
-            value: 'KOKURIKULER',
-            label: 'Kokurikuler / Projek',
-            badgeClass:
-                'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300',
-        },
-    ];
 
 const INITIAL_FORM: SubjectFormState = {
     code: '',
@@ -96,10 +60,8 @@ const MANAGER_ROLES = new Set([
     'STAFF_TU',
 ]);
 
-// Kata kunci konfirmasi khusus untuk tombol Hapus Semua (SUPER_ADMIN)
-const DELETE_ALL_KEYWORD = 'HAPUS SEMUA';
-
 export default function SubjectsPage() {
+    const { t } = useTranslation();
     const authUser = useAuthStore((state) => state.user);
     const authSchool = useAuthStore((state) => state.school);
 
@@ -136,6 +98,50 @@ export default function SubjectsPage() {
     const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState<boolean>(false);
     const [deleteAllConfirmText, setDeleteAllConfirmText] = useState<string>('');
     const [isDeletingAll, setIsDeletingAll] = useState<boolean>(false);
+
+    const categoryOptions = useMemo<
+        {
+            value: SubjectCategory;
+            label: string;
+            badgeClass: string;
+        }[]
+    >(
+        () => [
+            {
+                value: 'UMUM',
+                label: t('subjects.cat_UMUM'),
+                badgeClass:
+                    'bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/30 dark:text-blue-300',
+            },
+            {
+                value: 'PILIHAN',
+                label: t('subjects.cat_PILIHAN'),
+                badgeClass:
+                    'bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300',
+            },
+            {
+                value: 'KEJURUAN',
+                label: t('subjects.cat_KEJURUAN'),
+                badgeClass:
+                    'bg-violet-100 text-violet-700 border-violet-200 dark:bg-violet-900/30 dark:text-violet-300',
+            },
+            {
+                value: 'MUATAN_LOKAL',
+                label: t('subjects.cat_MUATAN_LOKAL'),
+                badgeClass:
+                    'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300',
+            },
+            {
+                value: 'KOKURIKULER',
+                label: t('subjects.cat_KOKURIKULER'),
+                badgeClass:
+                    'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300',
+            },
+        ],
+        [t]
+    );
+
+    const deleteAllKeyword = t('subjects.deleteAllKeyword');
 
     const canManageSubjects = useMemo(() => {
         const primaryRole = authUser?.role ?? '';
@@ -218,14 +224,12 @@ export default function SubjectsPage() {
             setFeedback({
                 type: 'error',
                 message:
-                    err instanceof Error
-                        ? err.message
-                        : 'Terjadi kesalahan saat memuat data.',
+                    err instanceof Error ? err.message : t('subjects.errLoad'),
             });
         } finally {
             setIsLoading(false);
         }
-    }, [resolveSchoolContext]);
+    }, [resolveSchoolContext, t]);
 
     useEffect(() => {
         void loadSubjects();
@@ -325,14 +329,14 @@ export default function SubjectsPage() {
         if (!schoolId) {
             setFeedback({
                 type: 'error',
-                message: 'Identitas sekolah belum terpilih.',
+                message: t('subjects.errNoSchool'),
             });
             return;
         }
         if (!form.name.trim()) {
             setFeedback({
                 type: 'error',
-                message: 'Nama mata pelajaran wajib diisi.',
+                message: t('subjects.errNameRequired'),
             });
             return;
         }
@@ -345,7 +349,10 @@ export default function SubjectsPage() {
                 await updateSubject(editingSubject.id, schoolId, form);
                 setFeedback({
                     type: 'success',
-                    message: `Mata pelajaran "${form.name}" berhasil diperbarui.`,
+                    message: t('subjects.toastUpdateSuccess').replace(
+                        '{name}',
+                        form.name
+                    ),
                 });
             } else {
                 await createSubject({
@@ -354,7 +361,10 @@ export default function SubjectsPage() {
                 });
                 setFeedback({
                     type: 'success',
-                    message: `Mata pelajaran "${form.name}" berhasil ditambahkan.`,
+                    message: t('subjects.toastCreateSuccess').replace(
+                        '{name}',
+                        form.name
+                    ),
                 });
             }
             setIsModalOpen(false);
@@ -363,9 +373,7 @@ export default function SubjectsPage() {
             setFeedback({
                 type: 'error',
                 message:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal menyimpan mata pelajaran.',
+                    err instanceof Error ? err.message : t('subjects.errSave'),
             });
         } finally {
             setIsSaving(false);
@@ -383,7 +391,10 @@ export default function SubjectsPage() {
             setSelectedIds((prev) => prev.filter((id) => id !== deleteTarget.id));
             setFeedback({
                 type: 'success',
-                message: `Mata pelajaran "${deleteTarget.name}" berhasil dihapus.`,
+                message: t('subjects.toastDelSuccess').replace(
+                    '{name}',
+                    deleteTarget.name
+                ),
             });
             setDeleteTarget(null);
             await loadSubjects();
@@ -391,9 +402,7 @@ export default function SubjectsPage() {
             setFeedback({
                 type: 'error',
                 message:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal menghapus mata pelajaran.',
+                    err instanceof Error ? err.message : t('subjects.errDelete'),
             });
             setDeleteTarget(null);
         } finally {
@@ -412,7 +421,10 @@ export default function SubjectsPage() {
             await deleteSubjectsByIds(selectedIds, schoolId);
             setFeedback({
                 type: 'success',
-                message: `${count} mata pelajaran terpilih berhasil dihapus.`,
+                message: t('subjects.toastDelSelSuccess').replace(
+                    '{count}',
+                    String(count)
+                ),
             });
             setSelectedIds([]);
             setIsDeleteSelectedModalOpen(false);
@@ -423,7 +435,7 @@ export default function SubjectsPage() {
                 message:
                     err instanceof Error
                         ? err.message
-                        : 'Gagal menghapus mata pelajaran terpilih.',
+                        : t('subjects.errDeleteSel'),
             });
             setIsDeleteSelectedModalOpen(false);
         } finally {
@@ -441,7 +453,10 @@ export default function SubjectsPage() {
     // Eksekusi penghapusan seluruh mata pelajaran (Khusus SUPER_ADMIN)
     const handleConfirmDeleteAll = async () => {
         if (!schoolId || !isSuperAdmin) return;
-        if (deleteAllConfirmText.trim().toUpperCase() !== DELETE_ALL_KEYWORD) {
+        if (
+            deleteAllConfirmText.trim().toUpperCase() !==
+            deleteAllKeyword.toUpperCase()
+        ) {
             return;
         }
 
@@ -453,7 +468,10 @@ export default function SubjectsPage() {
             await deleteAllSubjectsBySchool(schoolId);
             setFeedback({
                 type: 'success',
-                message: `Seluruh (${totalDeleted}) mata pelajaran pada sekolah ini berhasil dihapus.`,
+                message: t('subjects.toastDelAllSuccess').replace(
+                    '{count}',
+                    String(totalDeleted)
+                ),
             });
             setSelectedIds([]);
             setIsDeleteAllModalOpen(false);
@@ -465,7 +483,7 @@ export default function SubjectsPage() {
                 message:
                     err instanceof Error
                         ? err.message
-                        : 'Gagal menghapus seluruh mata pelajaran.',
+                        : t('subjects.errDeleteAll'),
             });
             setIsDeleteAllModalOpen(false);
         } finally {
@@ -487,13 +505,15 @@ export default function SubjectsPage() {
             if (inserted === 0) {
                 setFeedback({
                     type: 'success',
-                    message:
-                        'Semua mata pelajaran standar Kurikulum Merdeka sudah tersedia.',
+                    message: t('subjects.toastSeedExists'),
                 });
             } else {
                 setFeedback({
                     type: 'success',
-                    message: `${inserted} mata pelajaran Kurikulum Merdeka berhasil ditambahkan.`,
+                    message: t('subjects.toastSeedSuccess').replace(
+                        '{count}',
+                        String(inserted)
+                    ),
                 });
                 await loadSubjects();
             }
@@ -501,9 +521,7 @@ export default function SubjectsPage() {
             setFeedback({
                 type: 'error',
                 message:
-                    err instanceof Error
-                        ? err.message
-                        : 'Gagal mengisi paket mata pelajaran.',
+                    err instanceof Error ? err.message : t('subjects.errSeed'),
             });
         } finally {
             setIsSeeding(false);
@@ -512,7 +530,7 @@ export default function SubjectsPage() {
 
     const getCategoryMeta = (category: string) => {
         return (
-            CATEGORY_OPTIONS.find((opt) => opt.value === category) ?? {
+            categoryOptions.find((opt) => opt.value === category) ?? {
                 value: category,
                 label: category,
                 badgeClass: 'bg-slate-100 text-slate-700 border-slate-200',
@@ -521,7 +539,8 @@ export default function SubjectsPage() {
     };
 
     const isDeleteAllKeywordValid =
-        deleteAllConfirmText.trim().toUpperCase() === DELETE_ALL_KEYWORD;
+        deleteAllConfirmText.trim().toUpperCase() ===
+        deleteAllKeyword.toUpperCase();
 
     return (
         <div className="p-6 space-y-6">
@@ -529,11 +548,10 @@ export default function SubjectsPage() {
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
                     <h1 className="text-3xl font-bold tracking-tight text-foreground">
-                        Master Mata Pelajaran
+                        {t('subjects.pageTitle')}
                     </h1>
                     <p className="text-muted-foreground mt-1">
-                        Kelola daftar mata pelajaran dan urutan tampil pada Jadwal Pelajaran
-                        serta Cetak PDF Raport.
+                        {t('subjects.pageSubtitle')}
                     </p>
                 </div>
 
@@ -548,7 +566,7 @@ export default function SubjectsPage() {
                                 className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg border border-red-200 bg-red-50/70 text-red-600 text-sm font-medium hover:bg-red-600 hover:text-white hover:border-red-600 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-600 dark:hover:text-white transition-colors disabled:opacity-50"
                             >
                                 <Trash2 className="w-4 h-4" />
-                                Hapus Semua
+                                {t('subjects.deleteAll')}
                             </button>
                         )}
 
@@ -563,7 +581,7 @@ export default function SubjectsPage() {
                             ) : (
                                 <Sparkles className="w-4 h-4 text-amber-500" />
                             )}
-                            Isi Cepat Kurikulum Merdeka
+                            {t('subjects.seedMerdeka')}
                         </button>
 
                         <button
@@ -573,7 +591,7 @@ export default function SubjectsPage() {
                             className="inline-flex items-center gap-2 px-4 py-2.5 rounded-lg bg-primary text-primary-foreground text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-50"
                         >
                             <Plus className="w-4 h-4" />
-                            Tambah Mata Pelajaran
+                            {t('subjects.addSubject')}
                         </button>
                     </div>
                 )}
@@ -616,7 +634,7 @@ export default function SubjectsPage() {
                         </div>
                         <div>
                             <p className="text-sm font-medium text-muted-foreground">
-                                Total Mata Pelajaran
+                                {t('subjects.totalSubjects')}
                             </p>
                             <p className="text-3xl font-bold">{subjects.length}</p>
                         </div>
@@ -630,7 +648,7 @@ export default function SubjectsPage() {
                         </div>
                         <div>
                             <p className="text-sm font-medium text-muted-foreground">
-                                Mapel Aktif
+                                {t('subjects.activeSubjects')}
                             </p>
                             <p className="text-3xl font-bold">{activeCount}</p>
                         </div>
@@ -644,10 +662,10 @@ export default function SubjectsPage() {
                         </div>
                         <div>
                             <p className="text-sm font-medium text-muted-foreground">
-                                Integrasi Modul
+                                {t('subjects.moduleIntegration')}
                             </p>
                             <p className="text-sm font-semibold text-foreground mt-1">
-                                Jadwal Pelajaran &amp; PDF Raport
+                                {t('subjects.moduleIntegrationDesc')}
                             </p>
                         </div>
                     </CardContent>
@@ -662,7 +680,7 @@ export default function SubjectsPage() {
                             {selectedIds.length}
                         </span>
                         <span className="font-medium text-foreground">
-                            mata pelajaran dipilih
+                            {t('subjects.selectedCount')}
                         </span>
                     </div>
 
@@ -672,7 +690,7 @@ export default function SubjectsPage() {
                             onClick={() => setSelectedIds([])}
                             className="px-3 py-1.5 rounded-lg border bg-background text-xs font-medium text-foreground hover:bg-muted transition-colors"
                         >
-                            Batal Pilih
+                            {t('subjects.clearSelection')}
                         </button>
                         <button
                             type="button"
@@ -680,7 +698,10 @@ export default function SubjectsPage() {
                             className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg bg-red-600 text-white text-xs font-semibold hover:bg-red-700 transition-colors shadow-xs"
                         >
                             <Trash2 className="w-3.5 h-3.5" />
-                            Hapus Terpilih ({selectedIds.length})
+                            {t('subjects.deleteSelected').replace(
+                                '{count}',
+                                String(selectedIds.length)
+                            )}
                         </button>
                     </div>
                 </div>
@@ -690,10 +711,11 @@ export default function SubjectsPage() {
             <Card className="border-none shadow-sm">
                 <CardHeader className="pb-4 border-b flex flex-col md:flex-row md:items-center justify-between gap-4">
                     <div>
-                        <CardTitle className="text-lg">Daftar Mata Pelajaran</CardTitle>
+                        <CardTitle className="text-lg">
+                            {t('subjects.listTitle')}
+                        </CardTitle>
                         <CardDescription>
-                            Kolom &ldquo;Urutan Raport&rdquo; menentukan posisi baris mata
-                            pelajaran saat cetak raport PDF.
+                            {t('subjects.listSubtitle')}
                         </CardDescription>
                     </div>
 
@@ -704,7 +726,7 @@ export default function SubjectsPage() {
                                 type="text"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
-                                placeholder="Cari kode atau nama mapel..."
+                                placeholder={t('subjects.searchPlaceholder')}
                                 className="pl-9 pr-3 py-2 text-sm rounded-lg border bg-background w-full sm:w-64 focus:outline-none focus:ring-2 focus:ring-primary/30"
                             />
                         </div>
@@ -714,8 +736,10 @@ export default function SubjectsPage() {
                             onChange={(e) => setCategoryFilter(e.target.value)}
                             className="px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
                         >
-                            <option value="ALL">Semua Kategori</option>
-                            {CATEGORY_OPTIONS.map((opt) => (
+                            <option value="ALL">
+                                {t('subjects.allCategories')}
+                            </option>
+                            {categoryOptions.map((opt) => (
                                 <option key={opt.value} value={opt.value}>
                                     {opt.label}
                                 </option>
@@ -728,17 +752,20 @@ export default function SubjectsPage() {
                     {isLoading ? (
                         <div className="p-12 flex flex-col items-center justify-center text-muted-foreground gap-3">
                             <Loader2 className="w-8 h-8 animate-spin text-primary" />
-                            <p className="text-sm">Memuat daftar mata pelajaran...</p>
+                            <p className="text-sm">
+                                {t('subjects.loadingSubjects')}
+                            </p>
                         </div>
                     ) : filteredSubjects.length === 0 ? (
                         <div className="p-12 text-center space-y-3">
                             <BookOpen className="w-10 h-10 text-muted-foreground/50 mx-auto" />
                             <p className="font-medium text-foreground">
-                                Belum ada data mata pelajaran
+                                {t('subjects.emptyTitle')}
                             </p>
                             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                                Tambahkan mata pelajaran secara manual atau klik tombol{' '}
-                                <strong>Isi Cepat Kurikulum Merdeka</strong> di pojok kanan atas.
+                                {t('subjects.emptyDescPrefix')}
+                                <strong>{t('subjects.emptyDescHighlight')}</strong>
+                                {t('subjects.emptyDescSuffix')}
                             </p>
                         </div>
                     ) : (
@@ -758,20 +785,30 @@ export default function SubjectsPage() {
                                                         }
                                                     }}
                                                     onChange={handleToggleSelectAllFiltered}
-                                                    aria-label="Pilih semua mata pelajaran"
+                                                    aria-label={t('subjects.selectAllAria')}
                                                     className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary/30 cursor-pointer"
                                                 />
                                             </th>
                                         )}
-                                        <th className="px-6 py-4 font-medium w-24">Urutan</th>
-                                        <th className="px-6 py-4 font-medium w-28">Kode</th>
-                                        <th className="px-6 py-4 font-medium">
-                                            Nama Mata Pelajaran
+                                        <th className="px-6 py-4 font-medium w-24">
+                                            {t('subjects.colOrder')}
                                         </th>
-                                        <th className="px-6 py-4 font-medium">Kategori</th>
-                                        <th className="px-6 py-4 font-medium">Status</th>
+                                        <th className="px-6 py-4 font-medium w-28">
+                                            {t('subjects.colCode')}
+                                        </th>
+                                        <th className="px-6 py-4 font-medium">
+                                            {t('subjects.colName')}
+                                        </th>
+                                        <th className="px-6 py-4 font-medium">
+                                            {t('subjects.colCategory')}
+                                        </th>
+                                        <th className="px-6 py-4 font-medium">
+                                            {t('subjects.colStatus')}
+                                        </th>
                                         {canManageSubjects && (
-                                            <th className="px-6 py-4 font-medium text-right">Aksi</th>
+                                            <th className="px-6 py-4 font-medium text-right">
+                                                {t('subjects.colActions')}
+                                            </th>
                                         )}
                                     </tr>
                                 </thead>
@@ -797,7 +834,9 @@ export default function SubjectsPage() {
                                                             onChange={() =>
                                                                 handleToggleSelectOne(item.id)
                                                             }
-                                                            aria-label={`Pilih ${item.name}`}
+                                                            aria-label={t(
+                                                                'subjects.selectOneAria'
+                                                            ).replace('{name}', item.name)}
                                                             className="w-4 h-4 rounded border-gray-300 text-primary focus:ring-primary/30 cursor-pointer"
                                                         />
                                                     </td>
@@ -836,12 +875,12 @@ export default function SubjectsPage() {
                                                     {item.isActive ? (
                                                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
                                                             <CheckCircle2 className="w-3.5 h-3.5" />
-                                                            Aktif
+                                                            {t('subjects.statusActive')}
                                                         </span>
                                                     ) : (
                                                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
                                                             <XCircle className="w-3.5 h-3.5" />
-                                                            Nonaktif
+                                                            {t('subjects.statusInactive')}
                                                         </span>
                                                     )}
                                                 </td>
@@ -854,7 +893,7 @@ export default function SubjectsPage() {
                                                                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border/80 bg-background text-xs font-medium text-foreground hover:bg-muted hover:border-border transition-all shadow-2xs"
                                                             >
                                                                 <Pencil className="w-3.5 h-3.5 text-muted-foreground" />
-                                                                <span>Edit</span>
+                                                                <span>{t('subjects.actionEdit')}</span>
                                                             </button>
                                                             <button
                                                                 type="button"
@@ -862,7 +901,7 @@ export default function SubjectsPage() {
                                                                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-red-200/80 bg-red-50/60 text-xs font-medium text-red-600 hover:bg-red-600 hover:text-white hover:border-red-600 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-400 dark:hover:bg-red-600 dark:hover:text-white transition-all shadow-2xs"
                                                             >
                                                                 <Trash2 className="w-3.5 h-3.5" />
-                                                                <span>Hapus</span>
+                                                                <span>{t('subjects.actionDelete')}</span>
                                                             </button>
                                                         </div>
                                                     </td>
@@ -884,8 +923,8 @@ export default function SubjectsPage() {
                         <div className="px-6 py-4 border-b flex items-center justify-between">
                             <h2 className="text-lg font-bold">
                                 {editingSubject
-                                    ? 'Edit Mata Pelajaran'
-                                    : 'Tambah Mata Pelajaran Baru'}
+                                    ? t('subjects.modalEditTitle')
+                                    : t('subjects.modalAddTitle')}
                             </h2>
                             <button
                                 type="button"
@@ -900,23 +939,23 @@ export default function SubjectsPage() {
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div>
                                     <label className="block text-sm font-medium mb-1.5">
-                                        Kode Mapel{' '}
+                                        {t('subjects.labelCode')}{' '}
                                         <span className="text-muted-foreground text-xs">
-                                            (Opsional)
+                                            {t('subjects.optionalTag')}
                                         </span>
                                     </label>
                                     <input
                                         type="text"
                                         value={form.code}
                                         onChange={(e) => setForm({ ...form, code: e.target.value })}
-                                        placeholder="Contoh: INF, KKA, MTK"
+                                        placeholder={t('subjects.placeholderCode')}
                                         className="w-full px-3 py-2 text-sm rounded-lg border bg-background uppercase focus:outline-none focus:ring-2 focus:ring-primary/30"
                                     />
                                 </div>
 
                                 <div>
                                     <label className="block text-sm font-medium mb-1.5">
-                                        Urutan di Raport
+                                        {t('subjects.labelOrder')}
                                     </label>
                                     <input
                                         type="number"
@@ -936,21 +975,22 @@ export default function SubjectsPage() {
 
                             <div>
                                 <label className="block text-sm font-medium mb-1.5">
-                                    Nama Mata Pelajaran <span className="text-red-500">*</span>
+                                    {t('subjects.labelName')}{' '}
+                                    <span className="text-red-500">*</span>
                                 </label>
                                 <input
                                     type="text"
                                     required
                                     value={form.name}
                                     onChange={(e) => setForm({ ...form, name: e.target.value })}
-                                    placeholder="Contoh: Koding dan Kecerdasan Artifisial"
+                                    placeholder={t('subjects.placeholderName')}
                                     className="w-full px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 />
                             </div>
 
                             <div>
                                 <label className="block text-sm font-medium mb-1.5">
-                                    Kategori Kelompok
+                                    {t('subjects.labelCategory')}
                                 </label>
                                 <select
                                     value={form.category}
@@ -962,7 +1002,7 @@ export default function SubjectsPage() {
                                     }
                                     className="w-full px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 >
-                                    {CATEGORY_OPTIONS.map((opt) => (
+                                    {categoryOptions.map((opt) => (
                                         <option key={opt.value} value={opt.value}>
                                             {opt.label}
                                         </option>
@@ -972,9 +1012,9 @@ export default function SubjectsPage() {
 
                             <div>
                                 <label className="block text-sm font-medium mb-1.5">
-                                    Keterangan / Catatan{' '}
+                                    {t('subjects.labelDescription')}{' '}
                                     <span className="text-muted-foreground text-xs">
-                                        (Opsional)
+                                        {t('subjects.optionalTag')}
                                     </span>
                                 </label>
                                 <input
@@ -983,7 +1023,7 @@ export default function SubjectsPage() {
                                     onChange={(e) =>
                                         setForm({ ...form, description: e.target.value })
                                     }
-                                    placeholder="Misal: Kelas X Fase E Kurikulum Merdeka"
+                                    placeholder={t('subjects.placeholderDescription')}
                                     className="w-full px-3 py-2 text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/30"
                                 />
                             </div>
@@ -997,10 +1037,7 @@ export default function SubjectsPage() {
                                     }
                                     className="rounded border-gray-300"
                                 />
-                                <span>
-                                    Mata pelajaran aktif (tampil pada pilihan jadwal &amp; input
-                                    nilai)
-                                </span>
+                                <span>{t('subjects.checkboxActive')}</span>
                             </label>
 
                             <div className="pt-4 border-t flex items-center justify-end gap-3">
@@ -1009,7 +1046,7 @@ export default function SubjectsPage() {
                                     onClick={() => setIsModalOpen(false)}
                                     className="px-4 py-2 text-sm font-medium rounded-lg border hover:bg-muted transition-colors"
                                 >
-                                    Batal
+                                    {t('subjects.btnCancel')}
                                 </button>
                                 <button
                                     type="submit"
@@ -1018,8 +1055,8 @@ export default function SubjectsPage() {
                                 >
                                     {isSaving && <Loader2 className="w-4 h-4 animate-spin" />}
                                     {editingSubject
-                                        ? 'Simpan Perubahan'
-                                        : 'Simpan Mata Pelajaran'}
+                                        ? t('subjects.btnSaveChanges')
+                                        : t('subjects.btnSaveSubject')}
                                 </button>
                             </div>
                         </form>
@@ -1044,11 +1081,10 @@ export default function SubjectsPage() {
                                 </div>
                                 <div className="space-y-1">
                                     <h3 className="text-lg font-bold text-foreground">
-                                        Hapus Mata Pelajaran?
+                                        {t('subjects.modalDelTitle')}
                                     </h3>
                                     <p className="text-sm text-muted-foreground leading-relaxed">
-                                        Anda akan menghapus mata pelajaran berikut secara permanen
-                                        dari master sekolah:
+                                        {t('subjects.modalDelSub')}
                                     </p>
                                 </div>
                             </div>
@@ -1059,8 +1095,12 @@ export default function SubjectsPage() {
                                         {deleteTarget.name}
                                     </p>
                                     <p className="text-xs text-muted-foreground mt-0.5">
-                                        Kode: {deleteTarget.code || '-'} • Urutan Raport #
-                                        {deleteTarget.sortOrder}
+                                        {t('subjects.modalDelMeta')
+                                            .replace('{code}', deleteTarget.code || '-')
+                                            .replace(
+                                                '{order}',
+                                                String(deleteTarget.sortOrder)
+                                            )}
                                     </p>
                                 </div>
                                 <Badge variant="outline" className="text-xs shrink-0">
@@ -1069,9 +1109,8 @@ export default function SubjectsPage() {
                             </div>
 
                             <p className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 rounded-lg p-3">
-                                <strong>Catatan:</strong> Tindakan ini tidak dapat dibatalkan.
-                                Jika mapel sudah pernah memiliki nilai raport, sebaiknya ubah
-                                statusnya menjadi <em>Nonaktif</em> melalui menu Edit.
+                                <strong>{t('subjects.modalDelNoteLabel')}</strong>{' '}
+                                {t('subjects.modalDelNote')}
                             </p>
                         </div>
 
@@ -1082,7 +1121,7 @@ export default function SubjectsPage() {
                                 onClick={() => setDeleteTarget(null)}
                                 className="px-4 py-2 rounded-lg border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
                             >
-                                Batal
+                                {t('subjects.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -1095,7 +1134,9 @@ export default function SubjectsPage() {
                                 ) : (
                                     <Trash2 className="w-4 h-4" />
                                 )}
-                                {isDeleting ? 'Menghapus...' : 'Ya, Hapus Permanen'}
+                                {isDeleting
+                                    ? t('subjects.btnDeleting')
+                                    : t('subjects.btnConfirmDelete')}
                             </button>
                         </div>
                     </div>
@@ -1121,11 +1162,13 @@ export default function SubjectsPage() {
                                 </div>
                                 <div className="space-y-1">
                                     <h3 className="text-lg font-bold text-foreground">
-                                        Hapus {selectedIds.length} Mata Pelajaran Terpilih?
+                                        {t('subjects.modalDelSelTitle').replace(
+                                            '{count}',
+                                            String(selectedIds.length)
+                                        )}
                                     </h3>
                                     <p className="text-sm text-muted-foreground leading-relaxed">
-                                        Daftar mata pelajaran yang Anda centang di bawah ini
-                                        akan dihapus permanen:
+                                        {t('subjects.modalDelSelSub')}
                                     </p>
                                 </div>
                             </div>
@@ -1148,9 +1191,8 @@ export default function SubjectsPage() {
                             </div>
 
                             <p className="text-xs text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 rounded-lg p-3">
-                                <strong>Catatan:</strong> Penghapusan akan otomatis dibatalkan
-                                jika salah satu mapel di atas sudah dipakai pada jadwal atau
-                                nilai siswa.
+                                <strong>{t('subjects.modalDelNoteLabel')}</strong>{' '}
+                                {t('subjects.modalDelSelNote')}
                             </p>
                         </div>
 
@@ -1161,7 +1203,7 @@ export default function SubjectsPage() {
                                 onClick={() => setIsDeleteSelectedModalOpen(false)}
                                 className="px-4 py-2 rounded-lg border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
                             >
-                                Batal
+                                {t('subjects.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -1175,8 +1217,11 @@ export default function SubjectsPage() {
                                     <Trash2 className="w-4 h-4" />
                                 )}
                                 {isDeletingSelected
-                                    ? 'Menghapus...'
-                                    : `Ya, Hapus ${selectedIds.length} Mapel`}
+                                    ? t('subjects.btnDeleting')
+                                    : t('subjects.btnConfirmDeleteSel').replace(
+                                        '{count}',
+                                        String(selectedIds.length)
+                                    )}
                             </button>
                         </div>
                     </div>
@@ -1200,43 +1245,44 @@ export default function SubjectsPage() {
                                 </div>
                                 <div className="space-y-1">
                                     <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 text-[11px] font-semibold uppercase tracking-wide">
-                                        Otoritas Super Admin
+                                        {t('subjects.modalDelAllBadge')}
                                     </div>
                                     <h3 className="text-lg font-bold text-foreground">
-                                        Hapus Semua Mata Pelajaran?
+                                        {t('subjects.modalDelAllTitle')}
                                     </h3>
                                     <p className="text-sm text-muted-foreground leading-relaxed">
-                                        Anda akan menghapus seluruh{' '}
+                                        {t('subjects.modalDelAllSubPrefix')}
                                         <strong className="text-foreground">
-                                            {subjects.length} mata pelajaran
-                                        </strong>{' '}
-                                        milik sekolah ini secara permanen.
+                                            {t('subjects.modalDelAllSubCount').replace(
+                                                '{count}',
+                                                String(subjects.length)
+                                            )}
+                                        </strong>
+                                        {t('subjects.modalDelAllSubSuffix')}
                                     </p>
                                 </div>
                             </div>
 
                             <div className="text-xs text-red-800 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/60 rounded-lg p-3 space-y-1">
-                                <p className="font-semibold">Peringatan Penting:</p>
-                                <p>
-                                    Data yang sudah dihapus tidak dapat dikembalikan. Proses akan
-                                    dibatalkan otomatis jika ada mapel yang sudah dipakai pada
-                                    jadwal atau nilai siswa.
+                                <p className="font-semibold">
+                                    {t('subjects.modalDelAllWarnTitle')}
                                 </p>
+                                <p>{t('subjects.modalDelAllWarnBody')}</p>
                             </div>
 
                             <div className="space-y-1.5 pt-1">
                                 <label className="block text-xs font-medium text-muted-foreground">
-                                    Ketik{' '}
+                                    {t('subjects.modalDelAllTypePrefix')}
                                     <span className="font-mono font-bold text-foreground select-all">
-                                        {DELETE_ALL_KEYWORD}
-                                    </span>{' '}
-                                    di bawah ini untuk melanjutkan:
+                                        {deleteAllKeyword}
+                                    </span>
+                                    {t('subjects.modalDelAllTypeSuffix')}
                                 </label>
                                 <input
                                     type="text"
                                     value={deleteAllConfirmText}
                                     onChange={(e) => setDeleteAllConfirmText(e.target.value)}
-                                    placeholder={DELETE_ALL_KEYWORD}
+                                    placeholder={deleteAllKeyword}
                                     disabled={isDeletingAll}
                                     className="w-full px-3 py-2 text-sm font-mono rounded-lg border bg-background uppercase focus:outline-none focus:ring-2 focus:ring-red-500/40"
                                 />
@@ -1250,7 +1296,7 @@ export default function SubjectsPage() {
                                 onClick={() => setIsDeleteAllModalOpen(false)}
                                 className="px-4 py-2 rounded-lg border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50"
                             >
-                                Batal
+                                {t('subjects.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -1264,8 +1310,11 @@ export default function SubjectsPage() {
                                     <Trash2 className="w-4 h-4" />
                                 )}
                                 {isDeletingAll
-                                    ? 'Menghapus Semua...'
-                                    : `Hapus ${subjects.length} Mapel`}
+                                    ? t('subjects.btnDeletingAll')
+                                    : t('subjects.btnConfirmDeleteAll').replace(
+                                        '{count}',
+                                        String(subjects.length)
+                                    )}
                             </button>
                         </div>
                     </div>
