@@ -1,6 +1,9 @@
 // src/modules/grades/pages/GradesAndReportPage.tsx
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+    ArrowDown,
+    ArrowUp,
+    ArrowUpDown,
     Award,
     BookOpen,
     Calendar,
@@ -412,6 +415,7 @@ function buildAutoHomeroomNote(params: {
 }
 
 export default function GradesAndReportPage() {
+    // Perbaikan TS2339: gunakan `locale` sesuai tipe kembalian useTranslation()
     const { t, locale } = useTranslation();
     const activeLang: 'id' | 'en' = locale === 'en' ? 'en' : 'id';
 
@@ -449,6 +453,24 @@ export default function GradesAndReportPage() {
 
     const [examMode, setExamMode] = useState<ReportExamMode>('SAS');
     const [activeTab, setActiveTab] = useState<ActiveTab>('GRADES');
+
+    // State Pengurutan Abjad Kolom Student Name / Nama Siswa
+    const [nameSortOrder, setNameSortOrder] = useState<'asc' | 'desc'>('asc');
+    const [rankingNameSort, setRankingNameSort] = useState<'asc' | 'desc' | null>(
+        null
+    );
+
+    const handleToggleNameSort = useCallback(() => {
+        setNameSortOrder((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    }, []);
+
+    const handleToggleRankingNameSort = useCallback(() => {
+        setRankingNameSort((prev) => {
+            if (prev === null) return 'asc';
+            if (prev === 'asc') return 'desc';
+            return null;
+        });
+    }, []);
 
     // Bobot Penilaian
     const [weights, setWeights] = useState({
@@ -1413,6 +1435,18 @@ export default function GradesAndReportPage() {
         selectedSemesterId,
     ]);
 
+    // Daftar siswa terurut berdasarkan abjad (A-Z atau Z-A)
+    const sortedGradeRows = useMemo(() => {
+        const copy = [...gradeRows];
+        copy.sort((a, b) => {
+            const cmp = a.student.fullName.localeCompare(b.student.fullName, 'id', {
+                sensitivity: 'base',
+            });
+            return nameSortOrder === 'asc' ? cmp : -cmp;
+        });
+        return copy;
+    }, [gradeRows, nameSortOrder]);
+
     const handlePrintSingleStudentPdf = async (row: GradeSheetRow) => {
         if (!resolvedSchoolId || !selectedSemesterId || !currentClassContext)
             return;
@@ -1457,13 +1491,13 @@ export default function GradesAndReportPage() {
             !selectedSemesterId ||
             !selectedClassId ||
             !currentClassContext ||
-            gradeRows.length === 0
+            sortedGradeRows.length === 0
         )
             return;
 
         setIsPrintingBatch(true);
         try {
-            const studentIds = gradeRows.map((r) => r.student.id);
+            const studentIds = sortedGradeRows.map((r) => r.student.id);
             const batchRes = await gradeService.getClassCompleteReportBundles({
                 schoolId: resolvedSchoolId,
                 semesterId: selectedSemesterId,
@@ -1471,7 +1505,7 @@ export default function GradesAndReportPage() {
                 studentIds,
             });
 
-            const inputs = gradeRows.map((row) => ({
+            const inputs = sortedGradeRows.map((row) => ({
                 mode: examMode,
                 lang: activeLang,
                 school: batchRes.data.school,
@@ -1504,14 +1538,26 @@ export default function GradesAndReportPage() {
 
     const filteredNoteRows = useMemo(() => {
         const q = noteSearchQuery.trim().toLowerCase();
-        if (!q) return gradeRows;
-        return gradeRows.filter(
+        if (!q) return sortedGradeRows;
+        return sortedGradeRows.filter(
             (r) =>
                 r.student.fullName.toLowerCase().includes(q) ||
                 r.student.nisn.toLowerCase().includes(q) ||
                 (r.student.nis ?? '').toLowerCase().includes(q)
         );
-    }, [gradeRows, noteSearchQuery]);
+    }, [sortedGradeRows, noteSearchQuery]);
+
+    const displayedRankings = useMemo(() => {
+        if (!rankingNameSort) return rankings;
+        const copy = [...rankings];
+        copy.sort((a, b) => {
+            const cmp = a.fullName.localeCompare(b.fullName, 'id', {
+                sensitivity: 'base',
+            });
+            return rankingNameSort === 'asc' ? cmp : -cmp;
+        });
+        return copy;
+    }, [rankings, rankingNameSort]);
 
     return (
         <div className="p-6 space-y-6">
@@ -1819,7 +1865,7 @@ export default function GradesAndReportPage() {
                                 <Loader2 className="w-8 h-8 animate-spin text-primary" />
                                 <p className="text-sm">{tr('grades.loadingSheet')}</p>
                             </div>
-                        ) : gradeRows.length === 0 ? (
+                        ) : sortedGradeRows.length === 0 ? (
                             <div className="p-12 text-center space-y-2 text-muted-foreground">
                                 <Users className="w-10 h-10 mx-auto opacity-40" />
                                 <p className="font-medium text-foreground">
@@ -1838,7 +1884,23 @@ export default function GradesAndReportPage() {
                                                 {tr('grades.colNo')}
                                             </th>
                                             <th className="px-3 py-3 min-w-45">
-                                                {tr('grades.colStudentName')}
+                                                <button
+                                                    type="button"
+                                                    onClick={handleToggleNameSort}
+                                                    title={
+                                                        nameSortOrder === 'asc'
+                                                            ? 'Urut Abjad A-Z (Klik untuk Z-A)'
+                                                            : 'Urut Abjad Z-A (Klik untuk A-Z)'
+                                                    }
+                                                    className="inline-flex items-center gap-1.5 uppercase font-semibold hover:text-foreground transition-colors cursor-pointer select-none"
+                                                >
+                                                    <span>{tr('grades.colStudentName')}</span>
+                                                    {nameSortOrder === 'asc' ? (
+                                                        <ArrowUp className="w-3.5 h-3.5 text-primary" />
+                                                    ) : (
+                                                        <ArrowDown className="w-3.5 h-3.5 text-primary" />
+                                                    )}
+                                                </button>
                                             </th>
                                             {Array.from({ length: tpCount }).map((_, idx) => (
                                                 <th
@@ -1872,7 +1934,7 @@ export default function GradesAndReportPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {gradeRows.map((row, idx) => (
+                                        {sortedGradeRows.map((row, idx) => (
                                             <tr
                                                 key={row.student.id}
                                                 className="border-b hover:bg-muted/20 align-top"
@@ -2316,7 +2378,23 @@ export default function GradesAndReportPage() {
                                                     {tr('grades.colNo')}
                                                 </th>
                                                 <th className="px-3 py-3 min-w-43.75">
-                                                    {tr('grades.colStudentName')}
+                                                    <button
+                                                        type="button"
+                                                        onClick={handleToggleNameSort}
+                                                        title={
+                                                            nameSortOrder === 'asc'
+                                                                ? 'Urut Abjad A-Z (Klik untuk Z-A)'
+                                                                : 'Urut Abjad Z-A (Klik untuk A-Z)'
+                                                        }
+                                                        className="inline-flex items-center gap-1.5 uppercase font-semibold hover:text-foreground transition-colors cursor-pointer select-none"
+                                                    >
+                                                        <span>{tr('grades.colStudentName')}</span>
+                                                        {nameSortOrder === 'asc' ? (
+                                                            <ArrowUp className="w-3.5 h-3.5 text-primary" />
+                                                        ) : (
+                                                            <ArrowDown className="w-3.5 h-3.5 text-primary" />
+                                                        )}
+                                                    </button>
                                                 </th>
                                                 <th className="px-2 py-3 w-36 text-center">
                                                     {tr('grades.colAttendance')}
@@ -3011,7 +3089,7 @@ export default function GradesAndReportPage() {
                                 <Loader2 className="w-7 h-7 animate-spin text-primary" />
                                 <p className="text-sm">{tr('grades.loadingRanking')}</p>
                             </div>
-                        ) : rankings.length === 0 ? (
+                        ) : displayedRankings.length === 0 ? (
                             <div className="p-12 text-center text-sm text-muted-foreground">
                                 {tr('grades.emptyRanking')}
                             </div>
@@ -3024,7 +3102,27 @@ export default function GradesAndReportPage() {
                                                 {tr('grades.colRank')}
                                             </th>
                                             <th className="px-6 py-3.5">
-                                                {tr('grades.colStudentName')}
+                                                <button
+                                                    type="button"
+                                                    onClick={handleToggleRankingNameSort}
+                                                    title={
+                                                        rankingNameSort === null
+                                                            ? 'Klik untuk urut abjad A-Z'
+                                                            : rankingNameSort === 'asc'
+                                                                ? 'Urut A-Z (Klik untuk Z-A)'
+                                                                : 'Urut Z-A (Klik untuk kembali ke Peringkat)'
+                                                    }
+                                                    className="inline-flex items-center gap-1.5 uppercase font-semibold hover:text-foreground transition-colors cursor-pointer select-none"
+                                                >
+                                                    <span>{tr('grades.colStudentName')}</span>
+                                                    {rankingNameSort === 'asc' ? (
+                                                        <ArrowUp className="w-3.5 h-3.5 text-primary" />
+                                                    ) : rankingNameSort === 'desc' ? (
+                                                        <ArrowDown className="w-3.5 h-3.5 text-primary" />
+                                                    ) : (
+                                                        <ArrowUpDown className="w-3.5 h-3.5 opacity-60" />
+                                                    )}
+                                                </button>
                                             </th>
                                             <th className="px-6 py-3.5 text-center">
                                                 {tr('grades.colGradedSubjects')}
@@ -3038,7 +3136,7 @@ export default function GradesAndReportPage() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {rankings.map((r) => (
+                                        {displayedRankings.map((r) => (
                                             <tr
                                                 key={r.studentId}
                                                 className="border-b last:border-0 hover:bg-muted/20"

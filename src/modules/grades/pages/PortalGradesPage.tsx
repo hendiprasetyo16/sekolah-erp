@@ -61,6 +61,7 @@ const CATEGORY_KEY_MAP: Record<string, TranslationKey> = {
 };
 
 export default function PortalGradesPage() {
+    // Perbaikan TS2339: gunakan `locale` sesuai tipe kembalian useTranslation()
     const { t, locale } = useTranslation();
     const activeLang: 'id' | 'en' = locale === 'en' ? 'en' : 'id';
 
@@ -776,7 +777,7 @@ export default function PortalGradesPage() {
                                                     key={ach.id}
                                                     className="text-muted-foreground"
                                                 >
-                                                    • <strong>{ach.title}</strong> ({ach.level},{' '}
+                                                    - <strong>{ach.title}</strong> ({ach.level},{' '}
                                                     {ach.year})
                                                 </div>
                                             ))}
