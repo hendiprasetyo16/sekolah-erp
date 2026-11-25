@@ -48,60 +48,8 @@ import {
   getClockPartsInTimezone,
   getTimeStampTagInTimezone,
   mapTeacherDbRowToProfile,
-  sanitizeIdentityValue,
   sanitizeStorageSegment,
 } from '../utils/teacherAttendance.helpers';
-
-const EXTRA_DUTY_ALIAS_KEYS = [
-  'additionalTask',
-  'additionalTasks',
-  'additionalPosition',
-  'additionalRole',
-  'additional_duty',
-  'additional_duties',
-] as const;
-
-const IGNORED_DUTY_VALUES = new Set([
-  '-',
-  '--',
-  '—',
-  'tidak ada',
-  'none',
-  'null',
-  'undefined',
-]);
-
-function normalizeTeacherRow(row: TeacherDbRow): TeacherProfile {
-  const base = mapTeacherDbRowToProfile(row);
-  const rawRecord = row as unknown as Record<string, unknown>;
-  const duties = base.additionalDuties.filter(
-    (d) => !IGNORED_DUTY_VALUES.has(d.toLowerCase())
-  );
-
-  for (const key of EXTRA_DUTY_ALIAS_KEYS) {
-    const val = rawRecord[key];
-    if (typeof val === 'string') {
-      const cleaned = sanitizeIdentityValue(val);
-      if (cleaned && !IGNORED_DUTY_VALUES.has(cleaned.toLowerCase())) {
-        duties.push(cleaned);
-      }
-    } else if (Array.isArray(val)) {
-      for (const item of val) {
-        if (typeof item === 'string') {
-          const cleaned = sanitizeIdentityValue(item);
-          if (cleaned && !IGNORED_DUTY_VALUES.has(cleaned.toLowerCase())) {
-            duties.push(cleaned);
-          }
-        }
-      }
-    }
-  }
-
-  return {
-    ...base,
-    additionalDuties: Array.from(new Set(duties)),
-  };
-}
 
 interface UseTeacherAttendanceDataParams {
   setActiveView: (view: SubView) => void;
@@ -242,6 +190,7 @@ export function useTeacherAttendanceData({
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const loadSeqRef = useRef<number>(0);
+  const hasSyncedInitialTimezoneDatesRef = useRef<boolean>(false);
 
   const resolvedTeacherPhotoUrl = useMemo(() => {
     if (teacher?.photoUrl && teacher.photoUrl.trim().length > 0) {
@@ -325,6 +274,25 @@ export function useTeacherAttendanceData({
   const [leaveReason, setLeaveReason] = useState<string>('');
   const [leaveFile, setLeaveFile] = useState<File | null>(null);
   const [isSubmittingLeave, setIsSubmittingLeave] = useState<boolean>(false);
+
+  // Selaraskan tanggal awal kalender & form izin sekali saat zona waktu sekolah terdeteksi
+  useEffect(() => {
+    if (!schoolGeo?.timezone || hasSyncedInitialTimezoneDatesRef.current) return;
+    hasSyncedInitialTimezoneDatesRef.current = true;
+
+    const zonedToday = getSchoolDateString(new Date(), schoolGeo.timezone);
+    const [yStr, mStr] = zonedToday.split('-');
+    const parsedYear = Number(yStr);
+    const parsedMonth = Number(mStr) - 1;
+
+    if (Number.isFinite(parsedYear) && Number.isFinite(parsedMonth)) {
+      setCalendarYear(parsedYear);
+      setCalendarMonth(parsedMonth);
+    }
+    setSelectedCalendarDate(zonedToday);
+    setLeaveStartDate(zonedToday);
+    setLeaveEndDate(zonedToday);
+  }, [schoolGeo?.timezone]);
 
   // Filter Laporan
   const [reportScope, setReportScope] = useState<'monthly' | 'yearly'>(
@@ -453,7 +421,7 @@ export function useTeacherAttendanceData({
 
         if (isCancelled) return;
         const rows = (data ?? []) as TeacherDbRow[];
-        const list: TeacherProfile[] = rows.map(normalizeTeacherRow);
+        const list: TeacherProfile[] = rows.map(mapTeacherDbRowToProfile);
         setSimTeachers(list);
         setSimTeacherId(list.length > 0 ? list[0].id : '');
       } finally {
@@ -532,19 +500,39 @@ export function useTeacherAttendanceData({
           ? simTeachers.find((item) => item.id === simTeacherId) ?? null
           : null;
       } else {
-        const { data: tRaw } = await supabase
+        const cleanEmail = user.email?.trim() ?? '';
+        let teacherQuery = supabase
           .from('teachers')
           .select('*')
-          .eq('schoolId', activeSchoolId)
-          .or(`userId.eq.${user.id},email.eq.${user.email ?? ''}`)
-          .limit(1)
-          .maybeSingle();
+          .eq('schoolId', activeSchoolId);
+
+        if (cleanEmail) {
+          const escapedEmail = cleanEmail.replace(/"/g, '\\"');
+          teacherQuery = teacherQuery.or(
+            `userId.eq.${user.id},email.eq."${escapedEmail}"`
+          );
+        } else {
+          teacherQuery = teacherQuery.eq('userId', user.id);
+        }
+
+        const { data: tRows } = await teacherQuery.limit(5);
 
         if (currentSeq !== loadSeqRef.current) return;
 
-        const tByUser = tRaw as TeacherDbRow | null;
-        if (tByUser) {
-          activeTeacher = normalizeTeacherRow(tByUser);
+        const candidates = (tRows ?? []) as Array<
+          TeacherDbRow & { isActive?: boolean | null }
+        >;
+
+        if (candidates.length > 0) {
+          const prioritized =
+            candidates.find(
+              (c) => c.userId === user.id && c.isActive !== false
+            ) ??
+            candidates.find((c) => c.userId === user.id) ??
+            candidates.find((c) => c.isActive !== false) ??
+            candidates[0];
+
+          activeTeacher = mapTeacherDbRowToProfile(prioritized);
         }
       }
 
@@ -732,7 +720,8 @@ export function useTeacherAttendanceData({
   const hasCheckedIn = Boolean(todayRecord?.checkInTime);
   const hasCheckedOut = Boolean(todayRecord?.checkOutTime);
   const isOnLeaveToday = Boolean(
-    todayRecord && ['IZIN', 'SAKIT'].includes(todayRecord.status)
+    todayRecord &&
+      ['IZIN', 'SAKIT'].includes((todayRecord.status ?? '').toUpperCase())
   );
 
   const todayCheckOutTimingInfo = useMemo(() => {
@@ -805,7 +794,10 @@ export function useTeacherAttendanceData({
       let uploadedAttachmentPath: string | null = null;
 
       try {
-        const ext = leaveFile.name.split('.').pop() || 'pdf';
+        const nameParts = leaveFile.name.split('.');
+        const rawExt = nameParts.length > 1 ? nameParts.pop() : undefined;
+        const ext = rawExt ? sanitizeStorageSegment(rawExt) : 'pdf';
+
         const schoolFolder = schoolGeo?.name
           ? sanitizeStorageSegment(schoolGeo.name)
           : activeSchoolId;
@@ -964,14 +956,24 @@ export function useTeacherAttendanceData({
         ? historyRecords.filter((r) => r.date.startsWith(selectedMonthPrefix))
         : historyRecords.filter((r) => r.date.startsWith(String(calendarYear)));
 
-    const hadir = filtered.filter((r) => r.status === 'HADIR').length;
-    const terlambat = filtered.filter((r) => r.status === 'TERLAMBAT').length;
-    const izinSakit = filtered.filter((r) =>
-      ['IZIN', 'SAKIT'].includes(r.status)
-    ).length;
-    const alpa = filtered.filter((r) =>
-      ['ALPA', 'ALPHA'].includes(r.status)
-    ).length;
+    let hadir = 0;
+    let terlambat = 0;
+    let izinSakit = 0;
+    let alpa = 0;
+
+    for (const r of filtered) {
+      const normalizedStatus = (r.status ?? '').toUpperCase();
+      if (normalizedStatus === 'HADIR') {
+        hadir += 1;
+      } else if (normalizedStatus === 'TERLAMBAT') {
+        terlambat += 1;
+      } else if (normalizedStatus === 'IZIN' || normalizedStatus === 'SAKIT') {
+        izinSakit += 1;
+      } else if (normalizedStatus === 'ALPA' || normalizedStatus === 'ALPHA') {
+        alpa += 1;
+      }
+    }
+
     const totalEfektif = Math.max(filtered.length, 1);
     const pct = Math.round(((hadir + terlambat) / totalEfektif) * 100);
 

@@ -1,4 +1,9 @@
 // src/modules/teacher-attendance/utils/teacherAttendance.helpers.ts
+import {
+  CHECKOUT_TOLERANCE_MINUTES,
+  FALLBACK_WORK_END_TIME,
+  FALLBACK_WORK_START_TIME,
+} from '../constants/teacherAttendance.constants';
 import type {
   CheckOutTimingStatus,
   TeacherDbRow,
@@ -6,58 +11,109 @@ import type {
 } from '../types/teacherAttendance.types';
 
 const PLACEHOLDER_VALUES = new Set([
+  '',
   '-',
   '--',
+  '---',
   '—',
+  'n/a',
+  'na',
   'null',
   'undefined',
   'none',
   'tidak ada',
+  '0',
+  'nan',
 ]);
 
+export const EXTRA_DUTY_ALIAS_KEYS = [
+  'additionalDuties',
+  'additionalDuty',
+  'additional_duties',
+  'additional_duty',
+  'tugasTambahan',
+  'tugas_tambahan',
+  'additionalTask',
+  'additionalTasks',
+  'additionalPosition',
+  'additionalRole',
+] as const;
+
 export function sanitizeIdentityValue(value: unknown): string | null {
-  if (typeof value !== 'string' && typeof value !== 'number') return null;
-  const trimmed = String(value).trim();
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value === 0) return null;
+    return String(value);
+  }
+  if (typeof value !== 'string') return null;
+
+  const trimmed = value.trim();
   if (!trimmed) return null;
   if (PLACEHOLDER_VALUES.has(trimmed.toLowerCase())) return null;
   return trimmed;
 }
 
-export function mapTeacherDbRowToProfile(row: TeacherDbRow): TeacherProfile {
+export function extractAdditionalDuties(row: Record<string, unknown>): string[] {
   const duties: string[] = [];
 
-  if (Array.isArray(row.additionalDuties)) {
-    for (const item of row.additionalDuties) {
-      const cleaned = sanitizeIdentityValue(item);
-      if (cleaned) duties.push(cleaned);
-    }
-  } else if (typeof row.additionalDuties === 'string') {
-    for (const part of row.additionalDuties.split(/[,;]/)) {
-      const cleaned = sanitizeIdentityValue(part);
-      if (cleaned) duties.push(cleaned);
+  for (const key of EXTRA_DUTY_ALIAS_KEYS) {
+    const raw = row[key];
+    if (Array.isArray(raw)) {
+      for (const item of raw) {
+        const cleaned = sanitizeIdentityValue(item);
+        if (cleaned) duties.push(cleaned);
+      }
+    } else if (typeof raw === 'string') {
+      for (const part of raw.split(/[,;|]/)) {
+        const cleaned = sanitizeIdentityValue(part);
+        if (cleaned) duties.push(cleaned);
+      }
     }
   }
+
+  const seen = new Set<string>();
+  const unique: string[] = [];
+  for (const duty of duties) {
+    const normalized = duty.toLowerCase();
+    if (!seen.has(normalized)) {
+      seen.add(normalized);
+      unique.push(duty);
+    }
+  }
+
+  return unique;
+}
+
+export function mapTeacherDbRowToProfile(row: TeacherDbRow): TeacherProfile {
+  const rawRecord = row as unknown as Record<string, unknown>;
 
   const rawPhoto =
     typeof row.photoUrl === 'string' && row.photoUrl.trim()
       ? row.photoUrl.trim()
       : typeof row.avatarUrl === 'string' && row.avatarUrl.trim()
         ? row.avatarUrl.trim()
-        : null;
+        : sanitizeIdentityValue(rawRecord.photo_url ?? rawRecord.avatar_url);
 
   return {
     id: row.id,
-    schoolId: row.schoolId ?? '',
-    userId: row.userId ?? null,
-    fullName: row.fullName?.trim() || 'Guru',
+    schoolId:
+      sanitizeIdentityValue(row.schoolId ?? rawRecord.school_id) ?? '',
+    userId:
+      sanitizeIdentityValue(row.userId ?? rawRecord.user_id) ?? null,
+    fullName:
+      sanitizeIdentityValue(
+        row.fullName ?? rawRecord.full_name ?? rawRecord.name
+      ) ?? 'Guru',
     email: sanitizeIdentityValue(row.email),
     nip: sanitizeIdentityValue(row.nip),
     nuptk: sanitizeIdentityValue(row.nuptk),
     nik: sanitizeIdentityValue(row.nik),
-    position: sanitizeIdentityValue(row.position),
-    additionalDuties: Array.from(new Set(duties)),
+    position: sanitizeIdentityValue(row.position ?? rawRecord.jabatan),
+    additionalDuties: extractAdditionalDuties(rawRecord),
     photoUrl: rawPhoto,
-    allowDesktopAttendance: Boolean(row.allowDesktopAttendance),
+    allowDesktopAttendance: Boolean(
+      row.allowDesktopAttendance ?? rawRecord.allow_desktop_attendance
+    ),
   };
 }
 
@@ -66,29 +122,36 @@ export function formatTeacherIdentityLabel(
   fallbackLabel: string
 ): string {
   if (!teacher) return fallbackLabel;
-  if (teacher.nip && teacher.nip !== '0') return `NIP. ${teacher.nip}`;
-  if (teacher.nuptk && teacher.nuptk !== '0') return `NUPTK. ${teacher.nuptk}`;
-  if (teacher.nik && teacher.nik !== '0') return `NIK. ${teacher.nik}`;
+
+  const nip = sanitizeIdentityValue(teacher.nip);
+  if (nip) return `NIP: ${nip}`;
+
+  const nuptk = sanitizeIdentityValue(teacher.nuptk);
+  if (nuptk) return `NUPTK: ${nuptk}`;
+
   return fallbackLabel;
 }
 
 export function sanitizeStorageSegment(input: string): string {
   const cleaned = input
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^a-zA-Z0-9_-]+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .replace(/_+/g, '_');
+    .trim()
+    .replace(/\s+/g, '_')
+    .replace(/[^a-zA-Z0-9_]/g, '')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '');
 
-  return cleaned || 'unknown';
+  return cleaned || 'guru';
 }
 
 export function buildTeacherFolderName(teacher: TeacherProfile): string {
-  const namePart = sanitizeStorageSegment(teacher.fullName);
-  const idPart = sanitizeStorageSegment(
-    teacher.nip || teacher.nuptk || teacher.id.slice(0, 8)
-  );
-  return `${namePart}_${idPart}`;
+  const cleanName = sanitizeStorageSegment(teacher.fullName || 'guru');
+  const rawIdentifier =
+    sanitizeIdentityValue(teacher.nik) ||
+    sanitizeIdentityValue(teacher.nip) ||
+    sanitizeIdentityValue(teacher.nuptk);
+
+  const cleanDigits = rawIdentifier ? rawIdentifier.replace(/\D/g, '') : '';
+  return cleanDigits ? `${cleanName}_${cleanDigits}` : cleanName;
 }
 
 export function getClockPartsInTimezone(
@@ -143,7 +206,11 @@ export function formatDeadlineWithTolerance(
   workStartTime: string,
   toleranceMinutes: number
 ): string {
-  const startTotal = parseTimeToMinutes(workStartTime, 7 * 60);
+  const fallbackStartMinutes = parseTimeToMinutes(
+    FALLBACK_WORK_START_TIME,
+    7 * 60 + 30
+  );
+  const startTotal = parseTimeToMinutes(workStartTime, fallbackStartMinutes);
   const deadlineTotal =
     (startTotal + Math.max(0, Math.round(toleranceMinutes))) % (24 * 60);
   const h = String(Math.floor(deadlineTotal / 60)).padStart(2, '0');
@@ -157,9 +224,13 @@ export function calculateLateMinutes(
   toleranceMinutes: number,
   timezone: string
 ): number {
+  const fallbackStartMinutes = parseTimeToMinutes(
+    FALLBACK_WORK_START_TIME,
+    7 * 60 + 30
+  );
   const { hours, minutes } = getClockPartsInTimezone(checkDate, timezone);
   const actualTotal = Number(hours) * 60 + Number(minutes);
-  const startTotal = parseTimeToMinutes(workStartTime, 7 * 60);
+  const startTotal = parseTimeToMinutes(workStartTime, fallbackStartMinutes);
   const deadlineTotal = startTotal + Math.max(0, Math.round(toleranceMinutes));
 
   if (actualTotal <= deadlineTotal) return 0;
@@ -169,17 +240,21 @@ export function calculateLateMinutes(
 export function evaluateCheckOutTiming(
   checkOutDate: Date,
   workEndTime: string,
-  toleranceMinutes: number,
-  timezone: string
+  toleranceMinutes: number = CHECKOUT_TOLERANCE_MINUTES,
+  timezone: string = 'Asia/Jakarta'
 ): {
   status: CheckOutTimingStatus;
   isEarly: boolean;
   isOvertime: boolean;
   diffMinutes: number;
 } {
+  const fallbackEndMinutes = parseTimeToMinutes(
+    FALLBACK_WORK_END_TIME,
+    14 * 60 + 30
+  );
   const { hours, minutes } = getClockPartsInTimezone(checkOutDate, timezone);
   const actualTotal = Number(hours) * 60 + Number(minutes);
-  const endTotal = parseTimeToMinutes(workEndTime, 14 * 60);
+  const endTotal = parseTimeToMinutes(workEndTime, fallbackEndMinutes);
 
   if (actualTotal < endTotal) {
     return {
@@ -203,7 +278,7 @@ export function evaluateCheckOutTiming(
     status: 'ON_TIME',
     isEarly: false,
     isOvertime: false,
-    diffMinutes: Math.max(0, actualTotal - endTotal),
+    diffMinutes: 0,
   };
 }
 
@@ -244,6 +319,7 @@ export function isEarlyDepartureNote(notes?: string | null): boolean {
     lower.includes('pulang awal') ||
     lower.includes('pulang lebih awal') ||
     lower.includes('pulang cepat') ||
+    lower.includes('early check-out') ||
     lower.includes('early checkout') ||
     lower.includes('early departure')
   );

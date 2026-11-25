@@ -37,6 +37,39 @@ import { TeacherLogTab } from '../components/TeacherLogTab';
 import { TeacherBottomNav } from '../components/TeacherBottomNav';
 import { TeacherAttendanceModals } from '../components/TeacherAttendanceModals';
 
+const TOAST_AUTO_DISMISS_MS = 5000;
+
+const ATTENDANCE_PAGE_INLINE_STYLES = `
+  body.attendance-hide-header header {
+    max-height: 0px !important;
+    min-height: 0px !important;
+    height: 0px !important;
+    padding-top: 0px !important;
+    padding-bottom: 0px !important;
+    margin: 0px !important;
+    border-width: 0px !important;
+    opacity: 0 !important;
+    overflow: hidden !important;
+    pointer-events: none !important;
+    transform: translateY(-100%);
+    transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  body:not(.attendance-hide-header) header {
+    transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  @keyframes attendance-marquee {
+    0%, 15% {
+      transform: translateX(0%);
+    }
+    100% {
+      transform: translateX(-50%);
+    }
+  }
+  .animate-attendance-marquee {
+    animation: attendance-marquee linear infinite;
+  }
+`;
+
 export function TeacherAttendancePage() {
     const navigate = useNavigate();
     const { t } = useTranslation();
@@ -44,7 +77,6 @@ export function TeacherAttendancePage() {
     const {
         sidebarCollapsed,
         setSidebarCollapsed,
-        sidebarOpen,
         setSidebarOpen,
     } = useUIStore();
 
@@ -59,16 +91,31 @@ export function TeacherAttendancePage() {
         useState<boolean>(false);
     const glowTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    // Notifikasi Melayang
+    // Notifikasi Melayang dengan Timer Terkelola
     const [toast, setToast] = useState<{
         type: 'success' | 'error';
         message: string;
     } | null>(null);
+    const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+    const dismissToast = useCallback(() => {
+        if (toastTimeoutRef.current) {
+            clearTimeout(toastTimeoutRef.current);
+            toastTimeoutRef.current = null;
+        }
+        setToast(null);
+    }, []);
 
     const showToast = useCallback(
         (type: 'success' | 'error', message: string) => {
             setToast({ type, message });
-            setTimeout(() => setToast(null), 5000);
+            if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
+            }
+            toastTimeoutRef.current = setTimeout(() => {
+                setToast(null);
+                toastTimeoutRef.current = null;
+            }, TOAST_AUTO_DISMISS_MS);
         },
         []
     );
@@ -80,6 +127,7 @@ export function TeacherAttendancePage() {
         }
         glowTimeoutRef.current = setTimeout(() => {
             setIsFingerprintGlowing(false);
+            glowTimeoutRef.current = null;
         }, FINGERPRINT_GLOW_DURATION_MS);
     }, []);
 
@@ -87,6 +135,9 @@ export function TeacherAttendancePage() {
         return () => {
             if (glowTimeoutRef.current) {
                 clearTimeout(glowTimeoutRef.current);
+            }
+            if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
             }
         };
     }, []);
@@ -98,12 +149,17 @@ export function TeacherAttendancePage() {
     }, [setSidebarOpen]);
 
     const handleToggleSidebar = useCallback(() => {
+        const {
+            sidebarOpen: currentOpen,
+            sidebarCollapsed: currentCollapsed,
+        } = useUIStore.getState();
+
         if (window.innerWidth < 1024) {
-            setSidebarOpen(!sidebarOpen);
+            setSidebarOpen(!currentOpen);
         } else {
-            setSidebarCollapsed(!sidebarCollapsed);
+            setSidebarCollapsed(!currentCollapsed);
         }
-    }, [sidebarOpen, setSidebarOpen, sidebarCollapsed, setSidebarCollapsed]);
+    }, [setSidebarOpen, setSidebarCollapsed]);
 
     // Data Guru, Sekolah, Hari Libur, Quotes, Laporan, & Cuti/Izin
     const attendanceData = useTeacherAttendanceData({
@@ -142,37 +198,111 @@ export function TeacherAttendancePage() {
         loadTeacherAndAttendance: attendanceData.loadTeacherAndAttendance,
     });
 
-    // Keyboard Escape Handler untuk Modal Aktif
+    // Destruktur properti & handler spesifik agar dependency useEffect / useCallback granular
+    const {
+        isHolidayModalOpen,
+        isTogglingHolidayLock,
+        setIsHolidayModalOpen,
+        loadTeacherAndAttendance,
+        setQuoteOffset,
+        handleSubmitStrictLeave,
+        handleEnableSpecialEvent,
+        handleDisableSpecialEvent,
+    } = attendanceData;
+
+    const {
+        checkoutConfirmModal,
+        closeCheckoutConfirmModal,
+        cameraModal,
+        isSubmittingAttendance,
+        closeCameraModal,
+        requestGpsPosition,
+        submitGpsAttendance,
+    } = gpsAndCamera;
+
+    // Keyboard Escape Handler untuk Modal Aktif (tidak re-bind setiap detik)
     useEffect(() => {
         if (
-            !attendanceData.isHolidayModalOpen &&
-            !gpsAndCamera.checkoutConfirmModal.open &&
-            !gpsAndCamera.cameraModal.open
+            !isHolidayModalOpen &&
+            !checkoutConfirmModal.open &&
+            !cameraModal.open
         ) {
             return;
         }
+
         const handleKeyDown = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return;
-            if (
-                gpsAndCamera.cameraModal.open &&
-                !gpsAndCamera.isSubmittingAttendance
-            ) {
-                gpsAndCamera.closeCameraModal();
-            } else if (gpsAndCamera.checkoutConfirmModal.open) {
-                gpsAndCamera.closeCheckoutConfirmModal();
-            } else if (
-                attendanceData.isHolidayModalOpen &&
-                !attendanceData.isTogglingHolidayLock
-            ) {
-                attendanceData.setIsHolidayModalOpen(false);
+
+            if (cameraModal.open && !isSubmittingAttendance) {
+                closeCameraModal();
+            } else if (checkoutConfirmModal.open) {
+                closeCheckoutConfirmModal();
+            } else if (isHolidayModalOpen && !isTogglingHolidayLock) {
+                setIsHolidayModalOpen(false);
             }
         };
+
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [
-        attendanceData,
-        gpsAndCamera,
+        isHolidayModalOpen,
+        isTogglingHolidayLock,
+        setIsHolidayModalOpen,
+        checkoutConfirmModal.open,
+        closeCheckoutConfirmModal,
+        cameraModal.open,
+        isSubmittingAttendance,
+        closeCameraModal,
     ]);
+
+    // Callback Stabil untuk Komponen Anak
+    const handleRefreshData = useCallback(() => {
+        void loadTeacherAndAttendance();
+    }, [loadTeacherAndAttendance]);
+
+    const handleRefreshGps = useCallback(() => {
+        void requestGpsPosition();
+    }, [requestGpsPosition]);
+
+    const handleNextQuote = useCallback(() => {
+        setQuoteOffset((prev) => prev + 1);
+    }, [setQuoteOffset]);
+
+    const handleNavigateManageQuotes = useCallback(() => {
+        navigate('/attendance/quotes');
+    }, [navigate]);
+
+    const handleNavigateMasterAttendance = useCallback(() => {
+        navigate('/academic/master-data', {
+            state: { tab: 'presensi' },
+        });
+    }, [navigate]);
+
+    const handleNavigateDashboard = useCallback(() => {
+        navigate(TEACHER_DASHBOARD_ROUTE);
+    }, [navigate]);
+
+    const handleSubmitLeaveForm = useCallback(
+        (...args: Parameters<typeof handleSubmitStrictLeave>) => {
+            void handleSubmitStrictLeave(...args);
+        },
+        [handleSubmitStrictLeave]
+    );
+
+    const handleConfirmEnableSpecialEvent = useCallback(() => {
+        void handleEnableSpecialEvent();
+    }, [handleEnableSpecialEvent]);
+
+    const handleConfirmDisableSpecialEvent = useCallback(() => {
+        void handleDisableSpecialEvent();
+    }, [handleDisableSpecialEvent]);
+
+    const handleSubmitGpsAttendance = useCallback(
+        (...args: Parameters<typeof submitGpsAttendance>) => {
+            void submitGpsAttendance(...args);
+        },
+        [submitGpsAttendance]
+    );
 
     // Logika Sembunyikan / Munculkan Header Atas Aplikasi
     useEffect(() => {
@@ -271,7 +401,7 @@ export function TeacherAttendancePage() {
 
                     <button
                         type="button"
-                        onClick={() => navigate(TEACHER_DASHBOARD_ROUTE)}
+                        onClick={handleNavigateDashboard}
                         className="group relative w-full overflow-hidden rounded-2xl bg-linear-to-r from-[#1C3D6E] via-[#26508E] to-[#1E447A] hover:from-[#163159] hover:to-[#1C3D6E] text-white font-semibold text-xs sm:text-sm py-3.5 px-5 shadow-lg shadow-[#1C3D6E]/25 hover:shadow-xl hover:shadow-[#1C3D6E]/35 active:scale-[0.98] transition-all duration-200 flex items-center justify-center gap-2.5 border border-white/15 cursor-pointer"
                     >
                         <span className="p-1.5 rounded-xl bg-white/15 group-hover:-translate-x-0.5 transition-transform duration-200">
@@ -293,36 +423,7 @@ export function TeacherAttendancePage() {
             className={`min-h-[calc(100vh-1rem)] pb-28 max-w-xl md:max-w-2xl mx-auto px-1 transition-all duration-300 ${!isTopHeaderVisible ? '-mt-2 sm:-mt-3' : 'mt-0'
                 }`}
         >
-            <style>{`
-        body.attendance-hide-header header {
-          max-height: 0px !important;
-          min-height: 0px !important;
-          height: 0px !important;
-          padding-top: 0px !important;
-          padding-bottom: 0px !important;
-          margin: 0px !important;
-          border-width: 0px !important;
-          opacity: 0 !important;
-          overflow: hidden !important;
-          pointer-events: none !important;
-          transform: translateY(-100%);
-          transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        body:not(.attendance-hide-header) header {
-          transition: all 0.28s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        @keyframes attendance-marquee {
-          0%, 15% {
-            transform: translateX(0%);
-          }
-          100% {
-            transform: translateX(-50%);
-          }
-        }
-        .animate-attendance-marquee {
-          animation: attendance-marquee linear infinite;
-        }
-      `}</style>
+            <style>{ATTENDANCE_PAGE_INLINE_STYLES}</style>
 
             {/* Notifikasi Melayang */}
             <AnimatePresence>
@@ -349,7 +450,7 @@ export function TeacherAttendancePage() {
                             </div>
                             <button
                                 type="button"
-                                onClick={() => setToast(null)}
+                                onClick={dismissToast}
                                 className="p-1 rounded-lg hover:bg-white/20 shrink-0"
                             >
                                 <X size={14} />
@@ -397,11 +498,7 @@ export function TeacherAttendancePage() {
                         <div className="flex items-center gap-1.5">
                             <button
                                 type="button"
-                                onClick={() =>
-                                    navigate('/academic/master-data', {
-                                        state: { tab: 'presensi' },
-                                    })
-                                }
+                                onClick={handleNavigateMasterAttendance}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
                             >
                                 <Settings2 size={12} />
@@ -409,7 +506,7 @@ export function TeacherAttendancePage() {
                             </button>
                             <button
                                 type="button"
-                                onClick={() => navigate('/attendance/quotes')}
+                                onClick={handleNavigateManageQuotes}
                                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-purple-600 text-white hover:bg-purple-700 transition"
                             >
                                 <Sparkles size={12} />
@@ -460,7 +557,7 @@ export function TeacherAttendancePage() {
                     schoolGeo={attendanceData.schoolGeo}
                     todayRecord={attendanceData.todayRecord}
                     isLoadingData={attendanceData.isLoadingData}
-                    onRefreshData={() => void attendanceData.loadTeacherAndAttendance()}
+                    onRefreshData={handleRefreshData}
                     onToggleSidebar={handleToggleSidebar}
                     onNavigateView={setActiveView}
                     formattedDateWithPasaran={attendanceData.formattedDateWithPasaran}
@@ -508,7 +605,7 @@ export function TeacherAttendancePage() {
                     isLocating={gpsAndCamera.isLocating}
                     distanceMeters={gpsAndCamera.distanceMeters}
                     isWithinRadius={gpsAndCamera.isWithinRadius}
-                    onRefreshGps={() => void gpsAndCamera.requestGpsPosition()}
+                    onRefreshGps={handleRefreshGps}
                     mapContainerRef={gpsAndCamera.mapContainerRef}
                     hoursStr={attendanceData.hoursStr}
                     minutesStr={attendanceData.minutesStr}
@@ -521,11 +618,9 @@ export function TeacherAttendancePage() {
                     currentLateMinutes={attendanceData.currentLateMinutes}
                     activeQuotes={attendanceData.activeQuotes}
                     activeQuoteItem={attendanceData.activeQuoteItem}
-                    onNextQuote={() =>
-                        attendanceData.setQuoteOffset((prev) => prev + 1)
-                    }
+                    onNextQuote={handleNextQuote}
                     isAdminOrSuperAdmin={attendanceData.isAdminOrSuperAdmin}
-                    onNavigateManageQuotes={() => navigate('/attendance/quotes')}
+                    onNavigateManageQuotes={handleNavigateManageQuotes}
                     isHolidayLocked={attendanceData.isHolidayLocked}
                     holidayReason={attendanceData.holidayReason}
                     isSubmittingAttendance={gpsAndCamera.isSubmittingAttendance}
@@ -558,7 +653,7 @@ export function TeacherAttendancePage() {
                     setLeaveFile={attendanceData.setLeaveFile}
                     isSubmittingLeave={attendanceData.isSubmittingLeave}
                     isLeaveFormReady={attendanceData.isLeaveFormReady}
-                    onSubmit={(e) => void attendanceData.handleSubmitStrictLeave(e)}
+                    onSubmit={handleSubmitLeaveForm}
                     showToast={showToast}
                 />
             )}
@@ -630,12 +725,8 @@ export function TeacherAttendancePage() {
                 specialEventTitleInput={attendanceData.specialEventTitleInput}
                 setSpecialEventTitleInput={attendanceData.setSpecialEventTitleInput}
                 isTogglingHolidayLock={attendanceData.isTogglingHolidayLock}
-                onEnableSpecialEvent={() =>
-                    void attendanceData.handleEnableSpecialEvent()
-                }
-                onDisableSpecialEvent={() =>
-                    void attendanceData.handleDisableSpecialEvent()
-                }
+                onEnableSpecialEvent={handleConfirmEnableSpecialEvent}
+                onDisableSpecialEvent={handleConfirmDisableSpecialEvent}
                 checkoutConfirmModal={gpsAndCamera.checkoutConfirmModal}
                 effectiveWorkEndTime={attendanceData.effectiveWorkEndTime}
                 earlyCheckoutReason={gpsAndCamera.earlyCheckoutReason}
@@ -654,9 +745,7 @@ export function TeacherAttendancePage() {
                 onCloseCameraModal={gpsAndCamera.closeCameraModal}
                 onTakeSnapshot={() => void gpsAndCamera.handleTakeSnapshot()}
                 onRetakeSelfie={gpsAndCamera.clearCapturedSelfie}
-                onSubmitAttendance={(mode, blob) =>
-                    void gpsAndCamera.submitGpsAttendance(mode, blob)
-                }
+                onSubmitAttendance={handleSubmitGpsAttendance}
             />
         </div>
     );

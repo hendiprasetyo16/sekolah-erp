@@ -1,5 +1,5 @@
 // src/modules/teacher-attendance/components/TeacherBerandaTab.tsx
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Menu,
@@ -79,6 +79,106 @@ interface TeacherBerandaTabProps {
     formatStatusLabel: (status?: string | null) => string;
 }
 
+interface DigitalClockCardProps {
+    variant: 'mobile' | 'desktop';
+    hoursStr: string;
+    minutesStr: string;
+    secondsStr: string;
+    hourUnitLabel: string;
+    minuteUnitLabel: string;
+    secondUnitLabel: string;
+}
+
+function DigitalClockCard({
+    variant,
+    hoursStr,
+    minutesStr,
+    secondsStr,
+    hourUnitLabel,
+    minuteUnitLabel,
+    secondUnitLabel,
+}: DigitalClockCardProps) {
+    const isMobile = variant === 'mobile';
+
+    return (
+        <div
+            className={
+                isMobile
+                    ? 'col-span-5 sm:hidden rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-2.5 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden'
+                    : 'hidden sm:flex sm:col-span-4 rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-3 px-2.5 flex-col items-center justify-between text-center shadow-inner relative overflow-hidden'
+            }
+        >
+            <div
+                className={
+                    isMobile
+                        ? 'pointer-events-none absolute -bottom-4 -right-4 w-16 h-16 rounded-full bg-amber-300/20'
+                        : 'pointer-events-none absolute -bottom-4 -right-4 w-20 h-20 rounded-full bg-amber-300/20'
+                }
+            />
+
+            <div
+                className={`flex items-center justify-center ${isMobile ? 'gap-1.5' : 'gap-2'
+                    } w-full`}
+            >
+                <span
+                    className={`${isMobile ? 'text-xl' : 'text-2xl'
+                        } font-extrabold text-[#1E3F73] leading-none font-mono`}
+                >
+                    {hoursStr}
+                </span>
+                <span
+                    className={`${isMobile ? 'text-[9px]' : 'text-[10px]'
+                        } font-bold tracking-wider text-slate-400`}
+                >
+                    {hourUnitLabel}
+                </span>
+            </div>
+
+            <div className="w-full h-px bg-amber-300/60 my-1" />
+
+            <div
+                className={`flex items-center justify-center ${isMobile ? 'gap-1.5' : 'gap-2'
+                    } w-full`}
+            >
+                <span
+                    className={`${isMobile ? 'text-xl' : 'text-2xl'
+                        } font-extrabold text-[#1E3F73] leading-none font-mono`}
+                >
+                    {minutesStr}
+                </span>
+                <span
+                    className={`${isMobile ? 'text-[9px]' : 'text-[10px]'
+                        } font-bold tracking-wider text-slate-400`}
+                >
+                    {minuteUnitLabel}
+                </span>
+            </div>
+
+            <div className="w-full h-px bg-amber-300/60 my-1" />
+
+            <div
+                className={`flex items-center justify-center ${isMobile ? 'gap-1.5' : 'gap-2'
+                    } w-full`}
+            >
+                <span
+                    className={`${isMobile ? 'text-xl' : 'text-2xl'
+                        } font-extrabold text-rose-500 leading-none font-mono`}
+                >
+                    {secondsStr}
+                </span>
+                <span
+                    className={`${isMobile ? 'text-[9px]' : 'text-[10px]'
+                        } font-bold tracking-wider text-rose-400`}
+                >
+                    {secondUnitLabel}
+                </span>
+            </div>
+        </div>
+    );
+}
+
+const PROFILE_HINT_AUTO_CLOSE_MS = 4500;
+
 export function TeacherBerandaTab({
     teacher,
     fallbackUserName,
@@ -147,7 +247,7 @@ export function TeacherBerandaTab({
 
         const autoCloseTimer = setTimeout(() => {
             setIsProfileHintOpen(false);
-        }, 4500);
+        }, PROFILE_HINT_AUTO_CLOSE_MS);
 
         document.addEventListener('mousedown', handlePointerDownOutside);
         document.addEventListener('touchstart', handlePointerDownOutside, {
@@ -161,12 +261,224 @@ export function TeacherBerandaTab({
         };
     }, [isProfileHintOpen]);
 
-    const basePositionLabel =
-        teacher?.position || t('teacherAttendance.defaultTeacherPosition');
-    const additionalDutyText =
-        teacher?.additionalDuties && teacher.additionalDuties.length > 0
-            ? teacher.additionalDuties.join(', ')
-            : null;
+    // Identitas tampilan guru (terisolasi dari re-render jam tiap detik)
+    const { displayName, avatarAlt, avatarInitial } = useMemo(() => {
+        const resolvedName =
+            teacher?.fullName?.trim() || fallbackUserName?.trim() || '';
+        return {
+            displayName:
+                resolvedName || t('teacherAttendance.profileUnlinked'),
+            avatarAlt: resolvedName || 'Guru',
+            avatarInitial: (resolvedName || 'G').charAt(0).toUpperCase(),
+        };
+    }, [teacher?.fullName, fallbackUserName, t]);
+
+    // Jabatan utama & tugas tambahan (deduplikasi per item & anti-duplikat terhadap jabatan utama)
+    const { basePositionLabel, additionalDutyText } = useMemo(() => {
+        const baseLabel =
+            teacher?.position?.trim() ||
+            t('teacherAttendance.defaultTeacherPosition');
+        const normalizedBase = baseLabel.toLowerCase();
+
+        const seen = new Set<string>();
+        const uniqueDuties: string[] = [];
+
+        for (const rawDuty of teacher?.additionalDuties ?? []) {
+            const trimmed = rawDuty.trim();
+            if (!trimmed) continue;
+            const normalized = trimmed.toLowerCase();
+            if (normalized === normalizedBase || seen.has(normalized)) continue;
+            seen.add(normalized);
+            uniqueDuties.push(trimmed);
+        }
+
+        return {
+            basePositionLabel: baseLabel,
+            additionalDutyText:
+                uniqueDuties.length > 0 ? uniqueDuties.join(', ') : null,
+        };
+    }, [teacher?.position, teacher?.additionalDuties, t]);
+
+    const clampedAttendancePercentage = Math.min(
+        100,
+        Math.max(0, reportStats.percentage)
+    );
+
+    const handleToggleProfileHint = useCallback(() => {
+        setIsProfileHintOpen((prev) => !prev);
+    }, []);
+
+    const handlePhotoError = useCallback(() => {
+        setPhotoLoadError(true);
+    }, []);
+
+    const handleHolidayButtonClick = useCallback(() => {
+        if (isAdminOrSuperAdmin) {
+            onOpenHolidayModal();
+        } else if (isHolidayLocked) {
+            showToast(
+                'error',
+                t('teacherAttendance.toastHolidayError', {
+                    reason: holidayReason,
+                })
+            );
+        } else {
+            showToast(
+                'success',
+                t('teacherAttendance.titleSpecialEventActive', {
+                    reason: holidayReason,
+                })
+            );
+        }
+    }, [
+        isAdminOrSuperAdmin,
+        onOpenHolidayModal,
+        isHolidayLocked,
+        showToast,
+        t,
+        holidayReason,
+    ]);
+
+    const handleCheckInCardClick = useCallback(() => {
+        if (isCheckInLocked) return;
+        onNavigateView('peta');
+    }, [isCheckInLocked, onNavigateView]);
+
+    const handleCheckOutCardClick = useCallback(() => {
+        if (!canCheckOut) return;
+        onNavigateView('peta');
+    }, [canCheckOut, onNavigateView]);
+
+    // Status visual & teks kartu DATANG
+    const checkInDisplay = useMemo(() => {
+        const isHolidayBlocked =
+            isHolidayLocked && !hasCheckedIn && !isOnLeaveToday;
+
+        let primaryText: string;
+        if (isHolidayBlocked) {
+            primaryText = t('teacherAttendance.lockedHolidayShort', {
+                reason: holidayReason,
+            });
+        } else if (isOnLeaveToday) {
+            primaryText = t('teacherAttendance.lockedStatusShort', {
+                status: formatStatusLabel(todayRecord?.status),
+            });
+        } else if (hasCheckedIn) {
+            primaryText = t('teacherAttendance.lockedAlreadyCheckedIn');
+        } else if (currentLateMinutes > 0) {
+            primaryText = t('teacherAttendance.lateDurationLabel', {
+                duration: formatDurationMinutes(currentLateMinutes),
+            });
+        } else if (effectiveToleranceMinutes > 0) {
+            primaryText = t('teacherAttendance.toleranceDeadlineLabel', {
+                time: effectiveDeadlineStr,
+            });
+        } else {
+            primaryText = t('teacherAttendance.tapToCheckIn');
+        }
+
+        let dotClassName = 'bg-amber-300 animate-pulse';
+        let statusText: string;
+
+        if (isHolidayBlocked) {
+            dotClassName = 'bg-rose-400';
+            statusText = t('teacherAttendance.holidayShortLabel');
+        } else if (hasCheckedIn) {
+            const isLateRecord = todayRecord?.status === 'TERLAMBAT';
+            dotClassName = isLateRecord ? 'bg-amber-400' : 'bg-emerald-400';
+            statusText =
+                isLateRecord && currentLateMinutes > 0
+                    ? t('teacherAttendance.lateMinutesShort', {
+                        minutes: currentLateMinutes,
+                    })
+                    : t('teacherAttendance.statusWithLabel', {
+                        status: formatStatusLabel(todayRecord?.status),
+                    });
+        } else if (currentLateMinutes > 0) {
+            dotClassName = 'bg-rose-400 animate-pulse';
+            statusText = t('teacherAttendance.pastDeadlineLabel', {
+                time: effectiveDeadlineStr,
+            });
+        } else {
+            statusText = t('teacherAttendance.waitingCheckIn');
+        }
+
+        return { primaryText, dotClassName, statusText };
+    }, [
+        isHolidayLocked,
+        hasCheckedIn,
+        isOnLeaveToday,
+        holidayReason,
+        todayRecord?.status,
+        currentLateMinutes,
+        effectiveToleranceMinutes,
+        effectiveDeadlineStr,
+        formatStatusLabel,
+        formatDurationMinutes,
+        t,
+    ]);
+
+    // Status visual & teks kartu PULANG
+    const checkOutDisplay = useMemo(() => {
+        const isHolidayBlocked = isHolidayLocked && !hasCheckedOut;
+
+        let primaryText: string;
+        if (isHolidayBlocked) {
+            primaryText = t('teacherAttendance.lockedHolidayShort', {
+                reason: holidayReason,
+            });
+        } else if (!hasCheckedIn) {
+            primaryText = t('teacherAttendance.lockedCheckInFirst');
+        } else if (hasCheckedOut) {
+            primaryText = t('teacherAttendance.lockedAlreadyCheckedOut');
+        } else {
+            primaryText = t('teacherAttendance.checkOutNotRecorded');
+        }
+
+        let dotClassName = 'bg-amber-100/60';
+        let statusText: string;
+
+        if (isHolidayBlocked) {
+            dotClassName = 'bg-rose-300';
+            statusText = t('teacherAttendance.holidayShortLabel');
+        } else if (!hasCheckedIn) {
+            statusText = t('teacherAttendance.activeAfterCheckIn');
+        } else if (hasCheckedOut) {
+            dotClassName =
+                todayCheckOutTimingInfo.isEarly ||
+                    todayCheckOutTimingInfo.isOvertime
+                    ? 'bg-amber-200'
+                    : 'bg-emerald-300';
+
+            if (todayCheckOutTimingInfo.isEarly) {
+                statusText = t('teacherAttendance.statusEarlyCheckOut');
+            } else if (todayCheckOutTimingInfo.isOvertime) {
+                statusText = t('teacherAttendance.statusOvertimeCheckOut');
+            } else {
+                statusText = t('teacherAttendance.statusCompletedOnTime');
+            }
+        } else {
+            if (canCheckOut) {
+                dotClassName = 'bg-red-400 animate-ping';
+            }
+            statusText = t('teacherAttendance.tapToCheckOut');
+        }
+
+        return { primaryText, dotClassName, statusText };
+    }, [
+        isHolidayLocked,
+        hasCheckedOut,
+        hasCheckedIn,
+        canCheckOut,
+        holidayReason,
+        todayCheckOutTimingInfo.isEarly,
+        todayCheckOutTimingInfo.isOvertime,
+        t,
+    ]);
+
+    const hourUnitLabel = t('teacherAttendance.clockHourUnit');
+    const minuteUnitLabel = t('teacherAttendance.clockMinuteUnit');
+    const secondUnitLabel = t('teacherAttendance.clockSecondUnit');
 
     return (
         <motion.div
@@ -218,25 +530,7 @@ export function TeacherBerandaTab({
                         {!isHolidayLoading && isHoliday && (
                             <button
                                 type="button"
-                                onClick={() => {
-                                    if (isAdminOrSuperAdmin) {
-                                        onOpenHolidayModal();
-                                    } else if (isHolidayLocked) {
-                                        showToast(
-                                            'error',
-                                            t('teacherAttendance.toastHolidayError', {
-                                                reason: holidayReason,
-                                            })
-                                        );
-                                    } else {
-                                        showToast(
-                                            'success',
-                                            t('teacherAttendance.titleSpecialEventActive', {
-                                                reason: holidayReason,
-                                            })
-                                        );
-                                    }
-                                }}
+                                onClick={handleHolidayButtonClick}
                                 className={`inline-flex items-center justify-center gap-1.5 p-2.5 sm:px-2.5 sm:py-2 rounded-xl border text-[11px] font-semibold backdrop-blur-xs transition active:scale-95 shrink-0 sm:order-1 ${isHolidayLocked
                                         ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
                                         : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
@@ -281,11 +575,11 @@ export function TeacherBerandaTab({
                     <div className="grid grid-cols-12 gap-3 items-stretch">
                         <div className="col-span-12 sm:col-span-8 flex flex-col justify-between gap-3">
                             <div className="flex items-start gap-3">
-                                {/* Foto Profil + Lencana Status Akun (Interaktif saat disentuh di HP maupun hover di Komputer) */}
+                                {/* Foto Profil + Lencana Status Akun */}
                                 <div ref={profileHintRef} className="relative shrink-0 mt-0.5">
                                     <button
                                         type="button"
-                                        onClick={() => setIsProfileHintOpen((prev) => !prev)}
+                                        onClick={handleToggleProfileHint}
                                         aria-expanded={isProfileHintOpen}
                                         aria-label={`${accountStatusHint.title}: ${accountStatusHint.description}`}
                                         title={`${accountStatusHint.title} — ${accountStatusHint.description}`}
@@ -295,16 +589,13 @@ export function TeacherBerandaTab({
                                             {resolvedTeacherPhotoUrl && !photoLoadError ? (
                                                 <img
                                                     src={resolvedTeacherPhotoUrl}
-                                                    alt={teacher?.fullName ?? fallbackUserName ?? 'Guru'}
-                                                    onError={() => setPhotoLoadError(true)}
+                                                    alt={avatarAlt}
+                                                    onError={handlePhotoError}
                                                     className="w-14 h-14 rounded-[14px] object-cover bg-white"
                                                 />
                                             ) : (
                                                 <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
-                                                    {(teacher?.fullName ?? fallbackUserName ?? 'G')
-                                                        .trim()
-                                                        .charAt(0)
-                                                        .toUpperCase()}
+                                                    {avatarInitial}
                                                 </div>
                                             )}
                                         </div>
@@ -358,9 +649,7 @@ export function TeacherBerandaTab({
 
                                 <div className="flex-1 min-w-0">
                                     <h2 className="font-bold text-[15px] sm:text-base text-slate-900 leading-snug wrap-break-word">
-                                        {teacher?.fullName ??
-                                            fallbackUserName ??
-                                            t('teacherAttendance.profileUnlinked')}
+                                        {displayName}
                                     </h2>
                                     <p className="text-[11px] font-mono text-slate-500 mt-0.5">
                                         {teacherIdentityLabel}
@@ -372,16 +661,14 @@ export function TeacherBerandaTab({
                                         />
                                         <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
                                             <span>{basePositionLabel}</span>
-                                            {additionalDutyText &&
-                                                additionalDutyText.toLowerCase() !==
-                                                basePositionLabel.toLowerCase() && (
-                                                    <>
-                                                        <span className="text-slate-400">•</span>
-                                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-[#1C3D6E]/10 text-[#1C3D6E] font-semibold text-[10px] leading-none">
-                                                            {additionalDutyText}
-                                                        </span>
-                                                    </>
-                                                )}
+                                            {additionalDutyText && (
+                                                <>
+                                                    <span className="text-slate-400">•</span>
+                                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-[#1C3D6E]/10 text-[#1C3D6E] font-semibold text-[10px] leading-none">
+                                                        {additionalDutyText}
+                                                    </span>
+                                                </>
+                                            )}
                                         </span>
                                     </p>
                                     <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-0.5 leading-snug">
@@ -435,85 +722,37 @@ export function TeacherBerandaTab({
                                         <div className="w-full h-1.5 rounded-full bg-slate-200 mt-1.5 overflow-hidden">
                                             <div
                                                 className="h-full rounded-full bg-linear-to-r from-amber-400 to-emerald-500 transition-all duration-500"
-                                                style={{ width: `${reportStats.percentage}%` }}
+                                                style={{
+                                                    width: `${clampedAttendancePercentage}%`,
+                                                }}
                                             />
                                         </div>
                                     </div>
                                 </div>
 
                                 {/* JAM DIGITAL KHUSUS LAYAR HP (< 640px) */}
-                                <div className="col-span-5 sm:hidden rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-2.5 px-2 flex flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
-                                    <div className="pointer-events-none absolute -bottom-4 -right-4 w-16 h-16 rounded-full bg-amber-300/20" />
-
-                                    <div className="flex items-center justify-center gap-1.5 w-full">
-                                        <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
-                                            {hoursStr}
-                                        </span>
-                                        <span className="text-[9px] font-bold tracking-wider text-slate-400">
-                                            {t('teacherAttendance.clockHourUnit')}
-                                        </span>
-                                    </div>
-
-                                    <div className="w-full h-px bg-amber-300/60 my-1" />
-
-                                    <div className="flex items-center justify-center gap-1.5 w-full">
-                                        <span className="text-xl font-extrabold text-[#1E3F73] leading-none font-mono">
-                                            {minutesStr}
-                                        </span>
-                                        <span className="text-[9px] font-bold tracking-wider text-slate-400">
-                                            {t('teacherAttendance.clockMinuteUnit')}
-                                        </span>
-                                    </div>
-
-                                    <div className="w-full h-px bg-amber-300/60 my-1" />
-
-                                    <div className="flex items-center justify-center gap-1.5 w-full">
-                                        <span className="text-xl font-extrabold text-rose-500 leading-none font-mono">
-                                            {secondsStr}
-                                        </span>
-                                        <span className="text-[9px] font-bold tracking-wider text-rose-400">
-                                            {t('teacherAttendance.clockSecondUnit')}
-                                        </span>
-                                    </div>
-                                </div>
+                                <DigitalClockCard
+                                    variant="mobile"
+                                    hoursStr={hoursStr}
+                                    minutesStr={minutesStr}
+                                    secondsStr={secondsStr}
+                                    hourUnitLabel={hourUnitLabel}
+                                    minuteUnitLabel={minuteUnitLabel}
+                                    secondUnitLabel={secondUnitLabel}
+                                />
                             </div>
                         </div>
 
                         {/* JAM DIGITAL KHUSUS LAYAR KOMPUTER (>= 640px) */}
-                        <div className="hidden sm:flex sm:col-span-4 rounded-2xl bg-linear-to-b from-[#F2F4F8] via-[#F7F3E6] to-[#EDE3C8] border border-amber-300/75 py-3 px-2.5 flex-col items-center justify-between text-center shadow-inner relative overflow-hidden">
-                            <div className="pointer-events-none absolute -bottom-4 -right-4 w-20 h-20 rounded-full bg-amber-300/20" />
-
-                            <div className="flex items-center justify-center gap-2 w-full">
-                                <span className="text-2xl font-extrabold text-[#1E3F73] leading-none font-mono">
-                                    {hoursStr}
-                                </span>
-                                <span className="text-[10px] font-bold tracking-wider text-slate-400">
-                                    {t('teacherAttendance.clockHourUnit')}
-                                </span>
-                            </div>
-
-                            <div className="w-full h-px bg-amber-300/60 my-1" />
-
-                            <div className="flex items-center justify-center gap-2 w-full">
-                                <span className="text-2xl font-extrabold text-[#1E3F73] leading-none font-mono">
-                                    {minutesStr}
-                                </span>
-                                <span className="text-[10px] font-bold tracking-wider text-slate-400">
-                                    {t('teacherAttendance.clockMinuteUnit')}
-                                </span>
-                            </div>
-
-                            <div className="w-full h-px bg-amber-300/60 my-1" />
-
-                            <div className="flex items-center justify-center gap-2 w-full">
-                                <span className="text-2xl font-extrabold text-rose-500 leading-none font-mono">
-                                    {secondsStr}
-                                </span>
-                                <span className="text-[10px] font-bold tracking-wider text-rose-400">
-                                    {t('teacherAttendance.clockSecondUnit')}
-                                </span>
-                            </div>
-                        </div>
+                        <DigitalClockCard
+                            variant="desktop"
+                            hoursStr={hoursStr}
+                            minutesStr={minutesStr}
+                            secondsStr={secondsStr}
+                            hourUnitLabel={hourUnitLabel}
+                            minuteUnitLabel={minuteUnitLabel}
+                            secondUnitLabel={secondUnitLabel}
+                        />
                     </div>
                 </div>
             </div>
@@ -524,10 +763,7 @@ export function TeacherBerandaTab({
                 <button
                     type="button"
                     disabled={isCheckInLocked}
-                    onClick={() => {
-                        if (isCheckInLocked) return;
-                        onNavigateView('peta');
-                    }}
+                    onClick={handleCheckInCardClick}
                     className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
                             ? 'opacity-65 cursor-not-allowed saturate-75'
                             : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
@@ -576,62 +812,15 @@ export function TeacherBerandaTab({
                     <div className="space-y-1 w-full min-w-0">
                         <AutoScrollingText
                             className="text-[11px] text-slate-200/85 w-full"
-                            text={
-                                isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                                    ? t('teacherAttendance.lockedHolidayShort', {
-                                        reason: holidayReason,
-                                    })
-                                    : isOnLeaveToday
-                                        ? t('teacherAttendance.lockedStatusShort', {
-                                            status: formatStatusLabel(todayRecord?.status),
-                                        })
-                                        : hasCheckedIn
-                                            ? t('teacherAttendance.lockedAlreadyCheckedIn')
-                                            : currentLateMinutes > 0
-                                                ? t('teacherAttendance.lateDurationLabel', {
-                                                    duration:
-                                                        formatDurationMinutes(currentLateMinutes),
-                                                })
-                                                : effectiveToleranceMinutes > 0
-                                                    ? t('teacherAttendance.toleranceDeadlineLabel', {
-                                                        time: effectiveDeadlineStr,
-                                                    })
-                                                    : t('teacherAttendance.tapToCheckIn')
-                            }
+                            text={checkInDisplay.primaryText}
                         />
                         <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium min-w-0">
                             <span
-                                className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                                        ? 'bg-rose-400'
-                                        : hasCheckedIn
-                                            ? todayRecord?.status === 'TERLAMBAT'
-                                                ? 'bg-amber-400'
-                                                : 'bg-emerald-400'
-                                            : currentLateMinutes > 0
-                                                ? 'bg-rose-400 animate-pulse'
-                                                : 'bg-amber-300 animate-pulse'
-                                    }`}
+                                className={`w-2 h-2 rounded-full shrink-0 ${checkInDisplay.dotClassName}`}
                             />
                             <AutoScrollingText
                                 className="flex-1 min-w-0"
-                                text={
-                                    isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                                        ? t('teacherAttendance.holidayShortLabel')
-                                        : hasCheckedIn
-                                            ? todayRecord?.status === 'TERLAMBAT' &&
-                                                currentLateMinutes > 0
-                                                ? t('teacherAttendance.lateMinutesShort', {
-                                                    minutes: currentLateMinutes,
-                                                })
-                                                : t('teacherAttendance.statusWithLabel', {
-                                                    status: formatStatusLabel(todayRecord?.status),
-                                                })
-                                            : currentLateMinutes > 0
-                                                ? t('teacherAttendance.pastDeadlineLabel', {
-                                                    time: effectiveDeadlineStr,
-                                                })
-                                                : t('teacherAttendance.waitingCheckIn')
-                                }
+                                text={checkInDisplay.statusText}
                             />
                         </div>
                     </div>
@@ -641,10 +830,7 @@ export function TeacherBerandaTab({
                 <button
                     type="button"
                     disabled={!canCheckOut}
-                    onClick={() => {
-                        if (!canCheckOut) return;
-                        onNavigateView('peta');
-                    }}
+                    onClick={handleCheckOutCardClick}
                     className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
                             ? 'opacity-65 cursor-not-allowed saturate-75'
                             : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
@@ -690,47 +876,15 @@ export function TeacherBerandaTab({
                     <div className="space-y-1 w-full min-w-0">
                         <AutoScrollingText
                             className="text-[11px] text-amber-50/90 w-full"
-                            text={
-                                isHolidayLocked && !hasCheckedOut
-                                    ? t('teacherAttendance.lockedHolidayShort', {
-                                        reason: holidayReason,
-                                    })
-                                    : !hasCheckedIn
-                                        ? t('teacherAttendance.lockedCheckInFirst')
-                                        : hasCheckedOut
-                                            ? t('teacherAttendance.lockedAlreadyCheckedOut')
-                                            : t('teacherAttendance.checkOutNotRecorded')
-                            }
+                            text={checkOutDisplay.primaryText}
                         />
                         <div className="text-[11px] text-white flex items-center gap-1.5 font-medium min-w-0">
                             <span
-                                className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedOut
-                                        ? 'bg-rose-300'
-                                        : hasCheckedOut
-                                            ? todayCheckOutTimingInfo.isEarly ||
-                                                todayCheckOutTimingInfo.isOvertime
-                                                ? 'bg-amber-200'
-                                                : 'bg-emerald-300'
-                                            : canCheckOut
-                                                ? 'bg-red-400 animate-ping'
-                                                : 'bg-amber-100/60'
-                                    }`}
+                                className={`w-2 h-2 rounded-full shrink-0 ${checkOutDisplay.dotClassName}`}
                             />
                             <AutoScrollingText
                                 className="flex-1 min-w-0"
-                                text={
-                                    isHolidayLocked && !hasCheckedOut
-                                        ? t('teacherAttendance.holidayShortLabel')
-                                        : !hasCheckedIn
-                                            ? t('teacherAttendance.activeAfterCheckIn')
-                                            : hasCheckedOut
-                                                ? todayCheckOutTimingInfo.isEarly
-                                                    ? t('teacherAttendance.statusEarlyCheckOut')
-                                                    : todayCheckOutTimingInfo.isOvertime
-                                                        ? t('teacherAttendance.statusOvertimeCheckOut')
-                                                        : t('teacherAttendance.statusCompletedOnTime')
-                                                : t('teacherAttendance.tapToCheckOut')
-                                }
+                                text={checkOutDisplay.statusText}
                             />
                         </div>
                     </div>
