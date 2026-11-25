@@ -57,6 +57,11 @@ interface StudentRow {
   nisn: string | null
   nis: string | null
   nik: string | null
+  noKk?: string | null
+  address?: string | null
+  kelurahan?: string | null
+  phone?: string | null
+  telepon?: string | null
   status: string
 }
 
@@ -67,7 +72,9 @@ interface StudentParentRow {
   email: string | null
   fullName: string | null
   nik: string | null
+  phone?: string | null
   relation: string | null
+  isAlive?: boolean
 }
 
 interface ExistingUserRow {
@@ -117,6 +124,32 @@ class HttpError extends Error {
 }
 
 // =========================================================
+// DISJOINT SET (UNION-FIND) UNTUK PENGELOMPOKAN SAUDARA
+// =========================================================
+class UnionFind {
+  parent: number[]
+
+  constructor(n: number) {
+    this.parent = Array.from({ length: n }, (_, i) => i)
+  }
+
+  find(x: number): number {
+    if (this.parent[x] !== x) {
+      this.parent[x] = this.find(this.parent[x])
+    }
+    return this.parent[x]
+  }
+
+  union(a: number, b: number): void {
+    const rootA = this.find(a)
+    const rootB = this.find(b)
+    if (rootA !== rootB) {
+      this.parent[rootB] = rootA
+    }
+  }
+}
+
+// =========================================================
 // FUNGSI BANTU (HELPERS)
 // =========================================================
 function jsonResponse(body: unknown, status = 200): Response {
@@ -149,15 +182,54 @@ function cleanString(value: unknown): string {
     : ''
 }
 
+function cleanDigits(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const digits = value.replace(/\D/g, '')
+  // Abaikan NIK/KK tidak lengkap atau angka dummy seperti 0000000000000002
+  if (digits.length < 10 || /^0+2?$/.test(digits)) return ''
+  return digits
+}
+
+function normalizePersonName(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  return value
+    .toUpperCase()
+    .replace(/[^A-Z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function normalizePhone(value: unknown): string {
+  if (typeof value !== 'string') return ''
+  const digits = value.replace(/\D/g, '')
+  if (digits.length < 8) return ''
+  return digits.startsWith('62') ? '0' + digits.slice(2) : digits
+}
+
+function normalizeAddress(address?: string | null, kelurahan?: string | null): string {
+  const raw = `${address ?? ''} ${kelurahan ?? ''}`
+    .toUpperCase()
+    .replace(/\b(JL|JALAN|GG|GANG|NO|NOMOR|RT|RW|KEL|KELURAHAN|DESA)\b/g, ' ')
+    .replace(/[^A-Z0-9]/g, '')
+  return raw.length >= 8 ? raw : ''
+}
+
+async function shortHash(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input)
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data)
+  const hashArray = Array.from(new Uint8Array(hashBuffer))
+  return hashArray
+    .slice(0, 5)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('')
+}
+
 function normalizeEmail(value: unknown): string {
   return typeof value === 'string'
     ? value.trim().toLowerCase()
     : ''
 }
 
-/**
- * Validasi format UUID standar PostgreSQL (mendukung UUID v4 maupun UUID seed/kustom).
- */
 function isValidUuid(value: unknown): value is string {
   return (
     typeof value === 'string' &&
@@ -181,9 +253,6 @@ function isAllowedGroup(value: unknown): value is TargetGroup {
   )
 }
 
-/**
- * Selaras dengan fungsi SQL `map_tugas_tambahan_to_roles` dan frontend.
- */
 function mapTugasTambahanToRoles(tugasTambahan?: string | null): string[] {
   if (!tugasTambahan) return []
   const text = tugasTambahan.toLowerCase().trim()
@@ -204,10 +273,6 @@ function mapTugasTambahanToRoles(tugasTambahan?: string | null): string[] {
   return Array.from(new Set(mapped))
 }
 
-/**
- * Menentukan prioritas wali utama per siswa:
- * 1. Ayah -> 2. Ibu -> 3. Wali -> 4. Lainnya
- */
 function getParentPriority(relation: unknown): number {
   const rel =
     typeof relation === 'string'
@@ -240,7 +305,7 @@ function getUsername(
 function makeEmail(email: unknown, username: string): string {
   const suppliedEmail = normalizeEmail(email)
 
-  if (suppliedEmail) return suppliedEmail
+  if (suppliedEmail && isValidEmail(suppliedEmail)) return suppliedEmail
 
   return `${username}@sistem.local`.toLowerCase()
 }
@@ -267,9 +332,6 @@ function formatAuthErrorReason(rawMessage: string): string {
   return 'Pembuatan akun Auth gagal. Periksa format email atau data akun pada tabel master.'
 }
 
-/**
- * Menghapus profil public.users & akun Auth yang baru dibuat jika langkah tautan gagal.
- */
 async function rollbackAuthUser(
   supabaseAdmin: SupabaseClient,
   userId: string,
@@ -481,9 +543,7 @@ serve(async (req: Request): Promise<Response> => {
       throw new HttpError('Gagal memverifikasi data sekolah.', 500)
     }
 
-    const schoolRecord = schoolData as { id: string } | null
-
-    if (!schoolRecord) {
+    if (!schoolData) {
       throw new HttpError('Satuan pendidikan tidak ditemukan.', 404)
     }
 
@@ -491,6 +551,7 @@ serve(async (req: Request): Promise<Response> => {
     // 5. AMBIL DATA MASTER AKTIF & CEK TAUTAN YANG SUDAH ADA
     // =========================================================
     let masterData: AccountCandidate[] = []
+    const studentsWithPrimaryParent = new Set<string>()
 
     // ---------------------------------------------------------
     // A. GURU / STAFF (Hanya yang isActive = true)
@@ -581,24 +642,24 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     // ---------------------------------------------------------
-    // C. ORANG TUA / WALI (Hanya dari siswa yang status = 'AKTIF')
+    // C. ORANG TUA / WALI (1 AKUN PER KELUARGA / SIBLING CLUSTERING)
     // ---------------------------------------------------------
     if (targetGroup === 'orangtua') {
       const [activeStudentsRes, parentsRes, parentLinksRes] = await Promise.all([
         supabaseAdmin
           .from('students')
-          .select('id')
+          .select('id, "schoolId", email, "fullName", nisn, nis, nik, "noKk", address, kelurahan, phone, telepon, status')
           .eq('schoolId', schoolId)
-          .eq('status', 'AKTIF'),
+          .eq('status', 'AKTIF')
+          .order('fullName', { ascending: true }),
         supabaseAdmin
           .from('student_parents')
-          .select('id, "schoolId", "studentId", email, "fullName", nik, relation')
+          .select('id, "schoolId", "studentId", email, "fullName", nik, phone, relation, "isAlive"')
           .eq('schoolId', schoolId),
         supabaseAdmin
           .from('user_student_links')
-          .select('"studentId", relationship')
-          .eq('schoolId', schoolId)
-          .neq('relationship', 'SISWA'),
+          .select('"userId", "studentId", relationship, "isPrimary"')
+          .eq('schoolId', schoolId),
       ])
 
       if (activeStudentsRes.error) {
@@ -616,87 +677,212 @@ serve(async (req: Request): Promise<Response> => {
         throw new HttpError('Gagal memeriksa tautan akun orang tua.', 500)
       }
 
-      const activeStudentRows = (activeStudentsRes.data as { id: string }[] | null) || []
-      const activeStudentIds = new Set(
-        activeStudentRows.map((row: { id: string }) => String(row.id)),
-      )
-
-      const existingParentLinkRows = (parentLinksRes.data as UserStudentLinkRow[] | null) || []
-      const alreadyLinkedStudentParentIds = new Set(
-        existingParentLinkRows.map((row: UserStudentLinkRow) => String(row.studentId)),
-      )
-
-      const parentByStudent = new Map<string, StudentParentRow>()
+      const activeStudents = (activeStudentsRes.data as StudentRow[] | null) || []
       const parentRows = (parentsRes.data as StudentParentRow[] | null) || []
+      const allLinkRows = (parentLinksRes.data as UserStudentLinkRow[] | null) || []
+
+      const existingParentLinkByStudent = new Map<string, UserStudentLinkRow>()
+      for (const row of allLinkRows) {
+        const sid = String(row.studentId)
+        if (row.isPrimary) {
+          studentsWithPrimaryParent.add(sid)
+        }
+        if (row.relationship !== 'SISWA') {
+          existingParentLinkByStudent.set(sid, row)
+        }
+      }
+
+      // Kelompokkan data Ayah, Ibu, Wali per studentId
+      const parentsByStudent = new Map<
+        string,
+        { AYAH?: StudentParentRow; IBU?: StudentParentRow; WALI?: StudentParentRow; BEST?: StudentParentRow }
+      >()
 
       for (const parent of parentRows) {
         if (!parent.studentId) continue
-        if (!activeStudentIds.has(String(parent.studentId))) continue
+        const sid = String(parent.studentId)
+        const group = parentsByStudent.get(sid) ?? {}
+        const rel = (parent.relation || '').toUpperCase().trim()
 
-        const current = parentByStudent.get(parent.studentId)
+        if (rel.includes('AYAH')) group.AYAH = parent
+        else if (rel.includes('IBU')) group.IBU = parent
+        else if (rel.includes('WALI')) group.WALI = parent
 
         if (
-          !current ||
-          getParentPriority(parent.relation) <
-            getParentPriority(current.relation)
+          !group.BEST ||
+          getParentPriority(parent.relation) < getParentPriority(group.BEST.relation)
         ) {
-          parentByStudent.set(parent.studentId, parent)
+          group.BEST = parent
         }
+
+        parentsByStudent.set(sid, group)
       }
 
-      const parentByEmail = new Map<string, AccountCandidate>()
+      // Bangun Family/Sibling Clusters menggunakan Union-Find 4 Lapis
+      const uf = new UnionFind(activeStudents.length)
+      const keyOwner = new Map<string, number>()
 
-      for (const parent of parentByStudent.values()) {
-        const studentId = String(parent.studentId)
-        const username =
-          cleanString(parent.nik) ||
-          `w-${studentId.substring(0, 6)}`
-
-        const email = makeEmail(parent.email, username)
-        const isChildAlreadyLinked = alreadyLinkedStudentParentIds.has(studentId)
-
-        const link: ParentLink = {
-          studentId,
-          relationship: getRelationship(parent.relation),
-        }
-
-        const existing = parentByEmail.get(email)
-
-        if (!existing) {
-          parentByEmail.set(email, {
-            id: parent.id,
-            email,
-            fullName: parent.fullName || '',
-            role: 'ORANG_TUA',
-            studentLinks: isChildAlreadyLinked ? [] : [link],
-            alreadyLinked: isChildAlreadyLinked,
-          })
+      const bindKey = (key: string, idx: number) => {
+        if (!key) return
+        const prevIdx = keyOwner.get(key)
+        if (prevIdx !== undefined) {
+          uf.union(prevIdx, idx)
         } else {
-          if (!isChildAlreadyLinked) {
-            const links = existing.studentLinks ?? []
-            const alreadyInList = links.some(
-              (item: ParentLink) => item.studentId === studentId,
-            )
-
-            if (!alreadyInList) {
-              links.push(link)
-            }
-            existing.studentLinks = links
-            existing.alreadyLinked = false
-          }
-
-          if (!existing.fullName && parent.fullName) {
-            existing.fullName = parent.fullName
-          }
+          keyOwner.set(key, idx)
         }
       }
 
-      masterData = Array.from(parentByEmail.values()).map((parent: AccountCandidate) => ({
-        ...parent,
-        studentLinks: [...(parent.studentLinks ?? [])].sort(
-          (a: ParentLink, b: ParentLink) => a.studentId.localeCompare(b.studentId),
-        ),
-      }))
+      activeStudents.forEach((st, idx) => {
+        const pGroup = parentsByStudent.get(st.id) ?? {}
+        const ayahNik = cleanDigits(pGroup.AYAH?.nik)
+        const ibuNik = cleanDigits(pGroup.IBU?.nik)
+        const waliNik = cleanDigits(pGroup.WALI?.nik)
+
+        const ayahName = normalizePersonName(pGroup.AYAH?.fullName)
+        const ibuName = normalizePersonName(pGroup.IBU?.fullName)
+        const waliName = normalizePersonName(pGroup.WALI?.fullName)
+        const noKk = cleanDigits(st.noKk)
+
+        const phone =
+          normalizePhone(pGroup.AYAH?.phone) ||
+          normalizePhone(pGroup.IBU?.phone) ||
+          normalizePhone(pGroup.WALI?.phone) ||
+          normalizePhone(st.phone) ||
+          normalizePhone(st.telepon)
+        const addr = normalizeAddress(st.address, st.kelurahan)
+
+        // Lapis 1: NIK Ayah / Ibu / Wali yang valid
+        if (ayahNik) bindKey(`NIK_AYAH:${ayahNik}`, idx)
+        if (ibuNik) bindKey(`NIK_IBU:${ibuNik}`, idx)
+        if (waliNik) bindKey(`NIK_WALI:${waliNik}`, idx)
+
+        // Lapis 2: No. KK + minimal salah satu nama orang tua sama
+        if (noKk && ayahName) bindKey(`KK_AYAH:${noKk}:${ayahName}`, idx)
+        if (noKk && ibuName) bindKey(`KK_IBU:${noKk}:${ibuName}`, idx)
+
+        // Lapis 3: Pasangan Nama Ayah + Nama Ibu (untuk data tanpa NIK/KK)
+        if (ayahName && ibuName) {
+          bindKey(`COUPLE:${ayahName}|${ibuName}`, idx)
+        }
+
+        // Lapis 4: Single Parent + Nomor HP atau Alamat (mencegah nama umum salah gabung)
+        const singleName = ayahName || ibuName || waliName
+        if (singleName) {
+          if (phone) bindKey(`NAME_PHONE:${singleName}:${phone}`, idx)
+          if (addr) bindKey(`NAME_ADDR:${singleName}:${addr}`, idx)
+        }
+      })
+
+      // Kelompokkan indeks siswa per klaster keluarga
+      const clustersMap = new Map<number, number[]>()
+      activeStudents.forEach((_, idx) => {
+        const root = uf.find(idx)
+        const list = clustersMap.get(root) ?? []
+        list.push(idx)
+        clustersMap.set(root, list)
+      })
+
+      // Ambil juga peta userId -> email untuk klaster yang salah satu saudaranya sudah tertaut
+      const { data: existingParentUsers } = await supabaseAdmin
+        .from('users')
+        .select('id, email')
+        .eq('schoolId', schoolId)
+        .eq('role', 'ORANG_TUA')
+
+      const emailByUserId = new Map<string, string>(
+        ((existingParentUsers as { id: string; email: string }[] | null) || []).map((u) => [
+          u.id,
+          normalizeEmail(u.email),
+        ]),
+      )
+
+      const familyCandidates: AccountCandidate[] = []
+
+      for (const memberIndices of clustersMap.values()) {
+        const clusterStudents = memberIndices.map((i) => activeStudents[i])
+
+        // Kumpulkan data orang tua terlengkap dari seluruh saudara dalam klaster ini
+        let bestAyah: StudentParentRow | undefined
+        let bestIbu: StudentParentRow | undefined
+        let bestWali: StudentParentRow | undefined
+        let existingFamilyUserId: string | undefined
+
+        for (const st of clusterStudents) {
+          const existingLink = existingParentLinkByStudent.get(st.id)
+          if (existingLink?.userId && !existingFamilyUserId) {
+            existingFamilyUserId = existingLink.userId
+          }
+
+          const pGroup = parentsByStudent.get(st.id) ?? {}
+          if (pGroup.AYAH?.fullName) {
+            if (!bestAyah || (!cleanDigits(bestAyah.nik) && cleanDigits(pGroup.AYAH.nik))) {
+              bestAyah = pGroup.AYAH
+            }
+          }
+          if (pGroup.IBU?.fullName) {
+            if (!bestIbu || (!cleanDigits(bestIbu.nik) && cleanDigits(pGroup.IBU.nik))) {
+              bestIbu = pGroup.IBU
+            }
+          }
+          if (pGroup.WALI?.fullName) {
+            if (!bestWali || (!cleanDigits(bestWali.nik) && cleanDigits(pGroup.WALI.nik))) {
+              bestWali = pGroup.WALI
+            }
+          }
+        }
+
+        const chosenParent =
+          (bestAyah && bestAyah.isAlive !== false ? bestAyah : undefined) ??
+          (bestIbu && bestIbu.isAlive !== false ? bestIbu : undefined) ??
+          bestWali ??
+          bestAyah ??
+          bestIbu
+
+        if (!chosenParent && !existingFamilyUserId) {
+          continue
+        }
+
+        const relationshipLabel = getRelationship(chosenParent?.relation)
+        const unlinkedChildren: ParentLink[] = clusterStudents
+          .filter((st) => !existingParentLinkByStudent.has(st.id))
+          .map((st) => ({
+            studentId: st.id,
+            relationship: relationshipLabel,
+          }))
+          .sort((a, b) => a.studentId.localeCompare(b.studentId))
+
+        // Tentukan email keluarga secara deterministik (bukan dari 1 studentId saja)
+        let familyEmail = existingFamilyUserId
+          ? emailByUserId.get(existingFamilyUserId) || ''
+          : ''
+
+        if (!familyEmail && chosenParent) {
+          const parentNik = cleanDigits(chosenParent.nik)
+          const familySignature = [
+            schoolId,
+            normalizePersonName(bestAyah?.fullName),
+            normalizePersonName(bestIbu?.fullName),
+            normalizePersonName(bestWali?.fullName),
+            normalizeAddress(clusterStudents[0].address, clusterStudents[0].kelurahan) ||
+              clusterStudents[0].id,
+          ].join('|')
+
+          const username = parentNik || `w-${await shortHash(familySignature)}`
+          familyEmail = makeEmail(chosenParent.email, username)
+        }
+
+        familyCandidates.push({
+          id: chosenParent?.id || clusterStudents[0].id,
+          email: familyEmail,
+          fullName: (chosenParent?.fullName || '').trim(),
+          role: 'ORANG_TUA',
+          studentLinks: unlinkedChildren,
+          alreadyLinked: unlinkedChildren.length === 0,
+          existingUserId: existingFamilyUserId,
+        })
+      }
+
+      masterData = familyCandidates
     }
 
     // =========================================================
@@ -769,6 +955,17 @@ serve(async (req: Request): Promise<Response> => {
     for (const person of uniqueMasterData) {
       if (person.alreadyLinked) {
         skipped++
+        continue
+      }
+
+      // Jika klaster saudara sudah terdeteksi terhubung ke existingUserId
+      if (
+        person.role === 'ORANG_TUA' &&
+        person.existingUserId &&
+        person.studentLinks &&
+        person.studentLinks.length > 0
+      ) {
+        candidates.push(person)
         continue
       }
 
@@ -861,17 +1058,17 @@ serve(async (req: Request): Promise<Response> => {
             // JALUR 1: ORANG TUA SUDAH PUNYA AKUN (TAMBAH ANAK)
             // =================================================
             if (person.role === 'ORANG_TUA' && person.existingUserId && person.studentLinks) {
-              const { data: existingLinks, error: checkPrimaryError } = await supabaseAdmin
+              const { data: existingLinks, error: checkLinkError } = await supabaseAdmin
                 .from('user_student_links')
-                .select('"studentId", "isPrimary"')
+                .select('"studentId"')
                 .eq('schoolId', schoolId)
                 .eq('userId', person.existingUserId)
 
-              if (checkPrimaryError) {
+              if (checkLinkError) {
                 console.error(
                   'Gagal memeriksa tautan anak sebelumnya:',
                   person.email,
-                  checkPrimaryError.message,
+                  checkLinkError.message,
                 )
                 failures.push({
                   email: person.email,
@@ -880,13 +1077,10 @@ serve(async (req: Request): Promise<Response> => {
                 return
               }
 
-              const typedExistingLinks = (existingLinks as UserStudentLinkRow[] | null) || []
-
               const alreadyLinkedIds = new Set(
-                typedExistingLinks.map((row: UserStudentLinkRow) => String(row.studentId)),
-              )
-              const hasPrimaryChild = typedExistingLinks.some(
-                (row: UserStudentLinkRow) => row.isPrimary === true,
+                ((existingLinks as UserStudentLinkRow[] | null) || []).map((row) =>
+                  String(row.studentId),
+                ),
               )
 
               const newLinks = person.studentLinks
@@ -898,15 +1092,21 @@ serve(async (req: Request): Promise<Response> => {
                 return
               }
 
-              const linksToInsert = newLinks.map((link: ParentLink, index: number) => ({
-                id: crypto.randomUUID(),
-                schoolId,
-                userId: person.existingUserId,
-                studentId: link.studentId,
-                relationship: link.relationship,
-                isPrimary: !hasPrimaryChild && index === 0,
-                createdAt: new Date().toISOString(),
-              }))
+              const linksToInsert = newLinks.map((link: ParentLink) => {
+                const canBePrimary = !studentsWithPrimaryParent.has(link.studentId)
+                if (canBePrimary) {
+                  studentsWithPrimaryParent.add(link.studentId)
+                }
+                return {
+                  id: crypto.randomUUID(),
+                  schoolId,
+                  userId: person.existingUserId,
+                  studentId: link.studentId,
+                  relationship: link.relationship,
+                  isPrimary: canBePrimary,
+                  createdAt: new Date().toISOString(),
+                }
+              })
 
               const { error: appendLinkError } = await supabaseAdmin
                 .from('user_student_links')
@@ -972,7 +1172,6 @@ serve(async (req: Request): Promise<Response> => {
 
             newlyCreatedAuthUserId = userId
 
-            // B. Buat profil aplikasi di tabel public.users
             const { error: profileError } = await supabaseAdmin
               .from('users')
               .insert({
@@ -1008,7 +1207,6 @@ serve(async (req: Request): Promise<Response> => {
               return
             }
 
-            // C. Tautkan akun ke tabel master masing-masing role
             if (person.role === 'GURU') {
               const { error: teacherLinkError } = await supabaseAdmin
                 .from('teachers')
@@ -1017,18 +1215,8 @@ serve(async (req: Request): Promise<Response> => {
                 .eq('schoolId', schoolId)
 
               if (teacherLinkError) {
-                console.error(
-                  'Gagal menautkan akun ke data master guru:',
-                  person.email,
-                  teacherLinkError.message,
-                )
-
-                const rolledBack = await rollbackAuthUser(
-                  supabaseAdmin,
-                  userId,
-                )
+                const rolledBack = await rollbackAuthUser(supabaseAdmin, userId)
                 newlyCreatedAuthUserId = null
-
                 failures.push({
                   email: person.email,
                   reason: rolledBack
@@ -1046,33 +1234,29 @@ serve(async (req: Request): Promise<Response> => {
                 (a: ParentLink, b: ParentLink) => a.studentId.localeCompare(b.studentId),
               )
 
-              const linksToInsert = sortedLinks.map((link: ParentLink, index: number) => ({
-                id: crypto.randomUUID(),
-                schoolId,
-                userId,
-                studentId: link.studentId,
-                relationship: link.relationship,
-                isPrimary: index === 0,
-                createdAt: new Date().toISOString(),
-              }))
+              const linksToInsert = sortedLinks.map((link: ParentLink) => {
+                const canBePrimary = !studentsWithPrimaryParent.has(link.studentId)
+                if (canBePrimary) {
+                  studentsWithPrimaryParent.add(link.studentId)
+                }
+                return {
+                  id: crypto.randomUUID(),
+                  schoolId,
+                  userId,
+                  studentId: link.studentId,
+                  relationship: link.relationship,
+                  isPrimary: canBePrimary,
+                  createdAt: new Date().toISOString(),
+                }
+              })
 
               const { error: linkError } = await supabaseAdmin
                 .from('user_student_links')
                 .insert(linksToInsert)
 
               if (linkError) {
-                console.error(
-                  'Gagal menyimpan relasi orang tua-anak:',
-                  person.email,
-                  linkError.message,
-                )
-
-                const rolledBack = await rollbackAuthUser(
-                  supabaseAdmin,
-                  userId,
-                )
+                const rolledBack = await rollbackAuthUser(supabaseAdmin, userId)
                 newlyCreatedAuthUserId = null
-
                 failures.push({
                   email: person.email,
                   reason: rolledBack
@@ -1095,18 +1279,8 @@ serve(async (req: Request): Promise<Response> => {
                 })
 
               if (studentLinkError) {
-                console.error(
-                  'Gagal menyimpan relasi akun siswa:',
-                  person.email,
-                  studentLinkError.message,
-                )
-
-                const rolledBack = await rollbackAuthUser(
-                  supabaseAdmin,
-                  userId,
-                )
+                const rolledBack = await rollbackAuthUser(supabaseAdmin, userId)
                 newlyCreatedAuthUserId = null
-
                 failures.push({
                   email: person.email,
                   reason: rolledBack

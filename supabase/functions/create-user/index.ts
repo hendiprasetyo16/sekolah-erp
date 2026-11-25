@@ -354,40 +354,63 @@ async function syncMasterLink(
 
     if (rawLinks.length === 0) return
 
-    const { data: existingLinks, error: existingLinksError } = await supabaseAdmin
-      .from('user_student_links')
-      .select('"studentId", "isPrimary"')
-      .eq('schoolId', schoolId)
-      .eq('userId', userId)
+    const candidateStudentIds = Array.from(
+      new Set(rawLinks.map((item) => item.studentId.trim())),
+    )
 
-    if (existingLinksError) {
-      throw new HttpError(`Gagal memeriksa tautan anak: ${existingLinksError.message}`, 500)
+    // Cek tautan yang sudah ada untuk userId ini MAUPUN status isPrimary per studentId
+    const [userLinksRes, primaryLinksRes] = await Promise.all([
+      supabaseAdmin
+        .from('user_student_links')
+        .select('"studentId"')
+        .eq('schoolId', schoolId)
+        .eq('userId', userId),
+      supabaseAdmin
+        .from('user_student_links')
+        .select('"studentId"')
+        .eq('schoolId', schoolId)
+        .in('studentId', candidateStudentIds)
+        .eq('isPrimary', true),
+    ])
+
+    if (userLinksRes.error) {
+      throw new HttpError(`Gagal memeriksa tautan anak: ${userLinksRes.error.message}`, 500)
+    }
+    if (primaryLinksRes.error) {
+      throw new HttpError(`Gagal memeriksa status wali utama siswa: ${primaryLinksRes.error.message}`, 500)
     }
 
-    const existingIds = new Set(
-      (existingLinks || []).map((row: { studentId: string }) => String(row.studentId)),
+    const existingIdsForUser = new Set(
+      (userLinksRes.data || []).map((row: { studentId: string }) => String(row.studentId)),
     )
-    const hasPrimary = (existingLinks || []).some(
-      (row: { isPrimary?: boolean }) => row.isPrimary === true,
+    const studentsWithPrimary = new Set(
+      (primaryLinksRes.data || []).map((row: { studentId: string }) => String(row.studentId)),
     )
 
     const seenInPayload = new Set<string>()
     const toInsert = rawLinks
       .filter((item) => {
         const cleanId = item.studentId.trim()
-        if (existingIds.has(cleanId) || seenInPayload.has(cleanId)) return false
+        if (existingIdsForUser.has(cleanId) || seenInPayload.has(cleanId)) return false
         seenInPayload.add(cleanId)
         return true
       })
-      .map((item, idx) => ({
-        id: crypto.randomUUID(),
-        schoolId,
-        userId,
-        studentId: item.studentId.trim(),
-        relationship: (item.relationship || 'Wali').trim() || 'Wali',
-        isPrimary: !hasPrimary && idx === 0,
-        createdAt: new Date().toISOString(),
-      }))
+      .map((item) => {
+        const cleanId = item.studentId.trim()
+        const canBePrimary = !studentsWithPrimary.has(cleanId)
+        if (canBePrimary) {
+          studentsWithPrimary.add(cleanId)
+        }
+        return {
+          id: crypto.randomUUID(),
+          schoolId,
+          userId,
+          studentId: cleanId,
+          relationship: (item.relationship || 'Wali').trim() || 'Wali',
+          isPrimary: canBePrimary,
+          createdAt: new Date().toISOString(),
+        }
+      })
 
     if (toInsert.length > 0) {
       const { error } = await supabaseAdmin
