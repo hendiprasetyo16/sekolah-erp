@@ -27,6 +27,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTranslation } from '@/hooks/useTranslation';
 import { normalizeStudentSchoolId } from '../services/student.service';
 import { encodeCode128B } from '../utils/code128Barcode';
 import { encodeQrCodeSvg } from '../utils/qrCodeGenerator';
@@ -106,6 +107,12 @@ interface SchoolHeaderInfo {
     schoolStampUrl: string | null;
 }
 
+interface PrintSheetPage {
+    key: string;
+    side: 'FRONT' | 'BACK';
+    slots: Array<PrintableStudent | null>;
+}
+
 function resolveScanCode(student: Pick<PrintableStudent, 'nisn' | 'nis'>): string {
     const cleanNisn = (student.nisn ?? '').trim();
     const hasRealNisn = Boolean(cleanNisn) && !cleanNisn.toUpperCase().startsWith('TK-');
@@ -116,35 +123,68 @@ function resolveScanCode(student: Pick<PrintableStudent, 'nisn' | 'nis'>): strin
     return '';
 }
 
-function formatGenderLabel(gender: string | null): string | null {
-    if (!gender) return null;
-    const normalized = gender.trim().toUpperCase();
-    if (
-        normalized === 'L' ||
-        normalized === 'LAKI-LAKI' ||
-        normalized === 'LAKI_LAKI' ||
-        normalized === 'MALE'
-    ) {
-        return 'Laki-laki';
+function formatClassBadgeLabel(
+    rawClassName: string,
+    formatClassPrefix: (name: string) => string
+): string {
+    const clean = rawClassName.trim();
+    if (!clean || clean === '-') return formatClassPrefix('-');
+    if (/^(kelas|class)\b/i.test(clean)) return clean;
+    return formatClassPrefix(clean);
+}
+
+/**
+ * Menyusun halaman cetak A4 secara presisi:
+ * - Setiap lembar berisi maksimal 8 kartu (2 kolom x 4 baris).
+ * - Jika DOUBLE_SIDED, halaman belakang disisipkan tepat setelah halaman depan
+ *   dengan posisi kolom kiri & kanan ditukar per baris agar tepat sejajar saat dibalik.
+ */
+function buildPrintSheetPages(
+    students: PrintableStudent[],
+    sideMode: CardSideMode
+): PrintSheetPage[] {
+    const pages: PrintSheetPage[] = [];
+
+    for (let i = 0; i < students.length; i += CARDS_PER_A4_SHEET) {
+        const chunk = students.slice(i, i + CARDS_PER_A4_SHEET);
+        const pageIndex = Math.floor(i / CARDS_PER_A4_SHEET);
+
+        pages.push({
+            key: `sheet-${pageIndex}-front`,
+            side: 'FRONT',
+            slots: chunk,
+        });
+
+        if (sideMode === 'DOUBLE_SIDED') {
+            const mirroredBackSlots: Array<PrintableStudent | null> = [];
+            for (let rowStart = 0; rowStart < chunk.length; rowStart += 2) {
+                const leftCard = chunk[rowStart] ?? null;
+                const rightCard = chunk[rowStart + 1] ?? null;
+                // Tukar kolom kiri <-> kanan agar selaras saat kertas A4 dibalik (duplex)
+                mirroredBackSlots.push(rightCard, leftCard);
+            }
+
+            pages.push({
+                key: `sheet-${pageIndex}-back`,
+                side: 'BACK',
+                slots: mirroredBackSlots,
+            });
+        }
     }
-    if (
-        normalized === 'P' ||
-        normalized === 'PEREMPUAN' ||
-        normalized === 'FEMALE'
-    ) {
-        return 'Perempuan';
-    }
-    return gender;
+
+    return pages;
 }
 
 const StudentBarcodeSvg = memo(function StudentBarcodeSvg({
     codeValue,
     height = BARCODE_ONLY_HEIGHT_PX,
     showText = true,
+    invalidLabel,
 }: {
     codeValue: string;
     height?: number;
     showText?: boolean;
+    invalidLabel: string;
 }) {
     const barcodeData = useMemo(() => {
         const encoded = encodeCode128B(codeValue);
@@ -162,7 +202,7 @@ const StudentBarcodeSvg = memo(function StudentBarcodeSvg({
     if (!barcodeData) {
         return (
             <div className="text-[9px] text-red-600 font-semibold py-1">
-                NISN/NIS tidak valid untuk barcode
+                {invalidLabel}
             </div>
         );
     }
@@ -264,16 +304,47 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
     isPrintMode?: boolean;
     onToggleSelect?: (id: string) => void;
 }) {
+    const { t } = useTranslation();
+
     const scanCode = resolveScanCode(student);
     const hasRealNisn =
         Boolean(student.nisn) && !student.nisn!.toUpperCase().startsWith('TK-');
-    const genderLabel = formatGenderLabel(student.gender);
+
+    const genderLabel = useMemo(() => {
+        if (!student.gender) return null;
+        const normalized = student.gender.trim().toUpperCase();
+        if (
+            normalized === 'L' ||
+            normalized === 'LAKI-LAKI' ||
+            normalized === 'LAKI_LAKI' ||
+            normalized === 'MALE'
+        ) {
+            return t('studentCardPrint.genderMale');
+        }
+        if (
+            normalized === 'P' ||
+            normalized === 'PEREMPUAN' ||
+            normalized === 'FEMALE'
+        ) {
+            return t('studentCardPrint.genderFemale');
+        }
+        return student.gender;
+    }, [student.gender, t]);
+
+    const classBadgeText = useMemo(
+        () =>
+            formatClassBadgeLabel(student.className, (name) =>
+                t('studentCardPrint.classOptionPrefix', { name })
+            ),
+        [student.className, t]
+    );
 
     const showQr = codeMode === 'HYBRID' || codeMode === 'QR_ONLY';
     const showBarcode = codeMode === 'HYBRID' || codeMode === 'BARCODE_ONLY';
 
     const hasValidationBlock =
-        (showSignatureOnFront && (schoolInfo.principalSignatureUrl || schoolInfo.principalName)) ||
+        (showSignatureOnFront &&
+            (schoolInfo.principalSignatureUrl || schoolInfo.principalName)) ||
         (showStampOnFront && Boolean(schoolInfo.schoolStampUrl));
 
     return (
@@ -311,7 +382,8 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                             {schoolInfo.name}
                         </p>
                         <p className="text-[6.8px] font-medium text-emerald-100 truncate leading-tight">
-                            {schoolInfo.address?.trim() || 'KARTU IDENTITAS & PRESENSI DIGITAL'}
+                            {schoolInfo.address?.trim() ||
+                                t('studentCardPrint.defaultCardSubtitle')}
                         </p>
                     </div>
                 </div>
@@ -353,7 +425,11 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                             />
                         ) : (
                             <div className="flex flex-col items-center justify-center text-slate-400">
-                                <User size={19} strokeWidth={1.75} className="text-emerald-600/70" />
+                                <User
+                                    size={19}
+                                    strokeWidth={1.75}
+                                    className="text-emerald-600/70"
+                                />
                                 <span className="text-[6.5px] font-bold uppercase tracking-wider text-slate-400 mt-0.5">
                                     3 × 4
                                 </span>
@@ -372,12 +448,12 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                                 ? `NISN: ${student.nisn}`
                                 : student.nis && student.nis !== '-'
                                     ? `NIS: ${student.nis}`
-                                    : 'NISN/NIS Belum Diisi'}
+                                    : t('studentCardPrint.idNumberMissing')}
                         </p>
 
                         <div className="flex flex-wrap items-center gap-1 mt-1">
                             <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-[7.5px] font-bold text-emerald-800 leading-none">
-                                Kelas {student.className}
+                                {classBadgeText}
                             </span>
                             {genderLabel && (
                                 <span className="inline-block px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-[7.5px] font-semibold text-slate-700 leading-none">
@@ -393,21 +469,23 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                                     {showStampOnFront && schoolInfo.schoolStampUrl && (
                                         <img
                                             src={schoolInfo.schoolStampUrl}
-                                            alt="Stempel Sekolah"
+                                            alt="School Stamp"
                                             className="pointer-events-none absolute -left-1 h-5.5 w-5.5 object-contain opacity-85 mix-blend-multiply"
                                         />
                                     )}
                                     {showSignatureOnFront && schoolInfo.principalSignatureUrl && (
                                         <img
                                             src={schoolInfo.principalSignatureUrl}
-                                            alt="TTD Kepala Sekolah"
+                                            alt="Principal Signature"
                                             className="relative z-10 h-5 max-w-16 object-contain"
                                         />
                                     )}
                                 </div>
                                 {showSignatureOnFront && schoolInfo.principalName && (
                                     <div className="min-w-0">
-                                        <p className="text-[5.5px] text-slate-500">Kepala Sekolah,</p>
+                                        <p className="text-[5.5px] text-slate-500">
+                                            {t('studentCardPrint.principalLabel')}
+                                        </p>
                                         <p className="text-[6px] font-bold text-slate-800 truncate underline">
                                             {schoolInfo.principalName}
                                         </p>
@@ -422,7 +500,9 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                 {showQr && scanCode && (
                     <StudentQrCodeSvg
                         codeValue={scanCode}
-                        sizeMm={codeMode === 'QR_ONLY' ? QR_ONLY_SIZE_MM : QR_HYBRID_SIZE_MM}
+                        sizeMm={
+                            codeMode === 'QR_ONLY' ? QR_ONLY_SIZE_MM : QR_HYBRID_SIZE_MM
+                        }
                         caption={codeMode === 'QR_ONLY' ? scanCode : undefined}
                     />
                 )}
@@ -440,10 +520,11 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                                     : BARCODE_ONLY_HEIGHT_PX
                             }
                             showText={true}
+                            invalidLabel={t('studentCardPrint.invalidBarcode')}
                         />
                     ) : (
                         <span className="text-[8.5px] text-red-600 font-bold text-center">
-                            Lengkapi NISN/NIS di Master Siswa untuk mencetak kode presensi
+                            {t('studentCardPrint.missingCodeBarcodeNote')}
                         </span>
                     )}
                 </div>
@@ -452,15 +533,15 @@ const StudentIdCardBox = memo(function StudentIdCardBox({
                     {scanCode ? (
                         <>
                             <span className="font-semibold">
-                                Arahkan QR Code ke kamera kiosk saat datang & pulang
+                                {t('studentCardPrint.qrScanInstruction')}
                             </span>
                             <span className="font-mono font-bold text-emerald-700">
-                                AKTIF
+                                {t('studentCardPrint.cardStatusActive')}
                             </span>
                         </>
                     ) : (
                         <span className="text-red-600 font-bold mx-auto">
-                            Lengkapi NISN/NIS di Master Siswa untuk mencetak QR Code
+                            {t('studentCardPrint.missingCodeQrNote')}
                         </span>
                     )}
                 </div>
@@ -481,6 +562,8 @@ const StudentIdCardBackBox = memo(function StudentIdCardBackBox({
     schoolInfo: SchoolHeaderInfo;
     isPrintMode?: boolean;
 }) {
+    const { t } = useTranslation();
+
     return (
         <div
             style={{
@@ -495,7 +578,7 @@ const StudentIdCardBackBox = memo(function StudentIdCardBackBox({
             {/* Header Belakang */}
             <div className="bg-slate-800 text-white px-3 py-1 border-b-2 border-emerald-500 flex items-center justify-between shrink-0">
                 <span className="text-[7.5px] font-bold uppercase tracking-wider">
-                    Ketentuan & Pengesahan Kartu Pelajar
+                    {t('studentCardPrint.backHeaderTitle')}
                 </span>
                 <span className="text-[7px] font-mono text-emerald-300 truncate max-w-28">
                     {student.fullName}
@@ -505,32 +588,42 @@ const StudentIdCardBackBox = memo(function StudentIdCardBackBox({
             {/* Konten Tengah: Tata Tertib Kartu */}
             <div className="px-3.5 py-2 flex-1 flex flex-col justify-between min-h-0 text-[7px] text-slate-700">
                 <ol className="list-decimal pl-3.5 space-y-0.5 text-[6.8px] leading-snug text-slate-700">
-                    <li>Kartu ini adalah identitas resmi peserta didik {schoolInfo.name}.</li>
-                    <li>Wajib dibawa setiap hari untuk presensi digital & layanan sekolah.</li>
-                    <li>Dilarang meminjamkan atau memindahtangankan kartu kepada pihak lain.</li>
-                    <li>Apabila menemukan kartu ini, mohon kembalikan ke kantor {schoolInfo.name}.</li>
+                    <li>
+                        {t('studentCardPrint.backRule1', {
+                            schoolName: schoolInfo.name,
+                        })}
+                    </li>
+                    <li>{t('studentCardPrint.backRule2')}</li>
+                    <li>{t('studentCardPrint.backRule3')}</li>
+                    <li>
+                        {t('studentCardPrint.backRule4', {
+                            schoolName: schoolInfo.name,
+                        })}
+                    </li>
                 </ol>
 
                 {/* Area Pengesahan TTD Kepala Sekolah + Stempel Terpisah */}
                 <div className="flex items-end justify-between pt-1 border-t border-slate-200/80">
                     <div className="text-[6.2px] text-slate-500 max-w-36 leading-tight">
-                        Berlaku selama pemegang tercatat aktif sebagai peserta didik.
+                        {t('studentCardPrint.backValidityNote')}
                     </div>
 
                     <div className="flex flex-col items-center text-center min-w-30 leading-tight">
-                        <span className="text-[6.5px] text-slate-700">Kepala Sekolah,</span>
+                        <span className="text-[6.5px] text-slate-700">
+                            {t('studentCardPrint.principalLabel')}
+                        </span>
                         <div className="relative flex h-8 w-28 items-center justify-center my-0.5">
                             {schoolInfo.schoolStampUrl && (
                                 <img
                                     src={schoolInfo.schoolStampUrl}
-                                    alt="Stempel Sekolah"
+                                    alt="School Stamp"
                                     className="pointer-events-none absolute left-1 h-8 w-8 object-contain opacity-85 mix-blend-multiply"
                                 />
                             )}
                             {schoolInfo.principalSignatureUrl && (
                                 <img
                                     src={schoolInfo.principalSignatureUrl}
-                                    alt="TTD Kepala Sekolah"
+                                    alt="Principal Signature"
                                     className="relative z-10 h-7.5 max-w-24 object-contain"
                                 />
                             )}
@@ -551,6 +644,7 @@ const StudentIdCardBackBox = memo(function StudentIdCardBackBox({
 });
 
 export function StudentCardPrintPage() {
+    const { t } = useTranslation();
     const { user, school } = useAuthStore();
 
     const schoolMeta = school as {
@@ -571,7 +665,7 @@ export function StudentCardPrintPage() {
     );
 
     const [schoolInfo, setSchoolInfo] = useState<SchoolHeaderInfo>({
-        name: schoolMeta?.name ?? 'KARTU PRESENSI SISWA',
+        name: schoolMeta?.name ?? t('studentCardPrint.defaultSchoolTitle'),
         address: schoolMeta?.address ?? null,
         logoUrl: schoolMeta?.logoUrl ?? null,
         principalName: schoolMeta?.principalName ?? null,
@@ -598,19 +692,6 @@ export function StudentCardPrintPage() {
 
     const [currentPage, setCurrentPage] = useState<number>(1);
     const [pageSize, setPageSize] = useState<number>(DEFAULT_PREVIEW_PAGE_SIZE);
-    const [isPrinting, setIsPrinting] = useState<boolean>(false);
-
-    useEffect(() => {
-        const handleBeforePrint = () => setIsPrinting(true);
-        const handleAfterPrint = () => setIsPrinting(false);
-
-        window.addEventListener('beforeprint', handleBeforePrint);
-        window.addEventListener('afterprint', handleAfterPrint);
-        return () => {
-            window.removeEventListener('beforeprint', handleBeforePrint);
-            window.removeEventListener('afterprint', handleAfterPrint);
-        };
-    }, []);
 
     useEffect(() => {
         let mounted = true;
@@ -680,14 +761,21 @@ export function StudentCardPrintPage() {
 
                 if (schoolRow) {
                     setSchoolInfo((prev) => ({
-                        name: schoolRow.name || prev.name || 'KARTU PRESENSI SISWA',
+                        name:
+                            schoolRow.name ||
+                            prev.name ||
+                            t('studentCardPrint.defaultSchoolTitle'),
                         address: schoolRow.address ?? prev.address ?? null,
                         logoUrl: schoolRow.logoUrl ?? prev.logoUrl ?? null,
-                        principalName: schoolRow.principalName ?? prev.principalName ?? null,
+                        principalName:
+                            schoolRow.principalName ?? prev.principalName ?? null,
                         principalNip: schoolRow.principalNip ?? prev.principalNip ?? null,
                         principalSignatureUrl:
-                            schoolRow.principalSignatureUrl ?? prev.principalSignatureUrl ?? null,
-                        schoolStampUrl: schoolRow.schoolStampUrl ?? prev.schoolStampUrl ?? null,
+                            schoolRow.principalSignatureUrl ??
+                            prev.principalSignatureUrl ??
+                            null,
+                        schoolStampUrl:
+                            schoolRow.schoolStampUrl ?? prev.schoolStampUrl ?? null,
                     }));
                 }
 
@@ -705,12 +793,12 @@ export function StudentCardPrintPage() {
                     ? allClasses.filter((c) => c.academicYearId === activeYear.id)
                     : allClasses;
 
-                const finalClasses = (activeClasses.length > 0 ? activeClasses : allClasses).map(
-                    (c) => ({
-                        id: c.id,
-                        name: c.name,
-                    })
-                );
+                const finalClasses = (
+                    activeClasses.length > 0 ? activeClasses : allClasses
+                ).map((c) => ({
+                    id: c.id,
+                    name: c.name,
+                }));
 
                 setClassesList(finalClasses);
                 if (finalClasses.length > 0) {
@@ -731,67 +819,85 @@ export function StudentCardPrintPage() {
         return () => {
             mounted = false;
         };
-    }, [activeSchoolId]);
+    }, [activeSchoolId, t]);
 
-    const loadStudents = useCallback(async () => {
-        if (!activeSchoolId || !isClassesReady) return;
-        setIsLoading(true);
-        setErrorMsg(null);
-        setCurrentPage(1);
+    const loadStudents = useCallback(
+        async (signal?: { cancelled: boolean }) => {
+            if (!activeSchoolId || !isClassesReady) return;
+            setIsLoading(true);
+            setErrorMsg(null);
+            setCurrentPage(1);
 
-        try {
-            let query = supabase
-                .from('students')
-                .select('id, fullName, nisn, nis, gender, photoUrl, status, classId, classes(name)')
-                .eq('schoolId', activeSchoolId)
-                .order('fullName', { ascending: true });
+            try {
+                let query = supabase
+                    .from('students')
+                    .select(
+                        'id, fullName, nisn, nis, gender, photoUrl, status, classId, classes(name)'
+                    )
+                    .eq('schoolId', activeSchoolId)
+                    .order('fullName', { ascending: true });
 
-            if (selectedClassId !== 'ALL') {
-                query = query.eq('classId', selectedClassId);
+                if (selectedClassId !== 'ALL') {
+                    query = query.eq('classId', selectedClassId);
+                }
+
+                if (selectedStatus !== 'ALL') {
+                    query = query.eq('status', selectedStatus);
+                }
+
+                const { data, error } = await query;
+                if (signal?.cancelled) return;
+                if (error) throw error;
+
+                const typedRows = (data ?? []) as RawStudentCardRow[];
+                const mapped: PrintableStudent[] = typedRows.map((row) => {
+                    const clsName = Array.isArray(row.classes)
+                        ? row.classes[0]?.name
+                        : row.classes?.name;
+
+                    return {
+                        id: String(row.id),
+                        fullName:
+                            row.fullName?.trim() ||
+                            t('studentCardPrint.unnamedStudent'),
+                        nisn: row.nisn ?? null,
+                        nis: row.nis ?? null,
+                        gender: row.gender ?? null,
+                        photoUrl: row.photoUrl ?? null,
+                        status: row.status ?? 'AKTIF',
+                        classId: row.classId ?? '',
+                        className: clsName ?? '-',
+                    };
+                });
+
+                setStudents(mapped);
+
+                const validIds = mapped
+                    .filter((s) => Boolean(resolveScanCode(s)))
+                    .map((s) => s.id);
+                setSelectedIds(new Set(validIds));
+            } catch (err: unknown) {
+                if (signal?.cancelled) return;
+                const msg =
+                    err instanceof Error
+                        ? err.message
+                        : t('studentCardPrint.errLoadStudents');
+                setErrorMsg(msg);
+            } finally {
+                if (!signal?.cancelled) {
+                    setIsLoading(false);
+                }
             }
-
-            if (selectedStatus !== 'ALL') {
-                query = query.eq('status', selectedStatus);
-            }
-
-            const { data, error } = await query;
-            if (error) throw error;
-
-            const typedRows = (data ?? []) as RawStudentCardRow[];
-            const mapped: PrintableStudent[] = typedRows.map((row) => {
-                const clsName = Array.isArray(row.classes)
-                    ? row.classes[0]?.name
-                    : row.classes?.name;
-
-                return {
-                    id: String(row.id),
-                    fullName: row.fullName ?? 'Tanpa Nama',
-                    nisn: row.nisn ?? null,
-                    nis: row.nis ?? null,
-                    gender: row.gender ?? null,
-                    photoUrl: row.photoUrl ?? null,
-                    status: row.status ?? 'AKTIF',
-                    classId: row.classId ?? '',
-                    className: clsName ?? '-',
-                };
-            });
-
-            setStudents(mapped);
-
-            const validIds = mapped
-                .filter((s) => Boolean(resolveScanCode(s)))
-                .map((s) => s.id);
-            setSelectedIds(new Set(validIds));
-        } catch (err: unknown) {
-            const msg = err instanceof Error ? err.message : 'Gagal memuat data siswa.';
-            setErrorMsg(msg);
-        } finally {
-            setIsLoading(false);
-        }
-    }, [activeSchoolId, isClassesReady, selectedClassId, selectedStatus]);
+        },
+        [activeSchoolId, isClassesReady, selectedClassId, selectedStatus, t]
+    );
 
     useEffect(() => {
-        void loadStudents();
+        const signal = { cancelled: false };
+        void loadStudents(signal);
+        return () => {
+            signal.cancelled = true;
+        };
     }, [loadStudents]);
 
     const filteredStudents = useMemo(() => {
@@ -805,9 +911,17 @@ export function StudentCardPrintPage() {
         );
     }, [students, searchQuery]);
 
-    const effectivePageSize = pageSize === 0 ? filteredStudents.length || 1 : pageSize;
+    const printableFilteredCount = useMemo(
+        () => filteredStudents.filter((s) => Boolean(resolveScanCode(s))).length,
+        [filteredStudents]
+    );
+
+    const effectivePageSize =
+        pageSize === 0 ? filteredStudents.length || 1 : pageSize;
     const totalPages =
-        pageSize === 0 ? 1 : Math.max(1, Math.ceil(filteredStudents.length / effectivePageSize));
+        pageSize === 0
+            ? 1
+            : Math.max(1, Math.ceil(filteredStudents.length / effectivePageSize));
     const safeCurrentPage = Math.min(currentPage, totalPages);
 
     const paginatedPreviewStudents = useMemo(() => {
@@ -832,9 +946,12 @@ export function StudentCardPrintPage() {
         [filteredStudents, selectedIds]
     );
 
-    const totalCardFaces =
-        cardSideMode === 'DOUBLE_SIDED' ? cardsToPrint.length * 2 : cardsToPrint.length;
-    const estimatedSheets = Math.max(1, Math.ceil(totalCardFaces / CARDS_PER_A4_SHEET));
+    const printSheetPages = useMemo(
+        () => buildPrintSheetPages(cardsToPrint, cardSideMode),
+        [cardsToPrint, cardSideMode]
+    );
+
+    const estimatedSheets = printSheetPages.length;
 
     const toggleStudentSelection = useCallback((id: string) => {
         setSelectedIds((prev) => {
@@ -846,7 +963,9 @@ export function StudentCardPrintPage() {
     }, []);
 
     const handleSelectAllFiltered = () => {
-        const printableFiltered = filteredStudents.filter((s) => Boolean(resolveScanCode(s)));
+        const printableFiltered = filteredStudents.filter((s) =>
+            Boolean(resolveScanCode(s))
+        );
         const allFilteredSelected =
             printableFiltered.length > 0 &&
             printableFiltered.every((s) => selectedIds.has(s.id));
@@ -868,12 +987,7 @@ export function StudentCardPrintPage() {
 
     const handlePrint = () => {
         if (cardsToPrint.length === 0) return;
-        setIsPrinting(true);
-        requestAnimationFrame(() => {
-            setTimeout(() => {
-                window.print();
-            }, 60);
-        });
+        window.print();
     };
 
     const showLoadingState = isLoading || (Boolean(activeSchoolId) && !isClassesReady);
@@ -917,7 +1031,7 @@ export function StudentCardPrintPage() {
             padding: 0 !important;
             background: #FFFFFF !important;
           }
-          #print-cards-grid {
+          .print-a4-sheet {
             display: flex !important;
             flex-wrap: wrap !important;
             justify-content: flex-start !important;
@@ -929,7 +1043,12 @@ export function StudentCardPrintPage() {
             margin-right: 0 !important;
             padding: 0 !important;
           }
-          .student-id-card-item {
+          .print-a4-sheet + .print-a4-sheet {
+            break-before: page !important;
+            page-break-before: always !important;
+          }
+          .student-id-card-item,
+          .student-id-card-spacer {
             flex: 0 0 ${CARD_WIDTH_MM}mm !important;
             width: ${CARD_WIDTH_MM}mm !important;
             height: ${CARD_HEIGHT_MM}mm !important;
@@ -946,7 +1065,7 @@ export function StudentCardPrintPage() {
                 <div className="flex items-start gap-3">
                     <Link
                         to="/students"
-                        title="Kembali ke Daftar Siswa"
+                        title={t('studentCardPrint.backToStudentsTitle')}
                         className="mt-0.5 rounded-xl border border-border bg-card p-2.5 text-muted-foreground hover:text-foreground hover:bg-muted transition"
                     >
                         <ArrowLeft size={18} />
@@ -954,10 +1073,13 @@ export function StudentCardPrintPage() {
                     <div>
                         <h1 className="text-2xl font-bold flex items-center gap-2 text-foreground">
                             <QrCode className="text-emerald-600" size={24} />
-                            Cetak Kartu Pelajar (QR Code & Barcode)
+                            {t('studentCardPrint.pageTitle')}
                         </h1>
                         <p className="text-sm text-muted-foreground mt-0.5">
-                            Ukuran standar CR80 ({CARD_WIDTH_MM} × {CARD_HEIGHT_MM} mm) dilengkapi Logo Sekolah, TTD Kepala Sekolah, dan Stempel Sekolah.
+                            {t('studentCardPrint.pageSubtitle', {
+                                width: CARD_WIDTH_MM,
+                                height: CARD_HEIGHT_MM,
+                            })}
                         </p>
                     </div>
                 </div>
@@ -969,7 +1091,10 @@ export function StudentCardPrintPage() {
                     className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer transition"
                 >
                     <Printer size={16} />
-                    Cetak {cardsToPrint.length} Kartu ({estimatedSheets} Lembar A4)
+                    {t('studentCardPrint.btnPrintCards', {
+                        count: cardsToPrint.length,
+                        sheets: estimatedSheets,
+                    })}
                 </button>
             </div>
 
@@ -978,17 +1103,21 @@ export function StudentCardPrintPage() {
                 <div className="flex flex-wrap items-end gap-3">
                     <div className="min-w-40">
                         <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
-                            Filter Kelas
+                            {t('studentCardPrint.filterClassLabel')}
                         </label>
                         <select
                             value={selectedClassId}
                             onChange={(e) => setSelectedClassId(e.target.value)}
                             className="w-full rounded-xl border border-border bg-background px-3 py-2 text-xs font-semibold focus:outline-none focus:border-emerald-500"
                         >
-                            <option value="ALL">Semua Kelas</option>
+                            <option value="ALL">
+                                {t('studentCardPrint.allClassesOption')}
+                            </option>
                             {classesList.map((cls) => (
                                 <option key={cls.id} value={cls.id}>
-                                    Kelas {cls.name}
+                                    {formatClassBadgeLabel(cls.name, (name) =>
+                                        t('studentCardPrint.classOptionPrefix', { name })
+                                    )}
                                 </option>
                             ))}
                         </select>
@@ -996,7 +1125,7 @@ export function StudentCardPrintPage() {
 
                     <div className="min-w-36">
                         <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
-                            Status Siswa
+                            {t('studentCardPrint.filterStatusLabel')}
                         </label>
                         <div className="relative">
                             <Filter
@@ -1008,10 +1137,18 @@ export function StudentCardPrintPage() {
                                 onChange={(e) => setSelectedStatus(e.target.value)}
                                 className="w-full rounded-xl border border-border bg-background pl-8 pr-3 py-2 text-xs font-semibold focus:outline-none focus:border-emerald-500"
                             >
-                                <option value="AKTIF">Siswa Aktif</option>
-                                <option value="ALL">Semua Status</option>
-                                <option value="LULUS">Lulus</option>
-                                <option value="MUTASI_KELUAR">Mutasi Keluar</option>
+                                <option value="AKTIF">
+                                    {t('studentCardPrint.statusActiveOption')}
+                                </option>
+                                <option value="ALL">
+                                    {t('studentCardPrint.statusAllOption')}
+                                </option>
+                                <option value="LULUS">
+                                    {t('studentCardPrint.statusGraduatedOption')}
+                                </option>
+                                <option value="MUTASI_KELUAR">
+                                    {t('studentCardPrint.statusTransferredOption')}
+                                </option>
                             </select>
                         </div>
                     </div>
@@ -1019,7 +1156,7 @@ export function StudentCardPrintPage() {
                     {/* Pemilih Desain Kode */}
                     <div>
                         <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
-                            Desain Kode Presensi
+                            {t('studentCardPrint.codeDesignLabel')}
                         </label>
                         <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
                             <button
@@ -1031,7 +1168,7 @@ export function StudentCardPrintPage() {
                                     }`}
                             >
                                 <QrCode size={12} />
-                                <span>QR + Barcode</span>
+                                <span>{t('studentCardPrint.modeHybrid')}</span>
                             </button>
                             <button
                                 type="button"
@@ -1042,7 +1179,7 @@ export function StudentCardPrintPage() {
                                     }`}
                             >
                                 <QrCode size={12} />
-                                <span>QR Saja</span>
+                                <span>{t('studentCardPrint.modeQrOnly')}</span>
                             </button>
                             <button
                                 type="button"
@@ -1053,7 +1190,7 @@ export function StudentCardPrintPage() {
                                     }`}
                             >
                                 <Barcode size={12} />
-                                <span>Barcode Saja</span>
+                                <span>{t('studentCardPrint.modeBarcodeOnly')}</span>
                             </button>
                         </div>
                     </div>
@@ -1061,7 +1198,7 @@ export function StudentCardPrintPage() {
                     {/* Pemilih Sisi Kartu */}
                     <div>
                         <label className="text-[11px] font-semibold block mb-1 text-muted-foreground">
-                            Sisi Cetak
+                            {t('studentCardPrint.printSideLabel')}
                         </label>
                         <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
                             <button
@@ -1072,7 +1209,7 @@ export function StudentCardPrintPage() {
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                <span>Depan Saja</span>
+                                <span>{t('studentCardPrint.sideFrontOnly')}</span>
                             </button>
                             <button
                                 type="button"
@@ -1083,7 +1220,7 @@ export function StudentCardPrintPage() {
                                     }`}
                             >
                                 <FlipHorizontal2 size={12} />
-                                <span>Depan + Belakang</span>
+                                <span>{t('studentCardPrint.sideDoubleSided')}</span>
                             </button>
                         </div>
                     </div>
@@ -1101,7 +1238,13 @@ export function StudentCardPrintPage() {
                                 }`}
                         >
                             <PenTool size={13} />
-                            <span>TTD Kepsek (Depan): {showSignatureOnFront ? 'Aktif' : 'Nonaktif'}</span>
+                            <span>
+                                {t('studentCardPrint.toggleSignatureFront', {
+                                    state: showSignatureOnFront
+                                        ? t('studentCardPrint.stateActive')
+                                        : t('studentCardPrint.stateInactive'),
+                                })}
+                            </span>
                         </button>
 
                         <button
@@ -1113,7 +1256,13 @@ export function StudentCardPrintPage() {
                                 }`}
                         >
                             <Stamp size={13} />
-                            <span>Stempel Sekolah (Depan): {showStampOnFront ? 'Aktif' : 'Nonaktif'}</span>
+                            <span>
+                                {t('studentCardPrint.toggleStampFront', {
+                                    state: showStampOnFront
+                                        ? t('studentCardPrint.stateActive')
+                                        : t('studentCardPrint.stateInactive'),
+                                })}
+                            </span>
                         </button>
                     </div>
 
@@ -1127,7 +1276,7 @@ export function StudentCardPrintPage() {
                                     setSearchQuery(e.target.value);
                                     setCurrentPage(1);
                                 }}
-                                placeholder="Cari nama siswa atau NISN..."
+                                placeholder={t('studentCardPrint.searchPlaceholder')}
                                 className="w-full min-w-0 bg-transparent text-xs focus:outline-none"
                             />
                             {searchQuery && (
@@ -1147,11 +1296,13 @@ export function StudentCardPrintPage() {
                         <button
                             type="button"
                             onClick={handleSelectAllFiltered}
-                            disabled={filteredStudents.length === 0}
+                            disabled={printableFilteredCount === 0}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-border bg-background hover:bg-muted transition cursor-pointer disabled:opacity-50 shrink-0"
                         >
                             <Users size={14} />
-                            Pilih / Batal ({filteredStudents.length})
+                            {t('studentCardPrint.btnSelectToggle', {
+                                count: printableFilteredCount,
+                            })}
                         </button>
                     </div>
                 </div>
@@ -1161,13 +1312,13 @@ export function StudentCardPrintPage() {
                     <div className="flex items-center gap-1.5">
                         <Info size={14} className="text-emerald-600 shrink-0" />
                         <span>
-                            Logo, TTD Kepala Sekolah & Stempel dapat diatur di menu{' '}
+                            {t('studentCardPrint.tipBrandingPrefix')}
                             <Link
                                 to="/academic/master-data"
                                 state={{ tab: 'branding' }}
                                 className="font-semibold text-emerald-600 hover:underline"
                             >
-                                Master Akademik → Logo, TTD & Stempel
+                                {t('studentCardPrint.tipBrandingLink')}
                             </Link>
                             .
                         </span>
@@ -1175,7 +1326,11 @@ export function StudentCardPrintPage() {
                     <div className="inline-flex items-center gap-1.5 font-semibold text-foreground bg-muted/60 px-2.5 py-1 rounded-lg">
                         <FileSpreadsheet size={13} className="text-emerald-600" />
                         <span>
-                            {cardsToPrint.length} dari {filteredStudents.length} siswa dipilih ({CARDS_PER_A4_SHEET} sisi kartu/lembar)
+                            {t('studentCardPrint.selectedSummary', {
+                                selected: cardsToPrint.length,
+                                total: filteredStudents.length,
+                                perSheet: CARDS_PER_A4_SHEET,
+                            })}
                         </span>
                     </div>
                 </div>
@@ -1192,18 +1347,21 @@ export function StudentCardPrintPage() {
             {showLoadingState ? (
                 <div className="py-16 text-center text-xs opacity-70 flex items-center justify-center gap-2">
                     <Loader2 size={18} className="animate-spin text-emerald-600" />
-                    Memuat data siswa...
+                    {t('studentCardPrint.loadingStudents')}
                 </div>
             ) : filteredStudents.length === 0 ? (
                 <div className="rounded-xl border border-border bg-card p-10 text-center text-xs opacity-70">
-                    Tidak ada data siswa pada kelas/filter ini.
+                    {t('studentCardPrint.emptyStudents')}
                 </div>
             ) : (
                 <div className="rounded-2xl border border-border bg-muted/30 overflow-hidden">
                     <div className="p-5 sm:p-6">
                         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5 place-items-center">
                             {paginatedPreviewStudents.map((student) => (
-                                <div key={student.id} className="flex flex-col items-center gap-2">
+                                <div
+                                    key={student.id}
+                                    className="flex flex-col items-center gap-2"
+                                >
                                     <StudentIdCardBox
                                         student={student}
                                         schoolInfo={schoolInfo}
@@ -1229,9 +1387,11 @@ export function StudentCardPrintPage() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-5 py-3.5 border-t border-border bg-card text-xs">
                         <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                             <span>
-                                Pratinjau <strong>{startItemNumber}</strong>–
-                                <strong>{endItemNumber}</strong> dari{' '}
-                                <strong>{filteredStudents.length}</strong> kartu
+                                {t('studentCardPrint.previewRange', {
+                                    start: startItemNumber,
+                                    end: endItemNumber,
+                                    total: filteredStudents.length,
+                                })}
                             </span>
                             <select
                                 value={pageSize}
@@ -1239,14 +1399,16 @@ export function StudentCardPrintPage() {
                                     setPageSize(Number(e.target.value));
                                     setCurrentPage(1);
                                 }}
-                                aria-label="Jumlah kartu pratinjau per halaman"
+                                aria-label={t('studentCardPrint.ariaPreviewPageSize')}
                                 className="rounded-lg border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground focus:outline-none focus:border-emerald-500"
                             >
                                 {PREVIEW_PAGE_SIZE_OPTIONS.map((opt) => (
                                     <option key={opt} value={opt}>
                                         {opt === 0
-                                            ? 'Tampilkan Semua'
-                                            : `${opt} kartu / halaman`}
+                                            ? t('studentCardPrint.showAllOption')
+                                            : t('studentCardPrint.cardsPerPageOption', {
+                                                count: opt,
+                                            })}
                                     </option>
                                 ))}
                             </select>
@@ -1257,26 +1419,33 @@ export function StudentCardPrintPage() {
                                 <button
                                     type="button"
                                     disabled={safeCurrentPage <= 1}
-                                    onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                    onClick={() =>
+                                        setCurrentPage((p) => Math.max(1, p - 1))
+                                    }
                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                 >
                                     <ChevronLeft size={14} />
-                                    Sebelumnya
+                                    {t('studentCardPrint.btnPrevPage')}
                                 </button>
 
                                 <span className="px-2.5 py-1 font-mono font-semibold text-foreground">
-                                    Hal {safeCurrentPage} / {totalPages}
+                                    {t('studentCardPrint.pageIndicator', {
+                                        current: safeCurrentPage,
+                                        total: totalPages,
+                                    })}
                                 </span>
 
                                 <button
                                     type="button"
                                     disabled={safeCurrentPage >= totalPages}
                                     onClick={() =>
-                                        setCurrentPage((p) => Math.min(totalPages, p + 1))
+                                        setCurrentPage((p) =>
+                                            Math.min(totalPages, p + 1)
+                                        )
                                     }
                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                 >
-                                    Berikutnya
+                                    {t('studentCardPrint.btnNextPage')}
                                     <ChevronRight size={14} />
                                 </button>
                             </div>
@@ -1285,43 +1454,46 @@ export function StudentCardPrintPage() {
                 </div>
             )}
 
-            {/* Wadah Cetak Khusus */}
+            {/* Wadah Cetak Khusus (Selalu ter-mount agar Ctrl+P langsung berfungsi) */}
             {typeof document !== 'undefined' &&
-                isPrinting &&
-                cardsToPrint.length > 0 &&
+                printSheetPages.length > 0 &&
                 createPortal(
                     <div id="print-mount-root">
-                        <div id="print-cards-grid">
-                            {cardsToPrint.flatMap((student) => {
-                                const frontCard = (
-                                    <StudentIdCardBox
-                                        key={`print-front-${student.id}`}
-                                        student={student}
-                                        schoolInfo={schoolInfo}
-                                        academicYearLabel={activeAcademicYearName}
-                                        codeMode={cardCodeMode}
-                                        showSignatureOnFront={showSignatureOnFront}
-                                        showStampOnFront={showStampOnFront}
-                                        isSelected={true}
-                                        isPrintMode={true}
-                                    />
-                                );
+                        {printSheetPages.map((sheetPage) => (
+                            <div key={sheetPage.key} className="print-a4-sheet">
+                                {sheetPage.slots.map((student, slotIdx) => {
+                                    if (!student) {
+                                        return (
+                                            <div
+                                                key={`${sheetPage.key}-spacer-${slotIdx}`}
+                                                className="student-id-card-spacer"
+                                            />
+                                        );
+                                    }
 
-                                if (cardSideMode === 'DOUBLE_SIDED') {
-                                    return [
-                                        frontCard,
+                                    return sheetPage.side === 'FRONT' ? (
+                                        <StudentIdCardBox
+                                            key={`${sheetPage.key}-${student.id}`}
+                                            student={student}
+                                            schoolInfo={schoolInfo}
+                                            academicYearLabel={activeAcademicYearName}
+                                            codeMode={cardCodeMode}
+                                            showSignatureOnFront={showSignatureOnFront}
+                                            showStampOnFront={showStampOnFront}
+                                            isSelected={true}
+                                            isPrintMode={true}
+                                        />
+                                    ) : (
                                         <StudentIdCardBackBox
-                                            key={`print-back-${student.id}`}
+                                            key={`${sheetPage.key}-${student.id}`}
                                             student={student}
                                             schoolInfo={schoolInfo}
                                             isPrintMode={true}
-                                        />,
-                                    ];
-                                }
-
-                                return [frontCard];
-                            })}
-                        </div>
+                                        />
+                                    );
+                                })}
+                            </div>
+                        ))}
                     </div>,
                     document.body
                 )}

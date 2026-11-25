@@ -937,6 +937,75 @@ export const translations = {
       ariaManualInput: 'Input Barcode Scanner atau NISN Manual',
       btnSubmitScan: 'Absen',
     },
+    studentCardPrint: {
+      backToStudentsTitle: 'Kembali ke Daftar Siswa',
+      pageTitle: 'Cetak Kartu Pelajar (QR Code & Barcode)',
+      pageSubtitle:
+        'Ukuran standar CR80 ({width} × {height} mm) dilengkapi Logo Sekolah, TTD Kepala Sekolah, dan Stempel Sekolah.',
+      btnPrintCards: 'Cetak {count} Kartu ({sheets} Lembar A4)',
+      filterClassLabel: 'Filter Kelas',
+      allClassesOption: 'Semua Kelas',
+      classOptionPrefix: 'Kelas {name}',
+      filterStatusLabel: 'Status Siswa',
+      statusActiveOption: 'Siswa Aktif',
+      statusAllOption: 'Semua Status',
+      statusGraduatedOption: 'Lulus',
+      statusTransferredOption: 'Mutasi Keluar',
+      codeDesignLabel: 'Desain Kode Presensi',
+      modeHybrid: 'QR + Barcode',
+      modeQrOnly: 'QR Saja',
+      modeBarcodeOnly: 'Barcode Saja',
+      printSideLabel: 'Sisi Cetak',
+      sideFrontOnly: 'Depan Saja',
+      sideDoubleSided: 'Depan + Belakang',
+      toggleSignatureFront: 'TTD Kepsek (Depan): {state}',
+      toggleStampFront: 'Stempel Sekolah (Depan): {state}',
+      stateActive: 'Aktif',
+      stateInactive: 'Nonaktif',
+      searchPlaceholder: 'Cari nama siswa atau NISN...',
+      btnSelectToggle: 'Pilih / Batal ({count})',
+      tipBrandingPrefix: 'Logo, TTD Kepala Sekolah & Stempel dapat diatur di menu ',
+      tipBrandingLink: 'Master Akademik → Logo, TTD & Stempel',
+      selectedSummary:
+        '{selected} dari {total} siswa dipilih ({perSheet} sisi kartu/lembar)',
+      loadingStudents: 'Memuat data siswa...',
+      emptyStudents: 'Tidak ada data siswa pada kelas/filter ini.',
+      errLoadStudents: 'Gagal memuat data siswa.',
+      previewRange: 'Pratinjau {start}–{end} dari {total} kartu',
+      ariaPreviewPageSize: 'Jumlah kartu pratinjau per halaman',
+      showAllOption: 'Tampilkan Semua',
+      cardsPerPageOption: '{count} kartu / halaman',
+      btnPrevPage: 'Sebelumnya',
+      btnNextPage: 'Berikutnya',
+      pageIndicator: 'Hal {current} / {total}',
+
+      // Teks di dalam Kartu Pelajar (Depan & Belakang)
+      defaultSchoolTitle: 'KARTU PRESENSI SISWA',
+      defaultCardSubtitle: 'KARTU IDENTITAS & PRESENSI DIGITAL',
+      unnamedStudent: 'Tanpa Nama',
+      genderMale: 'Laki-laki',
+      genderFemale: 'Perempuan',
+      idNumberMissing: 'NISN/NIS Belum Diisi',
+      invalidBarcode: 'NISN/NIS tidak valid untuk barcode',
+      missingCodeBarcodeNote:
+        'Lengkapi NISN/NIS di Master Siswa untuk mencetak kode presensi',
+      missingCodeQrNote:
+        'Lengkapi NISN/NIS di Master Siswa untuk mencetak QR Code',
+      qrScanInstruction:
+        'Arahkan QR Code ke kamera kiosk saat datang & pulang',
+      cardStatusActive: 'AKTIF',
+      principalLabel: 'Kepala Sekolah,',
+      backHeaderTitle: 'Ketentuan & Pengesahan Kartu Pelajar',
+      backRule1: 'Kartu ini adalah identitas resmi peserta didik {schoolName}.',
+      backRule2:
+        'Wajib dibawa setiap hari untuk presensi digital & layanan sekolah.',
+      backRule3:
+        'Dilarang meminjamkan atau memindahtangankan kartu kepada pihak lain.',
+      backRule4:
+        'Apabila menemukan kartu ini, mohon kembalikan ke kantor {schoolName}.',
+      backValidityNote:
+        'Berlaku selama pemegang tercatat aktif sebagai peserta didik.',
+    },
   },
   en: {
     common: {
@@ -1872,6 +1941,76 @@ export const translations = {
         'Scan via USB or type NISN / NIS then press Enter...',
       ariaManualInput: 'Barcode Scanner or Manual NISN Input',
       btnSubmitScan: 'Check In',
+    },
+    studentCardPrint: {
+      backToStudentsTitle: 'Back to Student List',
+      pageTitle: 'Print Student ID Cards (QR Code & Barcode)',
+      pageSubtitle:
+        'Standard CR80 size ({width} × {height} mm) complete with School Logo, Principal Signature, and School Stamp.',
+      btnPrintCards: 'Print {count} Cards ({sheets} A4 Sheets)',
+      filterClassLabel: 'Filter by Class',
+      allClassesOption: 'All Classes',
+      classOptionPrefix: 'Class {name}',
+      filterStatusLabel: 'Student Status',
+      statusActiveOption: 'Active Students',
+      statusAllOption: 'All Statuses',
+      statusGraduatedOption: 'Graduated',
+      statusTransferredOption: 'Transferred Out',
+      codeDesignLabel: 'Attendance Code Design',
+      modeHybrid: 'QR + Barcode',
+      modeQrOnly: 'QR Only',
+      modeBarcodeOnly: 'Barcode Only',
+      printSideLabel: 'Print Sides',
+      sideFrontOnly: 'Front Only',
+      sideDoubleSided: 'Front + Back (Duplex)',
+      toggleSignatureFront: 'Principal Signature (Front): {state}',
+      toggleStampFront: 'School Stamp (Front): {state}',
+      stateActive: 'On',
+      stateInactive: 'Off',
+      searchPlaceholder: 'Search student name or NISN...',
+      btnSelectToggle: 'Select / Deselect ({count})',
+      tipBrandingPrefix:
+        'School Logo, Principal Signature & Stamp can be configured in ',
+      tipBrandingLink: 'Academic Master → Logo, Signature & Stamp',
+      selectedSummary:
+        '{selected} of {total} students selected ({perSheet} card faces/sheet)',
+      loadingStudents: 'Loading student data...',
+      emptyStudents: 'No students found for the selected class/filter.',
+      errLoadStudents: 'Failed to load student data.',
+      previewRange: 'Previewing {start}–{end} of {total} cards',
+      ariaPreviewPageSize: 'Preview cards per page',
+      showAllOption: 'Show All',
+      cardsPerPageOption: '{count} cards / page',
+      btnPrevPage: 'Previous',
+      btnNextPage: 'Next',
+      pageIndicator: 'Page {current} / {total}',
+
+      // Text inside Student ID Card (Front & Back)
+      defaultSchoolTitle: 'STUDENT ATTENDANCE CARD',
+      defaultCardSubtitle: 'DIGITAL IDENTITY & ATTENDANCE CARD',
+      unnamedStudent: 'Unnamed Student',
+      genderMale: 'Male',
+      genderFemale: 'Female',
+      idNumberMissing: 'NISN/NIS Not Set',
+      invalidBarcode: 'Invalid NISN/NIS for barcode',
+      missingCodeBarcodeNote:
+        'Complete NISN/NIS in Student Master to print attendance code',
+      missingCodeQrNote:
+        'Complete NISN/NIS in Student Master to print QR Code',
+      qrScanInstruction:
+        'Point QR Code at the kiosk camera upon arrival & departure',
+      cardStatusActive: 'ACTIVE',
+      principalLabel: 'Principal,',
+      backHeaderTitle: 'Student Card Terms & Validation',
+      backRule1: 'This card is the official student identification of {schoolName}.',
+      backRule2:
+        'Must be carried daily for digital attendance and school services.',
+      backRule3:
+        'Lending or transferring this card to another person is prohibited.',
+      backRule4:
+        'If found, please return this card to the {schoolName} office.',
+      backValidityNote:
+        'Valid as long as the holder is registered as an active student.',
     },
   },
 } as const;

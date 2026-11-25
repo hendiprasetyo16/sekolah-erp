@@ -12,6 +12,7 @@ import {
   Keyboard,
   Send,
 } from 'lucide-react';
+import { useTranslation } from '@/hooks/useTranslation';
 
 // ============================================================================
 // PARAMETER YANG DAPAT DISESUAIKAN
@@ -79,6 +80,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
   cooldownMs = DEFAULT_COOLDOWN_MS,
   className = '',
 }) => {
+  const { t } = useTranslation();
+
   const scannerRegionId = useRef(
     `qr-reader-${Math.random().toString(36).slice(2, 9)}`
   );
@@ -112,6 +115,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
   const [isMirrored, setIsMirrored] = useState<boolean>(DEFAULT_MIRROR_PREVIEW);
   const [isStarting, setIsStarting] = useState<boolean>(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
+  const [isCameraNotFound, setIsCameraNotFound] = useState<boolean>(false);
 
   const onScanSuccessRef = useRef(onScanSuccess);
   onScanSuccessRef.current = onScanSuccess;
@@ -159,6 +163,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
       isTransitioningRef.current = true;
       setIsStarting(true);
       setCameraError(null);
+      setIsCameraNotFound(false);
 
       try {
         await stopScannerSafely();
@@ -170,7 +175,9 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
 
         const mappedDevices: CameraDeviceOption[] = devices.map((d, idx) => ({
           id: d.id,
-          label: d.label?.trim() || `Kamera ${idx + 1}`,
+          label:
+            d.label?.trim() ||
+            t('attendanceScanner.cameraFallbackLabel', { index: idx + 1 }),
         }));
         setCameras(mappedDevices);
 
@@ -212,21 +219,19 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         );
       } catch (err: unknown) {
         const errorObj = err as { message?: string; name?: string };
-        let msg =
-          'Kamera tidak dapat diakses. Pastikan tidak sedang dipakai aplikasi lain.';
+        let msg = t('attendanceScanner.errCameraGeneric');
 
         if (
           errorObj?.message === 'NO_CAMERA_FOUND' ||
           errorObj?.name === 'NotFoundError'
         ) {
-          msg =
-            'Kamera tidak terdeteksi. Gunakan Barcode Scanner USB atau ketik NISN/NIS di bawah.';
+          setIsCameraNotFound(true);
+          msg = t('attendanceScanner.errCameraNotFound');
         } else if (
           errorObj?.message?.includes('Permission') ||
           errorObj?.name === 'NotAllowedError'
         ) {
-          msg =
-            'Izin kamera ditolak browser. Klik ikon gembok/kamera di sebelah URL lalu pilih Izinkan.';
+          msg = t('attendanceScanner.errCameraPermission');
         }
 
         setCameraError(msg);
@@ -242,6 +247,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
       isPaused,
       selectedCameraId,
       stopScannerSafely,
+      t,
     ]
   );
 
@@ -304,6 +310,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     const nextState = !isCameraEnabled;
     setIsCameraEnabled(nextState);
     setCameraError(null);
+    setIsCameraNotFound(false);
     try {
       localStorage.setItem(CAMERA_ENABLED_STORAGE_KEY, String(nextState));
     } catch {
@@ -330,7 +337,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
               value={selectedCameraId}
               onChange={(e) => handleSelectCameraChange(e.target.value)}
               disabled={isStarting}
-              aria-label="Pilih Perangkat Kamera"
+              aria-label={t('attendanceScanner.ariaSelectCamera')}
               className="w-full min-w-0 truncate rounded-lg border border-slate-700 bg-slate-900/90 px-2.5 py-1.5 text-xs font-medium text-slate-200 focus:border-emerald-500 focus:outline-none cursor-pointer"
             >
               {cameras.map((cam) => (
@@ -343,7 +350,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         ) : (
           <div className="flex items-center gap-1.5 text-xs font-medium text-slate-400">
             <Keyboard className="h-4 w-4 text-emerald-400" />
-            <span>Mode Scanner USB / Ketik Manual</span>
+            <span>{t('attendanceScanner.usbManualModeLabel')}</span>
           </div>
         )}
 
@@ -352,14 +359,16 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
             <button
               type="button"
               onClick={() => setIsMirrored((prev) => !prev)}
-              title="Balik Tampilan Cermin (Mirror)"
+              title={t('attendanceScanner.titleMirrorCamera')}
               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${isMirrored
-                  ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                  : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
+                ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
                 }`}
             >
               <FlipHorizontal2 className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Mirror</span>
+              <span className="hidden sm:inline">
+                {t('attendanceScanner.btnMirror')}
+              </span>
             </button>
           )}
 
@@ -368,23 +377,23 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
             onClick={handleToggleCamera}
             title={
               isCameraEnabled
-                ? 'Matikan Kamera (Gunakan Scanner USB/Manual saja)'
-                : 'Aktifkan Kamera Scanner'
+                ? t('attendanceScanner.titleDisableCamera')
+                : t('attendanceScanner.titleEnableCamera')
             }
             className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${isCameraEnabled
-                ? 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
-                : 'border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+              ? 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
+              : 'border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
               }`}
           >
             {isCameraEnabled ? (
               <>
                 <CameraOff className="h-3.5 w-3.5" />
-                <span>Tutup Kamera</span>
+                <span>{t('attendanceScanner.btnCloseCamera')}</span>
               </>
             ) : (
               <>
                 <Camera className="h-3.5 w-3.5" />
-                <span>Buka Kamera</span>
+                <span>{t('attendanceScanner.btnOpenCamera')}</span>
               </>
             )}
           </button>
@@ -443,14 +452,14 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 text-white gap-2 p-4">
               <Loader2 className="h-6 w-6 animate-spin text-emerald-400" />
               <span className="text-xs font-medium text-slate-200">
-                Menyiapkan kamera scanner...
+                {t('attendanceScanner.preparingCamera')}
               </span>
             </div>
           )}
 
           {cameraError && (
             <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/95 p-4 text-center text-white gap-2">
-              {cameraError.includes('tidak terdeteksi') ? (
+              {isCameraNotFound ? (
                 <VideoOff className="h-7 w-7 text-amber-400" />
               ) : (
                 <AlertCircle className="h-7 w-7 text-rose-400" />
@@ -464,7 +473,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
                 className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 cursor-pointer"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
-                Muat Ulang Kamera
+                {t('attendanceScanner.btnReloadCamera')}
               </button>
             </div>
           )}
@@ -482,8 +491,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
           value={manualCode}
           onChange={(e) => setManualCode(e.target.value)}
           disabled={isPaused}
-          placeholder="Scan USB atau ketik NISN / NIS lalu Enter..."
-          aria-label="Input Barcode Scanner atau NISN Manual"
+          placeholder={t('attendanceScanner.manualInputPlaceholder')}
+          aria-label={t('attendanceScanner.ariaManualInput')}
           className="flex-1 min-w-0 rounded-xl border border-slate-700 bg-slate-900/95 px-3.5 py-2 text-xs text-white placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none"
         />
         <button
@@ -492,7 +501,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
           className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 px-4 py-2 text-xs font-bold text-white transition cursor-pointer shrink-0"
         >
           <Send className="h-3.5 w-3.5" />
-          <span>Absen</span>
+          <span>{t('attendanceScanner.btnSubmitScan')}</span>
         </button>
       </form>
     </div>

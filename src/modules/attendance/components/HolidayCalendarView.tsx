@@ -8,6 +8,7 @@ import {
     CheckCircle2,
     Sparkles,
 } from 'lucide-react';
+import { useTranslation } from '@/hooks/useTranslation';
 import {
     checkRedDateStatus,
     type WorkDaysMode,
@@ -26,23 +27,6 @@ interface HolidayCalendarViewProps {
     onClickEditHoliday: (holiday: HolidayRecord) => void;
     onClickAddHolidayOnDate: (isoDate: string) => void;
 }
-
-const MONTH_NAMES = [
-    'Januari',
-    'Februari',
-    'Maret',
-    'April',
-    'Mei',
-    'Juni',
-    'Juli',
-    'Agustus',
-    'September',
-    'Oktober',
-    'November',
-    'Desember',
-] as const;
-
-const DAY_HEADERS = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'] as const;
 
 // ============================================================================
 // PARAMETER TAMPILAN YANG MUDAH DISESUAIKAN
@@ -68,7 +52,39 @@ export function HolidayCalendarView({
     onClickEditHoliday,
     onClickAddHolidayOnDate,
 }: HolidayCalendarViewProps) {
+    const { t } = useTranslation();
     const todayIso = useMemo(() => getTodayIsoLocal(), []);
+
+    const monthNames = useMemo(
+        () => [
+            t('attendanceSettings.month_0'),
+            t('attendanceSettings.month_1'),
+            t('attendanceSettings.month_2'),
+            t('attendanceSettings.month_3'),
+            t('attendanceSettings.month_4'),
+            t('attendanceSettings.month_5'),
+            t('attendanceSettings.month_6'),
+            t('attendanceSettings.month_7'),
+            t('attendanceSettings.month_8'),
+            t('attendanceSettings.month_9'),
+            t('attendanceSettings.month_10'),
+            t('attendanceSettings.month_11'),
+        ],
+        [t]
+    );
+
+    const dayHeaders = useMemo(
+        () => [
+            t('attendanceSettings.day_0'),
+            t('attendanceSettings.day_1'),
+            t('attendanceSettings.day_2'),
+            t('attendanceSettings.day_3'),
+            t('attendanceSettings.day_4'),
+            t('attendanceSettings.day_5'),
+            t('attendanceSettings.day_6'),
+        ],
+        [t]
+    );
 
     // State khusus tampilan HP (1 bulan per tampilan + tanggal yang diketuk)
     const [mobileMonth, setMobileMonth] = useState<number>(() => {
@@ -139,7 +155,8 @@ export function HolidayCalendarView({
         const dayHolidays = holidaysByDate.get(selectedIsoDate) ?? [];
         const jawaInfo = getJavaneseDateInfo(selectedIsoDate);
         const dateObj = new Date(`${selectedIsoDate}T00:00:00`);
-        const gregorianLabel = dateObj.toLocaleDateString('id-ID', {
+        const locale = t('attendanceSettings.day_0') === 'Sun' ? 'en-US' : 'id-ID';
+        const gregorianLabel = dateObj.toLocaleDateString(locale, {
             weekday: 'long',
             day: 'numeric',
             month: 'long',
@@ -153,7 +170,7 @@ export function HolidayCalendarView({
             ...redStatus,
             dayHolidays,
         };
-    }, [selectedIsoDate, holidaysNameMap, holidaysByDate, workDaysMode]);
+    }, [selectedIsoDate, holidaysNameMap, holidaysByDate, workDaysMode, t]);
 
     // Data bulan aktif untuk tampilan HP
     const mobileMonthData = useMemo(() => {
@@ -183,8 +200,8 @@ export function HolidayCalendarView({
     return (
         <div>
             {/* ====================================================================
-          1. TAMPILAN KHUSUS HP (< 768px): 1 BULAN + NEXT/PREV + INFO KLIK
-      ==================================================================== */}
+                1. TAMPILAN KHUSUS HP (< 768px): 1 BULAN + NEXT/PREV + INFO KLIK
+            ==================================================================== */}
             <div className="md:hidden space-y-3">
                 <div className="rounded-2xl border border-border bg-card p-3.5 shadow-xs space-y-3">
                     {/* Navigasi Bulan HP + Sub-header Bulan Jawa */}
@@ -193,8 +210,8 @@ export function HolidayCalendarView({
                             type="button"
                             onClick={handleMobilePrevMonth}
                             className="p-2 rounded-xl bg-muted hover:bg-muted/80 active:scale-95 transition shrink-0"
-                            title="Bulan Sebelumnya"
-                            aria-label="Bulan Sebelumnya"
+                            title={t('attendanceSettings.titlePrevMonth')}
+                            aria-label={t('attendanceSettings.titlePrevMonth')}
                         >
                             <ChevronLeft size={18} />
                         </button>
@@ -212,7 +229,7 @@ export function HolidayCalendarView({
                                     }}
                                     className="form-input w-auto! py-1 px-2.5 text-xs font-bold bg-muted/40"
                                 >
-                                    {MONTH_NAMES.map((mName, idx) => (
+                                    {monthNames.map((mName, idx) => (
                                         <option key={mName} value={idx}>
                                             {mName} {year}
                                         </option>
@@ -220,7 +237,9 @@ export function HolidayCalendarView({
                                 </select>
                                 {mobileMonthData.monthHolidays.length > 0 && (
                                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-600 dark:text-red-300 shrink-0">
-                                        {mobileMonthData.monthHolidays.length} libur
+                                        {t('attendanceSettings.holidayCountBadge', {
+                                            count: mobileMonthData.monthHolidays.length,
+                                        })}
                                     </span>
                                 )}
                             </div>
@@ -233,8 +252,8 @@ export function HolidayCalendarView({
                             type="button"
                             onClick={handleMobileNextMonth}
                             className="p-2 rounded-xl bg-muted hover:bg-muted/80 active:scale-95 transition shrink-0"
-                            title="Bulan Berikutnya"
-                            aria-label="Bulan Berikutnya"
+                            title={t('attendanceSettings.titleNextMonth')}
+                            aria-label={t('attendanceSettings.titleNextMonth')}
                         >
                             <ChevronRight size={18} />
                         </button>
@@ -242,7 +261,7 @@ export function HolidayCalendarView({
 
                     {/* Header Nama Hari HP */}
                     <div className="grid grid-cols-7 text-center border-b border-border/70 pb-1.5">
-                        {DAY_HEADERS.map((dayLabel, dayIdx) => {
+                        {dayHeaders.map((dayLabel, dayIdx) => {
                             const isSunday = dayIdx === 0;
                             const isFriday = dayIdx === 5;
                             const isSaturdayOff =
@@ -341,8 +360,8 @@ export function HolidayCalendarView({
                 {selectedMobileDetails && (
                     <div
                         className={`p-4 rounded-2xl border text-xs space-y-2.5 transition ${selectedMobileDetails.isRedDate
-                                ? 'bg-red-500/10 border-red-500/35'
-                                : 'bg-muted/40 border-border'
+                            ? 'bg-red-500/10 border-red-500/35'
+                            : 'bg-muted/40 border-border'
                             }`}
                     >
                         <div className="flex items-start justify-between gap-2">
@@ -358,23 +377,25 @@ export function HolidayCalendarView({
 
                             {selectedMobileDetails.isRedDate ? (
                                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-red-500 text-white shrink-0">
-                                    Tanggal Merah
+                                    {t('attendanceSettings.badgeRedDate')}
                                 </span>
                             ) : (
                                 <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-600/15 text-emerald-700 dark:text-emerald-300 shrink-0">
-                                    Hari Kerja
+                                    {t('attendanceSettings.badgeWorkday')}
                                 </span>
                             )}
                         </div>
 
                         {selectedMobileDetails.holidayName ? (
                             <div className="p-2.5 rounded-xl bg-red-500/10 border border-red-500/20 text-[11px] text-red-700 dark:text-red-200 font-semibold">
-                                Keterangan Libur: {selectedMobileDetails.holidayName}
+                                {t('attendanceSettings.holidayNotePrefix', {
+                                    name: selectedMobileDetails.holidayName,
+                                })}
                             </div>
                         ) : (
                             <div className="p-2.5 rounded-xl bg-card/80 border border-border text-[11px] text-muted-foreground flex items-center gap-2">
                                 <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
-                                <span>Hari kerja efektif sekolah (jadwal presensi aktif).</span>
+                                <span>{t('attendanceSettings.workdayEffectiveNote')}</span>
                             </div>
                         )}
 
@@ -391,7 +412,7 @@ export function HolidayCalendarView({
                                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 transition"
                                     >
                                         <Pencil size={12} />
-                                        Edit Keterangan Libur
+                                        {t('attendanceSettings.btnEditHolidayNote')}
                                     </button>
                                 )
                             ) : (
@@ -403,7 +424,7 @@ export function HolidayCalendarView({
                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition"
                                 >
                                     <Plus size={12} />
-                                    Jadikan Hari Libur / Cuti
+                                    {t('attendanceSettings.btnSetAsHoliday')}
                                 </button>
                             )}
                         </div>
@@ -412,10 +433,10 @@ export function HolidayCalendarView({
             </div>
 
             {/* ====================================================================
-          2. TAMPILAN KHUSUS KOMPUTER (>= 768px): KODE KALENDER LAMA 12 BULAN
-      ==================================================================== */}
+                2. TAMPILAN KHUSUS KOMPUTER (>= 768px): KALENDER 12 BULAN
+            ==================================================================== */}
             <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {MONTH_NAMES.map((monthName, monthIndex) => {
+                {monthNames.map((monthName, monthIndex) => {
                     const daysInMonth = new Date(
                         Date.UTC(year, monthIndex + 1, 0)
                     ).getUTCDate();
@@ -424,18 +445,15 @@ export function HolidayCalendarView({
                     ).getUTCDay();
                     const monthPrefix = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
 
-                    // Keterangan rentang bulan Jawa (contoh: "21 Jumadilawal 1960 Ja - 20 Jumadilakir 1960 Ja")
                     const javaneseRangeLabel = getJavaneseMonthRangeLabel(
                         year,
                         monthIndex
                     );
 
-                    // Kumpulkan daftar libur khusus pada bulan ini
                     const monthHolidays = holidays.filter((h) =>
                         h.date.startsWith(monthPrefix)
                     );
 
-                    // Buat sel kosong sebelum tanggal 1 + seluruh tanggal dalam bulan ini
                     const calendarCells: Array<number | null> = [
                         ...Array.from({ length: firstDayOfWeek }, () => null),
                         ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
@@ -453,7 +471,6 @@ export function HolidayCalendarView({
                                         <h4 className="text-sm font-bold text-foreground">
                                             {monthName} {year}
                                         </h4>
-                                        {/* Sub-header Bulan & Tahun Jawa */}
                                         <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 mt-0.5">
                                             {javaneseRangeLabel}
                                         </p>
@@ -461,14 +478,16 @@ export function HolidayCalendarView({
 
                                     {monthHolidays.length > 0 && (
                                         <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-600 dark:text-red-300 shrink-0">
-                                            {monthHolidays.length} libur
+                                            {t('attendanceSettings.holidayCountBadge', {
+                                                count: monthHolidays.length,
+                                            })}
                                         </span>
                                     )}
                                 </div>
 
-                                {/* Header Nama Hari (Min s.d. Sab) */}
+                                {/* Header Nama Hari */}
                                 <div className="grid grid-cols-7 text-center border-b border-border/70 pb-1.5">
-                                    {DAY_HEADERS.map((dayLabel, dayIdx) => {
+                                    {dayHeaders.map((dayLabel, dayIdx) => {
                                         const isSunday = dayIdx === 0;
                                         const isFriday = dayIdx === 5;
                                         const isSaturdayOff =
@@ -526,7 +545,6 @@ export function HolidayCalendarView({
                                         const isToday = isoDate === todayIso;
                                         const jawaInfo = getJavaneseDateInfo(isoDate);
 
-                                        // Penentuan warna latar & warna angka tanggal
                                         let cellBgClass =
                                             'hover:bg-muted/60 border-transparent';
                                         let dateNumberClass = 'text-foreground';
@@ -555,7 +573,9 @@ export function HolidayCalendarView({
 
                                         const tooltipText = hasHoliday
                                             ? `${jawaInfo.fullFormattedDate} — ${dayHolidays.map((h) => h.name).join(', ')}`
-                                            : `${jawaInfo.fullFormattedDate} (Klik untuk tambah libur)`;
+                                            : t('attendanceSettings.tooltipAddHoliday', {
+                                                javaneseDate: jawaInfo.fullFormattedDate,
+                                            });
 
                                         return (
                                             <button
@@ -571,14 +591,12 @@ export function HolidayCalendarView({
                                                 }}
                                                 className={`h-12 rounded-xl border px-0 py-1 flex flex-col items-center justify-center transition cursor-pointer overflow-hidden ${cellBgClass}`}
                                             >
-                                                {/* Angka Tanggal Masehi */}
                                                 <span
                                                     className={`text-sm font-extrabold leading-tight ${dateNumberClass}`}
                                                 >
                                                     {dayNum}
                                                 </span>
 
-                                                {/* Tanggal Jawa + Pasaran (contoh: "21 Pahing") */}
                                                 {CALENDAR_CONFIG.showFullPasaranName ? (
                                                     <>
                                                         <span className="hidden sm:inline text-[8.5px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
@@ -603,7 +621,7 @@ export function HolidayCalendarView({
                             <div className="pt-2.5 border-t border-border/70 space-y-1.5">
                                 {monthHolidays.length === 0 ? (
                                     <p className="text-[11px] italic text-muted-foreground">
-                                        Tidak ada tanggal merah khusus bulan ini.
+                                        {t('attendanceSettings.noSpecialHolidayMonth')}
                                     </p>
                                 ) : (
                                     monthHolidays.map((item) => {
@@ -637,7 +655,7 @@ export function HolidayCalendarView({
                                                             onClickEditHoliday(item)
                                                         }
                                                         className="p-1 rounded hover:bg-muted text-blue-600 shrink-0"
-                                                        title="Edit hari libur ini"
+                                                        title={t('attendanceSettings.titleEditHoliday')}
                                                     >
                                                         <Pencil size={12} />
                                                     </button>

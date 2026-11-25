@@ -11,6 +11,7 @@ import {
     Loader2,
     Info,
 } from 'lucide-react';
+import { useTranslation } from '@/hooks/useTranslation';
 import {
     getSchoolWaConfig,
     saveSchoolWaConfig,
@@ -27,6 +28,8 @@ interface WhatsAppSettingsCardProps {
 export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
     schoolId,
 }) => {
+    const { t } = useTranslation();
+
     const [config, setConfig] = useState<SchoolWaConfig | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -53,7 +56,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                     setFeedback({
                         type: 'error',
                         text:
-                            err?.message || 'Gagal memuat konfigurasi WhatsApp Gateway.',
+                            err?.message || t('attendanceSettings.errLoadWaConfig'),
                     });
                 }
             })
@@ -64,7 +67,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
         return () => {
             active = false;
         };
-    }, [schoolId]);
+    }, [schoolId, t]);
 
     const handleProviderChange = (provider: WaGatewayProvider) => {
         if (!config) return;
@@ -84,7 +87,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             await saveSchoolWaConfig(config);
             setFeedback({
                 type: 'success',
-                text: 'Konfigurasi WhatsApp Gateway berhasil disimpan ke database.',
+                text: t('attendanceSettings.feedbackWaSaved'),
             });
         } catch (err: unknown) {
             setFeedback({
@@ -92,7 +95,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                 text:
                     err instanceof Error
                         ? err.message
-                        : 'Gagal menyimpan pengaturan WhatsApp.',
+                        : t('attendanceSettings.errSaveWaConfig'),
             });
         } finally {
             setSaving(false);
@@ -103,7 +106,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
         if (!config || !schoolId || !testPhone.trim()) {
             setFeedback({
                 type: 'error',
-                text: 'Masukkan nomor WhatsApp tujuan pengujian terlebih dahulu.',
+                text: t('attendanceSettings.errEnterTestPhone'),
             });
             return;
         }
@@ -122,7 +125,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                 text:
                     err instanceof Error
                         ? err.message
-                        : 'Terjadi kesalahan saat menguji pengiriman pesan.',
+                        : t('attendanceSettings.errTestWaSend'),
             });
         } finally {
             setTesting(false);
@@ -132,7 +135,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
     if (!schoolId) {
         return (
             <div className="rounded-xl border border-border bg-card p-5 text-xs text-muted-foreground">
-                Pilih sekolah terlebih dahulu untuk mengatur integrasi WhatsApp Gateway.
+                {t('attendanceSettings.waSelectSchoolFirst')}
             </div>
         );
     }
@@ -142,7 +145,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             <div className="rounded-xl border border-border bg-card p-6 shadow-sm">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                     <Loader2 className="h-4 w-4 animate-spin text-emerald-600" />
-                    Memuat pengaturan WhatsApp Gateway...
+                    {t('attendanceSettings.waLoadingConfig')}
                 </div>
             </div>
         );
@@ -161,10 +164,10 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                     </div>
                     <div>
                         <h2 className="text-base font-bold">
-                            Integrasi WhatsApp Gateway Orang Tua
+                            {t('attendanceSettings.waCardTitle')}
                         </h2>
                         <p className="text-xs text-muted-foreground mt-0.5">
-                            Kirim notifikasi otomatis ke nomor HP Ibu/Ayah/Wali saat siswa melakukan scan presensi di Kiosk.
+                            {t('attendanceSettings.waCardSubtitle')}
                         </p>
                     </div>
                 </div>
@@ -179,7 +182,9 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                         className="h-4 w-4 rounded border-border accent-emerald-600 cursor-pointer"
                     />
                     <span className="text-xs font-bold">
-                        {config.isEnabled ? 'Status: AKTIF' : 'Status: NONAKTIF'}
+                        {config.isEnabled
+                            ? t('attendanceSettings.waStatusActive')
+                            : t('attendanceSettings.waStatusInactive')}
                     </span>
                 </label>
             </div>
@@ -187,8 +192,8 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             {feedback && (
                 <div
                     className={`flex items-center gap-2 rounded-xl p-3 text-xs font-medium border ${feedback.type === 'success'
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 border-emerald-500/40'
-                            : 'bg-red-500/15 text-red-700 dark:text-red-200 border-red-500/40'
+                        ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 border-emerald-500/40'
+                        : 'bg-red-500/15 text-red-700 dark:text-red-200 border-red-500/40'
                         }`}
                 >
                     {feedback.type === 'success' ? (
@@ -204,7 +209,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
                     <label className="block text-xs font-semibold mb-1.5">
-                        Provider WhatsApp Gateway *
+                        {t('attendanceSettings.waProviderLabel')}
                     </label>
                     <select
                         value={config.provider}
@@ -225,7 +230,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
 
                 <div>
                     <label className="block text-xs font-semibold mb-1.5">
-                        Endpoint API URL *
+                        {t('attendanceSettings.waApiUrlLabel')}
                     </label>
                     <input
                         type="url"
@@ -239,7 +244,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
 
                 <div>
                     <label className="block text-xs font-semibold mb-1.5">
-                        API Token / Device Key *
+                        {t('attendanceSettings.waApiTokenLabel')}
                     </label>
                     <div className="relative">
                         <input
@@ -250,7 +255,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                             }
                             placeholder={
                                 WA_PROVIDER_PRESETS[config.provider]?.tokenHint ??
-                                'Masukkan API Token'
+                                t('attendanceSettings.waApiTokenPlaceholder')
                             }
                             className="form-input w-full pr-10 text-xs font-mono"
                         />
@@ -258,7 +263,11 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                             type="button"
                             onClick={() => setShowToken((prev) => !prev)}
                             className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground cursor-pointer"
-                            title={showToken ? 'Sembunyikan Token' : 'Tampilkan Token'}
+                            title={
+                                showToken
+                                    ? t('attendanceSettings.titleHideToken')
+                                    : t('attendanceSettings.titleShowToken')
+                            }
                         >
                             {showToken ? (
                                 <EyeOff className="h-4 w-4" />
@@ -271,7 +280,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
 
                 <div>
                     <label className="block text-xs font-semibold mb-1.5">
-                        Nomor Pengirim / Sender (Opsional)
+                        {t('attendanceSettings.waSenderLabel')}
                     </label>
                     <input
                         type="text"
@@ -288,7 +297,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             {/* Pilihan Pemicu Notifikasi */}
             <div className="rounded-xl bg-muted/35 p-4 border border-border space-y-2.5">
                 <span className="block text-xs font-bold">
-                    Kirim Pesan Otomatis Saat:
+                    {t('attendanceSettings.waTriggerHeading')}
                 </span>
                 <div className="flex flex-wrap gap-6">
                     <label className="inline-flex items-center gap-2 text-xs font-medium cursor-pointer">
@@ -300,7 +309,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                             }
                             className="rounded border-border accent-emerald-600 cursor-pointer"
                         />
-                        Presensi Datang (Hadir)
+                        {t('attendanceSettings.waTriggerCheckIn')}
                     </label>
                     <label className="inline-flex items-center gap-2 text-xs font-medium cursor-pointer">
                         <input
@@ -311,7 +320,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                             }
                             className="rounded border-border accent-emerald-600 cursor-pointer"
                         />
-                        Presensi Datang (Terlambat)
+                        {t('attendanceSettings.waTriggerLate')}
                     </label>
                     <label className="inline-flex items-center gap-2 text-xs font-medium cursor-pointer">
                         <input
@@ -322,7 +331,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                             }
                             className="rounded border-border accent-emerald-600 cursor-pointer"
                         />
-                        Presensi Pulang
+                        {t('attendanceSettings.waTriggerCheckOut')}
                     </label>
                 </div>
             </div>
@@ -332,7 +341,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                 <div className="flex items-start gap-2 rounded-xl bg-blue-500/10 p-3 text-xs text-blue-700 dark:text-blue-200 border border-blue-500/30">
                     <Info className="h-4 w-4 shrink-0 text-blue-500 mt-0.5" />
                     <div>
-                        Variabel otomatis yang tersedia:{' '}
+                        {t('attendanceSettings.waVariablesHint')}{' '}
                         <code className="font-mono bg-card px-1.5 py-0.5 rounded border border-border">
                             {'{nama_siswa}'}
                         </code>
@@ -359,7 +368,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
                         <label className="block text-xs font-semibold mb-1.5">
-                            Template Pesan Presensi Datang
+                            {t('attendanceSettings.waTemplateCheckInLabel')}
                         </label>
                         <textarea
                             rows={3}
@@ -372,7 +381,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                     </div>
                     <div>
                         <label className="block text-xs font-semibold mb-1.5">
-                            Template Pesan Presensi Pulang
+                            {t('attendanceSettings.waTemplateCheckOutLabel')}
                         </label>
                         <textarea
                             rows={3}
@@ -393,7 +402,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                         type="tel"
                         value={testPhone}
                         onChange={(e) => setTestPhone(e.target.value)}
-                        placeholder="No. WA Uji Coba (0812...)"
+                        placeholder={t('attendanceSettings.waTestPhonePlaceholder')}
                         className="form-input w-48 text-xs py-2"
                     />
                     <button
@@ -407,7 +416,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                         ) : (
                             <Send className="h-3.5 w-3.5 text-blue-500" />
                         )}
-                        Tes Kirim WA
+                        {t('attendanceSettings.btnTestWa')}
                     </button>
                 </div>
 
@@ -421,7 +430,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                     ) : (
                         <Save className="h-4 w-4" />
                     )}
-                    Simpan Pengaturan WA
+                    {t('attendanceSettings.btnSaveWa')}
                 </button>
             </div>
         </form>

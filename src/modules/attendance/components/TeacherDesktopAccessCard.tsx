@@ -17,6 +17,7 @@ import {
     BadgeCheck,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
+import { useTranslation } from '@/hooks/useTranslation';
 
 // ============================================================================
 // PARAMETER KONFIGURASI TAMPILAN, BADGE & PAGINATION
@@ -144,7 +145,6 @@ function extractAdditionalDuties(
 
     const collected: string[] = [];
 
-    // Jika akun user terhubung memiliki role KEPALA_SEKOLAH, pastikan muncul di urutan pertama
     if (linkedUserRole === 'KEPALA_SEKOLAH') {
         collected.push('Kepala Sekolah');
     }
@@ -227,6 +227,8 @@ function isHighlightedDuty(duty: string): boolean {
 export function TeacherDesktopAccessCard({
     schoolId,
 }: TeacherDesktopAccessCardProps) {
+    const { t } = useTranslation();
+
     const [allowDesktopGlobal, setAllowDesktopGlobal] = useState<boolean>(false);
     const [teachersList, setTeachersList] = useState<TeacherDesktopAccessItem[]>(
         []
@@ -276,7 +278,6 @@ export function TeacherDesktopAccessCard({
                 throw schoolRes.error;
             }
 
-            // Peta opsional userId -> role (misal mendeteksi KEPALA_SEKOLAH secara otomatis)
             const userRoleMap = new Map<string, string>();
             if (!usersRes.error && Array.isArray(usersRes.data)) {
                 for (const u of usersRes.data as RawUserRoleRow[]) {
@@ -316,7 +317,9 @@ export function TeacherDesktopAccessCard({
                 return {
                     id: String(row.id ?? ''),
                     fullName:
-                        rawName.trim().length > 0 ? rawName.trim() : 'Tanpa Nama',
+                        rawName.trim().length > 0
+                            ? rawName.trim()
+                            : t('attendanceSettings.unnamedTeacher'),
                     nip: rawNip.length > 0 ? rawNip : null,
                     additionalDuties,
                     employmentStatus,
@@ -329,11 +332,11 @@ export function TeacherDesktopAccessCard({
             setCurrentPage(1);
 
             const schoolRow = schoolRes.data as RawSchoolDesktopRow | null;
-            if (mapped.length > 0 && mapped.every((t) => t.allowDesktopAttendance)) {
+            if (mapped.length > 0 && mapped.every((teacher) => teacher.allowDesktopAttendance)) {
                 setAllowDesktopGlobal(true);
             } else if (
                 mapped.length > 0 &&
-                mapped.every((t) => !t.allowDesktopAttendance)
+                mapped.every((teacher) => !teacher.allowDesktopAttendance)
             ) {
                 setAllowDesktopGlobal(false);
             } else if (typeof schoolRow?.allowDesktopAttendanceGlobal === 'boolean') {
@@ -344,12 +347,12 @@ export function TeacherDesktopAccessCard({
         } catch (err: unknown) {
             setFeedback({
                 status: 'error',
-                text: getErrorMessage(err, 'Gagal memuat daftar Guru/PTK.'),
+                text: getErrorMessage(err, t('attendanceSettings.errLoadTeachers')),
             });
         } finally {
             setIsLoadingTeachers(false);
         }
-    }, [schoolId]);
+    }, [schoolId, t]);
 
     useEffect(() => {
         void loadTeachersDesktopAccess();
@@ -399,15 +402,17 @@ export function TeacherDesktopAccessCard({
             setFeedback({
                 status: 'success',
                 text: nextAllow
-                    ? `Saklar Global AKTIF: Seluruh (${teachersList.length}) Guru/PTK kini diizinkan presensi lewat Komputer/Laptop.`
-                    : 'Saklar Global NONAKTIF: Seluruh Guru/PTK kini wajib presensi lewat HP (kecuali diaktifkan per guru di bawah).',
+                    ? t('attendanceSettings.feedbackGlobalDesktopOn', {
+                        count: teachersList.length,
+                    })
+                    : t('attendanceSettings.feedbackGlobalDesktopOff'),
             });
         } catch (err: unknown) {
             setFeedback({
                 status: 'error',
                 text: getErrorMessage(
                     err,
-                    'Gagal mengubah pengaturan global presensi komputer.'
+                    t('attendanceSettings.errToggleGlobalDesktop')
                 ),
             });
         } finally {
@@ -457,15 +462,21 @@ export function TeacherDesktopAccessCard({
             setFeedback({
                 status: 'success',
                 text: nextAllow
-                    ? `Izin Komputer DIAKTIFKAN untuk ${teacher.fullName}.`
-                    : `Izin Komputer DIMATIKAN untuk ${teacher.fullName} (wajib lewat HP).`,
+                    ? t('attendanceSettings.feedbackSingleDesktopOn', {
+                        name: teacher.fullName,
+                    })
+                    : t('attendanceSettings.feedbackSingleDesktopOff', {
+                        name: teacher.fullName,
+                    }),
             });
         } catch (err: unknown) {
             setFeedback({
                 status: 'error',
                 text: getErrorMessage(
                     err,
-                    `Gagal mengubah izin untuk ${teacher.fullName}.`
+                    t('attendanceSettings.errToggleSingleDesktop', {
+                        name: teacher.fullName,
+                    })
                 ),
             });
         } finally {
@@ -478,29 +489,29 @@ export function TeacherDesktopAccessCard({
     };
 
     const allowedCount = useMemo(
-        () => teachersList.filter((t) => t.allowDesktopAttendance).length,
+        () => teachersList.filter((teacher) => teacher.allowDesktopAttendance).length,
         [teachersList]
     );
 
     const filteredTeachers = useMemo(() => {
         const keyword = searchQuery.trim().toLowerCase();
-        return teachersList.filter((t) => {
-            if (filterMode === 'ALLOWED' && !t.allowDesktopAttendance) {
+        return teachersList.filter((teacher) => {
+            if (filterMode === 'ALLOWED' && !teacher.allowDesktopAttendance) {
                 return false;
             }
-            if (filterMode === 'BLOCKED' && t.allowDesktopAttendance) {
+            if (filterMode === 'BLOCKED' && teacher.allowDesktopAttendance) {
                 return false;
             }
             if (!keyword) return true;
-            const matchName = t.fullName.toLowerCase().includes(keyword);
-            const matchNip = (t.nip ?? '').toLowerCase().includes(keyword);
-            const matchDuty = t.additionalDuties.some((d) =>
+            const matchName = teacher.fullName.toLowerCase().includes(keyword);
+            const matchNip = (teacher.nip ?? '').toLowerCase().includes(keyword);
+            const matchDuty = teacher.additionalDuties.some((d) =>
                 d.toLowerCase().includes(keyword)
             );
-            const matchEmployment = (t.employmentStatus ?? '')
+            const matchEmployment = (teacher.employmentStatus ?? '')
                 .toLowerCase()
                 .includes(keyword);
-            const matchActive = (t.activeStatus ?? '')
+            const matchActive = (teacher.activeStatus ?? '')
                 .toLowerCase()
                 .includes(keyword);
 
@@ -534,19 +545,20 @@ export function TeacherDesktopAccessCard({
                 <div>
                     <h2 className="text-base font-bold flex items-center gap-2">
                         <Monitor size={18} className="text-blue-600" />
-                        Izin Akses Presensi via Komputer / Laptop (Desktop)
+                        {t('attendanceSettings.desktopCardTitle')}
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                        Secara bawaan, Guru/PTK melakukan presensi lewat HP. Gunakan saklar
-                        di bawah untuk mengizinkan akses komputer secara global atau khusus
-                        guru tertentu.
+                        {t('attendanceSettings.desktopCardSubtitle')}
                     </p>
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0">
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-blue-500/10 text-blue-700 dark:text-blue-300 border border-blue-500/25">
                         <Users size={13} />
-                        {allowedCount} / {teachersList.length} Diizinkan
+                        {t('attendanceSettings.desktopAllowedBadge', {
+                            allowed: allowedCount,
+                            total: teachersList.length,
+                        })}
                     </span>
 
                     <button
@@ -554,7 +566,7 @@ export function TeacherDesktopAccessCard({
                         onClick={() => void loadTeachersDesktopAccess()}
                         disabled={isLoadingTeachers}
                         className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all cursor-pointer"
-                        title="Muat ulang daftar Guru/PTK"
+                        title={t('attendanceSettings.titleReloadTeachers')}
                     >
                         <RefreshCw
                             size={14}
@@ -568,19 +580,23 @@ export function TeacherDesktopAccessCard({
                         className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl text-[11px] font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all cursor-pointer"
                         title={
                             isListExpanded
-                                ? 'Sembunyikan daftar per guru'
-                                : 'Tampilkan daftar per guru'
+                                ? t('attendanceSettings.titleCollapseTeachers')
+                                : t('attendanceSettings.titleExpandTeachers')
                         }
                     >
                         {isListExpanded ? (
                             <>
                                 <ChevronUp size={14} />
-                                <span className="hidden sm:inline">Ringkas</span>
+                                <span className="hidden sm:inline">
+                                    {t('attendanceSettings.btnCollapse')}
+                                </span>
                             </>
                         ) : (
                             <>
                                 <ChevronDown size={14} />
-                                <span className="hidden sm:inline">Daftar Guru</span>
+                                <span className="hidden sm:inline">
+                                    {t('attendanceSettings.btnTeacherList')}
+                                </span>
                             </>
                         )}
                     </button>
@@ -622,7 +638,7 @@ export function TeacherDesktopAccessCard({
                     <div>
                         <div className="flex flex-wrap items-center gap-2">
                             <span className="text-xs font-bold">
-                                Saklar Global: Izinkan Semua Guru / PTK Absen via Komputer
+                                {t('attendanceSettings.globalDesktopTitle')}
                             </span>
                             <span
                                 className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${allowDesktopGlobal
@@ -631,14 +647,14 @@ export function TeacherDesktopAccessCard({
                                     }`}
                             >
                                 {allowDesktopGlobal
-                                    ? 'AKTIF (SEMUA BOLEH)'
-                                    : 'NONAKTIF (KHUSUS HP)'}
+                                    ? t('attendanceSettings.globalDesktopBadgeOn')
+                                    : t('attendanceSettings.globalDesktopBadgeOff')}
                             </span>
                         </div>
                         <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
                             {allowDesktopGlobal
-                                ? 'Seluruh Guru/PTK di sekolah ini dapat melakukan presensi dari komputer maupun HP.'
-                                : 'Default direkomendasikan: Guru/PTK wajib absen dari HP, kecuali guru yang diaktifkan pada daftar di bawah.'}
+                                ? t('attendanceSettings.globalDesktopDescOn')
+                                : t('attendanceSettings.globalDesktopDescOff')}
                         </p>
                     </div>
                 </div>
@@ -689,7 +705,7 @@ export function TeacherDesktopAccessCard({
                                     setSearchQuery(e.target.value);
                                     setCurrentPage(1);
                                 }}
-                                placeholder="Cari nama Guru/PTK, NIP, jabatan/tugas tambahan, atau status..."
+                                placeholder={t('attendanceSettings.searchTeachersPlaceholder')}
                                 className="w-full min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                             />
                         </div>
@@ -706,7 +722,9 @@ export function TeacherDesktopAccessCard({
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                Semua ({teachersList.length})
+                                {t('attendanceSettings.filterAllTeachers', {
+                                    count: teachersList.length,
+                                })}
                             </button>
                             <button
                                 type="button"
@@ -719,7 +737,9 @@ export function TeacherDesktopAccessCard({
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                Boleh Komputer ({allowedCount})
+                                {t('attendanceSettings.filterAllowedTeachers', {
+                                    count: allowedCount,
+                                })}
                             </button>
                             <button
                                 type="button"
@@ -732,7 +752,9 @@ export function TeacherDesktopAccessCard({
                                     : 'text-muted-foreground hover:text-foreground'
                                     }`}
                             >
-                                Wajib HP ({teachersList.length - allowedCount})
+                                {t('attendanceSettings.filterBlockedTeachers', {
+                                    count: teachersList.length - allowedCount,
+                                })}
                             </button>
                         </div>
                     </div>
@@ -740,13 +762,13 @@ export function TeacherDesktopAccessCard({
                     {isLoadingTeachers ? (
                         <div className="py-8 text-center text-xs opacity-70 flex items-center justify-center gap-2">
                             <Loader2 size={15} className="animate-spin" />
-                            Memuat daftar Guru & PTK...
+                            {t('attendanceSettings.loadingTeachers')}
                         </div>
                     ) : paginatedTeachers.length === 0 ? (
                         <div className="py-6 text-center text-xs text-muted-foreground border border-dashed border-border rounded-xl">
                             {teachersList.length === 0
-                                ? 'Belum ada data Guru / PTK terdaftar pada sekolah ini.'
-                                : 'Tidak ada Guru / PTK yang cocok dengan pencarian Anda.'}
+                                ? t('attendanceSettings.emptyTeachersSchool')
+                                : t('attendanceSettings.emptyTeachersSearch')}
                         </div>
                     ) : (
                         <div className="rounded-xl border border-border overflow-hidden">
@@ -757,6 +779,11 @@ export function TeacherDesktopAccessCard({
                                     const isBusyRow = Boolean(updatingTeacherIds[teacher.id]);
                                     const isInactive =
                                         teacher.activeStatus?.toLowerCase() === 'non-aktif';
+                                    const activeBadgeLabel = isInactive
+                                        ? t('attendanceSettings.statusInactiveBadge')
+                                        : teacher.activeStatus === 'Aktif'
+                                            ? t('attendanceSettings.statusActiveBadge')
+                                            : teacher.activeStatus;
 
                                     return (
                                         <div
@@ -782,14 +809,14 @@ export function TeacherDesktopAccessCard({
                                                         )}
 
                                                         {SHOW_ACTIVE_STATUS_BADGE &&
-                                                            teacher.activeStatus && (
+                                                            activeBadgeLabel && (
                                                                 <span
                                                                     className={`inline-flex items-center px-2 py-0.5 rounded-md text-[10px] font-semibold border ${isInactive
                                                                         ? 'bg-red-500/12 text-red-700 dark:text-red-300 border-red-500/25'
                                                                         : 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300 border-emerald-500/25'
                                                                         }`}
                                                                 >
-                                                                    {teacher.activeStatus}
+                                                                    {activeBadgeLabel}
                                                                 </span>
                                                             )}
                                                     </div>
@@ -799,7 +826,7 @@ export function TeacherDesktopAccessCard({
                                                         <span className="text-[11px] text-muted-foreground font-mono">
                                                             {teacher.nip
                                                                 ? `NIP: ${teacher.nip}`
-                                                                : 'Tanpa NIP'}
+                                                                : t('attendanceSettings.noNip')}
                                                         </span>
 
                                                         {teacher.additionalDuties.map((duty) => {
@@ -830,11 +857,13 @@ export function TeacherDesktopAccessCard({
                                                 >
                                                     {teacher.allowDesktopAttendance ? (
                                                         <>
-                                                            <Monitor size={11} /> Boleh Komputer
+                                                            <Monitor size={11} />{' '}
+                                                            {t('attendanceSettings.badgeDesktopAllowed')}
                                                         </>
                                                     ) : (
                                                         <>
-                                                            <Smartphone size={11} /> Wajib HP
+                                                            <Smartphone size={11} />{' '}
+                                                            {t('attendanceSettings.badgeMobileOnly')}
                                                         </>
                                                     )}
                                                 </span>
@@ -843,7 +872,10 @@ export function TeacherDesktopAccessCard({
                                                     type="button"
                                                     role="switch"
                                                     aria-checked={teacher.allowDesktopAttendance}
-                                                    aria-label={`Izin komputer untuk ${teacher.fullName}`}
+                                                    aria-label={t(
+                                                        'attendanceSettings.ariaToggleDesktopFor',
+                                                        { name: teacher.fullName }
+                                                    )}
                                                     disabled={isBusyRow || isUpdatingGlobal}
                                                     onClick={() =>
                                                         void handleToggleSingleTeacher(teacher)
@@ -877,9 +909,11 @@ export function TeacherDesktopAccessCard({
                             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 px-4 py-2.5 border-t border-border bg-muted/25 text-xs">
                                 <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                                     <span>
-                                        Menampilkan <strong>{startItemNumber}</strong>–
-                                        <strong>{endItemNumber}</strong> dari{' '}
-                                        <strong>{filteredTeachers.length}</strong> Guru/PTK
+                                        {t('attendanceSettings.showingTeachersRange', {
+                                            start: startItemNumber,
+                                            end: endItemNumber,
+                                            total: filteredTeachers.length,
+                                        })}
                                     </span>
                                     <select
                                         value={pageSize}
@@ -887,12 +921,12 @@ export function TeacherDesktopAccessCard({
                                             setPageSize(Number(e.target.value));
                                             setCurrentPage(1);
                                         }}
-                                        aria-label="Jumlah guru per halaman"
+                                        aria-label={t('attendanceSettings.ariaPageSize')}
                                         className="form-input w-auto! text-xs py-1 px-2 bg-card font-medium"
                                     >
                                         {TEACHER_PAGE_SIZE_OPTIONS.map((opt) => (
                                             <option key={opt} value={opt}>
-                                                {opt} / halaman
+                                                {t('attendanceSettings.perPageOption', { count: opt })}
                                             </option>
                                         ))}
                                     </select>
@@ -909,11 +943,14 @@ export function TeacherDesktopAccessCard({
                                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                         >
                                             <ChevronLeft size={14} />
-                                            Sebelumnya
+                                            {t('attendanceSettings.btnPrevPage')}
                                         </button>
 
                                         <span className="px-2 py-1 font-mono font-semibold text-foreground">
-                                            Hal {safeCurrentPage} / {totalPages}
+                                            {t('attendanceSettings.pageIndicator', {
+                                                current: safeCurrentPage,
+                                                total: totalPages,
+                                            })}
                                         </span>
 
                                         <button
@@ -924,7 +961,7 @@ export function TeacherDesktopAccessCard({
                                             }
                                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                         >
-                                            Berikutnya
+                                            {t('attendanceSettings.btnNextPage')}
                                             <ChevronRight size={14} />
                                         </button>
                                     </div>
