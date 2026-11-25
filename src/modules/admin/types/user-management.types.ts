@@ -267,3 +267,22 @@ export function getEffectiveRoles(
 
     return Array.from(roleSet);
 }
+
+// Tambahkan di bagian bawah src/modules/admin/types/user-management.types.ts
+export interface FetchUsersPageParams {
+    schoolId: string | null;
+    isSuperAdmin: boolean;
+    page: number;
+    pageSize?: number;
+    tab: UserTabKey;
+    search?: string;
+    sortConfig: SortConfig;
+    lang?: 'id' | 'en';
+}
+
+export interface FetchUsersPageResult {
+    users: AppUser[];
+    totalCount: number;
+}
+
+export type UserTabCounts = Record<UserTabKey, number>;

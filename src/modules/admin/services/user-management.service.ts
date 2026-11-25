@@ -2,6 +2,11 @@
 import { supabase } from '@/services/supabase.client';
 import {
     BULK_CONCURRENCY,
+    ITEMS_PER_PAGE,
+    MANAGEMENT_ROLES,
+    ROLE_DISPLAY_NAMES,
+    ROLE_VALUES,
+    STAFF_ROLES,
     isProtectedAdminAccount,
     normalizeSchoolId,
     type AppUser,
@@ -12,8 +17,15 @@ import {
     type CreateUserFormValues,
     type EdgeFunctionBody,
     type EditUserFormValues,
+    type FetchUsersPageParams,
+    type FetchUsersPageResult,
     type InvokeResult,
+    type UserTabCounts,
+    type UserTabKey,
 } from '../types/user-management.types';
+
+const USER_SELECT_COLUMNS =
+    'id, schoolId, email, fullName, role, additionalRoles, isActive, avatarUrl, lastLogin, createdAt, updatedAt';
 
 // ==========================================
 // INTERNAL HELPERS
@@ -96,7 +108,7 @@ const chunkArray = <T>(items: readonly T[], size: number): T[][] => {
 };
 
 /**
- * Memperkaya daftar akun dengan:
+ * Memperkaya daftar akun secara PARALEL (hanya dijalankan pada baris halaman aktif):
  * 1. Status keterhubungan & foto profil siswa/orang tua dari `user_student_links` & `students`.
  * 2. Status keterhubungan, tugas tambahan Dapodik, dan `photoUrl` dari `teachers`.
  */
@@ -129,35 +141,39 @@ const enrichUsersWithMasterData = async (
     const teacherDutyMap = new Map<string, string>();
     const teacherPhotoMap = new Map<string, string>();
 
-    // 1. Ambil tautan master siswa / orang tua & foto profil siswa
-    if (studentParentIds.length > 0) {
+    const enrichStudentParentTask = async () => {
+        if (studentParentIds.length === 0) return;
         try {
             const idChunks = chunkArray(studentParentIds, 200);
-            for (const chunk of idChunks) {
-                let linkQuery = supabase
-                    .from('user_student_links')
-                    .select('userId, studentId')
-                    .in('userId', chunk);
+            const linkResults = await Promise.all(
+                idChunks.map(async (chunk) => {
+                    let linkQuery = supabase
+                        .from('user_student_links')
+                        .select('userId, studentId')
+                        .in('userId', chunk);
 
-                if (!isSuperAdmin && validSchoolId) {
-                    linkQuery = linkQuery.eq('schoolId', validSchoolId);
-                }
+                    if (!isSuperAdmin && validSchoolId) {
+                        linkQuery = linkQuery.eq('schoolId', validSchoolId);
+                    }
 
-                const { data: linkRows, error } = await linkQuery;
-                if (!error && Array.isArray(linkRows)) {
-                    for (const row of linkRows) {
-                        const typedRow = row as {
-                            userId?: string | null;
-                            studentId?: string | null;
-                        };
-                        if (typedRow.userId) {
-                            linkedCountMap.set(
-                                typedRow.userId,
-                                (linkedCountMap.get(typedRow.userId) ?? 0) + 1
-                            );
-                            if (typedRow.studentId && !primaryStudentByUser.has(typedRow.userId)) {
-                                primaryStudentByUser.set(typedRow.userId, typedRow.studentId);
-                            }
+                    const { data, error } = await linkQuery;
+                    return !error && Array.isArray(data) ? data : [];
+                })
+            );
+
+            for (const linkRows of linkResults) {
+                for (const row of linkRows) {
+                    const typedRow = row as {
+                        userId?: string | null;
+                        studentId?: string | null;
+                    };
+                    if (typedRow.userId) {
+                        linkedCountMap.set(
+                            typedRow.userId,
+                            (linkedCountMap.get(typedRow.userId) ?? 0) + 1
+                        );
+                        if (typedRow.studentId && !primaryStudentByUser.has(typedRow.userId)) {
+                            primaryStudentByUser.set(typedRow.userId, typedRow.studentId);
                         }
                     }
                 }
@@ -166,65 +182,30 @@ const enrichUsersWithMasterData = async (
             const uniqueStudentIds = Array.from(new Set(primaryStudentByUser.values()));
             if (uniqueStudentIds.length > 0) {
                 const studentChunks = chunkArray(uniqueStudentIds, 200);
-                for (const sChunk of studentChunks) {
-                    let studentQuery = supabase
-                        .from('students')
-                        .select('id, photoUrl')
-                        .in('id', sChunk);
+                const studentResults = await Promise.all(
+                    studentChunks.map(async (sChunk) => {
+                        let studentQuery = supabase
+                            .from('students')
+                            .select('id, photoUrl')
+                            .in('id', sChunk);
 
-                    if (!isSuperAdmin && validSchoolId) {
-                        studentQuery = studentQuery.eq('schoolId', validSchoolId);
-                    }
-
-                    const { data: studentRows, error } = await studentQuery;
-                    if (!error && Array.isArray(studentRows)) {
-                        for (const row of studentRows) {
-                            const typedRow = row as {
-                                id?: string | null;
-                                photoUrl?: string | null;
-                            };
-                            if (typedRow.id && typedRow.photoUrl) {
-                                studentPhotoMap.set(typedRow.id, typedRow.photoUrl);
-                            }
+                        if (!isSuperAdmin && validSchoolId) {
+                            studentQuery = studentQuery.eq('schoolId', validSchoolId);
                         }
-                    }
-                }
-            }
-        } catch {
-            // Fallback aman
-        }
-    }
 
-    // 2. Ambil tautan master, tugasTambahan & photoUrl dari tabel teachers (Dapodik)
-    if (staffUserIds.length > 0) {
-        try {
-            const staffChunks = chunkArray(staffUserIds, 200);
-            for (const chunk of staffChunks) {
-                let teacherQuery = supabase
-                    .from('teachers')
-                    .select('userId, tugasTambahan, photoUrl')
-                    .in('userId', chunk);
+                        const { data, error } = await studentQuery;
+                        return !error && Array.isArray(data) ? data : [];
+                    })
+                );
 
-                if (!isSuperAdmin && validSchoolId) {
-                    teacherQuery = teacherQuery.eq('schoolId', validSchoolId);
-                }
-
-                const { data: teacherRows, error } = await teacherQuery;
-                if (!error && Array.isArray(teacherRows)) {
-                    for (const row of teacherRows) {
+                for (const studentRows of studentResults) {
+                    for (const row of studentRows) {
                         const typedRow = row as {
-                            userId?: string | null;
-                            tugasTambahan?: string | null;
+                            id?: string | null;
                             photoUrl?: string | null;
                         };
-                        if (typedRow.userId) {
-                            linkedTeacherIds.add(typedRow.userId);
-                            if (typedRow.tugasTambahan) {
-                                teacherDutyMap.set(typedRow.userId, typedRow.tugasTambahan);
-                            }
-                            if (typedRow.photoUrl) {
-                                teacherPhotoMap.set(typedRow.userId, typedRow.photoUrl);
-                            }
+                        if (typedRow.id && typedRow.photoUrl) {
+                            studentPhotoMap.set(typedRow.id, typedRow.photoUrl);
                         }
                     }
                 }
@@ -232,7 +213,52 @@ const enrichUsersWithMasterData = async (
         } catch {
             // Fallback aman
         }
-    }
+    };
+
+    const enrichStaffTask = async () => {
+        if (staffUserIds.length === 0) return;
+        try {
+            const staffChunks = chunkArray(staffUserIds, 200);
+            const teacherResults = await Promise.all(
+                staffChunks.map(async (chunk) => {
+                    let teacherQuery = supabase
+                        .from('teachers')
+                        .select('userId, tugasTambahan, photoUrl')
+                        .in('userId', chunk);
+
+                    if (!isSuperAdmin && validSchoolId) {
+                        teacherQuery = teacherQuery.eq('schoolId', validSchoolId);
+                    }
+
+                    const { data, error } = await teacherQuery;
+                    return !error && Array.isArray(data) ? data : [];
+                })
+            );
+
+            for (const teacherRows of teacherResults) {
+                for (const row of teacherRows) {
+                    const typedRow = row as {
+                        userId?: string | null;
+                        tugasTambahan?: string | null;
+                        photoUrl?: string | null;
+                    };
+                    if (typedRow.userId) {
+                        linkedTeacherIds.add(typedRow.userId);
+                        if (typedRow.tugasTambahan) {
+                            teacherDutyMap.set(typedRow.userId, typedRow.tugasTambahan);
+                        }
+                        if (typedRow.photoUrl) {
+                            teacherPhotoMap.set(typedRow.userId, typedRow.photoUrl);
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Fallback aman
+        }
+    };
+
+    await Promise.all([enrichStudentParentTask(), enrichStaffTask()]);
 
     return users.map((u) => {
         const normalizedAdditionalRoles: AppUserRole[] = Array.isArray(u.additionalRoles)
@@ -272,11 +298,297 @@ const enrichUsersWithMasterData = async (
     });
 };
 
+const applyTabFilter = <T extends { in: (col: string, vals: readonly string[]) => T; eq: (col: string, val: string) => T }>(
+    query: T,
+    tab: UserTabKey
+): T => {
+    if (tab === 'manajemen') return query.in('role', [...MANAGEMENT_ROLES]);
+    if (tab === 'staff') return query.in('role', [...STAFF_ROLES]);
+    if (tab === 'siswa') return query.eq('role', 'SISWA');
+    if (tab === 'orangtua') return query.eq('role', 'ORANG_TUA');
+    return query;
+};
+
+const buildSearchOrClause = async (
+    search: string | undefined,
+    tab: UserTabKey,
+    validSchoolId: string | null
+): Promise<string | null> => {
+    const rawTrimmed = search?.trim() ?? '';
+    if (!rawTrimmed) return null;
+
+    const safeSearch = rawTrimmed
+        .replace(/[,()\\]/g, '')
+        .replace(/[%_]/g, '\\$&');
+
+    if (!safeSearch) return null;
+
+    const lowerSearch = rawTrimmed.toLowerCase();
+    const matchedRoles = ROLE_VALUES.filter((r) => {
+        const labelId = ROLE_DISPLAY_NAMES[r]?.id?.toLowerCase() ?? '';
+        const labelEn = ROLE_DISPLAY_NAMES[r]?.en?.toLowerCase() ?? '';
+        return (
+            r.toLowerCase().includes(lowerSearch) ||
+            labelId.includes(lowerSearch) ||
+            labelEn.includes(lowerSearch)
+        );
+    });
+
+    let matchedTeacherUserIds: string[] = [];
+    if (
+        safeSearch.length >= 2 &&
+        (tab === 'semua' || tab === 'manajemen' || tab === 'staff')
+    ) {
+        try {
+            let tQuery = supabase
+                .from('teachers')
+                .select('userId')
+                .not('userId', 'is', null)
+                .ilike('tugasTambahan', `%${safeSearch}%`)
+                .limit(100);
+
+            if (validSchoolId) {
+                tQuery = tQuery.eq('schoolId', validSchoolId);
+            }
+
+            const { data: tRows } = await tQuery;
+            matchedTeacherUserIds = (tRows ?? [])
+                .map((r) => (r as { userId?: string | null }).userId)
+                .filter((uid): uid is string => Boolean(uid));
+        } catch {
+            // Fallback aman
+        }
+    }
+
+    const orParts: string[] = [
+        `fullName.ilike.%${safeSearch}%`,
+        `email.ilike.%${safeSearch}%`,
+    ];
+
+    if (matchedRoles.length > 0) {
+        orParts.push(`role.in.(${matchedRoles.join(',')})`);
+    }
+    if (matchedTeacherUserIds.length > 0) {
+        orParts.push(`id.in.(${matchedTeacherUserIds.join(',')})`);
+    }
+
+    return orParts.join(',');
+};
+
 // ==========================================
 // PUBLIC SERVICE API
 // ==========================================
 
 export const userManagementService = {
+    /**
+     * Mengambil 1 halaman user langsung dari server (10 baris) + enrichment paralel.
+     * Jauh lebih cepat daripada menarik seluruh tabel `users` ke browser.
+     */
+    async fetchUsersPage(params: FetchUsersPageParams): Promise<FetchUsersPageResult> {
+        const {
+            schoolId,
+            isSuperAdmin,
+            page,
+            pageSize = ITEMS_PER_PAGE,
+            tab,
+            search,
+            sortConfig,
+        } = params;
+
+        const validSchoolId = normalizeSchoolId(schoolId);
+        if (!isSuperAdmin && !validSchoolId) {
+            return { users: [], totalCount: 0 };
+        }
+
+        const safePage = Math.max(1, Math.trunc(page));
+        const safeLimit = Math.max(1, Math.min(100, Math.trunc(pageSize)));
+        const searchOrClause = await buildSearchOrClause(search, tab, validSchoolId);
+
+        // Mode Super Admin + Urutan Default: pastikan SUPER_ADMIN selalu berada di posisi paling atas
+        if (
+            isSuperAdmin &&
+            sortConfig.key === 'none' &&
+            (tab === 'semua' || tab === 'manajemen')
+        ) {
+            let superAdminQuery = supabase
+                .from('users')
+                .select(USER_SELECT_COLUMNS)
+                .eq('role', 'SUPER_ADMIN')
+                .order('createdAt', { ascending: false })
+                .order('id', { ascending: true });
+
+            if (searchOrClause) {
+                superAdminQuery = superAdminQuery.or(searchOrClause);
+            }
+
+            let countOtherQuery = supabase
+                .from('users')
+                .select('id', { count: 'exact', head: true })
+                .neq('role', 'SUPER_ADMIN');
+
+            if (validSchoolId) {
+                countOtherQuery = countOtherQuery.eq('schoolId', validSchoolId);
+            }
+            countOtherQuery = applyTabFilter(countOtherQuery, tab);
+            if (searchOrClause) {
+                countOtherQuery = countOtherQuery.or(searchOrClause);
+            }
+
+            const [superRes, countOtherRes] = await Promise.all([
+                superAdminQuery,
+                countOtherQuery,
+            ]);
+
+            if (superRes.error) throw new Error(superRes.error.message);
+            if (countOtherRes.error) throw new Error(countOtherRes.error.message);
+
+            const superAdmins = (superRes.data as AppUser[]) || [];
+            const otherCount = countOtherRes.count ?? 0;
+            const totalCount = superAdmins.length + otherCount;
+
+            const globalStart = (safePage - 1) * safeLimit;
+            const globalEnd = globalStart + safeLimit - 1;
+            const superSlice = superAdmins.slice(globalStart, globalEnd + 1);
+            const remainingSlots = safeLimit - superSlice.length;
+
+            let otherUsers: AppUser[] = [];
+            if (remainingSlots > 0 && otherCount > 0) {
+                const otherStart = Math.max(0, globalStart - superAdmins.length);
+                const otherEnd = otherStart + remainingSlots - 1;
+
+                let otherQuery = supabase
+                    .from('users')
+                    .select(USER_SELECT_COLUMNS)
+                    .neq('role', 'SUPER_ADMIN');
+
+                if (validSchoolId) {
+                    otherQuery = otherQuery.eq('schoolId', validSchoolId);
+                }
+                otherQuery = applyTabFilter(otherQuery, tab);
+                if (searchOrClause) {
+                    otherQuery = otherQuery.or(searchOrClause);
+                }
+
+                const { data: otherData, error: otherErr } = await otherQuery
+                    .order('createdAt', { ascending: false })
+                    .order('id', { ascending: true })
+                    .range(otherStart, otherEnd);
+
+                if (otherErr) throw new Error(otherErr.message);
+                otherUsers = (otherData as AppUser[]) || [];
+            }
+
+            const pageUsers = [...superSlice, ...otherUsers];
+            const enriched = await enrichUsersWithMasterData(
+                pageUsers,
+                validSchoolId,
+                isSuperAdmin
+            );
+
+            return {
+                users: enriched,
+                totalCount,
+            };
+        }
+
+        // Query standar untuk semua kombinasi tab, pencarian, dan sorting
+        let query = supabase
+            .from('users')
+            .select(USER_SELECT_COLUMNS, { count: 'exact' });
+
+        if (validSchoolId) {
+            if (isSuperAdmin) {
+                query = query.or(`schoolId.eq.${validSchoolId},role.eq.SUPER_ADMIN`);
+            } else {
+                query = query.eq('schoolId', validSchoolId);
+            }
+        }
+
+        query = applyTabFilter(query, tab);
+
+        if (searchOrClause) {
+            query = query.or(searchOrClause);
+        }
+
+        const isAsc = sortConfig.direction === 'asc';
+        if (sortConfig.key === 'fullName') {
+            query = query.order('fullName', { ascending: isAsc });
+        } else if (sortConfig.key === 'role') {
+            query = query
+                .order('role', { ascending: isAsc })
+                .order('fullName', { ascending: true });
+        } else if (sortConfig.key === 'isActive') {
+            // asc = Aktif (true) di atas, Nonaktif (false) di bawah (selaras dengan sort lama)
+            query = query
+                .order('isActive', { ascending: !isAsc })
+                .order('fullName', { ascending: true });
+        } else {
+            query = query.order('createdAt', { ascending: false });
+        }
+
+        query = query.order('id', { ascending: true });
+
+        const from = (safePage - 1) * safeLimit;
+        const to = from + safeLimit - 1;
+
+        const { data, count, error } = await query.range(from, to);
+        if (error) throw new Error(error.message);
+
+        const pageUsers = (data as AppUser[]) || [];
+        const enriched = await enrichUsersWithMasterData(
+            pageUsers,
+            validSchoolId,
+            isSuperAdmin
+        );
+
+        return {
+            users: enriched,
+            totalCount: count ?? 0,
+        };
+    },
+
+    /**
+     * Menghitung jumlah akun per tab secara paralel menggunakan `head: true` (0 payload).
+     */
+    async fetchTabCounts(
+        schoolId: string | null,
+        isSuperAdmin: boolean
+    ): Promise<UserTabCounts> {
+        const validSchoolId = normalizeSchoolId(schoolId);
+        if (!isSuperAdmin && !validSchoolId) {
+            return { semua: 0, manajemen: 0, staff: 0, siswa: 0, orangtua: 0 };
+        }
+
+        const countForTab = async (tab: UserTabKey): Promise<number> => {
+            let q = supabase
+                .from('users')
+                .select('id', { count: 'exact', head: true });
+
+            if (validSchoolId) {
+                if (isSuperAdmin) {
+                    q = q.or(`schoolId.eq.${validSchoolId},role.eq.SUPER_ADMIN`);
+                } else {
+                    q = q.eq('schoolId', validSchoolId);
+                }
+            }
+
+            q = applyTabFilter(q, tab);
+            const { count, error } = await q;
+            if (error) throw new Error(error.message);
+            return count ?? 0;
+        };
+
+        const [semua, manajemen, staff, siswa, orangtua] = await Promise.all([
+            countForTab('semua'),
+            countForTab('manajemen'),
+            countForTab('staff'),
+            countForTab('siswa'),
+            countForTab('orangtua'),
+        ]);
+
+        return { semua, manajemen, staff, siswa, orangtua };
+    },
+
     async fetchAllUsers(schoolId: string | null, isSuperAdmin: boolean): Promise<AppUser[]> {
         const validSchoolId = normalizeSchoolId(schoolId);
         if (!isSuperAdmin && !validSchoolId) return [];
@@ -287,7 +599,7 @@ export const userManagementService = {
         for (let from = 0; ; from += pageSize) {
             let query = supabase
                 .from('users')
-                .select('*')
+                .select(USER_SELECT_COLUMNS)
                 .order('createdAt', { ascending: false })
                 .order('id', { ascending: true })
                 .range(from, from + pageSize - 1);
@@ -308,7 +620,6 @@ export const userManagementService = {
             if (batch.length < pageSize) break;
         }
 
-        // Pastikan akun SUPER_ADMIN selalu tampil di urutan paling atas secara default
         allUsers.sort((a, b) => {
             if (a.role === 'SUPER_ADMIN' && b.role !== 'SUPER_ADMIN') return -1;
             if (a.role !== 'SUPER_ADMIN' && b.role === 'SUPER_ADMIN') return 1;

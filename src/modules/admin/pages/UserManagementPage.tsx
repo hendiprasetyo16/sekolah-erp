@@ -1,7 +1,7 @@
 // src/modules/admin/pages/UserManagementPage.tsx
-import { useEffect, useMemo, useState } from 'react';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AnimatePresence, motion } from 'framer-motion';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { AnimatePresence } from 'framer-motion';
 import {
     AlertCircle,
     ArrowDown,
@@ -42,21 +42,18 @@ import {
 
 import {
     ITEMS_PER_PAGE,
-    MANAGEMENT_ROLES,
-    ROLE_DISPLAY_NAMES,
-    STAFF_ROLES,
     getEffectiveRoles,
     isBulkTargetGroup,
     isProtectedAdminAccount,
     normalizeSchoolId,
     type AppUser,
-    type AppUserRole,
     type BulkTargetGroup,
     type CreateUserFormValues,
     type EditUserFormValues,
     type ResetPasswordFormValues,
     type SortConfig,
     type SortKey,
+    type UserTabCounts,
     type UserTabKey,
 } from '../types/user-management.types';
 import { userManagementService } from '../services/user-management.service';
@@ -67,6 +64,14 @@ import {
     ResetPasswordModal,
 } from '../components/UserManagementForms';
 import { UserManagementTable } from '../components/UserManagementTable';
+
+const EMPTY_TAB_COUNTS: UserTabCounts = {
+    semua: 0,
+    manajemen: 0,
+    staff: 0,
+    siswa: 0,
+    orangtua: 0,
+};
 
 export function UserManagementPage() {
     const { school, user: currentUser } = useAuthStore();
@@ -107,12 +112,13 @@ export function UserManagementPage() {
     // ------------------------------------------
     const [activeTab, setActiveTab] = useState<UserTabKey>('semua');
     const [searchQuery, setSearchQuery] = useState<string>('');
+    const [debouncedSearch, setDebouncedSearch] = useState<string>('');
     const [sortConfig, setSortConfig] = useState<SortConfig>({
         key: 'none',
         direction: 'asc',
     });
     const [currentPage, setCurrentPage] = useState<number>(1);
-    const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
+    const [selectedUsersMap, setSelectedUsersMap] = useState<Record<string, AppUser>>({});
 
     const [isAddUserModalOpen, setIsAddUserModalOpen] = useState(false);
     const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
@@ -123,30 +129,99 @@ export function UserManagementPage() {
     const [isDeleteSelectedModalOpen, setIsDeleteSelectedModalOpen] = useState(false);
     const [isDeleteAllModalOpen, setIsDeleteAllModalOpen] = useState(false);
 
+    // Debounce pencarian 250ms agar mengetik tetap mulus tanpa spam kueri DB
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            setDebouncedSearch(searchQuery);
+        }, 250);
+        return () => clearTimeout(timer);
+    }, [searchQuery]);
+
+    const invalidateUsersQueries = useCallback(() => {
+        queryClient.invalidateQueries({ queryKey: ['users-page'] });
+        queryClient.invalidateQueries({ queryKey: ['users-tab-counts'] });
+        queryClient.invalidateQueries({ queryKey: ['users-list'] });
+    }, [queryClient]);
+
     // ------------------------------------------
-    // DATA FETCHING & REALTIME (TERFILTER SEKOLAH)
+    // DATA FETCHING PARALEL (10 BARIS + TAB COUNTS)
     // ------------------------------------------
-    const { data: users = [], isLoading } = useQuery<AppUser[], Error>({
-        queryKey: ['users-list', activeSchoolId, isSuperAdmin],
-        queryFn: () => userManagementService.fetchAllUsers(activeSchoolId, isSuperAdmin),
+    const {
+        data: pageResult = { users: [], totalCount: 0 },
+        isLoading,
+    } = useQuery({
+        queryKey: [
+            'users-page',
+            activeSchoolId,
+            isSuperAdmin,
+            currentPage,
+            activeTab,
+            debouncedSearch,
+            sortConfig.key,
+            sortConfig.direction,
+            lang,
+        ],
+        queryFn: () =>
+            userManagementService.fetchUsersPage({
+                schoolId: activeSchoolId,
+                isSuperAdmin,
+                page: currentPage,
+                pageSize: ITEMS_PER_PAGE,
+                tab: activeTab,
+                search: debouncedSearch,
+                sortConfig,
+                lang,
+            }),
         enabled: isSuperAdmin || Boolean(activeSchoolId),
-        staleTime: 0,
-        refetchOnMount: 'always',
-        refetchOnWindowFocus: true,
-        refetchOnReconnect: true,
+        staleTime: 30_000,
+        placeholderData: keepPreviousData,
     });
 
+    const { data: tabCounts = EMPTY_TAB_COUNTS } = useQuery<UserTabCounts, Error>({
+        queryKey: ['users-tab-counts', activeSchoolId, isSuperAdmin],
+        queryFn: () => userManagementService.fetchTabCounts(activeSchoolId, isSuperAdmin),
+        enabled: isSuperAdmin || Boolean(activeSchoolId),
+        staleTime: 30_000,
+        placeholderData: keepPreviousData,
+    });
+
+    const paginatedUsers = pageResult.users;
+    const totalFilteredCount = pageResult.totalCount;
+    const totalPages = Math.ceil(totalFilteredCount / ITEMS_PER_PAGE);
+
+    useEffect(() => {
+        if (totalPages > 0 && currentPage > totalPages) {
+            setCurrentPage(totalPages);
+        }
+    }, [currentPage, totalPages]);
+
+    // Sinkronkan objek user terpilih jika datanya diperbarui di halaman aktif
+    useEffect(() => {
+        if (paginatedUsers.length === 0) return;
+        setSelectedUsersMap((prev) => {
+            let changed = false;
+            const next = { ...prev };
+            for (const u of paginatedUsers) {
+                if (next[u.id] && next[u.id] !== u) {
+                    next[u.id] = u;
+                    changed = true;
+                }
+            }
+            return changed ? next : prev;
+        });
+    }, [paginatedUsers]);
+
+    // Realtime subscription ringan
     useEffect(() => {
         if (!isSuperAdmin && !activeSchoolId) return;
 
         let timer: ReturnType<typeof setTimeout> | undefined;
         let channel: ReturnType<typeof supabase.channel> | null = null;
-
         const changeFilter = activeSchoolId ? `schoolId=eq.${activeSchoolId}` : undefined;
 
         try {
             channel = supabase
-                .channel(`users-list-${crypto.randomUUID()}`)
+                .channel(`users-realtime-${activeSchoolId ?? 'global'}`)
                 .on(
                     'postgres_changes',
                     {
@@ -157,10 +232,7 @@ export function UserManagementPage() {
                     },
                     () => {
                         clearTimeout(timer);
-                        timer = setTimeout(
-                            () => queryClient.invalidateQueries({ queryKey: ['users-list'] }),
-                            500
-                        );
+                        timer = setTimeout(() => invalidateUsersQueries(), 600);
                     }
                 )
                 .subscribe((status, err) => {
@@ -176,7 +248,7 @@ export function UserManagementPage() {
             clearTimeout(timer);
             if (channel) supabase.removeChannel(channel);
         };
-    }, [queryClient, activeSchoolId, isSuperAdmin]);
+    }, [activeSchoolId, isSuperAdmin, invalidateUsersQueries]);
 
     // ------------------------------------------
     // MUTATIONS
@@ -187,7 +259,7 @@ export function UserManagementPage() {
         onSuccess: () => {
             toast.success(tUM('toastAddSuccess'));
             setIsAddUserModalOpen(false);
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            invalidateUsersQueries();
         },
         onError: (error: Error) => toast.error(error.message),
     });
@@ -222,7 +294,7 @@ export function UserManagementPage() {
         onSuccess: () => {
             toast.success(tUM('toastEditSuccess'));
             setUserToEdit(null);
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            invalidateUsersQueries();
             queryClient.invalidateQueries({ queryKey: ['teachers'] });
             queryClient.invalidateQueries({ queryKey: ['user-detail'] });
         },
@@ -250,7 +322,7 @@ export function UserManagementPage() {
             }),
         onSuccess: () => {
             toast.success(tUM('toastStatusSuccess'));
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            invalidateUsersQueries();
         },
         onError: (error: Error) => toast.error(error.message),
     });
@@ -262,10 +334,16 @@ export function UserManagementPage() {
                 currentUserId: currentUser?.id,
                 activeSchoolId,
             }),
-        onSuccess: () => {
+        onSuccess: (_, deletedId) => {
             toast.success(tUM('toastDelSuccess'));
             setUserToDelete(null);
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setSelectedUsersMap((prev) => {
+                if (!prev[deletedId]) return prev;
+                const next = { ...prev };
+                delete next[deletedId];
+                return next;
+            });
+            invalidateUsersQueries();
         },
         onError: (error: Error) => toast.error(error.message),
     });
@@ -291,8 +369,8 @@ export function UserManagementPage() {
                 });
             }
             setIsGenerateSelectedModalOpen(false);
-            setSelectedUserIds([]);
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setSelectedUsersMap({});
+            invalidateUsersQueries();
         },
         onError: (error: Error) => toast.error(error.message),
     });
@@ -331,7 +409,7 @@ export function UserManagementPage() {
             } else {
                 setIsGenerateAllModalOpen(false);
             }
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            invalidateUsersQueries();
         },
         onError: (error: Error) =>
             toast.error(lang === 'id' ? 'Gagal Generate' : 'Generation Failed', {
@@ -340,10 +418,10 @@ export function UserManagementPage() {
     });
 
     const deleteSelectedMutation = useMutation({
-        mutationFn: (ids: string[]) =>
+        mutationFn: (selectedUsersList: AppUser[]) =>
             userManagementService.deleteSelectedUsers({
-                selectedIds: ids,
-                allUsers: users,
+                selectedIds: selectedUsersList.map((u) => u.id),
+                allUsers: selectedUsersList,
                 activeSchoolId,
                 currentUserId: currentUser?.id,
                 isSuperAdmin,
@@ -356,8 +434,8 @@ export function UserManagementPage() {
                 });
             }
             setIsDeleteSelectedModalOpen(false);
-            setSelectedUserIds([]);
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setSelectedUsersMap({});
+            invalidateUsersQueries();
         },
         onError: (error: Error) => toast.error(error.message),
     });
@@ -384,105 +462,31 @@ export function UserManagementPage() {
             } else {
                 setIsDeleteAllModalOpen(false);
             }
-            setSelectedUserIds([]);
-            queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            setSelectedUsersMap({});
+            invalidateUsersQueries();
         },
         onError: (error: Error) => toast.error(error.message),
     });
 
     // ------------------------------------------
-    // FILTER, SORT & PAGINATION
+    // DERIVED SELECTION STATES
     // ------------------------------------------
-    const processedUsers = useMemo(() => {
-        const q = searchQuery.trim().toLowerCase();
-        const filtered = users.filter((u) => {
-            const effectiveRolesText = getEffectiveRoles(u)
-                .map((r) => ROLE_DISPLAY_NAMES[r as AppUserRole]?.[lang] ?? r)
-                .join(' ')
-                .toLowerCase();
+    const selectedUsersList = useMemo(
+        () => Object.values(selectedUsersMap),
+        [selectedUsersMap]
+    );
 
-            const matchesSearch =
-                !q ||
-                u.fullName.toLowerCase().includes(q) ||
-                u.email.toLowerCase().includes(q) ||
-                effectiveRolesText.includes(q) ||
-                (u.tugasTambahan ?? '').toLowerCase().includes(q);
-
-            let matchesTab = true;
-            if (activeTab === 'manajemen') matchesTab = MANAGEMENT_ROLES.includes(u.role);
-            else if (activeTab === 'staff') matchesTab = STAFF_ROLES.includes(u.role);
-            else if (activeTab === 'siswa') matchesTab = u.role === 'SISWA';
-            else if (activeTab === 'orangtua') matchesTab = u.role === 'ORANG_TUA';
-
-            return matchesSearch && matchesTab;
-        });
-
-        if (sortConfig.key !== 'none') {
-            filtered.sort((a, b) => {
-                let comparison = 0;
-                if (sortConfig.key === 'fullName') {
-                    comparison = a.fullName.localeCompare(b.fullName, undefined, {
-                        sensitivity: 'base',
-                    });
-                } else if (sortConfig.key === 'role') {
-                    comparison = a.role.localeCompare(b.role, undefined, {
-                        sensitivity: 'base',
-                    });
-                } else if (sortConfig.key === 'isActive') {
-                    comparison = a.isActive === b.isActive ? 0 : a.isActive ? -1 : 1;
-                }
-                return sortConfig.direction === 'asc' ? comparison : -comparison;
-            });
-        }
-
-        return filtered;
-    }, [users, searchQuery, activeTab, sortConfig, lang]);
-
-    const totalPages = Math.ceil(processedUsers.length / ITEMS_PER_PAGE);
-
-    useEffect(() => {
-        if (totalPages > 0 && currentPage > totalPages) {
-            setCurrentPage(totalPages);
-        }
-    }, [currentPage, totalPages]);
-
-    useEffect(() => {
-        const validIds = new Set(users.map((u) => u.id));
-        setSelectedUserIds((prev) => {
-            const next = prev.filter((id) => validIds.has(id));
-            return next.length === prev.length ? prev : next;
-        });
-    }, [users]);
-
-    const paginatedUsers = useMemo(
-        () =>
-            processedUsers.slice(
-                (currentPage - 1) * ITEMS_PER_PAGE,
-                currentPage * ITEMS_PER_PAGE
-            ),
-        [processedUsers, currentPage]
+    const selectedUserIds = useMemo(
+        () => Object.keys(selectedUsersMap),
+        [selectedUsersMap]
     );
 
     const eligibleSelectedUsers = useMemo(
         () =>
-            processedUsers.filter(
-                (u) =>
-                    selectedUserIds.includes(u.id) &&
-                    !isProtectedAdminAccount(u, isSuperAdmin) &&
-                    u.id !== currentUser?.id
+            selectedUsersList.filter(
+                (u) => !isProtectedAdminAccount(u, isSuperAdmin) && u.id !== currentUser?.id
             ),
-        [processedUsers, selectedUserIds, isSuperAdmin, currentUser?.id]
-    );
-
-    const tabCounts = useMemo<Record<UserTabKey, number>>(
-        () => ({
-            semua: users.length,
-            manajemen: users.filter((u) => MANAGEMENT_ROLES.includes(u.role)).length,
-            staff: users.filter((u) => STAFF_ROLES.includes(u.role)).length,
-            siswa: users.filter((u) => u.role === 'SISWA').length,
-            orangtua: users.filter((u) => u.role === 'ORANG_TUA').length,
-        }),
-        [users]
+        [selectedUsersList, isSuperAdmin, currentUser?.id]
     );
 
     // ------------------------------------------
@@ -491,13 +495,13 @@ export function UserManagementPage() {
     const handleTabChange = (nextTab: string) => {
         setActiveTab(nextTab as UserTabKey);
         setCurrentPage(1);
-        setSelectedUserIds([]);
+        setSelectedUsersMap({});
     };
 
     const handleSearchChange = (value: string) => {
         setSearchQuery(value);
         setCurrentPage(1);
-        setSelectedUserIds([]);
+        setSelectedUsersMap({});
     };
 
     const handleSortChange = (nextSort: SortConfig) => {
@@ -517,22 +521,40 @@ export function UserManagementPage() {
     };
 
     const handleSelectAllPage = (checked: boolean) => {
-        const selectableIds = paginatedUsers
-            .filter((u) => u.id !== currentUser?.id && !isProtectedAdminAccount(u, isSuperAdmin))
-            .map((u) => u.id);
+        const selectablePageUsers = paginatedUsers.filter(
+            (u) => u.id !== currentUser?.id && !isProtectedAdminAccount(u, isSuperAdmin)
+        );
 
         if (checked) {
-            setSelectedUserIds((prev) => Array.from(new Set([...prev, ...selectableIds])));
+            setSelectedUsersMap((prev) => {
+                const next = { ...prev };
+                for (const u of selectablePageUsers) {
+                    next[u.id] = u;
+                }
+                return next;
+            });
         } else {
-            const pageIdSet = new Set(selectableIds);
-            setSelectedUserIds((prev) => prev.filter((id) => !pageIdSet.has(id)));
+            setSelectedUsersMap((prev) => {
+                const next = { ...prev };
+                for (const u of selectablePageUsers) {
+                    delete next[u.id];
+                }
+                return next;
+            });
         }
     };
 
     const handleToggleSelectUser = (userId: string) => {
-        setSelectedUserIds((prev) =>
-            prev.includes(userId) ? prev.filter((id) => id !== userId) : [...prev, userId]
-        );
+        setSelectedUsersMap((prev) => {
+            const next = { ...prev };
+            if (next[userId]) {
+                delete next[userId];
+            } else {
+                const found = paginatedUsers.find((u) => u.id === userId);
+                if (found) next[userId] = found;
+            }
+            return next;
+        });
     };
 
     const sortLabel =
@@ -563,11 +585,7 @@ export function UserManagementPage() {
     const activeBulkGroup = isBulkTargetGroup(activeTab) ? activeTab : null;
 
     return (
-        <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            className="relative space-y-6"
-        >
+        <div className="relative space-y-6">
             {/* ================= MODALS ================= */}
             <AnimatePresence>
                 {isAddUserModalOpen && canManageUsers && (
@@ -640,21 +658,17 @@ export function UserManagementPage() {
                         title={tUM('modalGenSelTitle', { count: eligibleSelectedUsers.length })}
                         description={tUM('modalGenSelSub', { count: eligibleSelectedUsers.length })}
                         subNote={
-                            selectedUserIds.length > eligibleSelectedUsers.length
+                            selectedUsersList.length > eligibleSelectedUsers.length
                                 ? lang === 'id'
-                                    ? `${selectedUserIds.length - eligibleSelectedUsers.length} akun Admin / akun sendiri otomatis dilewati.`
-                                    : `${selectedUserIds.length - eligibleSelectedUsers.length} Admin / self account(s) automatically skipped.`
+                                    ? `${selectedUsersList.length - eligibleSelectedUsers.length} akun Admin / akun sendiri otomatis dilewati.`
+                                    : `${selectedUsersList.length - eligibleSelectedUsers.length} Admin / self account(s) automatically skipped.`
                                 : undefined
                         }
                         confirmLabel={tGlobal('yes')}
                         cancelLabel={tGlobal('cancel')}
                         isPending={generateSelectedMutation.isPending}
                         onClose={() => setIsGenerateSelectedModalOpen(false)}
-                        onConfirm={() =>
-                            generateSelectedMutation.mutate(
-                                processedUsers.filter((u) => selectedUserIds.includes(u.id))
-                            )
-                        }
+                        onConfirm={() => generateSelectedMutation.mutate(selectedUsersList)}
                     />
                 )}
 
@@ -677,17 +691,17 @@ export function UserManagementPage() {
                         title={tUM('modalDelSelTitle', { count: eligibleSelectedUsers.length })}
                         description={tUM('modalDelSelSub', { count: eligibleSelectedUsers.length })}
                         subNote={
-                            selectedUserIds.length > eligibleSelectedUsers.length
+                            selectedUsersList.length > eligibleSelectedUsers.length
                                 ? lang === 'id'
-                                    ? `${selectedUserIds.length - eligibleSelectedUsers.length} akun Admin / akun sendiri dilindungi dari penghapusan.`
-                                    : `${selectedUserIds.length - eligibleSelectedUsers.length} Admin / self account(s) protected from deletion.`
+                                    ? `${selectedUsersList.length - eligibleSelectedUsers.length} akun Admin / akun sendiri dilindungi dari penghapusan.`
+                                    : `${selectedUsersList.length - eligibleSelectedUsers.length} Admin / self account(s) protected from deletion.`
                                 : undefined
                         }
                         confirmLabel={tGlobal('delete')}
                         cancelLabel={tGlobal('cancel')}
                         isPending={deleteSelectedMutation.isPending}
                         onClose={() => setIsDeleteSelectedModalOpen(false)}
-                        onConfirm={() => deleteSelectedMutation.mutate(selectedUserIds)}
+                        onConfirm={() => deleteSelectedMutation.mutate(selectedUsersList)}
                     />
                 )}
 
@@ -937,7 +951,7 @@ export function UserManagementPage() {
                 {/* ================= TABEL & PAGINATION ================= */}
                 <UserManagementTable
                     users={paginatedUsers}
-                    totalFilteredCount={processedUsers.length}
+                    totalFilteredCount={totalFilteredCount}
                     isLoading={isLoading}
                     lang={lang}
                     currentPage={currentPage}
@@ -957,6 +971,6 @@ export function UserManagementPage() {
                     onDeleteUser={setUserToDelete}
                 />
             </div>
-        </motion.div>
+        </div>
     );
 }
