@@ -100,6 +100,7 @@ type CheckOutTimingStatus = 'EARLY' | 'ON_TIME' | 'OVERTIME';
 
 interface TeacherProfile {
   id: string;
+  userId?: string | null;
   fullName: string;
   nik?: string | null;
   nip?: string | null;
@@ -151,6 +152,7 @@ interface DailyQuoteDbRow {
 
 interface TeacherDbRow {
   id: string;
+  userId?: string | null;
   fullName: string;
   nik?: string | null;
   nip?: string | null;
@@ -189,8 +191,46 @@ interface SubmitGpsRpcResult {
 }
 
 // ============================================================================
-// FUNGSI BANTUAN (HELPER) ERROR, ZONA WAKTU SEKOLAH, JARAK GPS, & KETERLAMBATAN
+// FUNGSI BANTUAN (HELPER) IDENTITAS PTK, ZONA WAKTU, JARAK GPS, & KETERLAMBATAN
 // ============================================================================
+function sanitizeIdentityValue(raw?: string | null): string | null {
+  if (!raw) return null;
+  const cleaned = raw.trim();
+  if (!cleaned) return null;
+
+  const lower = cleaned.toLowerCase();
+  if (
+    cleaned === '-' ||
+    cleaned === '--' ||
+    cleaned === '—' ||
+    cleaned === '0' ||
+    lower === 'nan' ||
+    lower === 'null' ||
+    lower === 'undefined'
+  ) {
+    return null;
+  }
+
+  return cleaned;
+}
+
+function formatTeacherIdentityLabel(
+  teacher: TeacherProfile | null,
+  fallbackLabel: string
+): string {
+  const cleanNip = sanitizeIdentityValue(teacher?.nip);
+  if (cleanNip) {
+    return `NIP: ${cleanNip}`;
+  }
+
+  const cleanNuptk = sanitizeIdentityValue(teacher?.nuptk);
+  if (cleanNuptk) {
+    return `NUPTK: ${cleanNuptk}`;
+  }
+
+  return fallbackLabel;
+}
+
 function extractErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && error.message) {
     return error.message;
@@ -640,11 +680,33 @@ export function TeacherAttendancePage() {
 
   // Data Guru, Pengaturan Sekolah, & Riwayat Presensi
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
+  const [photoLoadError, setPhotoLoadError] = useState<boolean>(false);
   const [schoolGeo, setSchoolGeo] = useState<SchoolGeoAndSchedule | null>(null);
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const loadSeqRef = useRef<number>(0);
+
+  const resolvedTeacherPhotoUrl = useMemo(() => {
+    if (teacher?.photoUrl && teacher.photoUrl.trim().length > 0) {
+      return teacher.photoUrl.trim();
+    }
+    if (
+      !isSuperAdmin &&
+      teacher &&
+      teacher.userId &&
+      teacher.userId === user?.id &&
+      user?.avatarUrl &&
+      user.avatarUrl.trim().length > 0
+    ) {
+      return user.avatarUrl.trim();
+    }
+    return null;
+  }, [teacher, isSuperAdmin, user?.id, user?.avatarUrl]);
+
+  useEffect(() => {
+    setPhotoLoadError(false);
+  }, [teacher?.id, resolvedTeacherPhotoUrl]);
 
   const schoolTimezone = schoolGeo?.timezone || DEFAULT_SCHOOL_TIMEZONE;
   const todayStr = useMemo(
@@ -1056,6 +1118,7 @@ export function TeacherAttendancePage() {
         const rows = (data ?? []) as TeacherDbRow[];
         const list: TeacherProfile[] = rows.map((item) => ({
           id: item.id,
+          userId: item.userId ?? null,
           fullName: item.fullName,
           nik: item.nik ?? null,
           nip: item.nip ?? null,
@@ -1157,6 +1220,7 @@ export function TeacherAttendancePage() {
         if (tByUser) {
           activeTeacher = {
             id: tByUser.id,
+            userId: tByUser.userId ?? null,
             fullName: tByUser.fullName,
             nik: tByUser.nik ?? null,
             nip: tByUser.nip ?? null,
@@ -2292,6 +2356,16 @@ export function TeacherAttendancePage() {
   const isEarlyReasonValid =
     earlyCheckoutReason.trim().length >= MIN_EARLY_CHECKOUT_REASON_LENGTH;
 
+  const isTeacherAccountLinked = Boolean(teacher?.userId);
+  const teacherIdentityLabel = useMemo(
+    () =>
+      formatTeacherIdentityLabel(
+        teacher,
+        t('teacherAttendance.registeredStaffFallback')
+      ),
+    [teacher, t]
+  );
+
   const fingerprintButtonStyle = useMemo(() => {
     if (!isOnMapView) {
       return isFingerprintGlowing
@@ -2427,8 +2501,8 @@ export function TeacherAttendancePage() {
           >
             <div
               className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-400'
-                : 'bg-red-600 text-white border-red-400'
+                  ? 'bg-emerald-600 text-white border-emerald-400'
+                  : 'bg-red-600 text-white border-red-400'
                 }`}
             >
               <div className="flex items-center gap-2.5">
@@ -2613,8 +2687,8 @@ export function TeacherAttendancePage() {
                       }
                     }}
                     className={`inline-flex items-center justify-center gap-1.5 p-2.5 sm:px-2.5 sm:py-2 rounded-xl border text-[11px] font-semibold backdrop-blur-xs transition active:scale-95 shrink-0 sm:order-1 ${isHolidayLocked
-                      ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
-                      : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
+                        ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
+                        : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
                       }`}
                     title={
                       isHolidayLocked
@@ -2661,21 +2735,37 @@ export function TeacherAttendancePage() {
                   <div className="flex items-start gap-3">
                     <div className="relative shrink-0 mt-0.5">
                       <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
-                        {teacher?.photoUrl ? (
+                        {resolvedTeacherPhotoUrl && !photoLoadError ? (
                           <img
-                            src={teacher.photoUrl}
-                            alt={teacher.fullName}
+                            src={resolvedTeacherPhotoUrl}
+                            alt={teacher?.fullName ?? user?.fullName ?? 'Guru'}
+                            onError={() => setPhotoLoadError(true)}
                             className="w-14 h-14 rounded-[14px] object-cover bg-white"
                           />
                         ) : (
                           <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
-                            {(teacher?.fullName ?? user?.fullName ?? 'G').charAt(
-                              0
-                            )}
+                            {(teacher?.fullName ?? user?.fullName ?? 'G')
+                              .trim()
+                              .charAt(0)
+                              .toUpperCase()}
                           </div>
                         )}
                       </div>
-                      <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-amber-400 text-slate-900 flex items-center justify-center shadow border border-white">
+                      <span
+                        title={
+                          isTeacherAccountLinked
+                            ? currentLang === 'en'
+                              ? 'Linked to Login Account'
+                              : 'Akun Login Tertaut'
+                            : currentLang === 'en'
+                              ? 'Dapodik PTK (Not yet linked to login account)'
+                              : 'PTK Dapodik (Belum tertaut akun login)'
+                        }
+                        className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center shadow border border-white transition-colors ${isTeacherAccountLinked
+                            ? 'bg-emerald-500 text-white'
+                            : 'bg-amber-400 text-slate-900'
+                          }`}
+                      >
                         <ShieldCheck size={12} />
                       </span>
                     </div>
@@ -2687,9 +2777,7 @@ export function TeacherAttendancePage() {
                           t('teacherAttendance.profileUnlinked')}
                       </h2>
                       <p className="text-[11px] font-mono text-slate-500 mt-0.5">
-                        {teacher?.nip ||
-                          teacher?.nuptk ||
-                          t('teacherAttendance.registeredStaffFallback')}
+                        {teacherIdentityLabel}
                       </p>
                       <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-1 leading-snug">
                         <Briefcase
@@ -2846,8 +2934,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2919,14 +3007,14 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                      ? 'bg-rose-400'
-                      : hasCheckedIn
-                        ? todayRecord?.status === 'TERLAMBAT'
-                          ? 'bg-amber-400'
-                          : 'bg-emerald-400'
-                        : currentLateMinutes > 0
-                          ? 'bg-rose-400 animate-pulse'
-                          : 'bg-amber-300 animate-pulse'
+                        ? 'bg-rose-400'
+                        : hasCheckedIn
+                          ? todayRecord?.status === 'TERLAMBAT'
+                            ? 'bg-amber-400'
+                            : 'bg-emerald-400'
+                          : currentLateMinutes > 0
+                            ? 'bg-rose-400 animate-pulse'
+                            : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <AutoScrollingText
@@ -2963,8 +3051,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -3022,15 +3110,15 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedOut
-                      ? 'bg-rose-300'
-                      : hasCheckedOut
-                        ? todayCheckOutTimingInfo.isEarly ||
-                          todayCheckOutTimingInfo.isOvertime
-                          ? 'bg-amber-200'
-                          : 'bg-emerald-300'
-                        : canCheckOut
-                          ? 'bg-red-400 animate-ping'
-                          : 'bg-amber-100/60'
+                        ? 'bg-rose-300'
+                        : hasCheckedOut
+                          ? todayCheckOutTimingInfo.isEarly ||
+                            todayCheckOutTimingInfo.isOvertime
+                            ? 'bg-amber-200'
+                            : 'bg-emerald-300'
+                          : canCheckOut
+                            ? 'bg-red-400 animate-ping'
+                            : 'bg-amber-100/60'
                       }`}
                   />
                   <AutoScrollingText
@@ -3090,8 +3178,8 @@ export function TeacherAttendancePage() {
                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
-                      ? 'bg-red-500/85 text-white'
-                      : 'bg-emerald-500/85 text-white'
+                        ? 'bg-red-500/85 text-white'
+                        : 'bg-emerald-500/85 text-white'
                       }`}
                   >
                     {attendancePhase === 'CHECK_OUT'
@@ -3125,20 +3213,20 @@ export function TeacherAttendancePage() {
           {/* INDIKATOR RADIUS GPS REAL-TIME SEBELUM SELFIE */}
           <div
             className={`rounded-2xl p-3 border flex items-center justify-between gap-2.5 text-xs shadow-sm ${isLocating || distanceMeters === null
-              ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-200'
-              : isWithinRadius
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-200'
+                : isWithinRadius
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                  : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <Radio
                 size={18}
                 className={`shrink-0 ${isLocating || distanceMeters === null
-                  ? 'animate-pulse text-blue-500'
-                  : isWithinRadius
-                    ? 'text-emerald-500'
-                    : 'text-red-500'
+                    ? 'animate-pulse text-blue-500'
+                    : isWithinRadius
+                      ? 'text-emerald-500'
+                      : 'text-red-500'
                   }`}
               />
               <div className="min-w-0">
@@ -3331,8 +3419,8 @@ export function TeacherAttendancePage() {
               onClick={handleFingerprintAction}
               disabled={isSubmittingAttendance}
               className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
-                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
-                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                  ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <span className="text-sm flex items-center gap-1.5">
@@ -3431,8 +3519,8 @@ export function TeacherAttendancePage() {
                       type="button"
                       onClick={() => setLeaveCategory(item.value)}
                       className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                          ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                          : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                         }`}
                     >
                       {item.label}
@@ -3528,8 +3616,8 @@ export function TeacherAttendancePage() {
                 </label>
                 <label
                   className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                    ? 'border-emerald-500/70 bg-emerald-500/10'
-                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                      ? 'border-emerald-500/70 bg-emerald-500/10'
+                      : 'border-border hover:border-emerald-500/60 bg-muted/30'
                     }`}
                 >
                   {leaveFile ? (
@@ -3570,8 +3658,8 @@ export function TeacherAttendancePage() {
                   type="submit"
                   disabled={isSubmittingLeave || !teacher}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                      ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                     }`}
                 >
                   {isSubmittingLeave ? (
@@ -3635,8 +3723,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 {t('teacherAttendance.scopeMonthly')}
@@ -3645,8 +3733,8 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
                 {t('teacherAttendance.scopeYearly')}
@@ -3762,10 +3850,10 @@ export function TeacherAttendancePage() {
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
-                    ? 'text-red-500'
-                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : 'opacity-65'
+                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                        ? 'text-red-500'
+                        : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -3800,10 +3888,10 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                     className={`h-12 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                      : isToday
-                        ? 'border-amber-400 font-bold'
-                        : 'border-transparent'
+                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                        : isToday
+                          ? 'border-amber-400 font-bold'
+                          : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
@@ -3830,8 +3918,8 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                  ? 'bg-red-500/10 border-red-500/30'
-                  : 'bg-muted/40 border-border'
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -3981,12 +4069,12 @@ export function TeacherAttendancePage() {
                     </div>
                     <span
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                        : item.status === 'TERLAMBAT'
-                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                          : item.status === 'ALPA' || item.status === 'ALPHA'
-                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                          : item.status === 'TERLAMBAT'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                            : item.status === 'ALPA' || item.status === 'ALPHA'
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                              : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                         }`}
                     >
                       {formatStatusLabel(item.status)}
@@ -4011,8 +4099,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
@@ -4023,8 +4111,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
@@ -4059,8 +4147,8 @@ export function TeacherAttendancePage() {
               <Fingerprint
                 size={28}
                 className={`transition-transform duration-150 ${isFingerprintGlowing
-                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                  : ''
+                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                    : ''
                   }`}
               />
             </motion.button>
@@ -4070,8 +4158,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
@@ -4082,8 +4170,8 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
@@ -4117,8 +4205,8 @@ export function TeacherAttendancePage() {
                 <div className="flex items-center gap-2.5">
                   <div
                     className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${isHolidayLocked
-                      ? 'bg-rose-500/15 text-rose-500'
-                      : 'bg-emerald-500/15 text-emerald-500'
+                        ? 'bg-rose-500/15 text-rose-500'
+                        : 'bg-emerald-500/15 text-emerald-500'
                       }`}
                   >
                     {isHolidayLocked ? (
@@ -4370,7 +4458,6 @@ export function TeacherAttendancePage() {
               </div>
 
               <div className="rounded-2xl overflow-hidden bg-black aspect-square max-h-[52dvh] mx-auto w-full relative">
-
                 {capturedPreview ? (
                   <img
                     src={capturedPreview}
@@ -4400,8 +4487,8 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={() => void handleTakeSnapshot()}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                    ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                    : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                     }`}
                 >
                   <Camera size={18} className="shrink-0" />
@@ -4426,8 +4513,8 @@ export function TeacherAttendancePage() {
                     }
                     disabled={isSubmittingAttendance}
                     className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                       }`}
                   >
                     {isSubmittingAttendance ? (
