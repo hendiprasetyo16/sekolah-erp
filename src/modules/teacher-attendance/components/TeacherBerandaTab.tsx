@@ -35,6 +35,7 @@ interface TeacherBerandaTabProps {
         description: string;
     };
     schoolGeo: SchoolGeoAndSchedule | null;
+    schoolTimezone: string;
     todayRecord: AttendanceRecord | null;
     isLoadingData: boolean;
     onRefreshData: () => void;
@@ -43,9 +44,6 @@ interface TeacherBerandaTabProps {
     formattedDateWithPasaran: string;
     javaneseDateBadge: string;
     monthYearLabel: string;
-    hoursStr: string;
-    minutesStr: string;
-    secondsStr: string;
     reportStats: {
         percentage: number;
         hadir: number;
@@ -79,11 +77,48 @@ interface TeacherBerandaTabProps {
     formatStatusLabel: (status?: string | null) => string;
 }
 
+function useSchoolClockParts(schoolTimezone: string) {
+    const getParts = useCallback(() => {
+        try {
+            const parts = new Intl.DateTimeFormat('en-GB', {
+                timeZone: schoolTimezone,
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit',
+                hour12: false,
+            }).formatToParts(new Date());
+
+            return {
+                hoursStr: parts.find((p) => p.type === 'hour')?.value ?? '00',
+                minutesStr: parts.find((p) => p.type === 'minute')?.value ?? '00',
+                secondsStr: parts.find((p) => p.type === 'second')?.value ?? '00',
+            };
+        } catch {
+            const now = new Date();
+            return {
+                hoursStr: String(now.getHours()).padStart(2, '0'),
+                minutesStr: String(now.getMinutes()).padStart(2, '0'),
+                secondsStr: String(now.getSeconds()).padStart(2, '0'),
+            };
+        }
+    }, [schoolTimezone]);
+
+    const [clock, setClock] = useState(getParts);
+
+    useEffect(() => {
+        setClock(getParts());
+        const timer = window.setInterval(() => {
+            setClock(getParts());
+        }, 1000);
+        return () => window.clearInterval(timer);
+    }, [getParts]);
+
+    return clock;
+}
+
 interface DigitalClockCardProps {
     variant: 'mobile' | 'desktop';
-    hoursStr: string;
-    minutesStr: string;
-    secondsStr: string;
+    schoolTimezone: string;
     hourUnitLabel: string;
     minuteUnitLabel: string;
     secondUnitLabel: string;
@@ -91,14 +126,13 @@ interface DigitalClockCardProps {
 
 function DigitalClockCard({
     variant,
-    hoursStr,
-    minutesStr,
-    secondsStr,
+    schoolTimezone,
     hourUnitLabel,
     minuteUnitLabel,
     secondUnitLabel,
 }: DigitalClockCardProps) {
     const isMobile = variant === 'mobile';
+    const { hoursStr, minutesStr, secondsStr } = useSchoolClockParts(schoolTimezone);
 
     return (
         <div
@@ -187,6 +221,7 @@ export function TeacherBerandaTab({
     isTeacherAccountLinked,
     accountStatusHint,
     schoolGeo,
+    schoolTimezone,
     todayRecord,
     isLoadingData,
     onRefreshData,
@@ -195,9 +230,6 @@ export function TeacherBerandaTab({
     formattedDateWithPasaran,
     javaneseDateBadge,
     monthYearLabel,
-    hoursStr,
-    minutesStr,
-    secondsStr,
     reportStats,
     isHolidayLoading,
     isHoliday,
@@ -232,7 +264,6 @@ export function TeacherBerandaTab({
         setIsProfileHintOpen(false);
     }, [teacher?.id, resolvedTeacherPhotoUrl]);
 
-    // Tutup otomatis popover informasi status akun saat mengetuk area luar atau setelah 4,5 detik
     useEffect(() => {
         if (!isProfileHintOpen) return;
 
@@ -261,19 +292,16 @@ export function TeacherBerandaTab({
         };
     }, [isProfileHintOpen]);
 
-    // Identitas tampilan guru (terisolasi dari re-render jam tiap detik)
     const { displayName, avatarAlt, avatarInitial } = useMemo(() => {
         const resolvedName =
             teacher?.fullName?.trim() || fallbackUserName?.trim() || '';
         return {
-            displayName:
-                resolvedName || t('teacherAttendance.profileUnlinked'),
+            displayName: resolvedName || t('teacherAttendance.profileUnlinked'),
             avatarAlt: resolvedName || 'Guru',
             avatarInitial: (resolvedName || 'G').charAt(0).toUpperCase(),
         };
     }, [teacher?.fullName, fallbackUserName, t]);
 
-    // Jabatan utama & tugas tambahan (deduplikasi per item & anti-duplikat terhadap jabatan utama)
     const { basePositionLabel, additionalDutyText } = useMemo(() => {
         const baseLabel =
             teacher?.position?.trim() ||
@@ -349,7 +377,6 @@ export function TeacherBerandaTab({
         onNavigateView('peta');
     }, [canCheckOut, onNavigateView]);
 
-    // Status visual & teks kartu DATANG
     const checkInDisplay = useMemo(() => {
         const isHolidayBlocked =
             isHolidayLocked && !hasCheckedIn && !isOnLeaveToday;
@@ -418,7 +445,6 @@ export function TeacherBerandaTab({
         t,
     ]);
 
-    // Status visual & teks kartu PULANG
     const checkOutDisplay = useMemo(() => {
         const isHolidayBlocked = isHolidayLocked && !hasCheckedOut;
 
@@ -575,7 +601,6 @@ export function TeacherBerandaTab({
                     <div className="grid grid-cols-12 gap-3 items-stretch">
                         <div className="col-span-12 sm:col-span-8 flex flex-col justify-between gap-3">
                             <div className="flex items-start gap-3">
-                                {/* Foto Profil + Lencana Status Akun */}
                                 <div ref={profileHintRef} className="relative shrink-0 mt-0.5">
                                     <button
                                         type="button"
@@ -684,7 +709,6 @@ export function TeacherBerandaTab({
                                 </div>
                             </div>
 
-                            {/* Baris Tingkat Kehadiran (+ Jam khusus HP) */}
                             <div className="grid grid-cols-12 sm:grid-cols-1 gap-2.5 items-stretch">
                                 <div className="col-span-7 sm:col-span-1 rounded-2xl bg-white/85 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs flex flex-col justify-between">
                                     <div className="flex items-center justify-between gap-2">
@@ -733,9 +757,7 @@ export function TeacherBerandaTab({
                                 {/* JAM DIGITAL KHUSUS LAYAR HP (< 640px) */}
                                 <DigitalClockCard
                                     variant="mobile"
-                                    hoursStr={hoursStr}
-                                    minutesStr={minutesStr}
-                                    secondsStr={secondsStr}
+                                    schoolTimezone={schoolTimezone}
                                     hourUnitLabel={hourUnitLabel}
                                     minuteUnitLabel={minuteUnitLabel}
                                     secondUnitLabel={secondUnitLabel}
@@ -746,9 +768,7 @@ export function TeacherBerandaTab({
                         {/* JAM DIGITAL KHUSUS LAYAR KOMPUTER (>= 640px) */}
                         <DigitalClockCard
                             variant="desktop"
-                            hoursStr={hoursStr}
-                            minutesStr={minutesStr}
-                            secondsStr={secondsStr}
+                            schoolTimezone={schoolTimezone}
                             hourUnitLabel={hourUnitLabel}
                             minuteUnitLabel={minuteUnitLabel}
                             secondUnitLabel={secondUnitLabel}
@@ -759,7 +779,6 @@ export function TeacherBerandaTab({
 
             {/* Dua Kartu Utama: DATANG & PULANG */}
             <div className="grid grid-cols-2 gap-3.5">
-                {/* KARTU DATANG */}
                 <button
                     type="button"
                     disabled={isCheckInLocked}
@@ -826,7 +845,6 @@ export function TeacherBerandaTab({
                     </div>
                 </button>
 
-                {/* KARTU PULANG */}
                 <button
                     type="button"
                     disabled={!canCheckOut}

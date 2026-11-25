@@ -1,4 +1,5 @@
 // src/modules/teacher-attendance/components/TeacherReportTab.tsx
+import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
     Menu,
@@ -38,6 +39,7 @@ interface TeacherReportTabProps {
     selectedJavaneseMonthRange: string;
     calendarYear: number;
     setCalendarYear: (year: number) => void;
+    calendarMonth?: number;
     setCalendarMonth: (month: number) => void;
     selectedCalendarDate: string;
     setSelectedCalendarDate: (dateStr: string) => void;
@@ -68,6 +70,7 @@ export function TeacherReportTab({
     selectedJavaneseMonthRange,
     calendarYear,
     setCalendarYear,
+    calendarMonth,
     setCalendarMonth,
     selectedCalendarDate,
     setSelectedCalendarDate,
@@ -84,6 +87,35 @@ export function TeacherReportTab({
     formatStatusLabel,
 }: TeacherReportTabProps) {
     const { t } = useTranslation();
+
+    const activeMonthIndex = useMemo(() => {
+        if (typeof calendarMonth === 'number') return calendarMonth;
+        const firstDateCell = calendarDaysGrid.find((c) => Boolean(c.dateStr));
+        if (firstDateCell?.dateStr) {
+            const monthPart = Number(firstDateCell.dateStr.split('-')[1]);
+            if (!Number.isNaN(monthPart) && monthPart >= 1 && monthPart <= 12) {
+                return monthPart - 1;
+            }
+        }
+        return new Date().getMonth();
+    }, [calendarMonth, calendarDaysGrid]);
+
+    const shortMonthLabels = useMemo(() => {
+        const formatter = new Intl.DateTimeFormat('id-ID', { month: 'short' });
+        return Array.from({ length: 12 }, (_, idx) =>
+            formatter.format(new Date(2026, idx, 1)).replace('.', '')
+        );
+    }, []);
+
+    const handleQuickSelectMonth = (monthIdx: number) => {
+        setCalendarMonth(monthIdx);
+        const monthPrefix = `${calendarYear}-${String(monthIdx + 1).padStart(2, '0')}`;
+        if (todayStr.startsWith(monthPrefix)) {
+            setSelectedCalendarDate(todayStr);
+        } else {
+            setSelectedCalendarDate(`${monthPrefix}-01`);
+        }
+    };
 
     return (
         <motion.div
@@ -159,7 +191,6 @@ export function TeacherReportTab({
                 </div>
             </div>
 
-            {/* 4 Kartu Ringkasan Statistik (Responsif di layar HP sempit agar teks tidak keluar kotak) */}
             <div className="grid grid-cols-4 gap-1.5 sm:gap-2.5">
                 <div className="data-card px-1.5 py-2.5 sm:p-3 text-center min-w-0 overflow-hidden">
                     <div className="text-xl sm:text-2xl font-extrabold text-emerald-500">
@@ -243,6 +274,28 @@ export function TeacherReportTab({
                         </button>
                     </div>
                 </div>
+
+                {/* NAVIGASI CEPAT 12-BULAN SAAT MODE TAHUNAN AKTIF */}
+                {reportScope === 'yearly' && (
+                    <div className="grid grid-cols-6 sm:grid-cols-12 gap-1 p-1.5 rounded-2xl bg-muted/45 border border-border">
+                        {shortMonthLabels.map((label, idx) => {
+                            const isActive = idx === activeMonthIndex;
+                            return (
+                                <button
+                                    key={label}
+                                    type="button"
+                                    onClick={() => handleQuickSelectMonth(idx)}
+                                    className={`py-1.5 px-1 rounded-xl text-[11px] font-semibold transition ${isActive
+                                            ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                                            : 'text-foreground/75 hover:bg-muted hover:text-foreground'
+                                        }`}
+                                >
+                                    {label}
+                                </button>
+                            );
+                        })}
+                    </div>
+                )}
 
                 <div className="grid grid-cols-7 gap-1 text-center">
                     {shortDayNames.map((hari, idx) => (

@@ -1,4 +1,5 @@
 // src/modules/teacher-attendance/components/TeacherLeaveTab.tsx
+import { useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
     FileCheck2,
@@ -8,9 +9,13 @@ import {
     Upload,
     Loader2,
     Send,
+    X,
 } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
-import { MIN_REASON_LENGTH } from '../constants/teacherAttendance.constants';
+import {
+    MAX_LEAVE_FILE_BYTES,
+    MIN_REASON_LENGTH,
+} from '../constants/teacherAttendance.constants';
 import type {
     LeaveCategory,
     TeacherProfile,
@@ -62,6 +67,14 @@ export function TeacherLeaveTab({
     showToast,
 }: TeacherLeaveTabProps) {
     const { t } = useTranslation();
+    const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    const handleClearFile = () => {
+        setLeaveFile(null);
+        if (fileInputRef.current) {
+            fileInputRef.current.value = '';
+        }
+    };
 
     return (
         <motion.div
@@ -226,43 +239,62 @@ export function TeacherLeaveTab({
                         <label className="block text-xs font-semibold mb-1.5">
                             {t('teacherAttendance.leaveFileLabel')}
                         </label>
-                        <label
-                            className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                                    ? 'border-emerald-500/70 bg-emerald-500/10'
-                                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
-                                }`}
-                        >
-                            {leaveFile ? (
-                                <CheckCircle2 size={22} className="text-emerald-500 mb-1.5" />
-                            ) : (
-                                <Upload size={22} className="text-emerald-500 mb-1.5" />
+                        <div className="relative">
+                            <label
+                                className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
+                                        ? 'border-emerald-500/70 bg-emerald-500/10 pr-10'
+                                        : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                                    }`}
+                            >
+                                {leaveFile ? (
+                                    <CheckCircle2 size={22} className="text-emerald-500 mb-1.5" />
+                                ) : (
+                                    <Upload size={22} className="text-emerald-500 mb-1.5" />
+                                )}
+                                <span className="text-xs font-semibold text-center break-all">
+                                    {leaveFile
+                                        ? t('teacherAttendance.leaveFileReady', {
+                                            name: leaveFile.name,
+                                        })
+                                        : t('teacherAttendance.leaveFilePrompt')}
+                                </span>
+                                <span className="text-[11px] opacity-60 mt-0.5">
+                                    {leaveFile
+                                        ? `${(leaveFile.size / 1024).toFixed(0)} KB • ${t(
+                                            'teacherAttendance.leaveFileReplaceHint'
+                                        )}`
+                                        : t('teacherAttendance.leaveFileSizeHint')}
+                                </span>
+                                <input
+                                    ref={fileInputRef}
+                                    type="file"
+                                    accept="image/*,.pdf"
+                                    className="hidden"
+                                    onChange={(e) => {
+                                        const file = e.target.files?.[0] ?? null;
+                                        if (file && file.size > MAX_LEAVE_FILE_BYTES) {
+                                            e.target.value = '';
+                                            showToast('error', t('teacherAttendance.errFileMax2Mb'));
+                                            return;
+                                        }
+                                        setLeaveFile(file);
+                                        e.target.value = '';
+                                    }}
+                                />
+                            </label>
+
+                            {leaveFile && (
+                                <button
+                                    type="button"
+                                    onClick={handleClearFile}
+                                    aria-label="Hapus lampiran"
+                                    title="Hapus lampiran"
+                                    className="absolute top-2.5 right-2.5 p-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 transition"
+                                >
+                                    <X size={15} />
+                                </button>
                             )}
-                            <span className="text-xs font-semibold text-center">
-                                {leaveFile
-                                    ? t('teacherAttendance.leaveFileReady', {
-                                        name: leaveFile.name,
-                                    })
-                                    : t('teacherAttendance.leaveFilePrompt')}
-                            </span>
-                            <span className="text-[11px] opacity-60 mt-0.5">
-                                {leaveFile
-                                    ? t('teacherAttendance.leaveFileReplaceHint')
-                                    : t('teacherAttendance.leaveFileSizeHint')}
-                            </span>
-                            <input
-                                type="file"
-                                accept="image/*,.pdf"
-                                className="hidden"
-                                onChange={(e) => {
-                                    const file = e.target.files?.[0] ?? null;
-                                    if (file && file.size > 2 * 1024 * 1024) {
-                                        showToast('error', t('teacherAttendance.errFileMax2Mb'));
-                                        return;
-                                    }
-                                    setLeaveFile(file);
-                                }}
-                            />
-                        </label>
+                        </div>
                     </div>
 
                     <div className="pt-1">

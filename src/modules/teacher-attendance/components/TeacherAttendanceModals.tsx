@@ -1,5 +1,5 @@
 // src/modules/teacher-attendance/components/TeacherAttendanceModals.tsx
-import type { RefObject } from 'react';
+import { useEffect, type RefObject } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Lock,
@@ -16,7 +16,6 @@ import { useTranslation } from '@/hooks/useTranslation';
 import { MIN_EARLY_CHECKOUT_REASON_LENGTH } from '../constants/teacherAttendance.constants';
 
 interface TeacherAttendanceModalsProps {
-    // Holiday / Special Event Modal
     isAdminOrSuperAdmin: boolean;
     isHolidayModalOpen: boolean;
     setIsHolidayModalOpen: (open: boolean) => void;
@@ -28,7 +27,6 @@ interface TeacherAttendanceModalsProps {
     onEnableSpecialEvent: () => void;
     onDisableSpecialEvent: () => void;
 
-    // Early Checkout Confirmation Modal
     checkoutConfirmModal: {
         open: boolean;
         isEarly: boolean;
@@ -44,7 +42,6 @@ interface TeacherAttendanceModalsProps {
     onCloseCheckoutConfirmModal: () => void;
     onConfirmProceedCheckout: () => void;
 
-    // Selfie Camera Modal
     cameraModal: {
         open: boolean;
         mode: 'CHECK_IN' | 'CHECK_OUT';
@@ -95,6 +92,42 @@ export function TeacherAttendanceModals({
     onSubmitAttendance,
 }: TeacherAttendanceModalsProps) {
     const { t } = useTranslation();
+
+    const isAnyModalOpen =
+        (isHolidayModalOpen && isAdminOrSuperAdmin) ||
+        checkoutConfirmModal.open ||
+        cameraModal.open;
+
+    useEffect(() => {
+        if (!isAnyModalOpen) return;
+
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape') return;
+            if (isTogglingHolidayLock || isSubmittingAttendance) return;
+
+            if (cameraModal.open) {
+                onCloseCameraModal();
+            } else if (checkoutConfirmModal.open) {
+                onCloseCheckoutConfirmModal();
+            } else if (isHolidayModalOpen && isAdminOrSuperAdmin) {
+                setIsHolidayModalOpen(false);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [
+        isAnyModalOpen,
+        isTogglingHolidayLock,
+        isSubmittingAttendance,
+        cameraModal.open,
+        checkoutConfirmModal.open,
+        isHolidayModalOpen,
+        isAdminOrSuperAdmin,
+        onCloseCameraModal,
+        onCloseCheckoutConfirmModal,
+        setIsHolidayModalOpen,
+    ]);
 
     return (
         <>

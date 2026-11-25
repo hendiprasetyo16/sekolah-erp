@@ -1,5 +1,5 @@
 // src/modules/teacher-attendance/components/TeacherMapTab.tsx
-import type { RefObject } from 'react';
+import { useState, useEffect, useCallback, type RefObject } from 'react';
 import { motion } from 'framer-motion';
 import {
     Menu,
@@ -26,9 +26,44 @@ import type {
     TeacherProfile,
 } from '../types/teacherAttendance.types';
 
+function LiveMinuteBadge({ schoolTimezone }: { schoolTimezone: string }) {
+    const getFormattedMinute = useCallback(() => {
+        try {
+            return new Intl.DateTimeFormat('en-GB', {
+                timeZone: schoolTimezone,
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+            }).format(new Date());
+        } catch {
+            const now = new Date();
+            return `${String(now.getHours()).padStart(2, '0')}:${String(
+                now.getMinutes()
+            ).padStart(2, '0')}`;
+        }
+    }, [schoolTimezone]);
+
+    const [timeText, setTimeText] = useState(getFormattedMinute);
+
+    useEffect(() => {
+        setTimeText(getFormattedMinute());
+        const timer = window.setInterval(() => {
+            setTimeText(getFormattedMinute());
+        }, 5000);
+        return () => window.clearInterval(timer);
+    }, [getFormattedMinute]);
+
+    return (
+        <div className="text-sm font-extrabold text-slate-900 font-mono">
+            {timeText}
+        </div>
+    );
+}
+
 interface TeacherMapTabProps {
     teacher: TeacherProfile | null;
     schoolGeo: SchoolGeoAndSchedule | null;
+    schoolTimezone: string;
     todayRecord: AttendanceRecord | null;
     attendancePhase: 'CHECK_IN' | 'CHECK_OUT' | 'COMPLETED' | 'ON_LEAVE';
     formattedDateWithPasaran: string;
@@ -40,8 +75,6 @@ interface TeacherMapTabProps {
     isWithinRadius: boolean;
     onRefreshGps: () => void;
     mapContainerRef: RefObject<HTMLDivElement | null>;
-    hoursStr: string;
-    minutesStr: string;
     isCheckOutPhase: boolean;
     isSelfieRequiredForCurrentPhase: boolean;
     effectiveWorkEndTime: string;
@@ -70,6 +103,7 @@ interface TeacherMapTabProps {
 export function TeacherMapTab({
     teacher,
     schoolGeo,
+    schoolTimezone,
     todayRecord,
     attendancePhase,
     formattedDateWithPasaran,
@@ -81,8 +115,6 @@ export function TeacherMapTab({
     isWithinRadius,
     onRefreshGps,
     mapContainerRef,
-    hoursStr,
-    minutesStr,
     isCheckOutPhase,
     isSelfieRequiredForCurrentPhase,
     effectiveWorkEndTime,
@@ -257,9 +289,7 @@ export function TeacherMapTab({
                             <div className="w-8 h-8 mx-auto mb-1 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center">
                                 <Clock size={16} />
                             </div>
-                            <div className="text-sm font-extrabold text-slate-900 font-mono">
-                                {hoursStr}:{minutesStr}
-                            </div>
+                            <LiveMinuteBadge schoolTimezone={schoolTimezone} />
                             <div className="text-[11px] text-slate-500">
                                 {isCheckOutPhase
                                     ? t('teacherAttendance.metricCheckOutAt', {
@@ -311,7 +341,6 @@ export function TeacherMapTab({
                 </div>
             </div>
 
-            {/* Kartu Status & Instruksi Ketuk Tombol Sidik Jari */}
             {!teacher ? (
                 <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
                     {t('teacherAttendance.errTeacherUnlinked')}

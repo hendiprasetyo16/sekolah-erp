@@ -198,11 +198,7 @@ export function TeacherAttendancePage() {
         loadTeacherAndAttendance: attendanceData.loadTeacherAndAttendance,
     });
 
-    // Destruktur properti & handler spesifik agar dependency useEffect / useCallback granular
     const {
-        isHolidayModalOpen,
-        isTogglingHolidayLock,
-        setIsHolidayModalOpen,
         loadTeacherAndAttendance,
         setQuoteOffset,
         handleSubmitStrictLeave,
@@ -211,49 +207,9 @@ export function TeacherAttendancePage() {
     } = attendanceData;
 
     const {
-        checkoutConfirmModal,
-        closeCheckoutConfirmModal,
-        cameraModal,
-        isSubmittingAttendance,
-        closeCameraModal,
         requestGpsPosition,
         submitGpsAttendance,
     } = gpsAndCamera;
-
-    // Keyboard Escape Handler untuk Modal Aktif (tidak re-bind setiap detik)
-    useEffect(() => {
-        if (
-            !isHolidayModalOpen &&
-            !checkoutConfirmModal.open &&
-            !cameraModal.open
-        ) {
-            return;
-        }
-
-        const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape') return;
-
-            if (cameraModal.open && !isSubmittingAttendance) {
-                closeCameraModal();
-            } else if (checkoutConfirmModal.open) {
-                closeCheckoutConfirmModal();
-            } else if (isHolidayModalOpen && !isTogglingHolidayLock) {
-                setIsHolidayModalOpen(false);
-            }
-        };
-
-        window.addEventListener('keydown', handleKeyDown);
-        return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [
-        isHolidayModalOpen,
-        isTogglingHolidayLock,
-        setIsHolidayModalOpen,
-        checkoutConfirmModal.open,
-        closeCheckoutConfirmModal,
-        cameraModal.open,
-        isSubmittingAttendance,
-        closeCameraModal,
-    ]);
 
     // Callback Stabil untuk Komponen Anak
     const handleRefreshData = useCallback(() => {
@@ -436,8 +392,8 @@ export function TeacherAttendancePage() {
                     >
                         <div
                             className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                                    ? 'bg-emerald-600 text-white border-emerald-400'
-                                    : 'bg-red-600 text-white border-red-400'
+                                ? 'bg-emerald-600 text-white border-emerald-400'
+                                : 'bg-red-600 text-white border-red-400'
                                 }`}
                         >
                             <div className="flex items-center gap-2.5">
@@ -555,6 +511,7 @@ export function TeacherAttendancePage() {
                     isTeacherAccountLinked={attendanceData.isTeacherAccountLinked}
                     accountStatusHint={attendanceData.accountStatusHint}
                     schoolGeo={attendanceData.schoolGeo}
+                    schoolTimezone={attendanceData.schoolTimezone}
                     todayRecord={attendanceData.todayRecord}
                     isLoadingData={attendanceData.isLoadingData}
                     onRefreshData={handleRefreshData}
@@ -563,9 +520,6 @@ export function TeacherAttendancePage() {
                     formattedDateWithPasaran={attendanceData.formattedDateWithPasaran}
                     javaneseDateBadge={attendanceData.javaneseDateBadge}
                     monthYearLabel={attendanceData.monthYearLabel}
-                    hoursStr={attendanceData.hoursStr}
-                    minutesStr={attendanceData.minutesStr}
-                    secondsStr={attendanceData.secondsStr}
                     reportStats={attendanceData.reportStats}
                     isHolidayLoading={attendanceData.isHolidayLoading}
                     isHoliday={attendanceData.isHoliday}
@@ -596,6 +550,7 @@ export function TeacherAttendancePage() {
                 <TeacherMapTab
                     teacher={attendanceData.teacher}
                     schoolGeo={attendanceData.schoolGeo}
+                    schoolTimezone={attendanceData.schoolTimezone}
                     todayRecord={attendanceData.todayRecord}
                     attendancePhase={attendanceData.attendancePhase}
                     formattedDateWithPasaran={attendanceData.formattedDateWithPasaran}
@@ -607,8 +562,6 @@ export function TeacherAttendancePage() {
                     isWithinRadius={gpsAndCamera.isWithinRadius}
                     onRefreshGps={handleRefreshGps}
                     mapContainerRef={gpsAndCamera.mapContainerRef}
-                    hoursStr={attendanceData.hoursStr}
-                    minutesStr={attendanceData.minutesStr}
                     isCheckOutPhase={gpsAndCamera.isCheckOutPhase}
                     isSelfieRequiredForCurrentPhase={
                         gpsAndCamera.isSelfieRequiredForCurrentPhase
@@ -668,6 +621,7 @@ export function TeacherAttendancePage() {
                     selectedJavaneseMonthRange={attendanceData.selectedJavaneseMonthRange}
                     calendarYear={attendanceData.calendarYear}
                     setCalendarYear={attendanceData.setCalendarYear}
+                    calendarMonth={attendanceData.calendarMonth}
                     setCalendarMonth={attendanceData.setCalendarMonth}
                     selectedCalendarDate={attendanceData.selectedCalendarDate}
                     setSelectedCalendarDate={attendanceData.setSelectedCalendarDate}

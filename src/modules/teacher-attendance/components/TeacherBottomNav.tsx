@@ -41,6 +41,16 @@ export function TeacherBottomNav({
 }: TeacherBottomNavProps) {
     const { t } = useTranslation();
 
+    const fingerprintAriaLabel = !isOnMapView
+        ? t('teacherAttendance.titleOpenAttendanceMap')
+        : isHolidayLocked
+            ? t('teacherAttendance.toastHolidayError', {
+                reason: holidayReason,
+            })
+            : isCheckOutPhase
+                ? t('teacherAttendance.titleFingerprintCheckOut')
+                : t('teacherAttendance.titleFingerprintCheckIn');
+
     return (
         <div
             className={`fixed bottom-4 inset-x-0 z-40 px-4 pointer-events-none transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'
@@ -49,6 +59,7 @@ export function TeacherBottomNav({
             <div className="max-w-md mx-auto pointer-events-auto rounded-3xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/90 dark:border-white/15 shadow-2xl px-2 py-2 grid grid-cols-5 items-center">
                 <button
                     type="button"
+                    aria-current={activeView === 'beranda' ? 'page' : undefined}
                     onClick={() => onSelectView('beranda')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
                             ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
@@ -61,6 +72,7 @@ export function TeacherBottomNav({
 
                 <button
                     type="button"
+                    aria-current={activeView === 'laporan' ? 'page' : undefined}
                     onClick={() => onSelectView('laporan')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
                             ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
@@ -84,17 +96,8 @@ export function TeacherBottomNav({
                         onPointerDown={onTriggerFingerprintGlow}
                         onClick={onFingerprintAction}
                         className={`-mt-7 w-15 h-15 rounded-full flex items-center justify-center border-4 border-white dark:border-slate-900 transition-all duration-200 select-none ${fingerprintButtonStyle}`}
-                        title={
-                            !isOnMapView
-                                ? t('teacherAttendance.titleOpenAttendanceMap')
-                                : isHolidayLocked
-                                    ? t('teacherAttendance.toastHolidayError', {
-                                        reason: holidayReason,
-                                    })
-                                    : isCheckOutPhase
-                                        ? t('teacherAttendance.titleFingerprintCheckOut')
-                                        : t('teacherAttendance.titleFingerprintCheckIn')
-                        }
+                        title={fingerprintAriaLabel}
+                        aria-label={fingerprintAriaLabel}
                     >
                         <Fingerprint
                             size={28}
@@ -108,6 +111,7 @@ export function TeacherBottomNav({
 
                 <button
                     type="button"
+                    aria-current={activeView === 'izin' ? 'page' : undefined}
                     onClick={() => onSelectView('izin')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
                             ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
@@ -120,6 +124,7 @@ export function TeacherBottomNav({
 
                 <button
                     type="button"
+                    aria-current={activeView === 'log' ? 'page' : undefined}
                     onClick={() => onSelectView('log')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
                             ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'

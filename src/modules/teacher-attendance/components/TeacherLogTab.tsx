@@ -1,4 +1,5 @@
 // src/modules/teacher-attendance/components/TeacherLogTab.tsx
+import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { History, Menu } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -9,6 +10,8 @@ import {
     calculateLateMinutes,
     isEarlyDepartureNote,
 } from '../utils/teacherAttendance.helpers';
+
+type LogStatusFilter = 'ALL' | 'HADIR' | 'TERLAMBAT' | 'IZIN_SAKIT' | 'ALPA';
 
 interface TeacherLogTabProps {
     historyRecords: AttendanceRecord[];
@@ -32,6 +35,59 @@ export function TeacherLogTab({
     formatStatusLabel,
 }: TeacherLogTabProps) {
     const { t } = useTranslation();
+    const [activeFilter, setActiveFilter] = useState<LogStatusFilter>('ALL');
+
+    const { counts, filteredRecords } = useMemo(() => {
+        const summary = {
+            ALL: historyRecords.length,
+            HADIR: 0,
+            TERLAMBAT: 0,
+            IZIN_SAKIT: 0,
+            ALPA: 0,
+        };
+
+        const matched: AttendanceRecord[] = [];
+
+        for (const item of historyRecords) {
+            const status = (item.status ?? '').toUpperCase();
+            let bucket: Exclude<LogStatusFilter, 'ALL'> | null = null;
+
+            if (status === 'HADIR') {
+                bucket = 'HADIR';
+            } else if (status === 'TERLAMBAT') {
+                bucket = 'TERLAMBAT';
+            } else if (
+                status === 'IZIN' ||
+                status === 'SAKIT' ||
+                status === 'DINAS_LUAR'
+            ) {
+                bucket = 'IZIN_SAKIT';
+            } else if (status === 'ALPA' || status === 'ALPHA') {
+                bucket = 'ALPA';
+            }
+
+            if (bucket) {
+                summary[bucket] += 1;
+            }
+
+            if (activeFilter === 'ALL' || bucket === activeFilter) {
+                matched.push(item);
+            }
+        }
+
+        return { counts: summary, filteredRecords: matched };
+    }, [historyRecords, activeFilter]);
+
+    const filterChips: { key: LogStatusFilter; label: string }[] = [
+        { key: 'ALL', label: currentLang === 'en' ? 'All' : 'Semua' },
+        { key: 'HADIR', label: formatStatusLabel('HADIR') },
+        { key: 'TERLAMBAT', label: formatStatusLabel('TERLAMBAT') },
+        {
+            key: 'IZIN_SAKIT',
+            label: `${formatStatusLabel('IZIN')}/${formatStatusLabel('SAKIT')}`,
+        },
+        { key: 'ALPA', label: formatStatusLabel('ALPA') },
+    ];
 
     return (
         <motion.div
@@ -59,13 +115,49 @@ export function TeacherLogTab({
                 </button>
             </div>
 
+            {historyRecords.length > 0 && (
+                <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
+                    {filterChips.map((chip) => {
+                        const isSelected = activeFilter === chip.key;
+                        return (
+                            <button
+                                key={chip.key}
+                                type="button"
+                                onClick={() => setActiveFilter(chip.key)}
+                                className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap border transition ${isSelected
+                                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                                        : 'bg-muted/50 text-foreground/75 border-border hover:bg-muted'
+                                    }`}
+                            >
+                                {chip.label} ({counts[chip.key]})
+                            </button>
+                        );
+                    })}
+                </div>
+            )}
+
             {historyRecords.length === 0 ? (
                 <p className="text-xs opacity-60 text-center py-8">
                     {t('teacherAttendance.logEmpty')}
                 </p>
+            ) : filteredRecords.length === 0 ? (
+                <div className="text-center py-8 space-y-2">
+                    <p className="text-xs opacity-65">
+                        {currentLang === 'en'
+                            ? 'No attendance records match this filter.'
+                            : 'Tidak ada riwayat presensi pada kategori ini.'}
+                    </p>
+                    <button
+                        type="button"
+                        onClick={() => setActiveFilter('ALL')}
+                        className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-muted hover:bg-muted/80 transition"
+                    >
+                        {currentLang === 'en' ? 'Show All' : 'Tampilkan Semua'}
+                    </button>
+                </div>
             ) : (
                 <div className="space-y-2.5 max-h-105 overflow-y-auto pr-1">
-                    {historyRecords.map((item) => {
+                    {filteredRecords.map((item) => {
                         const isEarlyLog = isEarlyDepartureNote(item.notes);
                         const itemJv = getJavaneseDateInfo(item.date, currentLang);
                         const loggedLateMinutes =
