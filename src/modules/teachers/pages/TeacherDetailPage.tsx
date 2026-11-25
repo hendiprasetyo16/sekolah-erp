@@ -16,6 +16,7 @@ import {
   UserCheck,
   UserX,
   AlertCircle,
+  AlertTriangle,
   RefreshCw,
   Camera,
   Trash2,
@@ -55,6 +56,12 @@ import { useTeacherScope } from '@/hooks/useTeacherScope';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { formatDate, formatCurrency } from '@/utils/format';
 import { cn } from '@/utils/cn';
+
+type DeletePhotoDialogState =
+  | { type: 'ACTIVE_PHOTO' }
+  | { type: 'HISTORY_ITEM'; item: TeacherPhotoHistoryItem }
+  | { type: 'PURGE_EXPIRED' }
+  | null;
 
 /**
  * Menerjemahkan error teknis (API, Supabase, Jaringan, atau UUID tidak valid)
@@ -190,6 +197,7 @@ export function TeacherDetailPage() {
   const [avatarLoadError, setAvatarLoadError] = useState(false);
   const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null);
   const [previewModalCaption, setPreviewModalCaption] = useState<string>('');
+  const [deleteDialogState, setDeleteDialogState] = useState<DeletePhotoDialogState>(null);
 
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
 
@@ -301,6 +309,8 @@ export function TeacherDetailPage() {
         teacherId: teacher.id,
         file,
         linkedUserId: teacher.userId,
+        schoolName: school?.id === teacher.schoolId ? school.name : undefined,
+        teacherName: teacher.fullName,
       });
     },
     onSuccess: (res) => {
@@ -332,6 +342,7 @@ export function TeacherDetailPage() {
     },
     onSuccess: (res) => {
       setAvatarLoadError(false);
+      setDeleteDialogState(null);
       queryClient.invalidateQueries({ queryKey: ['teacher', id] });
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
@@ -382,6 +393,7 @@ export function TeacherDetailPage() {
     mutationFn: (item: TeacherPhotoHistoryItem) =>
       teacherService.deletePhotoHistoryItem(item),
     onSuccess: (res) => {
+      setDeleteDialogState(null);
       queryClient.invalidateQueries({
         queryKey: ['teacher-photo-history', teacher?.id],
       });
@@ -402,6 +414,7 @@ export function TeacherDetailPage() {
   const purgeExpiredMutation = useMutation({
     mutationFn: () => teacherService.purgeExpiredPhotoHistory(teacher?.schoolId),
     onSuccess: (res) => {
+      setDeleteDialogState(null);
       queryClient.invalidateQueries({
         queryKey: ['teacher-photo-history', teacher?.id],
       });
@@ -418,11 +431,43 @@ export function TeacherDetailPage() {
     },
   });
 
+  const isDeleteConfirmPending =
+    removePhotoMutation.isPending ||
+    deleteHistoryItemMutation.isPending ||
+    purgeExpiredMutation.isPending;
+
+  // Tutup modal via tombol Escape saat tidak sedang memproses penghapusan
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (previewModalUrl) {
+        setPreviewModalUrl(null);
+        return;
+      }
+      if (deleteDialogState && !isDeleteConfirmPending) {
+        setDeleteDialogState(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewModalUrl, deleteDialogState, isDeleteConfirmPending]);
+
   const handlePhotoFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
     uploadPhotoMutation.mutate(file);
+  };
+
+  const handleConfirmDeleteDialog = () => {
+    if (!deleteDialogState || isDeleteConfirmPending) return;
+    if (deleteDialogState.type === 'ACTIVE_PHOTO') {
+      removePhotoMutation.mutate();
+    } else if (deleteDialogState.type === 'HISTORY_ITEM') {
+      deleteHistoryItemMutation.mutate(deleteDialogState.item);
+    } else if (deleteDialogState.type === 'PURGE_EXPIRED') {
+      purgeExpiredMutation.mutate();
+    }
   };
 
   const isPhotoBusy = uploadPhotoMutation.isPending || removePhotoMutation.isPending;
@@ -512,6 +557,9 @@ export function TeacherDetailPage() {
     (name || '?').trim().charAt(0).toUpperCase() || '?';
 
   const hasValidPhoto = Boolean(teacher.photoUrl && !avatarLoadError);
+  const expiredHistoryCount = photoHistory.filter(
+    (item) => new Date(item.expiresAt).getTime() <= Date.now()
+  ).length;
 
   // Warna lencana status kepegawaian
   const statusColorMap: Record<string, string> = {
@@ -551,6 +599,205 @@ export function TeacherDetailPage() {
 
   return (
     <div className="w-full min-w-0 space-y-6">
+      {/* ================= DIALOG KONFIRMASI HAPUS FOTO MODERN ================= */}
+      {deleteDialogState && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-photo-dialog-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-xs"
+          onClick={() => {
+            if (!isDeleteConfirmPending) setDeleteDialogState(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card shadow-2xl transition-all"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Header Dialog */}
+            <div className="flex items-start justify-between gap-3 border-b border-border/60 px-5 pt-5 pb-4">
+              <div className="flex items-start gap-3.5">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-200 bg-rose-50 text-rose-600 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-400">
+                  <AlertTriangle className="h-5 w-5" />
+                </div>
+                <div>
+                  <h3
+                    id="delete-photo-dialog-title"
+                    className="text-base font-semibold leading-snug text-foreground"
+                  >
+                    {deleteDialogState.type === 'ACTIVE_PHOTO'
+                      ? isId
+                        ? 'Hapus Foto Profil Aktif?'
+                        : 'Remove Active Profile Photo?'
+                      : deleteDialogState.type === 'HISTORY_ITEM'
+                        ? isId
+                          ? 'Hapus Permanen Arsip Foto?'
+                          : 'Permanently Delete Archived Photo?'
+                        : isId
+                          ? 'Bersihkan Arsip Foto Kedaluwarsa?'
+                          : 'Purge Expired Archived Photos?'}
+                  </h3>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {isId
+                      ? 'Konfirmasi tindakan administrasi foto PTK'
+                      : 'Confirm teacher photo administration action'}
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                disabled={isDeleteConfirmPending}
+                onClick={() => setDeleteDialogState(null)}
+                className="h-8 w-8 shrink-0 rounded-lg text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            {/* Konten Dialog */}
+            <div className="space-y-4 px-5 py-4 text-sm">
+              {deleteDialogState.type === 'ACTIVE_PHOTO' && (
+                <>
+                  <div className="flex items-center gap-3.5 rounded-xl border border-border/70 bg-muted/40 p-3">
+                    {hasValidPhoto ? (
+                      <img
+                        src={teacher.photoUrl!}
+                        alt={teacher.fullName}
+                        className="h-14 w-14 shrink-0 rounded-full border-2 border-border object-cover shadow-xs"
+                      />
+                    ) : (
+                      <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-lg font-bold text-white">
+                        {getInitials(teacher.fullName)}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate font-semibold text-foreground">{teacher.fullName}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {teacher.position || 'Guru'} {teacher.nip ? `• NIP ${teacher.nip}` : ''}
+                      </p>
+                      <Badge
+                        variant="outline"
+                        className="mt-1.5 border-rose-200 bg-rose-50 text-[11px] text-rose-700 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-300"
+                      >
+                        {isId ? 'Foto Profil Saat Ini' : 'Current Profile Photo'}
+                      </Badge>
+                    </div>
+                  </div>
+
+                  <p className="leading-relaxed text-muted-foreground">
+                    {isId
+                      ? 'Foto profil aktif akan dihapus dari tampilan biodata guru dan akun login terkait.'
+                      : 'The active profile photo will be removed from the teacher profile and linked login account.'}
+                  </p>
+
+                  <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 p-3 text-xs leading-relaxed text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
+                    {isId
+                      ? `Sesuai kebijakan retensi sekolah (${retentionDays} hari), foto ini otomatis dipindahkan ke Arsip Histori Foto Super Admin sebelum dihapus permanen.`
+                      : `Per school retention policy (${retentionDays} days), this photo will be moved to the Super Admin Photo Archive before permanent deletion.`}
+                  </div>
+                </>
+              )}
+
+              {deleteDialogState.type === 'HISTORY_ITEM' && (
+                <>
+                  <div className="flex items-center gap-3.5 rounded-xl border border-border/70 bg-muted/40 p-3">
+                    <img
+                      src={deleteDialogState.item.photoUrl}
+                      alt="Arsip foto"
+                      className="h-16 w-16 shrink-0 rounded-xl border border-border object-cover shadow-xs"
+                    />
+                    <div className="min-w-0 flex-1 space-y-1">
+                      <p className="truncate font-semibold text-foreground">{teacher.fullName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {isId ? 'Diganti pada:' : 'Replaced at:'}{' '}
+                        <span className="font-medium text-foreground">
+                          {formatDateTimeShort(deleteDialogState.item.replacedAt)}
+                        </span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {isId ? 'Jadwal hapus otomatis:' : 'Auto-purge:'}{' '}
+                        <span className="font-medium text-foreground">
+                          {formatDateTimeShort(deleteDialogState.item.expiresAt)}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-rose-200 bg-rose-50/80 p-3 text-xs leading-relaxed text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/10 dark:text-rose-200">
+                    <span className="font-semibold">
+                      {isId ? 'Peringatan Penghapusan Permanen: ' : 'Permanent Deletion Warning: '}
+                    </span>
+                    {isId
+                      ? 'File foto ini akan dihapus secara permanen dari penyimpanan server maupun catatan histori dan tidak dapat dipulihkan kembali.'
+                      : 'This photo file will be permanently erased from server storage and history logs and cannot be recovered.'}
+                  </div>
+                </>
+              )}
+
+              {deleteDialogState.type === 'PURGE_EXPIRED' && (
+                <>
+                  <p className="leading-relaxed text-muted-foreground">
+                    {isId
+                      ? 'Sistem akan menghapus secara permanen seluruh arsip foto lama di sekolah ini yang telah melewati masa retensi.'
+                      : 'The system will permanently remove all archived photos in this school that have passed their retention period.'}
+                  </p>
+
+                  <div className="rounded-xl border border-amber-200/80 bg-amber-50/70 p-3 text-xs leading-relaxed text-amber-900 dark:border-amber-500/25 dark:bg-amber-500/10 dark:text-amber-200">
+                    {isId
+                      ? `Masa retensi aktif sekolah: ${retentionDays} hari${expiredHistoryCount > 0 ? ` (${expiredHistoryCount} arsip kedaluwarsa terdeteksi pada guru ini)` : ''}. Tindakan ini tidak dapat dibatalkan.`
+                      : `Active school retention: ${retentionDays} days${expiredHistoryCount > 0 ? ` (${expiredHistoryCount} expired item(s) detected for this teacher)` : ''}. This action cannot be undone.`}
+                  </div>
+                </>
+              )}
+            </div>
+
+            {/* Footer Aksi Dialog */}
+            <div className="flex flex-col-reverse gap-2 border-t border-border/60 bg-muted/25 px-5 py-3.5 sm:flex-row sm:justify-end">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={isDeleteConfirmPending}
+                onClick={() => setDeleteDialogState(null)}
+                className="w-full sm:w-auto"
+              >
+                {isId ? 'Batal' : 'Cancel'}
+              </Button>
+              <Button
+                type="button"
+                disabled={isDeleteConfirmPending}
+                onClick={handleConfirmDeleteDialog}
+                className="w-full bg-rose-600 text-white shadow-xs hover:bg-rose-700 sm:w-auto"
+              >
+                {isDeleteConfirmPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    {isId ? 'Menghapus...' : 'Deleting...'}
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-4 w-4" />
+                    {deleteDialogState.type === 'ACTIVE_PHOTO'
+                      ? isId
+                        ? 'Ya, Hapus Foto'
+                        : 'Yes, Remove Photo'
+                      : deleteDialogState.type === 'HISTORY_ITEM'
+                        ? isId
+                          ? 'Ya, Hapus Permanen'
+                          : 'Yes, Delete Permanently'
+                        : isId
+                          ? 'Ya, Bersihkan Sekarang'
+                          : 'Yes, Purge Now'}
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ================= MODAL PRATINJAU FOTO ================= */}
       {previewModalUrl && (
         <div
@@ -705,7 +952,7 @@ export function TeacherDetailPage() {
                       variant="ghost"
                       size="sm"
                       disabled={isPhotoBusy}
-                      onClick={() => removePhotoMutation.mutate()}
+                      onClick={() => setDeleteDialogState({ type: 'ACTIVE_PHOTO' })}
                       className="h-7 px-2 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-400 dark:hover:bg-rose-500/10"
                     >
                       {removePhotoMutation.isPending ? (
@@ -938,7 +1185,7 @@ export function TeacherDetailPage() {
                   variant="outline"
                   size="sm"
                   disabled={purgeExpiredMutation.isPending}
-                  onClick={() => purgeExpiredMutation.mutate()}
+                  onClick={() => setDeleteDialogState({ type: 'PURGE_EXPIRED' })}
                   className="h-7 w-full justify-center bg-background text-xs"
                 >
                   {purgeExpiredMutation.isPending ? (
@@ -1023,7 +1270,9 @@ export function TeacherDetailPage() {
                               variant="ghost"
                               size="icon"
                               disabled={deleteHistoryItemMutation.isPending}
-                              onClick={() => deleteHistoryItemMutation.mutate(item)}
+                              onClick={() =>
+                                setDeleteDialogState({ type: 'HISTORY_ITEM', item })
+                              }
                               title={isId ? 'Hapus permanen' : 'Delete permanently'}
                               className="h-7 w-7 shrink-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-400 dark:hover:bg-rose-500/10"
                             >

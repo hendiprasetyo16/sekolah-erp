@@ -79,6 +79,38 @@ const assertValidUuid = (id: string, label = 'ID guru'): string => {
 };
 
 // ============================================================================
+// HELPER PENAMAAN FOLDER & FILE STORAGE (URL-SAFE SLUG + WAKTU WIB)
+// ============================================================================
+const slugifyStorageSegment = (raw?: string | null, fallback = 'item'): string => {
+  if (!raw || typeof raw !== 'string') return fallback;
+  const cleaned = raw
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60)
+    .replace(/-+$/g, '');
+  return cleaned || fallback;
+};
+
+const formatJakartaFileTimestamp = (date = new Date()): string => {
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date);
+
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+  return `${get('year')}${get('month')}${get('day')}-${get('hour')}${get('minute')}${get('second')}`;
+};
+
+// ============================================================================
 // HELPER KOMPRESI & VALIDASI FOTO PROFIL PTK
 // ============================================================================
 const compressTeacherPhotoFile = async (
@@ -857,13 +889,49 @@ export const teacherService = {
     schoolId: string;
     teacherId: string;
     file: File;
+    schoolName?: string | null;
+    teacherName?: string | null;
   }): Promise<{ publicUrl: string; storagePath: string }> {
     const validSchoolId = assertValidUuid(params.schoolId, 'Identitas sekolah');
     const validTeacherId = assertValidUuid(params.teacherId, 'ID guru');
 
+    const authSchool = useAuthStore.getState().school;
+    let resolvedSchoolName =
+      params.schoolName?.trim() ||
+      (authSchool?.id === validSchoolId ? authSchool.name?.trim() : '') ||
+      '';
+    let resolvedTeacherName = params.teacherName?.trim() || '';
+
+    if (!resolvedSchoolName) {
+      const { data: schoolRow } = await supabase
+        .from('schools')
+        .select('name')
+        .eq('id', validSchoolId)
+        .maybeSingle();
+      resolvedSchoolName = schoolRow?.name?.trim() || '';
+    }
+
+    if (!resolvedTeacherName) {
+      const { data: teacherRow } = await supabase
+        .from('teachers')
+        .select('fullName')
+        .eq('id', validTeacherId)
+        .maybeSingle();
+      resolvedTeacherName = teacherRow?.fullName?.trim() || '';
+    }
+
+    const schoolFolder = slugifyStorageSegment(
+      resolvedSchoolName,
+      `sekolah-${validSchoolId.slice(0, 8).toLowerCase()}`
+    );
+    const teacherNameSlug = slugifyStorageSegment(resolvedTeacherName, 'guru');
+    const teacherFolder = `${teacherNameSlug}_${validTeacherId.slice(0, 6).toLowerCase()}`;
+
     const { blob, contentType, extension } = await compressTeacherPhotoFile(params.file);
-    const randomSuffix = Math.random().toString(36).slice(2, 10);
-    const storagePath = `${validSchoolId}/${validTeacherId}/${Date.now()}-${randomSuffix}.${extension}`;
+    const timestamp = formatJakartaFileTimestamp();
+    const shortUniqueSuffix = Math.random().toString(36).slice(2, 5);
+    const fileName = `${teacherNameSlug}_${timestamp}-${shortUniqueSuffix}.${extension}`;
+    const storagePath = `${schoolFolder}/${teacherFolder}/${fileName}`;
 
     const { error: uploadError } = await supabase.storage
       .from(TEACHER_PHOTOS_BUCKET)
@@ -936,11 +1004,15 @@ export const teacherService = {
     teacherId: string;
     file: File;
     linkedUserId?: string | null;
+    schoolName?: string | null;
+    teacherName?: string | null;
   }): Promise<ApiResponse<UpdateTeacherPhotoRpcResponse>> {
     const { publicUrl } = await this.uploadTeacherPhoto({
       schoolId: params.schoolId,
       teacherId: params.teacherId,
       file: params.file,
+      schoolName: params.schoolName,
+      teacherName: params.teacherName,
     });
 
     return this.updateTeacherPhoto(params.teacherId, publicUrl, params.linkedUserId);
