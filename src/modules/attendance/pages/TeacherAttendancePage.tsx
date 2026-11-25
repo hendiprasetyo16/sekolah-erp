@@ -2720,15 +2720,15 @@ export function TeacherAttendancePage() {
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedOut
-                        ? 'bg-rose-300'
-                        : hasCheckedOut
-                          ? todayCheckOutTimingInfo.isEarly ||
-                            todayCheckOutTimingInfo.isOvertime
-                            ? 'bg-amber-200'
-                            : 'bg-emerald-300'
-                          : canCheckOut
-                            ? 'bg-red-400 animate-ping'
-                            : 'bg-amber-100/60'
+                      ? 'bg-rose-300'
+                      : hasCheckedOut
+                        ? todayCheckOutTimingInfo.isEarly ||
+                          todayCheckOutTimingInfo.isOvertime
+                          ? 'bg-amber-200'
+                          : 'bg-emerald-300'
+                        : canCheckOut
+                          ? 'bg-red-400 animate-ping'
+                          : 'bg-amber-100/60'
                       }`}
                   />
                   <AutoScrollingText
