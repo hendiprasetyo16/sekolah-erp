@@ -35,7 +35,21 @@ const ALLOWED_MIME_TYPES = [
     'image/svg+xml',
 ];
 
+const MIME_TO_EXT: Record<string, string> = {
+    'image/png': 'png',
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/webp': 'webp',
+    'image/svg+xml': 'svg',
+};
+
 type UploadTarget = 'logo' | 'signature' | 'stamp';
+
+const TARGET_FILE_PREFIX: Record<UploadTarget, string> = {
+    logo: 'logo-sekolah',
+    signature: 'ttd-kepala-sekolah',
+    stamp: 'stempel-sekolah',
+};
 
 interface SchoolBrandingRow {
     id: string;
@@ -45,6 +59,38 @@ interface SchoolBrandingRow {
     principalNip: string | null;
     principalSignatureUrl: string | null;
     schoolStampUrl: string | null;
+}
+
+// ============================================================================
+// HELPER PENAMAAN FOLDER & FILE STORAGE (URL-SAFE SLUG + WAKTU WIB)
+// ============================================================================
+function slugifyStorageSegment(raw?: string | null, fallback = 'item'): string {
+    if (!raw || typeof raw !== 'string') return fallback;
+    const cleaned = raw
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 60)
+        .replace(/-+$/g, '');
+    return cleaned || fallback;
+}
+
+function formatJakartaFileTimestamp(date = new Date()): string {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Asia/Jakarta',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+    }).formatToParts(date);
+
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '00';
+    return `${get('year')}${get('month')}${get('day')}-${get('hour')}${get('minute')}${get('second')}`;
 }
 
 /**
@@ -93,6 +139,7 @@ export function SchoolBrandingTab() {
     const [deleteTarget, setDeleteTarget] = useState<UploadTarget | null>(null);
     const [isDeletingAsset, setIsDeletingAsset] = useState<boolean>(false);
 
+    const [schoolName, setSchoolName] = useState<string>(initialSchool?.name ?? '');
     const [logoUrl, setLogoUrl] = useState<string>(initialSchool?.logoUrl ?? '');
     const [principalName, setPrincipalName] = useState<string>(initialSchool?.principalName ?? '');
     const [principalNip, setPrincipalNip] = useState<string>(initialSchool?.principalNip ?? '');
@@ -134,6 +181,7 @@ export function SchoolBrandingTab() {
                 if (!mounted || !data) return;
 
                 const row = data as SchoolBrandingRow;
+                setSchoolName(row.name ?? '');
                 setLogoUrl(row.logoUrl ?? '');
                 setPrincipalName(row.principalName ?? '');
                 setPrincipalNip(row.principalNip ?? '');
@@ -200,14 +248,37 @@ export function SchoolBrandingTab() {
 
         setUploadingType(target);
         try {
-            const ext = file.name.split('.').pop()?.toLowerCase() || 'png';
-            const filePath = `${schoolId}/${target}-${Date.now()}.${ext}`;
+            let resolvedSchoolName = schoolName.trim() || school?.name?.trim() || '';
+            if (!resolvedSchoolName) {
+                const { data: schoolRow } = await supabase
+                    .from('schools')
+                    .select('name')
+                    .eq('id', schoolId)
+                    .maybeSingle();
+                resolvedSchoolName = schoolRow?.name?.trim() || '';
+                if (resolvedSchoolName) {
+                    setSchoolName(resolvedSchoolName);
+                }
+            }
+
+            const schoolFolder = slugifyStorageSegment(
+                resolvedSchoolName,
+                `sekolah-${schoolId.slice(0, 8).toLowerCase()}`
+            );
+            const ext =
+                MIME_TO_EXT[file.type] ||
+                file.name.split('.').pop()?.toLowerCase() ||
+                'png';
+            const timestamp = formatJakartaFileTimestamp();
+            const shortUniqueSuffix = Math.random().toString(36).slice(2, 5);
+            const fileName = `${TARGET_FILE_PREFIX[target]}_${timestamp}-${shortUniqueSuffix}.${ext}`;
+            const filePath = `${schoolFolder}/${fileName}`;
 
             const { error: uploadError } = await supabase.storage
                 .from(STORAGE_BUCKET)
                 .upload(filePath, file, {
                     cacheControl: '3600',
-                    upsert: true,
+                    upsert: false,
                     contentType: file.type,
                 });
 
