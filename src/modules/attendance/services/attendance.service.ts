@@ -5,6 +5,7 @@ import type {
   AttendanceStatus,
   AttendanceSummary,
   ClassStudentAttendanceRow,
+  DailyQuoteRow,
   GpsAttendanceRpcResponse,
   HolidayCategoryType,
   NationalHolidayRow,
@@ -12,6 +13,7 @@ import type {
   SchoolCoordinates,
   SchoolSpecialEvent,
   SchoolWaConfig,
+  SpecialEventTargetType,
   StudentAttendance,
   StudentWaRecipientResult,
   SubmitTeacherGpsAttendanceParams,
@@ -24,10 +26,7 @@ import type {
 import { getSchoolDateString, isAfterDeadline } from './gps.utils';
 import { dispatchStudentAttendanceWhatsApp } from './whatsappService';
 
-// ============================================================================
-// PARAMETER KONFIGURASI LAYANAN PRESENSI
-// ============================================================================
-const SIGNED_URL_EXPIRES_SECONDS = 3600; // Masa berlaku URL foto privat (1 jam)
+const SIGNED_URL_EXPIRES_SECONDS = 3600;
 const SELFIE_BUCKET = 'attendance-selfies';
 const ATTACHMENT_BUCKET = 'attendance-attachments';
 
@@ -208,7 +207,6 @@ const ATTENDANCE_BASE_COLUMNS = `
   securityFlags, deviceTelemetry, createdAt, updatedAt
 `;
 
-// Kolom cadangan minimal jika sebagian kolom telemetri belum ada di tabel attendances
 const ATTENDANCE_FALLBACK_COLUMNS = `
   id, schoolId, studentId, teacherId, type, date, status,
   notes, recordedBy, checkInTime, time, checkOutTime, createdAt, updatedAt
@@ -220,7 +218,7 @@ function formatTimeInTimezone(date: Date, timeZone: string): string {
       timeZone,
       hour: '2-digit',
       minute: '2-digit',
-      hour12: false,
+      hourCycle: 'h23',
     }).format(date);
   } catch {
     return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
@@ -229,7 +227,7 @@ function formatTimeInTimezone(date: Date, timeZone: string): string {
 
 export const attendanceService = {
   // ==========================================================================
-  // 1. KONFIGURASI SEKOLAH & PROFIL GURU (SELARAS KOLOM SQL v20.2)
+  // 1. KONFIGURASI SEKOLAH & PROFIL GURU (SELARAS KOLOM SQL v22.2)
   // ==========================================================================
 
   async getSchoolCoordinates(schoolId: string): Promise<SchoolCoordinates> {
@@ -304,10 +302,6 @@ export const attendanceService = {
     if (error) throw error;
   },
 
-  /**
-   * Mencari profil Guru/PTK aktif berdasarkan userId (utama),
-   * dengan fallback ke email atau fullName jika belum tertaut.
-   */
   async getTeacherProfileByUser(params: {
     schoolId: string;
     userId: string;
@@ -582,7 +576,6 @@ export const attendanceService = {
 
     if (error) throw error;
 
-    // Kirim notifikasi WhatsApp secara non-blocking di latar belakang
     const timeFormatted = formatTimeInTimezone(
       now,
       schoolCfg.settings.timezone
@@ -648,7 +641,6 @@ export const attendanceService = {
 
     if (error) throw error;
 
-    // Kirim notifikasi WhatsApp kepulangan secara non-blocking
     const timeFormatted = formatTimeInTimezone(
       now,
       schoolCfg.settings.timezone
@@ -815,6 +807,8 @@ export const attendanceService = {
   async getStudentAttendances(params: {
     schoolId: string;
     date?: string;
+    startDate?: string;
+    endDate?: string;
     classId?: string;
     studentId?: string;
     status?: AttendanceStatus;
@@ -824,6 +818,8 @@ export const attendanceService = {
     const {
       schoolId,
       date,
+      startDate,
+      endDate,
       classId,
       studentId,
       status,
@@ -833,8 +829,6 @@ export const attendanceService = {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    // Gunakan left join students(...) saat tanpa filter classId agar data presensi
-    // tidak hilang jika relasi profil siswa dibatasi RLS
     const studentRelation = classId ? 'students!inner' : 'students';
 
     const buildQuery = (columns: string) => {
@@ -852,9 +846,12 @@ export const attendanceService = {
         .eq('schoolId', schoolId)
         .eq('type', 'SISWA')
         .range(from, to)
+        .order('date', { ascending: false })
         .order('createdAt', { ascending: false });
 
       if (date) q = q.eq('date', date);
+      if (startDate) q = q.gte('date', startDate);
+      if (endDate) q = q.lte('date', endDate);
       if (studentId) q = q.eq('studentId', studentId);
       if (status) q = q.eq('status', status);
       if (classId) q = q.eq('students.classId', classId);
@@ -870,7 +867,6 @@ export const attendanceService = {
       count = fallbackRes.count;
     }
 
-    // Konversi melalui unknown agar TypeScript tidak menolak ParserError dari string select dinamis
     const typedRows = (data ?? []) as unknown as StudentAttendanceQueryRow[];
     const mapped: StudentAttendance[] = typedRows.map((row) => {
       const studentObj = Array.isArray(row.students)
@@ -943,7 +939,7 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 5. PRESENSI GPS GURU VIA SERVER RPC v20.2 & PENGAJUAN IZIN
+  // 5. PRESENSI GPS GURU VIA SERVER RPC v22.2 & PENGAJUAN IZIN
   // ==========================================================================
 
   async submitTeacherGpsAttendance(
@@ -1101,14 +1097,22 @@ export const attendanceService = {
     schoolId: string;
     attendanceId: string;
     decision: 'APPROVED' | 'REJECTED';
+    approvedBy?: string | null;
     notes?: string;
   }): Promise<void> {
     const updatePayload: {
       approvalStatus: AttendanceApprovalStatus;
+      approvedBy?: string | null;
+      approvedAt: string;
       notes?: string;
     } = {
       approvalStatus: params.decision,
+      approvedAt: new Date().toISOString(),
     };
+
+    if (params.approvedBy !== undefined) {
+      updatePayload.approvedBy = params.approvedBy;
+    }
 
     if (params.notes !== undefined) {
       updatePayload.notes = params.notes.trim();
@@ -1126,6 +1130,8 @@ export const attendanceService = {
   async getTeacherAttendances(params: {
     schoolId: string;
     date?: string;
+    startDate?: string;
+    endDate?: string;
     teacherId?: string;
     status?: AttendanceStatus;
     approvalStatus?: AttendanceApprovalStatus;
@@ -1135,6 +1141,8 @@ export const attendanceService = {
     const {
       schoolId,
       date,
+      startDate,
+      endDate,
       teacherId,
       status,
       approvalStatus,
@@ -1144,8 +1152,6 @@ export const attendanceService = {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    // Gunakan left join teachers(...) agar data presensi guru tetap muncul
-    // meskipun relasi tabel teachers dibatasi RLS
     const buildQuery = (columns: string) => {
       let q = supabase
         .from('attendances')
@@ -1159,9 +1165,12 @@ export const attendanceService = {
         .eq('schoolId', schoolId)
         .eq('type', 'GURU')
         .range(from, to)
+        .order('date', { ascending: false })
         .order('createdAt', { ascending: false });
 
       if (date) q = q.eq('date', date);
+      if (startDate) q = q.gte('date', startDate);
+      if (endDate) q = q.lte('date', endDate);
       if (teacherId) q = q.eq('teacherId', teacherId);
       if (status) q = q.eq('status', status);
       if (approvalStatus) q = q.eq('approvalStatus', approvalStatus);
@@ -1177,7 +1186,6 @@ export const attendanceService = {
       count = fallbackRes.count;
     }
 
-    // Konversi melalui unknown agar TypeScript tidak menolak ParserError dari string select dinamis
     const typedRows = (data ?? []) as unknown as TeacherAttendanceQueryRow[];
     const mapped: TeacherAttendance[] = typedRows.map((row) => {
       const teacherObj = Array.isArray(row.teachers)
@@ -1263,7 +1271,7 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 6. RINGKASAN STATISTIK HARIAN & PENCARIAN KIOSK
+  // 6. RINGKASAN STATISTIK HARIAN, QUOTES & PENCARIAN KIOSK
   // ==========================================================================
 
   async getSummary(schoolId: string, date: string): Promise<AttendanceSummary> {
@@ -1350,6 +1358,18 @@ export const attendanceService = {
     };
   },
 
+  async getActiveDailyQuotes(schoolId: string): Promise<DailyQuoteRow[]> {
+    const { data, error } = await supabase
+      .from('daily_quotes')
+      .select('id, schoolId, quote, author, isActive, createdBy, createdAt, updatedAt')
+      .or(`schoolId.is.null,schoolId.eq.${schoolId}`)
+      .eq('isActive', true)
+      .order('createdAt', { ascending: false });
+
+    if (error) throw error;
+    return (data ?? []) as DailyQuoteRow[];
+  },
+
   async findStudentByNisOrNisn(schoolId: string, code: string) {
     const cleanCode = code.trim().replace(/[^a-zA-Z0-9-]/g, '');
     if (!cleanCode) return null;
@@ -1367,7 +1387,7 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 7. KELOLA HARI LIBUR & KEGIATAN KHUSUS SEKOLAH
+  // 7. KELOLA HARI LIBUR & KEGIATAN KHUSUS SEKOLAH (SQL v22.2)
   // ==========================================================================
 
   async getNationalHolidays(
@@ -1459,7 +1479,9 @@ export const attendanceService = {
 
     const { data, error } = await supabase
       .from('school_special_events')
-      .select('id, schoolId, eventDate, reason, isActive, createdAt, updatedAt')
+      .select(
+        'id, schoolId, eventDate, reason, targetType, isActive, createdBy, createdAt, updatedAt'
+      )
       .eq('schoolId', schoolId)
       .gte('eventDate', startDate)
       .lte('eventDate', endDate)
@@ -1473,9 +1495,12 @@ export const attendanceService = {
     schoolId: string;
     eventDate: string;
     reason: string;
+    targetType?: SpecialEventTargetType;
     isActive?: boolean;
     createdBy?: string;
   }): Promise<SchoolSpecialEvent> {
+    const targetType: SpecialEventTargetType = payload.targetType ?? 'ALL';
+
     const { data, error } = await supabase
       .from('school_special_events')
       .upsert(
@@ -1483,10 +1508,11 @@ export const attendanceService = {
           schoolId: payload.schoolId,
           eventDate: payload.eventDate,
           reason: payload.reason.trim(),
+          targetType,
           isActive: payload.isActive ?? true,
           createdBy: payload.createdBy ?? null,
         },
-        { onConflict: 'schoolId,eventDate' }
+        { onConflict: 'schoolId,eventDate,targetType' }
       )
       .select()
       .single();
@@ -1524,7 +1550,7 @@ export const attendanceService = {
   },
 
   // ==========================================================================
-  // 8. WHATSAPP GATEWAY LOGS & KONFIGURASI (SKEMA SQL v20.2)
+  // 8. WHATSAPP GATEWAY LOGS & KONFIGURASI (SKEMA SQL v22.2)
   // ==========================================================================
 
   async getSchoolWaConfig(schoolId: string): Promise<SchoolWaConfig | null> {

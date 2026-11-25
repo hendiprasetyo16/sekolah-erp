@@ -42,10 +42,11 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
 }
 
 export function DailyQuotesManagePage() {
-    const { user, school } = useAuthStore();
-    const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-    const isAdmin = user?.role === 'ADMIN';
+    const { user, school, hasAnyRole } = useAuthStore();
+    const isSuperAdmin = hasAnyRole(['SUPER_ADMIN']);
+    const isAdmin = hasAnyRole(['ADMIN']);
     const canManage = isSuperAdmin || isAdmin;
+    const activeSchoolId = school?.id || user?.schoolId || '';
 
     const [quotes, setQuotes] = useState<DailyQuoteItem[]>([]);
     const [schools, setSchools] = useState<Array<{ id: string; name: string }>>([]);
@@ -75,7 +76,7 @@ export function DailyQuotesManagePage() {
 
     useEffect(() => {
         if (!isSuperAdmin) {
-            if (school?.id) setTargetSchoolId(school.id);
+            if (activeSchoolId) setTargetSchoolId(activeSchoolId);
             return;
         }
 
@@ -86,19 +87,21 @@ export function DailyQuotesManagePage() {
             .then(({ data }) => {
                 setSchools(data ?? []);
             });
-    }, [isSuperAdmin, school?.id]);
+    }, [isSuperAdmin, activeSchoolId]);
 
     const loadQuotes = useCallback(async () => {
         if (!canManage) return;
+        if (!isSuperAdmin && !activeSchoolId) return;
+
         setIsLoading(true);
         try {
             let query = supabase
                 .from('daily_quotes')
-                .select('*')
+                .select('id, schoolId, quote, author, isActive, createdAt')
                 .order('createdAt', { ascending: false });
 
-            if (!isSuperAdmin && school?.id) {
-                query = query.or(`schoolId.eq.${school.id},schoolId.is.null`);
+            if (!isSuperAdmin && activeSchoolId) {
+                query = query.or(`schoolId.eq.${activeSchoolId},schoolId.is.null`);
             }
 
             const { data, error } = await query;
@@ -115,10 +118,10 @@ export function DailyQuotesManagePage() {
         } finally {
             setIsLoading(false);
         }
-    }, [canManage, isSuperAdmin, school?.id]);
+    }, [canManage, isSuperAdmin, activeSchoolId]);
 
     useEffect(() => {
-        loadQuotes();
+        void loadQuotes();
     }, [loadQuotes]);
 
     const resetForm = () => {
@@ -126,7 +129,7 @@ export function DailyQuotesManagePage() {
         setQuoteText('');
         setAuthorText('');
         setIsActive(true);
-        setTargetSchoolId(isSuperAdmin ? 'GLOBAL' : school?.id || '');
+        setTargetSchoolId(isSuperAdmin ? 'GLOBAL' : activeSchoolId);
     };
 
     const handleEditClick = (item: DailyQuoteItem) => {
@@ -145,16 +148,21 @@ export function DailyQuotesManagePage() {
             return;
         }
 
+        const resolvedSchoolId = isSuperAdmin
+            ? targetSchoolId === 'GLOBAL'
+                ? null
+                : targetSchoolId
+            : activeSchoolId;
+
+        if (!isSuperAdmin && !resolvedSchoolId) {
+            showToast('error', 'Identitas sekolah belum ditemukan. Muat ulang halaman.');
+            return;
+        }
+
         setIsSaving(true);
         try {
-            const resolvedSchoolId = isSuperAdmin
-                ? targetSchoolId === 'GLOBAL'
-                    ? null
-                    : targetSchoolId
-                : school?.id ?? null;
-
             if (editingId) {
-                const { error } = await supabase
+                let updateQuery = supabase
                     .from('daily_quotes')
                     .update({
                         quote: quoteText.trim(),
@@ -164,6 +172,11 @@ export function DailyQuotesManagePage() {
                     })
                     .eq('id', editingId);
 
+                if (!isSuperAdmin && activeSchoolId) {
+                    updateQuery = updateQuery.eq('schoolId', activeSchoolId);
+                }
+
+                const { error } = await updateQuery;
                 if (error) throw error;
                 showToast('success', 'Kata Hari Ini berhasil diperbarui!');
             } else {
@@ -182,10 +195,7 @@ export function DailyQuotesManagePage() {
             resetForm();
             await loadQuotes();
         } catch (err: unknown) {
-            showToast(
-                'error',
-                getErrorMessage(err, 'Gagal menyimpan Kata Hari Ini.')
-            );
+            showToast('error', getErrorMessage(err, 'Gagal menyimpan Kata Hari Ini.'));
         } finally {
             setIsSaving(false);
         }
@@ -198,11 +208,16 @@ export function DailyQuotesManagePage() {
         }
 
         try {
-            const { error } = await supabase
+            let toggleQuery = supabase
                 .from('daily_quotes')
                 .update({ isActive: !item.isActive })
                 .eq('id', item.id);
 
+            if (!isSuperAdmin && activeSchoolId) {
+                toggleQuery = toggleQuery.eq('schoolId', activeSchoolId);
+            }
+
+            const { error } = await toggleQuery;
             if (error) throw error;
             showToast(
                 'success',
@@ -210,10 +225,7 @@ export function DailyQuotesManagePage() {
             );
             await loadQuotes();
         } catch (err: unknown) {
-            showToast(
-                'error',
-                getErrorMessage(err, 'Gagal mengubah status kutipan.')
-            );
+            showToast('error', getErrorMessage(err, 'Gagal mengubah status kutipan.'));
         }
     };
 
@@ -229,11 +241,16 @@ export function DailyQuotesManagePage() {
         if (!deleteTarget) return;
         setIsDeleting(true);
         try {
-            const { error } = await supabase
+            let deleteQuery = supabase
                 .from('daily_quotes')
                 .delete()
                 .eq('id', deleteTarget.id);
 
+            if (!isSuperAdmin && activeSchoolId) {
+                deleteQuery = deleteQuery.eq('schoolId', activeSchoolId);
+            }
+
+            const { error } = await deleteQuery;
             if (error) throw error;
             showToast('success', 'Kutipan berhasil dihapus.');
             if (editingId === deleteTarget.id) resetForm();
@@ -277,7 +294,7 @@ export function DailyQuotesManagePage() {
                 </div>
                 <button
                     type="button"
-                    onClick={loadQuotes}
+                    onClick={() => void loadQuotes()}
                     disabled={isLoading}
                     className="btn-secondary"
                 >
@@ -468,7 +485,7 @@ export function DailyQuotesManagePage() {
                                                     <div className="flex items-center gap-1 shrink-0">
                                                         <button
                                                             type="button"
-                                                            onClick={() => handleToggleActive(item)}
+                                                            onClick={() => void handleToggleActive(item)}
                                                             className="p-1.5 rounded-lg hover:bg-muted transition"
                                                             title={
                                                                 item.isActive
@@ -530,8 +547,8 @@ export function DailyQuotesManagePage() {
                             <div>
                                 <h3 className="font-bold text-base">Hapus Kutipan?</h3>
                                 <p className="text-xs opacity-75 mt-1 leading-relaxed">
-                                    Kutipan “{deleteTarget.quote}” akan dihapus secara
-                                    permanen dari daftar Kata Hari Ini.
+                                    Kutipan “{deleteTarget.quote}” akan dihapus secara permanen
+                                    dari daftar Kata Hari Ini.
                                 </p>
                             </div>
                         </div>

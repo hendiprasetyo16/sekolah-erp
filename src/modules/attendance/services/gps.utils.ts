@@ -1,6 +1,6 @@
 // src/modules/attendance/services/gps.utils.ts
 /**
- * GPS, Timezone & Image Compression Utility (Selaras Skema SQL v20.2)
+ * GPS, Timezone & Image Compression Utility (Selaras Skema SQL v22.2)
  */
 
 export interface GpsPosition {
@@ -12,9 +12,6 @@ export interface GpsPosition {
   isMock: boolean;
 }
 
-/**
- * Mengambil tanggal sesuai zona waktu sekolah (default 'Asia/Jakarta') dalam format 'YYYY-MM-DD'.
- */
 export function getSchoolDateString(
   date: Date = new Date(),
   timeZone: string = 'Asia/Jakarta'
@@ -35,17 +32,10 @@ export function getSchoolDateString(
   }
 }
 
-/**
- * Alias kompatibilitas untuk pengambilan tanggal lokal format 'YYYY-MM-DD'
- */
 export function getLocalDateString(date: Date = new Date()): string {
   return getSchoolDateString(date, 'Asia/Jakarta');
 }
 
-/**
- * Mengecek apakah waktu saat ini sudah melewati batas jam masuk + toleransi (menit)
- * sesuai zona waktu sekolah (default 'Asia/Jakarta').
- */
 export function isAfterDeadline(
   deadline: string = '07:30',
   now: Date = new Date(),
@@ -65,12 +55,13 @@ export function isAfterDeadline(
     timeZone,
     hour: '2-digit',
     minute: '2-digit',
-    hour12: false,
+    hourCycle: 'h23',
   }).formatToParts(now);
 
-  const curHour = Number(
+  const rawHour = Number(
     parts.find((p) => p.type === 'hour')?.value ?? now.getHours()
   );
+  const curHour = rawHour % 24;
   const curMin = Number(
     parts.find((p) => p.type === 'minute')?.value ?? now.getMinutes()
   );
@@ -79,10 +70,6 @@ export function isAfterDeadline(
   return currentTotalMinutes > totalDeadlineMinutes;
 }
 
-/**
- * Kompres foto selfie dari <video> dengan efek mirror horizontal,
- * batas ukuran < 450 KB (aman untuk bucket 500 KB), dan pembersihan memori WebView APK.
- */
 export async function compressSelfieFromVideo(
   videoElement: HTMLVideoElement,
   maxWidth: number = 720,
@@ -102,7 +89,6 @@ export async function compressSelfieFromVideo(
   if (!ctx) throw new Error('Gagal memproses gambar kamera.');
 
   try {
-    // Mirror horizontal agar hasil selfie natural seperti cermin
     ctx.translate(width, 0);
     ctx.scale(-1, 1);
     ctx.drawImage(videoElement, 0, 0, width, height);
@@ -129,21 +115,17 @@ export async function compressSelfieFromVideo(
 
     return resultBlob;
   } finally {
-    // Bebaskan buffer memori canvas agar WebView Android APK tidak bocor memori
     canvas.width = 0;
     canvas.height = 0;
   }
 }
 
-/**
- * Memvalidasi & mengompresi file lampiran izin/sakit (gambar dikompres, PDF dicek ukuran <= 2 MB)
- */
 export async function prepareAttachmentFile(file: File): Promise<{
   blob: Blob;
   extension: string;
   contentType: string;
 }> {
-  const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
+  const MAX_BYTES = 2 * 1024 * 1024;
 
   if (file.type === 'application/pdf') {
     if (file.size > MAX_BYTES) {
@@ -216,17 +198,13 @@ export async function prepareAttachmentFile(file: File): Promise<{
   }
 }
 
-/**
- * Kalkulasi jarak antara dua titik koordinat (Rumus Haversine)
- * @returns jarak dalam METER
- */
 export function calculateDistance(
   lat1: number,
   lon1: number,
   lat2: number,
   lon2: number
 ): number {
-  const R = 6371000; // Radius bumi dalam meter (selaras dengan RPC SQL)
+  const R = 6371000;
   const toRad = (deg: number) => (deg * Math.PI) / 180;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
@@ -240,9 +218,6 @@ export function calculateDistance(
   return R * c;
 }
 
-/**
- * Deteksi heuristik Mock GPS di Browser (selaras ambang batas RPC <= 1.0m)
- */
 export function detectMockGps(position: GeolocationPosition): boolean {
   const { coords } = position;
 
@@ -259,9 +234,6 @@ export function detectMockGps(position: GeolocationPosition): boolean {
   return false;
 }
 
-/**
- * Mendapatkan posisi GPS tunggal dengan validasi akurasi & deteksi mock
- */
 export function getCurrentPosition(
   options?: PositionOptions
 ): Promise<GpsPosition> {

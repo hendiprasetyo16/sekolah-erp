@@ -1,6 +1,10 @@
 // src/modules/attendance/types/attendance.types.ts
 
+export type SupportedAttendanceLocale = 'id' | 'en';
+
 export type AttendanceTargetType = 'SISWA' | 'GURU';
+
+export type SpecialEventTargetType = 'ALL' | 'GURU' | 'SISWA';
 
 export type AttendanceStatus =
   | 'HADIR'
@@ -19,7 +23,7 @@ export type WorkDaysMode = 'FIVE_DAYS' | 'SIX_DAYS';
 export type HolidayCategoryType = 'NASIONAL' | 'CUTI_BERSAMA' | 'SEKOLAH';
 
 /**
- * Representasi lengkap 1 baris tabel public.attendances (Skema SQL v20.2)
+ * Representasi lengkap 1 baris tabel public.attendances (Skema SQL v22.2)
  */
 export interface AttendanceRow {
   id: string;
@@ -38,7 +42,7 @@ export interface AttendanceRow {
   approvedAt: string | null;
   recordedBy: string | null;
   checkInTime: string | null; // TIMESTAMPTZ ISO string
-  time: string; // Kolom GENERATED ALWAYS AS ('HH:MI' Asia/Jakarta)
+  time: string; // Kolom GENERATED ALWAYS AS ('HH:MI' Asia/Jakarta) - READ ONLY
   checkOutTime: string | null; // TIMESTAMPTZ ISO string
   checkInLat: number | null;
   checkInLng: number | null;
@@ -128,7 +132,7 @@ export interface ClassStudentAttendanceRow {
 }
 
 /**
- * Pengaturan presensi & geofencing pada kolom tabel public.schools (Skema SQL v20.2)
+ * Pengaturan presensi & geofencing pada kolom tabel public.schools (Skema SQL v22.2)
  */
 export interface SchoolAttendanceSettings {
   id: string;
@@ -161,20 +165,22 @@ export interface SchoolCoordinates {
 }
 
 /**
- * Representasi baris tabel public.school_special_events
+ * Representasi baris tabel public.school_special_events (Skema SQL v22.2)
  */
 export interface SchoolSpecialEvent {
   id: string;
   schoolId: string;
   eventDate: string; // Format YYYY-MM-DD
   reason: string;
+  targetType: SpecialEventTargetType;
   isActive: boolean;
+  createdBy?: string | null;
   createdAt: string;
   updatedAt: string;
 }
 
 /**
- * Representasi baris tabel public.national_holidays
+ * Representasi baris tabel public.national_holidays (Skema SQL v22.2)
  */
 export interface NationalHolidayRow {
   id: string;
@@ -185,6 +191,30 @@ export interface NationalHolidayRow {
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Representasi baris tabel public.daily_quotes (Skema SQL v22.2)
+ */
+export interface DailyQuoteRow {
+  id: string;
+  schoolId: string | null;
+  quote: string;
+  author: string | null;
+  isActive: boolean;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Respons JSONB dari RPC public.check_teacher_attendance_allowed
+ */
+export interface TeacherAttendanceAllowedResult {
+  allowed: boolean;
+  is_holiday: boolean;
+  is_special_event: boolean;
+  reason: string;
 }
 
 /**
@@ -243,7 +273,7 @@ export interface GpsAttendanceRpcResponse {
 }
 
 // ============================================================================
-// TIPE DATA WHATSAPP GATEWAY (SKEMA SQL v20.2)
+// TIPE DATA WHATSAPP GATEWAY (SKEMA SQL v22.2)
 // ============================================================================
 
 export type WaGatewayProvider = 'FONNTE' | 'WABLAS' | 'WOOWA' | 'CUSTOM';

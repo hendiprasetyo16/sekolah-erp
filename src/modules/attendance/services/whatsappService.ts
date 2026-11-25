@@ -91,10 +91,6 @@ export async function saveSchoolWaConfig(
   if (error) throw error;
 }
 
-/**
- * Mengirim notifikasi WA presensi siswa secara asynchronous (non-blocking)
- * agar tidak memperlambat antrean scan kartu pelajar di layar Kiosk / APK.
- */
 export async function dispatchStudentAttendanceWhatsApp(params: {
   studentId: string;
   eventType: 'CHECK_IN' | 'CHECK_OUT';
@@ -150,10 +146,18 @@ export async function sendTestWhatsAppMessage(
     return { success: false, message: error.message };
   }
 
+  const res = data as {
+    success?: boolean;
+    message?: string;
+    error?: string;
+  } | null;
+
   return {
-    success: Boolean(data?.success),
-    message: data?.success
+    success: Boolean(res?.success),
+    message: res?.success
       ? 'Pesan uji coba berhasil dikirim ke nomor tujuan.'
-      : 'Gateway merespons gagal. Periksa kembali API URL dan Token Anda.',
+      : res?.message ||
+        res?.error ||
+        'Gateway merespons gagal. Periksa kembali API URL dan Token Anda.',
   };
 }

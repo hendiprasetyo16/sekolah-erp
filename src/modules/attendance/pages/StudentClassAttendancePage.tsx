@@ -32,13 +32,10 @@ import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 
-// ============================================================================
-// PARAMETER KONFIGURASI PAGINATION, FILTER DEFAULT & CATATAN LIBUR SISWA
-// ============================================================================
 const DEFAULT_STUDENT_PAGE_SIZE = 10;
 const STUDENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 0] as const; // 0 = Semua
-const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah'; // Selaras dengan StudentKioskPage.tsx
-const DEFAULT_CLASS_FILTER_FOR_ADMIN = 'ALL'; // Default filter kelas untuk Super Admin / Admin / Kepsek ('ALL' = Semua Kelas)
+const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah';
+const DEFAULT_CLASS_FILTER_FOR_ADMIN = 'ALL';
 
 type StudentAttendanceStatus =
     | 'HADIR'
@@ -209,17 +206,14 @@ function isMissingColumnError(err: unknown): boolean {
 }
 
 export function StudentClassAttendancePage() {
-    const { user, school } = useAuthStore();
-    const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-    // Peran pimpinan & admin selalu mendapat akses penuh ke semua kelas
-    const isPrivilegedRole =
-        user?.role === 'SUPER_ADMIN' ||
-        user?.role === 'ADMIN' ||
-        user?.role === 'KEPALA_SEKOLAH';
-
-    // Peran yang diizinkan menghapus catatan presensi siswa
-    const canDeleteAttendance =
-        user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+    const { user, school, hasAnyRole } = useAuthStore();
+    const isSuperAdmin = hasAnyRole(['SUPER_ADMIN']);
+    const isPrivilegedRole = hasAnyRole([
+        'SUPER_ADMIN',
+        'ADMIN',
+        'KEPALA_SEKOLAH',
+    ]);
+    const canDeleteAttendance = hasAnyRole(['SUPER_ADMIN', 'ADMIN']);
 
     const [simSchools, setSimSchools] = useState<
         Array<{ id: string; name: string; npsn: string }>
@@ -231,7 +225,6 @@ export function StudentClassAttendancePage() {
 
     const teacherScope = useTeacherScope(activeSchoolId);
 
-    // Pembatasan kelas hanya berlaku untuk Wali Kelas SD non-admin
     const isHomeroomRestricted =
         !isPrivilegedRole && Boolean(teacherScope.isElementaryHomeroomRestricted);
     const homeroomClassKey = useMemo(
@@ -246,7 +239,6 @@ export function StudentClassAttendancePage() {
     const [selectedClassId, setSelectedClassId] = useState<string>('');
     const [searchQuery, setSearchQuery] = useState<string>('');
 
-    // State Pagination
     const [currentPage, setCurrentPage] = useState<number>(1);
     const [pageSize, setPageSize] = useState<number>(DEFAULT_STUDENT_PAGE_SIZE);
 
@@ -256,7 +248,6 @@ export function StudentClassAttendancePage() {
     const [isSaving, setIsSaving] = useState<boolean>(false);
     const [checkingOutId, setCheckingOutId] = useState<string | null>(null);
 
-    // State Modal Konfirmasi Hapus Presensi Siswa
     const [deleteTarget, setDeleteTarget] = useState<StudentRowItem | null>(null);
     const [isDeletingRecord, setIsDeletingRecord] = useState<boolean>(false);
 
@@ -276,7 +267,6 @@ export function StudentClassAttendancePage() {
         useState<boolean>(false);
     const [specialEventInput, setSpecialEventInput] = useState<string>('');
 
-    // Penanda aktifnya mode presensi hari libur & teks keterangan otomatisnya
     const isSpecialEventMode = Boolean(
         holidayLock.isHoliday && holidayLock.isSpecialEventActive
     );
@@ -287,7 +277,7 @@ export function StudentClassAttendancePage() {
 
     const lockBannerMessage = useMemo(() => {
         if (holidayLock.isHoliday) {
-            return `Presensi dikunci otomatis karena hari libur (${holidayLock.holidayName ?? 'Libur Kalender'
+            return `Presensi dikunci otomatis karena hari libur (${holidayLock.holidayName || 'Libur Kalender'
                 }).`;
         }
         if (holidayLock.isSpecialEventActive) {
@@ -301,7 +291,6 @@ export function StudentClassAttendancePage() {
         specialEventNote,
     ]);
 
-    // Tutup modal hapus dengan tombol Escape pada keyboard
     useEffect(() => {
         if (!deleteTarget) return;
         const handleKeyDown = (e: KeyboardEvent) => {
@@ -313,7 +302,6 @@ export function StudentClassAttendancePage() {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [deleteTarget, isDeletingRecord]);
 
-    // Sinkronkan sekolah aktif secara instan saat Super Admin menekan "Ganti Sekolah"
     useEffect(() => {
         if (isSuperAdmin && school?.id) {
             setSimSchoolId(school.id);
@@ -334,7 +322,6 @@ export function StudentClassAttendancePage() {
 
     const loadClassesAndConfig = useCallback(async () => {
         if (!activeSchoolId) return;
-        // Untuk guru non-admin, tunggu scope guru selesai dimuat agar daftar kelas akurat
         if (!isPrivilegedRole && teacherScope.isLoading) return;
 
         setIsLoadingClasses(true);
@@ -348,7 +335,7 @@ export function StudentClassAttendancePage() {
                     .order('name', { ascending: true }),
                 supabase
                     .from('schools')
-                    .select('*')
+                    .select('enableStudentClassAttendance, enableStudentCheckOut')
                     .eq('id', activeSchoolId)
                     .maybeSingle(),
             ]);
@@ -360,7 +347,6 @@ export function StudentClassAttendancePage() {
                 name: string;
             }>;
 
-            // Hanya saring kelas jika user adalah Wali Kelas jenjang SD (bukan Admin/Super Admin)
             if (isHomeroomRestricted) {
                 const allowedSet = new Set(
                     homeroomClassKey ? homeroomClassKey.split(',') : []
@@ -374,13 +360,11 @@ export function StudentClassAttendancePage() {
 
             if (loadedClasses.length > 0) {
                 setSelectedClassId((prev) => {
-                    // Wali Kelas SD dikunci ke kelas ampuannya
                     if (isHomeroomRestricted) {
                         return loadedClasses.some((c) => c.id === prev)
                             ? prev
                             : loadedClasses[0].id;
                     }
-                    // Super Admin / Admin / Kepsek default ke 'ALL' (Semua Kelas) saat pertama dibuka atau ganti sekolah
                     if (prev === 'ALL') return 'ALL';
                     if (loadedClasses.some((c) => c.id === prev)) return prev;
                     return DEFAULT_CLASS_FILTER_FOR_ADMIN;
@@ -441,6 +425,7 @@ export function StudentClassAttendancePage() {
                 .from('students')
                 .select('id, fullName, nisn, nis, classId, gender, classes(name)')
                 .eq('schoolId', activeSchoolId)
+                .eq('status', 'AKTIF')
                 .order('fullName', { ascending: true });
 
             if (selectedClassId !== 'ALL') {
@@ -547,7 +532,6 @@ export function StudentClassAttendancePage() {
         void loadClassStudentsAndAttendance();
     }, [loadClassStudentsAndAttendance]);
 
-    // Isi otomatis kolom Keterangan ketika Mode Kegiatan Khusus aktif pada tanggal libur
     useEffect(() => {
         if (!isSpecialEventMode) return;
         setRows((prev) => {
@@ -558,7 +542,6 @@ export function StudentClassAttendancePage() {
                 return {
                     ...row,
                     notes: specialEventNote,
-                    // Tandai dirty bila siswa sudah terabsen namun catatannya masih kosong
                     isDirty: row.isDirty || row.status !== null,
                 };
             });
@@ -660,6 +643,29 @@ export function StudentClassAttendancePage() {
 
         try {
             const nowIso = buildIsoTimestampForDate(selectedDate);
+            const targetStudentIds = rowsToSave.map((r) => r.studentId);
+
+            // Cek data terkini di DB untuk mencegah bentrok unique constraint bila siswa baru scan di Kiosk
+            const { data: latestExistingRows, error: checkExistingErr } =
+                await supabase
+                    .from('attendances')
+                    .select('id, studentId')
+                    .eq('schoolId', activeSchoolId)
+                    .eq('date', selectedDate)
+                    .eq('type', 'SISWA')
+                    .in('studentId', targetStudentIds);
+
+            if (checkExistingErr) throw checkExistingErr;
+
+            const latestIdByStudent = new Map<string, string>();
+            for (const r of (latestExistingRows ?? []) as Array<{
+                id: string;
+                studentId: string | null;
+            }>) {
+                if (r.studentId) {
+                    latestIdByStudent.set(String(r.studentId), String(r.id));
+                }
+            }
 
             for (const item of rowsToSave) {
                 if (!item.status) continue;
@@ -669,13 +675,15 @@ export function StudentClassAttendancePage() {
                     ? item.checkInTime || nowIso
                     : null;
 
-                // Jika mode libur aktif & catatan dikosongkan, otomatis gunakan nama kegiatan
                 const effectiveNote =
                     item.notes.trim() ||
                     (isSpecialEventMode ? specialEventNote : null);
 
+                const resolvedRecordId =
+                    item.existingRecordId || latestIdByStudent.get(item.studentId) || null;
+
                 // Kolom "time" adalah GENERATED ALWAYS di PostgreSQL sehingga tidak ikut dikirim
-                if (item.existingRecordId) {
+                if (resolvedRecordId) {
                     const updatePayload: Record<string, string | null> = {
                         status: item.status,
                         checkInTime: effectiveCheckIn,
@@ -686,7 +694,8 @@ export function StudentClassAttendancePage() {
                     const { error: updErr } = await supabase
                         .from('attendances')
                         .update(updatePayload)
-                        .eq('id', item.existingRecordId);
+                        .eq('id', resolvedRecordId)
+                        .eq('schoolId', activeSchoolId);
 
                     if (updErr) {
                         if (isMissingColumnError(updErr)) {
@@ -697,7 +706,8 @@ export function StudentClassAttendancePage() {
                                     checkInTime: effectiveCheckIn,
                                     notes: effectiveNote,
                                 })
-                                .eq('id', item.existingRecordId);
+                                .eq('id', resolvedRecordId)
+                                .eq('schoolId', activeSchoolId);
                             if (fallbackErr) throw fallbackErr;
                         } else {
                             throw updErr;
@@ -761,7 +771,8 @@ export function StudentClassAttendancePage() {
     };
 
     const handleStudentCheckOut = async (row: StudentRowItem) => {
-        if (!row.existingRecordId || !enableStudentCheckOut) return;
+        if (!row.existingRecordId || !enableStudentCheckOut || !activeSchoolId)
+            return;
 
         if (holidayLock.isLocked) {
             setMessage({
@@ -781,7 +792,8 @@ export function StudentClassAttendancePage() {
             const { error } = await supabase
                 .from('attendances')
                 .update({ checkOutTime: nowIso })
-                .eq('id', row.existingRecordId);
+                .eq('id', row.existingRecordId)
+                .eq('schoolId', activeSchoolId);
 
             if (error) throw error;
 
@@ -807,7 +819,6 @@ export function StudentClassAttendancePage() {
         }
     };
 
-    // Eksekusi hapus catatan presensi siswa dari Modal Konfirmasi
     const handleConfirmDeleteRecord = async () => {
         if (
             !deleteTarget?.existingRecordId ||
@@ -912,7 +923,6 @@ export function StudentClassAttendancePage() {
         );
     }, [rows, searchQuery]);
 
-    // Kalkulasi Pagination
     const effectivePageSize = pageSize === 0 ? filteredRows.length || 1 : pageSize;
     const totalPages =
         pageSize === 0
@@ -974,7 +984,8 @@ export function StudentClassAttendancePage() {
     const deleteTargetStatusOption = useMemo(
         () =>
             deleteTarget?.status
-                ? STATUS_OPTIONS.find((opt) => opt.value === deleteTarget.status) ?? null
+                ? STATUS_OPTIONS.find((opt) => opt.value === deleteTarget.status) ??
+                null
                 : null,
         [deleteTarget]
     );
@@ -1088,7 +1099,7 @@ export function StudentClassAttendancePage() {
                     <CalendarOff size={20} className="text-amber-600 shrink-0 mt-0.5" />
                     <div className="text-xs space-y-1">
                         <p className="font-bold text-sm">
-                            Hari Libur: {holidayLock.holidayName ?? 'Libur Kalender'}
+                            Hari Libur: {holidayLock.holidayName || 'Libur Kalender'}
                         </p>
                         <p className="opacity-90 leading-relaxed">
                             Pengisian presensi siswa untuk tanggal{' '}
@@ -1123,8 +1134,8 @@ export function StudentClassAttendancePage() {
             {message && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${message.status === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {message.status === 'success' ? (
@@ -1373,8 +1384,8 @@ export function StudentClassAttendancePage() {
                                                                     )
                                                                 }
                                                                 className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer disabled:opacity-50 ${isSelected
-                                                                    ? opt.activeClass
-                                                                    : 'border-border bg-background hover:bg-muted text-foreground/80'
+                                                                        ? opt.activeClass
+                                                                        : 'border-border bg-background hover:bg-muted text-foreground/80'
                                                                     }`}
                                                             >
                                                                 <IconComp size={12} />
@@ -1557,7 +1568,6 @@ export function StudentClassAttendancePage() {
                             </button>
                         </div>
 
-                        {/* Kartu Ringkasan Data Siswa yang Akan Dihapus */}
                         <div className="p-3.5 rounded-xl border border-border bg-muted/40 space-y-2 text-xs">
                             <div className="flex items-center justify-between gap-2">
                                 <span className="text-muted-foreground">Nama Siswa</span>

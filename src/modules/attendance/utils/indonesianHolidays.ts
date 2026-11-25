@@ -1,6 +1,7 @@
 // src/modules/attendance/utils/indonesianHolidays.ts
 import type {
   HolidayCategoryType,
+  SupportedAttendanceLocale,
   WorkDaysMode,
 } from '../types/attendance.types';
 
@@ -14,6 +15,12 @@ export interface HolidayRecord {
   type?: HolidayCategoryType;
 }
 
+export type RedDateReasonCode =
+  | 'SUNDAY'
+  | 'SATURDAY_FIVE_DAYS'
+  | 'HOLIDAY'
+  | null;
+
 /**
  * Mengecek apakah suatu tanggal (YYYY-MM-DD) merupakan Tanggal Merah:
  * - Hari Minggu (selalu merah)
@@ -23,15 +30,20 @@ export interface HolidayRecord {
 export function checkRedDateStatus(
   dateStr: string,
   holidaysMap: Record<string, string> = {},
-  workDaysMode: WorkDaysMode = 'SIX_DAYS'
+  workDaysMode: WorkDaysMode = 'SIX_DAYS',
+  lang: SupportedAttendanceLocale = 'id'
 ): {
   isRedDate: boolean;
   isSunday: boolean;
   isSaturday: boolean;
+  reasonCode: RedDateReasonCode;
   holidayName: string | null;
 } {
-  const dateObj = new Date(`${dateStr}T00:00:00`);
-  const dayOfWeek = dateObj.getDay(); // 0 = Minggu, 6 = Sabtu
+  const [yStr, mStr, dStr] = dateStr.split('-');
+  const utcDate = new Date(
+    Date.UTC(Number(yStr) || 2026, (Number(mStr) || 1) - 1, Number(dStr) || 1)
+  );
+  const dayOfWeek = utcDate.getUTCDay(); // 0 = Minggu, 6 = Sabtu
   const isSunday = dayOfWeek === 0;
   const isSaturday = dayOfWeek === 6;
   const includeSaturday = workDaysMode === 'FIVE_DAYS';
@@ -41,17 +53,30 @@ export function checkRedDateStatus(
   const isRedDate =
     isSunday || (includeSaturday && isSaturday) || Boolean(dbHolidayName);
 
+  let reasonCode: RedDateReasonCode = null;
   let holidayName = dbHolidayName;
-  if (!holidayName && isSunday) {
-    holidayName = 'Libur Akhir Pekan (Hari Minggu)';
-  } else if (!holidayName && includeSaturday && isSaturday) {
-    holidayName = 'Libur Akhir Pekan (Hari Sabtu — 5 Hari Kerja)';
+
+  if (dbHolidayName) {
+    reasonCode = 'HOLIDAY';
+  } else if (isSunday) {
+    reasonCode = 'SUNDAY';
+    holidayName =
+      lang === 'en'
+        ? 'Weekend Holiday (Sunday)'
+        : 'Libur Akhir Pekan (Hari Minggu)';
+  } else if (includeSaturday && isSaturday) {
+    reasonCode = 'SATURDAY_FIVE_DAYS';
+    holidayName =
+      lang === 'en'
+        ? 'Weekend Holiday (Saturday — 5-Day Workweek)'
+        : 'Libur Akhir Pekan (Hari Sabtu — 5 Hari Kerja)';
   }
 
   return {
     isRedDate,
     isSunday,
     isSaturday,
+    reasonCode,
     holidayName,
   };
 }

@@ -1,16 +1,18 @@
 // ============================================================================
 // FILE: src/modules/attendance/hooks/useTeacherHolidayLock.ts
-// FUNGSI: Pengaturan Lock Hari Libur & Kegiatan Khusus Presensi Guru
+// FUNGSI: Pengaturan Lock Hari Libur & Kegiatan Khusus Presensi Guru (SQL v22.2)
 // ============================================================================
 
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/services/supabase.client';
-import {
-  checkRedDateStatus,
-  type WorkDaysMode,
-} from '../utils/indonesianHolidays';
+import type {
+  SpecialEventTargetType,
+  SupportedAttendanceLocale,
+  WorkDaysMode,
+} from '../types/attendance.types';
+import { checkRedDateStatus } from '../utils/indonesianHolidays';
 
-export type SpecialEventTargetType = 'ALL' | 'GURU' | 'SISWA';
+export type { SpecialEventTargetType };
 
 interface SchoolSpecialEventDbRow {
   id: string;
@@ -21,20 +23,12 @@ interface SchoolSpecialEventDbRow {
   isActive: boolean;
 }
 
-interface SchoolSpecialEventUpsertPayload {
-  schoolId: string;
-  eventDate: string;
-  reason: string;
-  targetType: SpecialEventTargetType;
-  isActive: boolean;
-  createdBy: string | null;
-}
-
 interface UseTeacherHolidayLockParams {
   schoolId: string;
   targetDate: string; // Format YYYY-MM-DD
   dbHolidaysMap: Record<string, string>;
   workDaysMode: WorkDaysMode;
+  lang?: SupportedAttendanceLocale;
 }
 
 export interface TeacherHolidayLockState {
@@ -44,6 +38,7 @@ export interface TeacherHolidayLockState {
   isSpecialEvent: boolean;
   reason: string;
   specialEventId: string | null;
+  specialEventTargetType: SpecialEventTargetType | null;
 }
 
 function normalizeTargetType(
@@ -63,6 +58,7 @@ export function useTeacherHolidayLock({
   targetDate,
   dbHolidaysMap,
   workDaysMode,
+  lang = 'id',
 }: UseTeacherHolidayLockParams) {
   const [state, setState] = useState<TeacherHolidayLockState>({
     loading: true,
@@ -71,17 +67,20 @@ export function useTeacherHolidayLock({
     isSpecialEvent: false,
     reason: '',
     specialEventId: null,
+    specialEventTargetType: null,
   });
 
-  /**
-   * Memeriksa status hari libur dan kegiatan khusus guru dari database
-   */
   const checkLockStatus = useCallback(async () => {
     const redStatus = checkRedDateStatus(
       targetDate,
       dbHolidaysMap,
-      workDaysMode
+      workDaysMode,
+      lang
     );
+
+    const defaultHolidayLabel =
+      redStatus.holidayName ||
+      (lang === 'en' ? 'School / Weekend Holiday' : 'Hari Libur Sekolah / Akhir Pekan');
 
     if (!schoolId || targetDate.length !== 10) {
       setState({
@@ -89,8 +88,9 @@ export function useTeacherHolidayLock({
         isLocked: redStatus.isRedDate,
         isHoliday: redStatus.isRedDate,
         isSpecialEvent: false,
-        reason: redStatus.holidayName || 'Hari Libur',
+        reason: defaultHolidayLabel,
         specialEventId: null,
+        specialEventTargetType: null,
       });
       return;
     }
@@ -105,21 +105,23 @@ export function useTeacherHolidayLock({
         .eq('eventDate', targetDate)
         .eq('isActive', true);
 
-      if (error) {
-        throw error;
-      }
+      if (error) throw error;
 
       const rows = (data ?? []) as SchoolSpecialEventDbRow[];
 
-      // Cari kegiatan khusus aktif dengan sasaran GURU atau ALL
-      const matchedEvent = rows.find((row) => {
-        const normalizedTarget = normalizeTargetType(row.targetType);
-        return normalizedTarget === 'GURU' || normalizedTarget === 'ALL';
-      });
+      // Prioritaskan agenda spesifik GURU, lalu ALL
+      const matchedGuru = rows.find(
+        (row) => normalizeTargetType(row.targetType) === 'GURU'
+      );
+      const matchedAll = rows.find(
+        (row) => normalizeTargetType(row.targetType) === 'ALL'
+      );
+      const matchedEvent = matchedGuru ?? matchedAll;
 
       if (matchedEvent) {
         const eventTitle =
-          String(matchedEvent.reason ?? '').trim() || 'Kegiatan Khusus Guru';
+          String(matchedEvent.reason ?? '').trim() ||
+          (lang === 'en' ? 'Special Teacher Event' : 'Kegiatan Khusus Guru');
 
         setState({
           loading: false,
@@ -128,6 +130,7 @@ export function useTeacherHolidayLock({
           isSpecialEvent: true,
           reason: eventTitle,
           specialEventId: String(matchedEvent.id),
+          specialEventTargetType: normalizeTargetType(matchedEvent.targetType),
         });
         return;
       }
@@ -138,8 +141,9 @@ export function useTeacherHolidayLock({
           isLocked: true,
           isHoliday: true,
           isSpecialEvent: false,
-          reason: redStatus.holidayName || 'Hari Libur Sekolah / Akhir Pekan',
+          reason: defaultHolidayLabel,
           specialEventId: null,
+          specialEventTargetType: null,
         });
       } else {
         setState({
@@ -147,118 +151,173 @@ export function useTeacherHolidayLock({
           isLocked: false,
           isHoliday: false,
           isSpecialEvent: false,
-          reason: 'Hari Kerja Normal',
+          reason: lang === 'en' ? 'Regular Workday' : 'Hari Kerja Normal',
           specialEventId: null,
+          specialEventTargetType: null,
         });
       }
     } catch (err: unknown) {
-      console.error(
-        '[useTeacherHolidayLock] Gagal memeriksa status libur:',
-        err
-      );
+      console.error('[useTeacherHolidayLock] Gagal memeriksa status libur:', err);
       setState({
         loading: false,
         isLocked: redStatus.isRedDate,
         isHoliday: redStatus.isRedDate,
         isSpecialEvent: false,
-        reason: redStatus.holidayName || 'Hari Libur',
+        reason: defaultHolidayLabel,
         specialEventId: null,
+        specialEventTargetType: null,
       });
     }
-  }, [schoolId, targetDate, dbHolidaysMap, workDaysMode]);
+  }, [schoolId, targetDate, dbHolidaysMap, workDaysMode, lang]);
 
   useEffect(() => {
     void checkLockStatus();
   }, [checkLockStatus]);
 
   /**
-   * Membuka kunci presensi khusus guru pada hari libur secara atomik (bebas duplicate key)
+   * Membuka kunci presensi khusus guru pada hari libur selaras unique index
+   * ("schoolId", "eventDate", "targetType") pada SQL v22.2
    */
   const enableTeacherSpecialEvent = async (
     title: string,
     userId?: string | null
   ): Promise<void> => {
     if (!schoolId) {
-      throw new Error('Identitas sekolah belum tersedia.');
+      throw new Error(
+        lang === 'en'
+          ? 'School identity is unavailable.'
+          : 'Identitas sekolah belum tersedia.'
+      );
     }
     if (targetDate.length !== 10) {
-      throw new Error('Format tanggal presensi tidak valid.');
+      throw new Error(
+        lang === 'en'
+          ? 'Invalid attendance date format.'
+          : 'Format tanggal presensi tidak valid.'
+      );
     }
 
-    const cleanTitle = title.trim() || 'Kegiatan Khusus Guru';
+    const cleanTitle =
+      title.trim() ||
+      (lang === 'en' ? 'Special Teacher Event' : 'Kegiatan Khusus Guru');
 
-    // Periksa baris berdasarkan unique constraint aktual: (schoolId, eventDate)
-    const { data: existingRaw, error: checkErr } = await supabase
+    const { data: existingRows, error: checkErr } = await supabase
       .from('school_special_events')
       .select('id, targetType, isActive')
       .eq('schoolId', schoolId)
-      .eq('eventDate', targetDate)
-      .maybeSingle();
+      .eq('eventDate', targetDate);
 
     if (checkErr) {
       throw new Error(checkErr.message);
     }
 
-    const existing = existingRaw as Pick<
-      SchoolSpecialEventDbRow,
-      'id' | 'targetType' | 'isActive'
-    > | null;
+    const rows = (existingRows ?? []) as Array<
+      Pick<SchoolSpecialEventDbRow, 'id' | 'targetType' | 'isActive'>
+    >;
 
-    // Jika sudah ada agenda aktif khusus SISWA di tanggal yang sama, gabungkan menjadi ALL
-    // agar presensi siswa yang sedang dibuka tidak ikut tertutup.
-    const nextTargetType: SpecialEventTargetType =
-      existing?.isActive && normalizeTargetType(existing.targetType) === 'SISWA'
-        ? 'ALL'
-        : 'GURU';
+    const existingGuru = rows.find(
+      (r) => normalizeTargetType(r.targetType) === 'GURU'
+    );
+    const existingAll = rows.find(
+      (r) => normalizeTargetType(r.targetType) === 'ALL'
+    );
 
-    const payload: SchoolSpecialEventUpsertPayload = {
-      schoolId,
-      eventDate: targetDate,
-      reason: cleanTitle,
-      targetType: nextTargetType,
-      isActive: true,
-      createdBy: userId ?? null,
-    };
+    if (existingGuru) {
+      const { error: updateErr } = await supabase
+        .from('school_special_events')
+        .update({
+          reason: cleanTitle,
+          isActive: true,
+          createdBy: userId ?? null,
+        })
+        .eq('id', existingGuru.id);
 
-    const { error: upsertErr } = await supabase
-      .from('school_special_events')
-      .upsert(payload, {
-        onConflict: 'schoolId,eventDate',
-      });
+      if (updateErr) throw new Error(updateErr.message);
+    } else if (existingAll) {
+      const { error: updateErr } = await supabase
+        .from('school_special_events')
+        .update({
+          reason: cleanTitle,
+          isActive: true,
+          createdBy: userId ?? null,
+        })
+        .eq('id', existingAll.id);
 
-    if (upsertErr) {
-      throw new Error(upsertErr.message);
+      if (updateErr) throw new Error(updateErr.message);
+    } else {
+      const { error: upsertErr } = await supabase
+        .from('school_special_events')
+        .upsert(
+          {
+            schoolId,
+            eventDate: targetDate,
+            reason: cleanTitle,
+            targetType: 'GURU',
+            isActive: true,
+            createdBy: userId ?? null,
+          },
+          {
+            onConflict: 'schoolId,eventDate,targetType',
+          }
+        );
+
+      if (upsertErr) throw new Error(upsertErr.message);
     }
 
     await checkLockStatus();
   };
 
   /**
-   * Mengunci kembali presensi guru pada hari libur
+   * Mengunci kembali presensi guru pada hari libur tanpa menutup presensi siswa
    */
   const disableTeacherSpecialEvent = async (): Promise<void> => {
     if (!schoolId) {
-      throw new Error('Identitas sekolah belum tersedia.');
+      throw new Error(
+        lang === 'en'
+          ? 'School identity is unavailable.'
+          : 'Identitas sekolah belum tersedia.'
+      );
     }
 
-    if (state.specialEventId) {
-      const { error } = await supabase
-        .from('school_special_events')
-        .update({ isActive: false })
-        .eq('id', state.specialEventId);
+    const { data: existingRows, error: fetchErr } = await supabase
+      .from('school_special_events')
+      .select('id, targetType, isActive')
+      .eq('schoolId', schoolId)
+      .eq('eventDate', targetDate);
 
-      if (error) {
-        throw new Error(error.message);
-      }
-    } else {
-      const { error } = await supabase
-        .from('school_special_events')
-        .update({ isActive: false })
-        .eq('schoolId', schoolId)
-        .eq('eventDate', targetDate);
+    if (fetchErr) {
+      throw new Error(fetchErr.message);
+    }
 
-      if (error) {
-        throw new Error(error.message);
+    const rows = (existingRows ?? []) as Array<
+      Pick<SchoolSpecialEventDbRow, 'id' | 'targetType' | 'isActive'>
+    >;
+    const hasSeparateSiswaRow = rows.some(
+      (r) => normalizeTargetType(r.targetType) === 'SISWA'
+    );
+
+    for (const row of rows) {
+      const target = normalizeTargetType(row.targetType);
+      if (target === 'GURU' && row.isActive) {
+        const { error } = await supabase
+          .from('school_special_events')
+          .update({ isActive: false })
+          .eq('id', row.id);
+        if (error) throw new Error(error.message);
+      } else if (target === 'ALL' && row.isActive) {
+        if (!hasSeparateSiswaRow) {
+          const { error } = await supabase
+            .from('school_special_events')
+            .update({ targetType: 'SISWA' })
+            .eq('id', row.id);
+          if (error) throw new Error(error.message);
+        } else {
+          const { error } = await supabase
+            .from('school_special_events')
+            .update({ isActive: false })
+            .eq('id', row.id);
+          if (error) throw new Error(error.message);
+        }
       }
     }
 
