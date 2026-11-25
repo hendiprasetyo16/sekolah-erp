@@ -12,6 +12,7 @@ import {
     LogOut,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
+import { useTranslation } from '@/hooks/useTranslation';
 
 // ============================================================================
 // PARAMETER DEFAULT KONFIGURASI PRESENSI SISWA
@@ -44,7 +45,11 @@ interface RawSchoolStudentSettingsRow {
     enableStudentCheckOut: boolean | null;
 }
 
-function getErrorDetails(err: unknown): { code: string; message: string } {
+function getErrorDetails(
+    err: unknown,
+    fallbackDb: string,
+    fallbackUnexpected: string
+): { code: string; message: string } {
     if (typeof err === 'object' && err !== null) {
         const rec = err as Record<string, unknown>;
         return {
@@ -52,17 +57,17 @@ function getErrorDetails(err: unknown): { code: string; message: string } {
             message:
                 typeof rec.message === 'string' && rec.message.trim().length > 0
                     ? rec.message
-                    : 'Terjadi kesalahan pada database.',
+                    : fallbackDb,
         };
     }
     if (err instanceof Error) {
         return { code: '', message: err.message };
     }
-    return { code: '', message: 'Terjadi kesalahan tidak terduga.' };
+    return { code: '', message: fallbackUnexpected };
 }
 
 function isMissingColumnError(err: unknown): boolean {
-    const { code, message } = getErrorDetails(err);
+    const { code, message } = getErrorDetails(err, '', '');
     const lower = message.toLowerCase();
     return (
         code === 'PGRST204' ||
@@ -81,6 +86,8 @@ export function StudentAttendanceSettingsCard({
     schoolId,
     onSaved,
 }: StudentAttendanceSettingsCardProps) {
+    const { t } = useTranslation();
+
     const [isLoading, setIsLoading] = useState<boolean>(false);
     const [isSaving, setIsSaving] = useState<boolean>(false);
     const [saveMessage, setSaveMessage] = useState<SaveMessageState | null>(null);
@@ -143,15 +150,19 @@ export function StudentAttendanceSettingsCard({
                 }
             }
         } catch (err: unknown) {
-            const { message } = getErrorDetails(err);
+            const { message } = getErrorDetails(
+                err,
+                t('attendanceSettings.errDatabaseGeneric'),
+                t('attendanceSettings.errUnexpectedGeneric')
+            );
             setSaveMessage({
                 status: 'error',
-                text: `Gagal memuat pengaturan siswa: ${message}`,
+                text: t('attendanceSettings.errLoadStudentSettings', { message }),
             });
         } finally {
             setIsLoading(false);
         }
-    }, [schoolId]);
+    }, [schoolId, t]);
 
     useEffect(() => {
         void loadSettings();
@@ -163,7 +174,7 @@ export function StudentAttendanceSettingsCard({
         if (!enableStudentKiosk && !enableStudentClassAttendance) {
             setSaveMessage({
                 status: 'error',
-                text: 'Minimal satu metode presensi siswa (Kiosk atau Manual Wali Kelas) harus diaktifkan.',
+                text: t('attendanceSettings.errMinOneStudentMethod'),
             });
             return;
         }
@@ -196,7 +207,7 @@ export function StudentAttendanceSettingsCard({
             if (error) {
                 if (isMissingColumnError(error)) {
                     throw new Error(
-                        'Kolom pengaturan siswa belum ada di database. Jalankan SQL Migration Patch v20 terlebih dahulu.'
+                        t('attendanceSettings.errMissingStudentColumns')
                     );
                 }
                 throw error;
@@ -204,14 +215,18 @@ export function StudentAttendanceSettingsCard({
 
             setSaveMessage({
                 status: 'success',
-                text: 'Pengaturan jadwal & metode presensi siswa berhasil disimpan.',
+                text: t('attendanceSettings.toastStudentSettingsSaved'),
             });
             onSaved?.();
         } catch (err: unknown) {
-            const { message } = getErrorDetails(err);
+            const { message } = getErrorDetails(
+                err,
+                t('attendanceSettings.errDatabaseGeneric'),
+                t('attendanceSettings.errUnexpectedGeneric')
+            );
             setSaveMessage({
                 status: 'error',
-                text: `Gagal menyimpan pengaturan siswa: ${message}`,
+                text: t('attendanceSettings.errSaveStudentSettings', { message }),
             });
         } finally {
             setIsSaving(false);
@@ -226,11 +241,10 @@ export function StudentAttendanceSettingsCard({
                 <div>
                     <h2 className="text-base font-bold flex items-center gap-2">
                         <GraduationCap size={18} className="text-emerald-600" />
-                        Pengaturan Jadwal & Metode Presensi Siswa
+                        {t('attendanceSettings.studentCardTitle')}
                     </h2>
                     <p className="text-xs text-muted-foreground mt-0.5">
-                        Atur jam masuk, batas keterlambatan, jam pulang siswa, serta
-                        metode presensi yang digunakan di sekolah.
+                        {t('attendanceSettings.studentCardSubtitle')}
                     </p>
                 </div>
 
@@ -245,7 +259,9 @@ export function StudentAttendanceSettingsCard({
                     ) : (
                         <Save size={14} />
                     )}
-                    {isSaving ? 'Menyimpan...' : 'Simpan Pengaturan Siswa'}
+                    {isSaving
+                        ? t('attendanceSettings.btnSaving')
+                        : t('attendanceSettings.btnSaveStudentSettings')}
                 </button>
             </div>
 
@@ -269,13 +285,13 @@ export function StudentAttendanceSettingsCard({
             <div className="space-y-2.5">
                 <div className="text-xs font-bold flex items-center gap-1.5 text-foreground">
                     <Clock size={14} className="text-emerald-600" />
-                    <span>Jadwal Jam Masuk & Pulang Siswa</span>
+                    <span>{t('attendanceSettings.studentScheduleHeading')}</span>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                     <div>
                         <label className="text-[11px] font-semibold block mb-1">
-                            Jam Masuk Siswa
+                            {t('attendanceSettings.studentStartTimeLabel')}
                         </label>
                         <input
                             type="time"
@@ -284,13 +300,13 @@ export function StudentAttendanceSettingsCard({
                             className="form-input w-full text-xs"
                         />
                         <span className="text-[10px] text-muted-foreground">
-                            Default: 07:00
+                            {t('attendanceSettings.studentStartTimeHint')}
                         </span>
                     </div>
 
                     <div>
                         <label className="text-[11px] font-semibold block mb-1">
-                            Toleransi Terlambat (Menit)
+                            {t('attendanceSettings.studentToleranceLabel')}
                         </label>
                         <input
                             type="number"
@@ -305,13 +321,13 @@ export function StudentAttendanceSettingsCard({
                             className="form-input w-full text-xs"
                         />
                         <span className="text-[10px] text-muted-foreground">
-                            Lewat batas otomatis status TERLAMBAT
+                            {t('attendanceSettings.studentToleranceHint')}
                         </span>
                     </div>
 
                     <div>
                         <label className="text-[11px] font-semibold block mb-1">
-                            Jam Mulai Boleh Absen Pulang
+                            {t('attendanceSettings.studentCheckOutStartLabel')}
                         </label>
                         <input
                             type="time"
@@ -321,13 +337,13 @@ export function StudentAttendanceSettingsCard({
                             className="form-input w-full text-xs disabled:opacity-50"
                         />
                         <span className="text-[10px] text-muted-foreground">
-                            Mencegah siswa absen pulang terlalu pagi
+                            {t('attendanceSettings.studentCheckOutStartHint')}
                         </span>
                     </div>
 
                     <div>
                         <label className="text-[11px] font-semibold block mb-1">
-                            Jam Pulang Normal Siswa
+                            {t('attendanceSettings.studentWorkEndLabel')}
                         </label>
                         <input
                             type="time"
@@ -336,7 +352,7 @@ export function StudentAttendanceSettingsCard({
                             className="form-input w-full text-xs"
                         />
                         <span className="text-[10px] text-muted-foreground">
-                            Default: 14:00
+                            {t('attendanceSettings.studentWorkEndHint')}
                         </span>
                     </div>
                 </div>
@@ -345,7 +361,7 @@ export function StudentAttendanceSettingsCard({
             {/* Bagian 2: Metode Presensi Siswa & Fitur Absen Pulang */}
             <div className="space-y-2.5 pt-1">
                 <div className="text-xs font-bold text-foreground">
-                    Metode Presensi Siswa yang Diaktifkan
+                    {t('attendanceSettings.studentMethodsHeading')}
                 </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -361,11 +377,10 @@ export function StudentAttendanceSettingsCard({
                         <div className="space-y-1">
                             <div className="text-xs font-bold flex items-center gap-1.5">
                                 <QrCode size={14} className="text-emerald-600 shrink-0" />
-                                <span>Kiosk Mandiri (Scan QR / NISN)</span>
+                                <span>{t('attendanceSettings.methodKioskTitle')}</span>
                             </div>
                             <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                Siswa melakukan scan kartu QR atau ketik NISN di terminal
-                                gerbang/kelas.
+                                {t('attendanceSettings.methodKioskDesc')}
                             </p>
                         </div>
                         <span
@@ -393,11 +408,10 @@ export function StudentAttendanceSettingsCard({
                         <div className="space-y-1">
                             <div className="text-xs font-bold flex items-center gap-1.5">
                                 <ClipboardList size={14} className="text-blue-600 shrink-0" />
-                                <span>Input Manual Wali Kelas / Guru</span>
+                                <span>{t('attendanceSettings.methodManualTitle')}</span>
                             </div>
                             <p className="text-[11px] text-muted-foreground leading-relaxed">
-                                Wali kelas atau guru mengabsen siswa per kelas secara manual di
-                                dalam kelas.
+                                {t('attendanceSettings.methodManualDesc')}
                             </p>
                         </div>
                         <span
@@ -427,12 +441,12 @@ export function StudentAttendanceSettingsCard({
                         <div className="space-y-1">
                             <div className="text-xs font-bold flex items-center gap-1.5">
                                 <LogOut size={14} className="text-indigo-600 shrink-0" />
-                                <span>Aktifkan Absen Pulang Siswa</span>
+                                <span>{t('attendanceSettings.methodCheckOutTitle')}</span>
                             </div>
                             <p className="text-[11px] text-muted-foreground leading-relaxed">
                                 {enableStudentCheckOut
-                                    ? 'Siswa dapat mencatat jam pulang saat pulang sekolah.'
-                                    : 'Absen pulang siswa dinonaktifkan (hanya mencatat absen masuk).'}
+                                    ? t('attendanceSettings.methodCheckOutActiveDesc')
+                                    : t('attendanceSettings.methodCheckOutInactiveDesc')}
                             </p>
                         </div>
                         <span

@@ -569,6 +569,374 @@ export const translations = {
       errLoadDetail: 'Gagal memuat rincian nilai.',
       errDownloadPdf: 'Gagal mengunduh PDF raport.',
     },
+    attendanceSettings: {
+      superAdminTitle: 'Mode Pengaturan Super Admin',
+      superAdminSubtitle: 'Pilih sekolah yang ingin diatur:',
+      tabGuruSchedule: '1. Jam & Aturan Guru',
+      tabGuruScheduleShort: 'Jam Guru',
+      tabGuruDesktop: '2. Izin Komputer Guru',
+      tabGuruDesktopShort: 'Izin PC',
+      tabStudent: '3. Presensi Siswa',
+      tabStudentShort: 'Siswa',
+      tabHolidays: '4. Kalender Libur ({count})',
+      tabHolidaysShort: 'Libur ({count})',
+      tabWhatsapp: '5. WhatsApp Gateway',
+      tabWhatsappShort: 'WA Gateway',
+      scheduleTitle:
+        'Jam Kerja, Verifikasi Kamera Selfie & Sistem Hari Kerja (Guru)',
+      scheduleSubtitle:
+        'Mengatur batas keterlambatan check-in, jadwal pulang, kewajiban foto selfie, serta hari libur akhir pekan.',
+      workStartLabel: 'Jam Berangkat / Masuk *',
+      workStartHint: 'Jadwal masuk resmi sekolah.',
+      lateToleranceLabel: 'Toleransi Keterlambatan (Menit)',
+      lateToleranceHintPrefix: 'Isi ',
+      lateToleranceHintSuffix: ' jika tanpa toleransi.',
+      workEndLabel: 'Jam Pulang Kerja *',
+      workEndHint: 'Acuan jadwal pulang pada kartu presensi.',
+      toleranceActivePrefix: 'Toleransi aktif ',
+      toleranceActiveMinutes: '{minutes} menit',
+      toleranceActiveMid1: ': Check-in s.d. pukul ',
+      toleranceActiveMid2: ' berstatus ',
+      statusPresent: 'HADIR',
+      toleranceActiveMid3: ', lewat pukul ',
+      toleranceActiveMid4: ' berstatus ',
+      statusLate: 'TERLAMBAT',
+      noTolerancePrefix: 'Tanpa toleransi: Check-in melewati pukul ',
+      noToleranceMid: ' langsung tercatat ',
+      selfieSectionLabel:
+        'Verifikasi Kamera Selfie Presensi (GPS + Foto Selfie vs GPS Saja)',
+      selfieSectionHint:
+        'Matikan jika sekolah hanya mewajibkan validasi titik koordinat GPS tanpa mengambil foto wajah.',
+      selfieCheckInTitle: 'Selfie Presensi Datang (Check-In)',
+      selfieCheckInActive:
+        'Aktif: Guru wajib mengambil foto selfie saat absen masuk.',
+      selfieCheckInInactive:
+        'Nonaktif: Absen masuk langsung tercatat dengan GPS saja.',
+      selfieCheckOutTitle: 'Selfie Presensi Pulang (Check-Out)',
+      selfieCheckOutActive:
+        'Aktif: Guru wajib mengambil foto selfie saat absen pulang.',
+      selfieCheckOutInactive:
+        'Nonaktif: Absen pulang langsung tercatat dengan GPS saja.',
+      workDaysLabel: 'Sistem Hari Kerja Sekolah *',
+      fiveDaysTitle: '5 Hari Kerja (Senin – Jumat)',
+      fiveDaysDescPrefix: 'Hari ',
+      fiveDaysDescHighlight: 'Sabtu & Minggu',
+      fiveDaysDescSuffix:
+        ' otomatis ditandai sebagai Tanggal Merah pada kalender presensi.',
+      sixDaysTitle: '6 Hari Kerja (Senin – Sabtu)',
+      sixDaysDescPrefix: 'Hari Sabtu tetap dihitung hari masuk; hanya ',
+      sixDaysDescHighlight: 'Minggu, Libur Nasional & Cuti Bersama',
+      sixDaysDescSuffix: ' yang berwarna merah.',
+      btnSaving: 'Menyimpan...',
+      btnSaveSchedule: 'Simpan Pengaturan Jam, Selfie & Hari Kerja',
+      toastSelectSchool: 'Pilih sekolah terlebih dahulu.',
+      toastPartialScheduleSaved:
+        'Jam & hari kerja tersimpan, tetapi kolom requireSelfieCheckIn/Out belum ada di tabel schools Supabase.',
+      selfieActiveShort: 'Aktif',
+      selfieInactiveShort: 'Nonaktif (GPS Saja)',
+      toastScheduleSavedWithTolerance:
+        'Tersimpan! Masuk {start} (+{tolerance}m), pulang {end} • {selfie}.',
+      toastScheduleSavedNoTolerance:
+        'Tersimpan! Masuk {start}, pulang {end} • {selfie}.',
+      errLoadSchedule: 'Gagal memuat pengaturan presensi sekolah.',
+      errSaveSchedule: 'Gagal menyimpan pengaturan presensi.',
+
+      // Kalender Libur
+      holidayTitle: 'Kalender Hari Libur Nasional, Cuti Bersama & Sekolah',
+      holidaySubtitle:
+        'Sinkronisasi cepat dari server kalender nasional, impor file Excel (.xlsx / .csv), atau input manual.',
+      btnExcelTemplate: 'Template Excel',
+      btnImportExcel: 'Import Excel / CSV',
+      apiServerLabel: 'Server API:',
+      calendarRefLabel: 'Kalender:',
+      calRefMuhammadiyah: 'Muhammadiyah (KHGT / Hisab)',
+      calRefGovernment: 'Pemerintah (SKB 3 Menteri)',
+      btnFetchingServer: 'Menarik Data...',
+      btnSyncFromServer: 'Sync dari Server ({year})',
+      includeCutiPrefix: 'Sertakan jadwal ',
+      includeCutiHighlight: 'Cuti Bersama',
+      includeAwalRamadanPrefix: 'Sertakan ',
+      includeAwalRamadanHighlight: 'Awal Puasa (1 Ramadan)',
+      saveScopeLabel: 'Cakupan Simpan:',
+      scopeGlobal: 'Nasional / Global',
+      scopeSchool: 'Khusus Sekolah Ini',
+      previewTitle: 'Pratinjau: {source} ({count} Tanggal)',
+      previewTip:
+        'Tip: Klik tanggal atau keterangan di bawah jika ingin menggeser 1 hari sebelum disimpan.',
+      defaultExtraHolidayName: 'Libur Tambahan',
+      btnAddRow: 'Tambah Baris',
+      btnCancel: 'Batal',
+      btnSaveToDb: 'Simpan ke Database',
+      colNo: 'No',
+      colDate: 'Tanggal',
+      colJavaneseDay: 'Pasaran Jawa',
+      colHolidayName: 'Keterangan Libur / Cuti',
+      colDelete: 'Hapus',
+      titleExcludeDate: 'Kecualikan tanggal ini',
+      labelHolidayDate: 'Tanggal Libur / Cuti *',
+      labelHolidayDesc: 'Keterangan Hari Libur *',
+      placeholderHolidayDesc:
+        'Contoh: Libur Awal Ramadan / Rapat Kerja Guru',
+      btnAddHoliday: 'Tambah Libur',
+      holidayListHeading: 'Daftar Tanggal Merah Tahun {year} ({count} hari)',
+      viewCalendar: 'Kalender',
+      viewList: 'Daftar',
+      yearOption: 'Tahun {year}',
+      btnAddYear: 'Tambah Tahun',
+      titleAddYear: 'Tambahkan tahun berikutnya ke daftar pilihan',
+      titleRefreshHolidays: 'Refresh Daftar Libur',
+      selectAllHolidays: 'Pilih Semua ({selected}/{total} dipilih)',
+      tapDateHint:
+        'Ketuk tanggal mana pun untuk melihat detail & Pasaran Jawa',
+      btnDeleteSelected: 'Hapus Terpilih ({count})',
+      btnDeleteAll: 'Hapus Semua ({count})',
+      loadingHolidays: 'Memuat data hari libur dari database...',
+      emptyHolidaysTitle:
+        'Belum ada data hari libur tersimpan untuk tahun {year}.',
+      emptyHolidaysDesc:
+        'Klik tombol Sync dari Server ({year}) di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama.',
+      badgeCutiBersama: 'Cuti Bersama',
+      badgeNational: 'Nasional',
+      badgeSchool: 'Sekolah',
+      titleEditHoliday: 'Edit tanggal atau keterangan',
+      titleDeleteHoliday: 'Hapus hari libur',
+      modalEditTitle: 'Edit Tanggal Merah',
+      modalEditSubtitle: 'Perbarui tanggal atau keterangan hari libur',
+      modalEditDateLabel: 'Tanggal Libur *',
+      modalEditJavanesePrefix: 'Kalender Jawa:',
+      modalEditDescLabel: 'Keterangan Hari Libur *',
+      btnSaveChanges: 'Simpan Perubahan',
+      btnDeleting: 'Menghapus...',
+      btnConfirmDeleteNow: 'Ya, Hapus Sekarang',
+      modalDelSingleTitle: 'Hapus Tanggal Merah?',
+      modalDelSingleDesc:
+        'Apakah Anda yakin ingin menghapus "{name}" ({date})?',
+      modalDelSelectedTitle: 'Hapus {count} Tanggal Merah Terpilih?',
+      modalDelSelectedDesc:
+        'Anda akan menghapus {count} data tanggal merah yang dicentang dari database.',
+      modalDelAllTitle: 'Hapus Semua Tanggal Merah Tahun {year}?',
+      modalDelAllDesc:
+        'Seluruh {count} data hari libur tahun {year} yang dapat Anda kelola akan dihapus permanen dari database.',
+      feedbackNextYearAdded:
+        'Tahun {year} ditambahkan. Klik "Sync dari Server ({year})" untuk menarik jadwal liburnya.',
+      feedbackFetchingServer: 'Sedang menarik data libur tahun {year}...',
+      feedbackPreviewSourceServer: '{provider} — Tahun {year}',
+      feedbackFetchedSuccess:
+        'Berhasil menarik {count} tanggal merah dari {provider}! Silakan cek pratinjau di bawah lalu klik "Simpan ke Database".',
+      errFetchServer: 'Gagal mengambil data dari server.',
+      errEmptySingleHoliday:
+        'Isi tanggal dan keterangan hari libur dengan lengkap.',
+      feedbackSingleAdded:
+        'Hari libur berhasil ditambahkan ke database!',
+      errAddSingleHoliday: 'Gagal menambahkan hari libur.',
+      errGlobalHolidayAdminOnly:
+        'Hari Libur Nasional Global hanya dapat diubah oleh Super Admin.',
+      feedbackEditSaved:
+        'Perubahan hari libur "{name}" berhasil disimpan!',
+      errUpdateHoliday: 'Gagal memperbarui hari libur.',
+      errInvalidSpreadsheet:
+        'Tidak ada baris valid ditemukan di file. Pastikan kolom 1 adalah Tanggal (YYYY-MM-DD) dan kolom 2 adalah Keterangan.',
+      feedbackPreviewSourceFile: 'File {fileName}',
+      feedbackFileReadSuccess:
+        'Berhasil membaca {count} tanggal dari file {fileName}. Klik "Simpan ke Database" di bawah untuk menyimpan.',
+      errReadSpreadsheet: 'Gagal membaca file Excel/CSV.',
+      feedbackBatchSaved:
+        '{count} data hari libur & cuti bersama berhasil disimpan ke database!',
+      errSaveBatch: 'Gagal menyimpan data ke database.',
+      feedbackDeletedCount:
+        '{count} data hari libur berhasil dihapus dari database.',
+      errDeleteHolidays: 'Gagal menghapus hari libur.',
+      feedbackDatePicked:
+        'Tanggal {date} dipilih pada formulir di atas. Ketik keterangannya lalu klik "+ Tambah Libur".',
+      errLoadHolidays:
+        'Tabel national_holidays belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.',
+      errSchoolNotFound: 'Data sekolah tidak ditemukan.',
+
+      // Tampilan Kalender Bulanan
+      month_0: 'Januari',
+      month_1: 'Februari',
+      month_2: 'Maret',
+      month_3: 'April',
+      month_4: 'Mei',
+      month_5: 'Juni',
+      month_6: 'Juli',
+      month_7: 'Agustus',
+      month_8: 'September',
+      month_9: 'Oktober',
+      month_10: 'November',
+      month_11: 'Desember',
+      day_0: 'Min',
+      day_1: 'Sen',
+      day_2: 'Sel',
+      day_3: 'Rab',
+      day_4: 'Kam',
+      day_5: 'Jum',
+      day_6: 'Sab',
+      titlePrevMonth: 'Bulan Sebelumnya',
+      titleNextMonth: 'Bulan Berikutnya',
+      holidayCountBadge: '{count} libur',
+      badgeRedDate: 'Tanggal Merah',
+      badgeWorkday: 'Hari Kerja',
+      holidayNotePrefix: 'Keterangan Libur: {name}',
+      workdayEffectiveNote:
+        'Hari kerja efektif sekolah (jadwal presensi aktif).',
+      btnEditHolidayNote: 'Edit Keterangan Libur',
+      btnSetAsHoliday: 'Jadikan Hari Libur / Cuti',
+      tooltipAddHoliday: '{javaneseDate} (Klik untuk tambah libur)',
+      noSpecialHolidayMonth: 'Tidak ada tanggal merah khusus bulan ini.',
+
+      // Pengaturan Presensi Siswa
+      studentCardTitle: 'Pengaturan Jadwal & Metode Presensi Siswa',
+      studentCardSubtitle:
+        'Atur jam masuk, batas keterlambatan, jam pulang siswa, serta metode presensi yang digunakan di sekolah.',
+      btnSaveStudentSettings: 'Simpan Pengaturan Siswa',
+      studentScheduleHeading: 'Jadwal Jam Masuk & Pulang Siswa',
+      studentStartTimeLabel: 'Jam Masuk Siswa',
+      studentStartTimeHint: 'Default: 07:00',
+      studentToleranceLabel: 'Toleransi Terlambat (Menit)',
+      studentToleranceHint: 'Lewat batas otomatis status TERLAMBAT',
+      studentCheckOutStartLabel: 'Jam Mulai Boleh Absen Pulang',
+      studentCheckOutStartHint:
+        'Mencegah siswa absen pulang terlalu pagi',
+      studentWorkEndLabel: 'Jam Pulang Normal Siswa',
+      studentWorkEndHint: 'Default: 14:00',
+      studentMethodsHeading: 'Metode Presensi Siswa yang Diaktifkan',
+      methodKioskTitle: 'Kiosk Mandiri (Scan QR / NISN)',
+      methodKioskDesc:
+        'Siswa melakukan scan kartu QR atau ketik NISN di terminal gerbang/kelas.',
+      methodManualTitle: 'Input Manual Wali Kelas / Guru',
+      methodManualDesc:
+        'Wali kelas atau guru mengabsen siswa per kelas secara manual di dalam kelas.',
+      methodCheckOutTitle: 'Aktifkan Absen Pulang Siswa',
+      methodCheckOutActiveDesc:
+        'Siswa dapat mencatat jam pulang saat pulang sekolah.',
+      methodCheckOutInactiveDesc:
+        'Absen pulang siswa dinonaktifkan (hanya mencatat absen masuk).',
+      errMinOneStudentMethod:
+        'Minimal satu metode presensi siswa (Kiosk atau Manual Wali Kelas) harus diaktifkan.',
+      errMissingStudentColumns:
+        'Kolom pengaturan siswa belum ada di database. Jalankan SQL Migration Patch v20 terlebih dahulu.',
+      toastStudentSettingsSaved:
+        'Pengaturan jadwal & metode presensi siswa berhasil disimpan.',
+      errLoadStudentSettings: 'Gagal memuat pengaturan siswa: {message}',
+      errSaveStudentSettings: 'Gagal menyimpan pengaturan siswa: {message}',
+      errDatabaseGeneric: 'Terjadi kesalahan pada database.',
+      errUnexpectedGeneric: 'Terjadi kesalahan tidak terduga.',
+
+      // Izin Komputer Guru
+      desktopCardTitle:
+        'Izin Akses Presensi via Komputer / Laptop (Desktop)',
+      desktopCardSubtitle:
+        'Secara bawaan, Guru/PTK melakukan presensi lewat HP. Gunakan saklar di bawah untuk mengizinkan akses komputer secara global atau khusus guru tertentu.',
+      desktopAllowedBadge: '{allowed} / {total} Diizinkan',
+      titleReloadTeachers: 'Muat ulang daftar Guru/PTK',
+      titleCollapseTeachers: 'Sembunyikan daftar per guru',
+      titleExpandTeachers: 'Tampilkan daftar per guru',
+      btnCollapse: 'Ringkas',
+      btnTeacherList: 'Daftar Guru',
+      globalDesktopTitle:
+        'Saklar Global: Izinkan Semua Guru / PTK Absen via Komputer',
+      globalDesktopBadgeOn: 'AKTIF (SEMUA BOLEH)',
+      globalDesktopBadgeOff: 'NONAKTIF (KHUSUS HP)',
+      globalDesktopDescOn:
+        'Seluruh Guru/PTK di sekolah ini dapat melakukan presensi dari komputer maupun HP.',
+      globalDesktopDescOff:
+        'Default direkomendasikan: Guru/PTK wajib absen dari HP, kecuali guru yang diaktifkan pada daftar di bawah.',
+      searchTeachersPlaceholder:
+        'Cari nama Guru/PTK, NIP, jabatan/tugas tambahan, atau status...',
+      filterAllTeachers: 'Semua ({count})',
+      filterAllowedTeachers: 'Boleh Komputer ({count})',
+      filterBlockedTeachers: 'Wajib HP ({count})',
+      loadingTeachers: 'Memuat daftar Guru & PTK...',
+      emptyTeachersSchool:
+        'Belum ada data Guru / PTK terdaftar pada sekolah ini.',
+      emptyTeachersSearch:
+        'Tidak ada Guru / PTK yang cocok dengan pencarian Anda.',
+      unnamedTeacher: 'Tanpa Nama',
+      noNip: 'Tanpa NIP',
+      statusActiveBadge: 'Aktif',
+      statusInactiveBadge: 'Non-Aktif',
+      badgeDesktopAllowed: 'Boleh Komputer',
+      badgeMobileOnly: 'Wajib HP',
+      ariaToggleDesktopFor: 'Izin komputer untuk {name}',
+      showingTeachersRange:
+        'Menampilkan {start}–{end} dari {total} Guru/PTK',
+      ariaPageSize: 'Jumlah guru per halaman',
+      perPageOption: '{count} / halaman',
+      btnPrevPage: 'Sebelumnya',
+      btnNextPage: 'Berikutnya',
+      pageIndicator: 'Hal {current} / {total}',
+      feedbackGlobalDesktopOn:
+        'Saklar Global AKTIF: Seluruh ({count}) Guru/PTK kini diizinkan presensi lewat Komputer/Laptop.',
+      feedbackGlobalDesktopOff:
+        'Saklar Global NONAKTIF: Seluruh Guru/PTK kini wajib presensi lewat HP (kecuali diaktifkan per guru di bawah).',
+      errToggleGlobalDesktop:
+        'Gagal mengubah pengaturan global presensi komputer.',
+      feedbackSingleDesktopOn:
+        'Izin Komputer DIAKTIFKAN untuk {name}.',
+      feedbackSingleDesktopOff:
+        'Izin Komputer DIMATIKAN untuk {name} (wajib lewat HP).',
+      errToggleSingleDesktop: 'Gagal mengubah izin untuk {name}.',
+      errLoadTeachers: 'Gagal memuat daftar Guru/PTK.',
+
+      // WhatsApp Gateway
+      waSelectSchoolFirst:
+        'Pilih sekolah terlebih dahulu untuk mengatur integrasi WhatsApp Gateway.',
+      waLoadingConfig: 'Memuat pengaturan WhatsApp Gateway...',
+      waCardTitle: 'Integrasi WhatsApp Gateway Orang Tua',
+      waCardSubtitle:
+        'Kirim notifikasi otomatis ke nomor HP Ibu/Ayah/Wali saat siswa melakukan scan presensi di Kiosk.',
+      waStatusActive: 'Status: AKTIF',
+      waStatusInactive: 'Status: NONAKTIF',
+      waProviderLabel: 'Provider WhatsApp Gateway *',
+      waApiUrlLabel: 'Endpoint API URL *',
+      waApiTokenLabel: 'API Token / Device Key *',
+      waApiTokenPlaceholder: 'Masukkan API Token',
+      titleHideToken: 'Sembunyikan Token',
+      titleShowToken: 'Tampilkan Token',
+      waSenderLabel: 'Nomor Pengirim / Sender (Opsional)',
+      waTriggerHeading: 'Kirim Pesan Otomatis Saat:',
+      waTriggerCheckIn: 'Presensi Datang (Hadir)',
+      waTriggerLate: 'Presensi Datang (Terlambat)',
+      waTriggerCheckOut: 'Presensi Pulang',
+      waVariablesHint: 'Variabel otomatis yang tersedia:',
+      waTemplateCheckInLabel: 'Template Pesan Presensi Datang',
+      waTemplateCheckOutLabel: 'Template Pesan Presensi Pulang',
+      waTestPhonePlaceholder: 'No. WA Uji Coba (0812...)',
+      btnTestWa: 'Tes Kirim WA',
+      btnSaveWa: 'Simpan Pengaturan WA',
+      errLoadWaConfig: 'Gagal memuat konfigurasi WhatsApp Gateway.',
+      feedbackWaSaved:
+        'Konfigurasi WhatsApp Gateway berhasil disimpan ke database.',
+      errSaveWaConfig: 'Gagal menyimpan pengaturan WhatsApp.',
+      errEnterTestPhone:
+        'Masukkan nomor WhatsApp tujuan pengujian terlebih dahulu.',
+      errTestWaSend: 'Terjadi kesalahan saat menguji pengiriman pesan.',
+    },
+    attendanceScanner: {
+      cameraFallbackLabel: 'Kamera {index}',
+      errCameraGeneric:
+        'Kamera tidak dapat diakses. Pastikan tidak sedang dipakai aplikasi lain.',
+      errCameraNotFound:
+        'Kamera tidak terdeteksi. Gunakan Barcode Scanner USB atau ketik NISN/NIS di bawah.',
+      errCameraPermission:
+        'Izin kamera ditolak browser. Klik ikon gembok/kamera di sebelah URL lalu pilih Izinkan.',
+      ariaSelectCamera: 'Pilih Perangkat Kamera',
+      usbManualModeLabel: 'Mode Scanner USB / Ketik Manual',
+      titleMirrorCamera: 'Balik Tampilan Cermin (Mirror)',
+      btnMirror: 'Mirror',
+      titleDisableCamera:
+        'Matikan Kamera (Gunakan Scanner USB/Manual saja)',
+      titleEnableCamera: 'Aktifkan Kamera Scanner',
+      btnCloseCamera: 'Tutup Kamera',
+      btnOpenCamera: 'Buka Kamera',
+      preparingCamera: 'Menyiapkan kamera scanner...',
+      btnReloadCamera: 'Muat Ulang Kamera',
+      manualInputPlaceholder:
+        'Scan USB atau ketik NISN / NIS lalu Enter...',
+      ariaManualInput: 'Input Barcode Scanner atau NISN Manual',
+      btnSubmitScan: 'Absen',
+    },
   },
   en: {
     common: {
@@ -1138,6 +1506,372 @@ export const translations = {
       errLoadReports: 'Failed to load student report history.',
       errLoadDetail: 'Failed to load grade details.',
       errDownloadPdf: 'Failed to download PDF report card.',
+    },
+    attendanceSettings: {
+      superAdminTitle: 'Super Admin Settings Mode',
+      superAdminSubtitle: 'Select the school to configure:',
+      tabGuruSchedule: '1. Teacher Schedule & Rules',
+      tabGuruScheduleShort: 'Teacher Hours',
+      tabGuruDesktop: '2. Teacher Desktop Access',
+      tabGuruDesktopShort: 'PC Access',
+      tabStudent: '3. Student Attendance',
+      tabStudentShort: 'Students',
+      tabHolidays: '4. Holiday Calendar ({count})',
+      tabHolidaysShort: 'Holidays ({count})',
+      tabWhatsapp: '5. WhatsApp Gateway',
+      tabWhatsappShort: 'WA Gateway',
+      scheduleTitle:
+        'Working Hours, Selfie Verification & Workday System (Teachers)',
+      scheduleSubtitle:
+        'Configure check-in late tolerance, check-out schedule, selfie photo requirements, and weekend holidays.',
+      workStartLabel: 'Arrival / Check-In Time *',
+      workStartHint: 'Official school start time.',
+      lateToleranceLabel: 'Late Tolerance (Minutes)',
+      lateToleranceHintPrefix: 'Enter ',
+      lateToleranceHintSuffix: ' for no tolerance.',
+      workEndLabel: 'Check-Out / End Time *',
+      workEndHint: 'Reference end time on the attendance card.',
+      toleranceActivePrefix: 'Active tolerance ',
+      toleranceActiveMinutes: '{minutes} minutes',
+      toleranceActiveMid1: ': Check-in up to ',
+      toleranceActiveMid2: ' is marked ',
+      statusPresent: 'PRESENT',
+      toleranceActiveMid3: ', after ',
+      toleranceActiveMid4: ' is marked ',
+      statusLate: 'LATE',
+      noTolerancePrefix: 'No tolerance: Check-in after ',
+      noToleranceMid: ' is immediately marked ',
+      selfieSectionLabel:
+        'Attendance Selfie Verification (GPS + Selfie Photo vs GPS Only)',
+      selfieSectionHint:
+        'Disable if the school only requires GPS coordinate validation without taking a face photo.',
+      selfieCheckInTitle: 'Arrival Selfie (Check-In)',
+      selfieCheckInActive:
+        'Active: Teachers must take a selfie photo when checking in.',
+      selfieCheckInInactive:
+        'Disabled: Check-in is recorded immediately using GPS only.',
+      selfieCheckOutTitle: 'Departure Selfie (Check-Out)',
+      selfieCheckOutActive:
+        'Active: Teachers must take a selfie photo when checking out.',
+      selfieCheckOutInactive:
+        'Disabled: Check-out is recorded immediately using GPS only.',
+      workDaysLabel: 'School Workday System *',
+      fiveDaysTitle: '5 Workdays (Monday – Friday)',
+      fiveDaysDescPrefix: '',
+      fiveDaysDescHighlight: 'Saturday & Sunday',
+      fiveDaysDescSuffix:
+        ' are automatically marked as Red Dates on the attendance calendar.',
+      sixDaysTitle: '6 Workdays (Monday – Saturday)',
+      sixDaysDescPrefix: 'Saturday counts as a regular school day; only ',
+      sixDaysDescHighlight: 'Sunday, National Holidays & Collective Leave',
+      sixDaysDescSuffix: ' are marked in red.',
+      btnSaving: 'Saving...',
+      btnSaveSchedule: 'Save Schedule, Selfie & Workday Settings',
+      toastSelectSchool: 'Please select a school first.',
+      toastPartialScheduleSaved:
+        'Schedule & workdays saved, but requireSelfieCheckIn/Out columns do not exist yet in the Supabase schools table.',
+      selfieActiveShort: 'Active',
+      selfieInactiveShort: 'Disabled (GPS Only)',
+      toastScheduleSavedWithTolerance:
+        'Saved! Check-in {start} (+{tolerance}m), check-out {end} • {selfie}.',
+      toastScheduleSavedNoTolerance:
+        'Saved! Check-in {start}, check-out {end} • {selfie}.',
+      errLoadSchedule: 'Failed to load school attendance settings.',
+      errSaveSchedule: 'Failed to save attendance settings.',
+
+      // Holiday Calendar
+      holidayTitle: 'National, Collective Leave & School Holiday Calendar',
+      holidaySubtitle:
+        'Quick sync from national calendar servers, import Excel files (.xlsx / .csv), or add manually.',
+      btnExcelTemplate: 'Excel Template',
+      btnImportExcel: 'Import Excel / CSV',
+      apiServerLabel: 'API Server:',
+      calendarRefLabel: 'Calendar:',
+      calRefMuhammadiyah: 'Muhammadiyah (KHGT / Hisab)',
+      calRefGovernment: 'Government (SKB 3 Menteri)',
+      btnFetchingServer: 'Fetching Data...',
+      btnSyncFromServer: 'Sync from Server ({year})',
+      includeCutiPrefix: 'Include ',
+      includeCutiHighlight: 'Collective Leave (Cuti Bersama)',
+      includeAwalRamadanPrefix: 'Include ',
+      includeAwalRamadanHighlight: 'Start of Ramadan (1 Ramadan)',
+      saveScopeLabel: 'Save Scope:',
+      scopeGlobal: 'National / Global',
+      scopeSchool: 'This School Only',
+      previewTitle: 'Preview: {source} ({count} Dates)',
+      previewTip:
+        'Tip: Click any date or description below if you want to shift by 1 day before saving.',
+      defaultExtraHolidayName: 'Additional Holiday',
+      btnAddRow: 'Add Row',
+      btnCancel: 'Cancel',
+      btnSaveToDb: 'Save to Database',
+      colNo: 'No',
+      colDate: 'Date',
+      colJavaneseDay: 'Javanese Pasaran',
+      colHolidayName: 'Holiday / Leave Description',
+      colDelete: 'Delete',
+      titleExcludeDate: 'Exclude this date',
+      labelHolidayDate: 'Holiday / Leave Date *',
+      labelHolidayDesc: 'Holiday Description *',
+      placeholderHolidayDesc:
+        'e.g., Early Ramadan Break / Teacher Workshop',
+      btnAddHoliday: 'Add Holiday',
+      holidayListHeading: 'Red Dates List for {year} ({count} days)',
+      viewCalendar: 'Calendar',
+      viewList: 'List',
+      yearOption: 'Year {year}',
+      btnAddYear: 'Add Year',
+      titleAddYear: 'Add the next year to the selection list',
+      titleRefreshHolidays: 'Refresh Holiday List',
+      selectAllHolidays: 'Select All ({selected}/{total} selected)',
+      tapDateHint:
+        'Tap any date to view details & Javanese Pasaran',
+      btnDeleteSelected: 'Delete Selected ({count})',
+      btnDeleteAll: 'Delete All ({count})',
+      loadingHolidays: 'Loading holiday data from database...',
+      emptyHolidaysTitle: 'No holiday data saved yet for {year}.',
+      emptyHolidaysDesc:
+        'Click Sync from Server ({year}) above to automatically fetch National Holidays & Collective Leave.',
+      badgeCutiBersama: 'Collective Leave',
+      badgeNational: 'National',
+      badgeSchool: 'School',
+      titleEditHoliday: 'Edit date or description',
+      titleDeleteHoliday: 'Delete holiday',
+      modalEditTitle: 'Edit Red Date',
+      modalEditSubtitle: 'Update the holiday date or description',
+      modalEditDateLabel: 'Holiday Date *',
+      modalEditJavanesePrefix: 'Javanese Calendar:',
+      modalEditDescLabel: 'Holiday Description *',
+      btnSaveChanges: 'Save Changes',
+      btnDeleting: 'Deleting...',
+      btnConfirmDeleteNow: 'Yes, Delete Now',
+      modalDelSingleTitle: 'Delete Red Date?',
+      modalDelSingleDesc:
+        'Are you sure you want to delete "{name}" ({date})?',
+      modalDelSelectedTitle: 'Delete {count} Selected Red Dates?',
+      modalDelSelectedDesc:
+        'You are about to delete {count} checked red date records from the database.',
+      modalDelAllTitle: 'Delete All Red Dates for {year}?',
+      modalDelAllDesc:
+        'All {count} holiday records for {year} that you can manage will be permanently deleted from the database.',
+      feedbackNextYearAdded:
+        'Year {year} added. Click "Sync from Server ({year})" to fetch its holiday schedule.',
+      feedbackFetchingServer: 'Fetching holiday data for {year}...',
+      feedbackPreviewSourceServer: '{provider} — Year {year}',
+      feedbackFetchedSuccess:
+        'Successfully fetched {count} red dates from {provider}! Review the preview below then click "Save to Database".',
+      errFetchServer: 'Failed to fetch data from server.',
+      errEmptySingleHoliday:
+        'Please fill in both the holiday date and description.',
+      feedbackSingleAdded: 'Holiday successfully added to database!',
+      errAddSingleHoliday: 'Failed to add holiday.',
+      errGlobalHolidayAdminOnly:
+        'Global National Holidays can only be modified by a Super Admin.',
+      feedbackEditSaved:
+        'Changes to holiday "{name}" have been saved!',
+      errUpdateHoliday: 'Failed to update holiday.',
+      errInvalidSpreadsheet:
+        'No valid rows found in the file. Ensure column 1 is Date (YYYY-MM-DD) and column 2 is Description.',
+      feedbackPreviewSourceFile: 'File {fileName}',
+      feedbackFileReadSuccess:
+        'Successfully read {count} dates from {fileName}. Click "Save to Database" below to save.',
+      errReadSpreadsheet: 'Failed to read Excel/CSV file.',
+      feedbackBatchSaved:
+        '{count} holiday & collective leave records have been saved to the database!',
+      errSaveBatch: 'Failed to save data to database.',
+      feedbackDeletedCount:
+        '{count} holiday records have been deleted from the database.',
+      errDeleteHolidays: 'Failed to delete holidays.',
+      feedbackDatePicked:
+        'Date {date} selected in the form above. Enter its description and click "+ Add Holiday".',
+      errLoadHolidays:
+        'Table national_holidays is not available yet. Run the SQL script in Supabase first.',
+      errSchoolNotFound: 'School data not found.',
+
+      // Monthly Calendar View
+      month_0: 'January',
+      month_1: 'February',
+      month_2: 'March',
+      month_3: 'April',
+      month_4: 'May',
+      month_5: 'June',
+      month_6: 'July',
+      month_7: 'August',
+      month_8: 'September',
+      month_9: 'October',
+      month_10: 'November',
+      month_11: 'December',
+      day_0: 'Sun',
+      day_1: 'Mon',
+      day_2: 'Tue',
+      day_3: 'Wed',
+      day_4: 'Thu',
+      day_5: 'Fri',
+      day_6: 'Sat',
+      titlePrevMonth: 'Previous Month',
+      titleNextMonth: 'Next Month',
+      holidayCountBadge: '{count} holidays',
+      badgeRedDate: 'Red Date',
+      badgeWorkday: 'Workday',
+      holidayNotePrefix: 'Holiday Note: {name}',
+      workdayEffectiveNote:
+        'Effective school workday (attendance schedule active).',
+      btnEditHolidayNote: 'Edit Holiday Note',
+      btnSetAsHoliday: 'Mark as Holiday / Leave',
+      tooltipAddHoliday: '{javaneseDate} (Click to add holiday)',
+      noSpecialHolidayMonth: 'No special holidays this month.',
+
+      // Student Attendance Settings
+      studentCardTitle: 'Student Attendance Schedule & Methods Settings',
+      studentCardSubtitle:
+        'Configure student check-in time, late tolerance, dismissal time, and active attendance methods.',
+      btnSaveStudentSettings: 'Save Student Settings',
+      studentScheduleHeading: 'Student Check-In & Check-Out Schedule',
+      studentStartTimeLabel: 'Student Check-In Time',
+      studentStartTimeHint: 'Default: 07:00',
+      studentToleranceLabel: 'Late Tolerance (Minutes)',
+      studentToleranceHint: 'Past limit automatically marks as LATE',
+      studentCheckOutStartLabel: 'Earliest Check-Out Time',
+      studentCheckOutStartHint:
+        'Prevents students from checking out too early',
+      studentWorkEndLabel: 'Normal Student Dismissal Time',
+      studentWorkEndHint: 'Default: 14:00',
+      studentMethodsHeading: 'Enabled Student Attendance Methods',
+      methodKioskTitle: 'Self-Service Kiosk (Scan QR / NISN)',
+      methodKioskDesc:
+        'Students scan QR cards or enter NISN at the gate/classroom terminal.',
+      methodManualTitle: 'Manual Input by Homeroom / Teacher',
+      methodManualDesc:
+        'Homeroom teachers or instructors record class attendance manually.',
+      methodCheckOutTitle: 'Enable Student Check-Out',
+      methodCheckOutActiveDesc:
+        'Students can record their departure time at dismissal.',
+      methodCheckOutInactiveDesc:
+        'Student check-out is disabled (records check-in only).',
+      errMinOneStudentMethod:
+        'At least one student attendance method (Kiosk or Manual Homeroom) must be enabled.',
+      errMissingStudentColumns:
+        'Student settings columns are missing in the database. Run SQL Migration Patch v20 first.',
+      toastStudentSettingsSaved:
+        'Student attendance schedule & methods saved successfully.',
+      errLoadStudentSettings: 'Failed to load student settings: {message}',
+      errSaveStudentSettings: 'Failed to save student settings: {message}',
+      errDatabaseGeneric: 'A database error occurred.',
+      errUnexpectedGeneric: 'An unexpected error occurred.',
+
+      // Teacher Desktop Access
+      desktopCardTitle:
+        'Computer / Laptop (Desktop) Attendance Access Permission',
+      desktopCardSubtitle:
+        'By default, Teachers/Staff check in via mobile phone. Use the switches below to allow desktop access globally or per teacher.',
+      desktopAllowedBadge: '{allowed} / {total} Allowed',
+      titleReloadTeachers: 'Reload Teachers/Staff list',
+      titleCollapseTeachers: 'Hide per-teacher list',
+      titleExpandTeachers: 'Show per-teacher list',
+      btnCollapse: 'Collapse',
+      btnTeacherList: 'Teacher List',
+      globalDesktopTitle:
+        'Global Switch: Allow All Teachers / Staff to Check In via Computer',
+      globalDesktopBadgeOn: 'ACTIVE (ALL ALLOWED)',
+      globalDesktopBadgeOff: 'INACTIVE (MOBILE ONLY)',
+      globalDesktopDescOn:
+        'All Teachers/Staff at this school can record attendance from both computers and phones.',
+      globalDesktopDescOff:
+        'Recommended default: Teachers/Staff must check in via mobile phone, except those enabled below.',
+      searchTeachersPlaceholder:
+        'Search Teacher/Staff name, NIP, role/additional duty, or status...',
+      filterAllTeachers: 'All ({count})',
+      filterAllowedTeachers: 'Desktop Allowed ({count})',
+      filterBlockedTeachers: 'Mobile Only ({count})',
+      loadingTeachers: 'Loading Teachers & Staff list...',
+      emptyTeachersSchool:
+        'No Teachers / Staff registered for this school yet.',
+      emptyTeachersSearch:
+        'No Teachers / Staff match your search criteria.',
+      unnamedTeacher: 'Unnamed',
+      noNip: 'No NIP',
+      statusActiveBadge: 'Active',
+      statusInactiveBadge: 'Inactive',
+      badgeDesktopAllowed: 'Desktop Allowed',
+      badgeMobileOnly: 'Mobile Only',
+      ariaToggleDesktopFor: 'Desktop access for {name}',
+      showingTeachersRange:
+        'Showing {start}–{end} of {total} Teachers/Staff',
+      ariaPageSize: 'Teachers per page',
+      perPageOption: '{count} / page',
+      btnPrevPage: 'Previous',
+      btnNextPage: 'Next',
+      pageIndicator: 'Page {current} / {total}',
+      feedbackGlobalDesktopOn:
+        'Global Switch ACTIVE: All ({count}) Teachers/Staff are now permitted to check in via Computer/Laptop.',
+      feedbackGlobalDesktopOff:
+        'Global Switch INACTIVE: All Teachers/Staff must now check in via mobile phone (unless enabled individually below).',
+      errToggleGlobalDesktop:
+        'Failed to update global desktop attendance setting.',
+      feedbackSingleDesktopOn:
+        'Desktop Access ENABLED for {name}.',
+      feedbackSingleDesktopOff:
+        'Desktop Access DISABLED for {name} (mobile phone required).',
+      errToggleSingleDesktop: 'Failed to update permission for {name}.',
+      errLoadTeachers: 'Failed to load Teachers/Staff list.',
+
+      // WhatsApp Gateway
+      waSelectSchoolFirst:
+        'Select a school first to configure WhatsApp Gateway integration.',
+      waLoadingConfig: 'Loading WhatsApp Gateway settings...',
+      waCardTitle: 'Parent WhatsApp Gateway Integration',
+      waCardSubtitle:
+        'Send automatic notifications to parent/guardian mobile numbers when students scan attendance at the Kiosk.',
+      waStatusActive: 'Status: ACTIVE',
+      waStatusInactive: 'Status: INACTIVE',
+      waProviderLabel: 'WhatsApp Gateway Provider *',
+      waApiUrlLabel: 'Endpoint API URL *',
+      waApiTokenLabel: 'API Token / Device Key *',
+      waApiTokenPlaceholder: 'Enter API Token',
+      titleHideToken: 'Hide Token',
+      titleShowToken: 'Show Token',
+      waSenderLabel: 'Sender Number (Optional)',
+      waTriggerHeading: 'Send Automatic Message On:',
+      waTriggerCheckIn: 'Arrival Check-In (Present)',
+      waTriggerLate: 'Arrival Check-In (Late)',
+      waTriggerCheckOut: 'Departure Check-Out',
+      waVariablesHint: 'Available dynamic variables:',
+      waTemplateCheckInLabel: 'Check-In Message Template',
+      waTemplateCheckOutLabel: 'Check-Out Message Template',
+      waTestPhonePlaceholder: 'Test WA Number (0812...)',
+      btnTestWa: 'Test Send WA',
+      btnSaveWa: 'Save WA Settings',
+      errLoadWaConfig: 'Failed to load WhatsApp Gateway configuration.',
+      feedbackWaSaved:
+        'WhatsApp Gateway configuration saved to database successfully.',
+      errSaveWaConfig: 'Failed to save WhatsApp settings.',
+      errEnterTestPhone:
+        'Please enter a destination WhatsApp number for testing first.',
+      errTestWaSend: 'An error occurred while testing message delivery.',
+    },
+    attendanceScanner: {
+      cameraFallbackLabel: 'Camera {index}',
+      errCameraGeneric:
+        'Camera cannot be accessed. Ensure it is not being used by another application.',
+      errCameraNotFound:
+        'No camera detected. Use a USB Barcode Scanner or type NISN/NIS below.',
+      errCameraPermission:
+        'Camera permission denied by browser. Click the lock/camera icon next to the URL and select Allow.',
+      ariaSelectCamera: 'Select Camera Device',
+      usbManualModeLabel: 'USB Scanner / Manual Input Mode',
+      titleMirrorCamera: 'Flip Mirror Preview',
+      btnMirror: 'Mirror',
+      titleDisableCamera:
+        'Turn Off Camera (Use USB Scanner/Manual input only)',
+      titleEnableCamera: 'Enable Scanner Camera',
+      btnCloseCamera: 'Close Camera',
+      btnOpenCamera: 'Open Camera',
+      preparingCamera: 'Preparing scanner camera...',
+      btnReloadCamera: 'Reload Camera',
+      manualInputPlaceholder:
+        'Scan via USB or type NISN / NIS then press Enter...',
+      ariaManualInput: 'Barcode Scanner or Manual NISN Input',
+      btnSubmitScan: 'Check In',
     },
   },
 } as const;

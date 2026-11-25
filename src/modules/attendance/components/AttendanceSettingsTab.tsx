@@ -30,6 +30,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTranslation } from '@/hooks/useTranslation';
 import type { WorkDaysMode, HolidayRecord } from '../utils/indonesianHolidays';
 import {
     downloadHolidayExcelTemplate,
@@ -107,6 +108,7 @@ function isMissingColumnError(err: unknown): boolean {
 }
 
 export function AttendanceSettingsTab() {
+    const { t } = useTranslation();
     const { user, school } = useAuthStore();
     const isSuperAdmin = user?.role === 'SUPER_ADMIN';
     const isAdmin = user?.role === 'ADMIN';
@@ -197,10 +199,13 @@ export function AttendanceSettingsTab() {
         message: string;
     } | null>(null);
 
-    const showToast = (type: 'success' | 'error', message: string) => {
-        setToast({ type, message });
-        setTimeout(() => setToast(null), 5500);
-    };
+    const showToast = useCallback(
+        (type: 'success' | 'error', message: string) => {
+            setToast({ type, message });
+            setTimeout(() => setToast(null), 5500);
+        },
+        []
+    );
 
     useEffect(() => {
         if (school?.id) {
@@ -258,12 +263,12 @@ export function AttendanceSettingsTab() {
             const msg =
                 err instanceof Error
                     ? err.message
-                    : 'Gagal memuat pengaturan presensi sekolah.';
+                    : t('attendanceSettings.errLoadSchedule');
             showToast('error', msg);
         } finally {
             setIsLoadingSchedule(false);
         }
-    }, [selectedSchoolId]);
+    }, [selectedSchoolId, showToast, t]);
 
     useEffect(() => {
         loadScheduleSettings();
@@ -306,14 +311,16 @@ export function AttendanceSettingsTab() {
         setFilterYear(nextYear);
         setSyncFeedback({
             status: 'success',
-            text: `Tahun ${nextYear} ditambahkan. Klik "Sync dari Server (${nextYear})" untuk menarik jadwal liburnya.`,
+            text: t('attendanceSettings.feedbackNextYearAdded', {
+                year: nextYear,
+            }),
         });
     };
 
     const handleSaveSchedule = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!selectedSchoolId) {
-            showToast('error', 'Pilih sekolah terlebih dahulu.');
+            showToast('error', t('attendanceSettings.toastSelectSchool'));
             return;
         }
 
@@ -351,7 +358,7 @@ export function AttendanceSettingsTab() {
                     if (retry.error) throw retry.error;
                     showToast(
                         'error',
-                        'Jam & hari kerja tersimpan, tetapi kolom requireSelfieCheckIn/Out belum ada di tabel schools Supabase.'
+                        t('attendanceSettings.toastPartialScheduleSaved')
                     );
                     return;
                 }
@@ -359,22 +366,35 @@ export function AttendanceSettingsTab() {
             }
 
             setLateToleranceMinutes(cleanTolerance);
-            const selfieSummary = `Selfie Masuk: ${requireSelfieCheckIn ? 'Aktif' : 'Nonaktif (GPS Saja)'
-                }, Selfie Pulang: ${requireSelfieCheckOut ? 'Aktif' : 'Nonaktif (GPS Saja)'
+            const selfieSummary = `${t('attendanceSettings.selfieCheckInTitle')}: ${requireSelfieCheckIn
+                    ? t('attendanceSettings.selfieActiveShort')
+                    : t('attendanceSettings.selfieInactiveShort')
+                }, ${t('attendanceSettings.selfieCheckOutTitle')}: ${requireSelfieCheckOut
+                    ? t('attendanceSettings.selfieActiveShort')
+                    : t('attendanceSettings.selfieInactiveShort')
                 }`;
 
             showToast(
                 'success',
                 cleanTolerance > 0
-                    ? `Tersimpan! Masuk ${workStartTime} (+${cleanTolerance}m), pulang ${workEndTime} • ${selfieSummary}.`
-                    : `Tersimpan! Masuk ${workStartTime}, pulang ${workEndTime} • ${selfieSummary}.`
+                    ? t('attendanceSettings.toastScheduleSavedWithTolerance', {
+                        start: workStartTime,
+                        tolerance: cleanTolerance,
+                        end: workEndTime,
+                        selfie: selfieSummary,
+                    })
+                    : t('attendanceSettings.toastScheduleSavedNoTolerance', {
+                        start: workStartTime,
+                        end: workEndTime,
+                        selfie: selfieSummary,
+                    })
             );
         } catch (err: unknown) {
             showToast(
                 'error',
                 err instanceof Error
                     ? err.message
-                    : 'Gagal menyimpan pengaturan presensi.'
+                    : t('attendanceSettings.errSaveSchedule')
             );
         } finally {
             setIsSavingSchedule(false);
@@ -422,12 +442,12 @@ export function AttendanceSettingsTab() {
                 'error',
                 err instanceof Error
                     ? err.message
-                    : 'Tabel national_holidays belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
+                    : t('attendanceSettings.errLoadHolidays')
             );
         } finally {
             setIsLoadingHolidays(false);
         }
-    }, [filterYear, selectedSchoolId]);
+    }, [filterYear, selectedSchoolId, showToast, t]);
 
     useEffect(() => {
         loadHolidays();
@@ -443,7 +463,7 @@ export function AttendanceSettingsTab() {
         if (validRows.length === 0) return;
 
         if (!isSuperAdmin && !resolvedHolidaySchoolId) {
-            throw new Error('Data sekolah tidak ditemukan.');
+            throw new Error(t('attendanceSettings.errSchoolNotFound'));
         }
 
         let existingQuery = supabase
@@ -501,7 +521,9 @@ export function AttendanceSettingsTab() {
         setIsFetchingServer(true);
         setSyncFeedback({
             status: 'loading',
-            text: `Sedang menarik data libur tahun ${filterYear}...`,
+            text: t('attendanceSettings.feedbackFetchingServer', {
+                year: filterYear,
+            }),
         });
 
         try {
@@ -518,14 +540,24 @@ export function AttendanceSettingsTab() {
             });
 
             setPreviewRows(rows);
-            setPreviewSourceLabel(`${usedProviderLabel} — Tahun ${filterYear}`);
+            setPreviewSourceLabel(
+                t('attendanceSettings.feedbackPreviewSourceServer', {
+                    provider: usedProviderLabel,
+                    year: filterYear,
+                })
+            );
             setSyncFeedback({
                 status: 'success',
-                text: `Berhasil menarik ${rows.length} tanggal merah dari ${usedProviderLabel}! Silakan cek pratinjau di bawah lalu klik "Simpan ke Database".`,
+                text: t('attendanceSettings.feedbackFetchedSuccess', {
+                    count: rows.length,
+                    provider: usedProviderLabel,
+                }),
             });
         } catch (err: unknown) {
             const errMsg =
-                err instanceof Error ? err.message : 'Gagal mengambil data dari server.';
+                err instanceof Error
+                    ? err.message
+                    : t('attendanceSettings.errFetchServer');
             setSyncFeedback({
                 status: 'error',
                 text: errMsg,
@@ -541,7 +573,7 @@ export function AttendanceSettingsTab() {
         if (!newHolidayDate || cleanName.length < 3) {
             setSyncFeedback({
                 status: 'error',
-                text: 'Isi tanggal dan keterangan hari libur dengan lengkap.',
+                text: t('attendanceSettings.errEmptySingleHoliday'),
             });
             return;
         }
@@ -564,13 +596,15 @@ export function AttendanceSettingsTab() {
             await loadHolidays();
             setSyncFeedback({
                 status: 'success',
-                text: 'Hari libur berhasil ditambahkan ke database!',
+                text: t('attendanceSettings.feedbackSingleAdded'),
             });
         } catch (err: unknown) {
             setSyncFeedback({
                 status: 'error',
                 text:
-                    err instanceof Error ? err.message : 'Gagal menambahkan hari libur.',
+                    err instanceof Error
+                        ? err.message
+                        : t('attendanceSettings.errAddSingleHoliday'),
             });
         } finally {
             setIsAddingHoliday(false);
@@ -581,7 +615,7 @@ export function AttendanceSettingsTab() {
         if (!isSuperAdmin && item.schoolId === null) {
             setSyncFeedback({
                 status: 'error',
-                text: 'Hari Libur Nasional Global hanya dapat diubah oleh Super Admin.',
+                text: t('attendanceSettings.errGlobalHolidayAdminOnly'),
             });
             return;
         }
@@ -612,13 +646,17 @@ export function AttendanceSettingsTab() {
             await loadHolidays();
             setSyncFeedback({
                 status: 'success',
-                text: `Perubahan hari libur "${editNameInput.trim()}" berhasil disimpan!`,
+                text: t('attendanceSettings.feedbackEditSaved', {
+                    name: editNameInput.trim(),
+                }),
             });
         } catch (err: unknown) {
             setSyncFeedback({
                 status: 'error',
                 text:
-                    err instanceof Error ? err.message : 'Gagal memperbarui hari libur.',
+                    err instanceof Error
+                        ? err.message
+                        : t('attendanceSettings.errUpdateHoliday'),
             });
         } finally {
             setIsSavingEdit(false);
@@ -637,21 +675,30 @@ export function AttendanceSettingsTab() {
             if (parsed.length === 0) {
                 setSyncFeedback({
                     status: 'error',
-                    text: 'Tidak ada baris valid ditemukan di file. Pastikan kolom 1 adalah Tanggal (YYYY-MM-DD) dan kolom 2 adalah Keterangan.',
+                    text: t('attendanceSettings.errInvalidSpreadsheet'),
                 });
                 return;
             }
             setPreviewRows(parsed);
-            setPreviewSourceLabel(`File ${file.name}`);
+            setPreviewSourceLabel(
+                t('attendanceSettings.feedbackPreviewSourceFile', {
+                    fileName: file.name,
+                })
+            );
             setSyncFeedback({
                 status: 'success',
-                text: `Berhasil membaca ${parsed.length} tanggal dari file ${file.name}. Klik "Simpan ke Database" di bawah untuk menyimpan.`,
+                text: t('attendanceSettings.feedbackFileReadSuccess', {
+                    count: parsed.length,
+                    fileName: file.name,
+                }),
             });
         } catch (err: unknown) {
             setSyncFeedback({
                 status: 'error',
                 text:
-                    err instanceof Error ? err.message : 'Gagal membaca file Excel/CSV.',
+                    err instanceof Error
+                        ? err.message
+                        : t('attendanceSettings.errReadSpreadsheet'),
             });
         }
     };
@@ -671,7 +718,9 @@ export function AttendanceSettingsTab() {
             await loadHolidays();
             setSyncFeedback({
                 status: 'success',
-                text: `${countSaved} data hari libur & cuti bersama berhasil disimpan ke database!`,
+                text: t('attendanceSettings.feedbackBatchSaved', {
+                    count: countSaved,
+                }),
             });
         } catch (err: unknown) {
             setSyncFeedback({
@@ -679,7 +728,7 @@ export function AttendanceSettingsTab() {
                 text:
                     err instanceof Error
                         ? err.message
-                        : 'Gagal menyimpan data ke database.',
+                        : t('attendanceSettings.errSaveBatch'),
             });
         } finally {
             setIsImporting(false);
@@ -728,13 +777,17 @@ export function AttendanceSettingsTab() {
             await loadHolidays();
             setSyncFeedback({
                 status: 'success',
-                text: `${deletedCount} data hari libur berhasil dihapus dari database.`,
+                text: t('attendanceSettings.feedbackDeletedCount', {
+                    count: deletedCount,
+                }),
             });
         } catch (err: unknown) {
             setSyncFeedback({
                 status: 'error',
                 text:
-                    err instanceof Error ? err.message : 'Gagal menghapus hari libur.',
+                    err instanceof Error
+                        ? err.message
+                        : t('attendanceSettings.errDeleteHolidays'),
             });
         } finally {
             setIsDeletingHolidays(false);
@@ -753,36 +806,40 @@ export function AttendanceSettingsTab() {
     }> = [
             {
                 id: 'GURU_SCHEDULE',
-                label: '1. Jam & Aturan Guru',
-                shortLabel: 'Jam Guru',
+                label: t('attendanceSettings.tabGuruSchedule'),
+                shortLabel: t('attendanceSettings.tabGuruScheduleShort'),
                 icon: Clock,
                 activeClass: 'bg-emerald-600 text-white shadow-xs',
             },
             {
                 id: 'GURU_DESKTOP',
-                label: '2. Izin Komputer Guru',
-                shortLabel: 'Izin PC',
+                label: t('attendanceSettings.tabGuruDesktop'),
+                shortLabel: t('attendanceSettings.tabGuruDesktopShort'),
                 icon: Monitor,
                 activeClass: 'bg-blue-600 text-white shadow-xs',
             },
             {
                 id: 'SISWA',
-                label: '3. Presensi Siswa',
-                shortLabel: 'Siswa',
+                label: t('attendanceSettings.tabStudent'),
+                shortLabel: t('attendanceSettings.tabStudentShort'),
                 icon: GraduationCap,
                 activeClass: 'bg-indigo-600 text-white shadow-xs',
             },
             {
                 id: 'HOLIDAYS',
-                label: `4. Kalender Libur (${holidays.length})`,
-                shortLabel: `Libur (${holidays.length})`,
+                label: t('attendanceSettings.tabHolidays', {
+                    count: holidays.length,
+                }),
+                shortLabel: t('attendanceSettings.tabHolidaysShort', {
+                    count: holidays.length,
+                }),
                 icon: CalendarDays,
                 activeClass: 'bg-rose-600 text-white shadow-xs',
             },
             {
                 id: 'WHATSAPP',
-                label: '5. WhatsApp Gateway',
-                shortLabel: 'WA Gateway',
+                label: t('attendanceSettings.tabWhatsapp'),
+                shortLabel: t('attendanceSettings.tabWhatsappShort'),
                 icon: MessageSquare,
                 activeClass: 'bg-teal-600 text-white shadow-xs',
             },
@@ -794,8 +851,8 @@ export function AttendanceSettingsTab() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
-                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                            : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -812,10 +869,10 @@ export function AttendanceSettingsTab() {
                 <div className="rounded-xl border border-purple-500/30 bg-purple-500/10 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <div>
                         <p className="text-xs font-bold text-purple-700 dark:text-purple-300">
-                            Mode Pengaturan Super Admin
+                            {t('attendanceSettings.superAdminTitle')}
                         </p>
                         <p className="text-[11px] opacity-75">
-                            Pilih sekolah yang ingin diatur:
+                            {t('attendanceSettings.superAdminSubtitle')}
                         </p>
                     </div>
                     <select
@@ -845,8 +902,8 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={() => setActiveSubTab(tab.id)}
                             className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer ${isActive
-                                ? tab.activeClass
-                                : 'text-muted-foreground hover:text-foreground hover:bg-card/70'
+                                    ? tab.activeClass
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-card/70'
                                 }`}
                         >
                             <IconComponent size={15} className="shrink-0" />
@@ -869,10 +926,10 @@ export function AttendanceSettingsTab() {
                         <div>
                             <h2 className="text-base font-bold flex items-center gap-2">
                                 <Clock size={18} className="text-emerald-600" />
-                                Jam Kerja, Verifikasi Kamera Selfie & Sistem Hari Kerja (Guru)
+                                {t('attendanceSettings.scheduleTitle')}
                             </h2>
                             <p className="text-xs text-muted-foreground mt-0.5">
-                                Mengatur batas keterlambatan check-in, jadwal pulang, kewajiban foto selfie, serta hari libur akhir pekan.
+                                {t('attendanceSettings.scheduleSubtitle')}
                             </p>
                         </div>
                         {isLoadingSchedule && <RefreshCw size={16} className="spin opacity-60" />}
@@ -881,7 +938,7 @@ export function AttendanceSettingsTab() {
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                         <div>
                             <label className="block text-xs font-semibold mb-1.5">
-                                Jam Berangkat / Masuk *
+                                {t('attendanceSettings.workStartLabel')}
                             </label>
                             <input
                                 type="time"
@@ -891,13 +948,13 @@ export function AttendanceSettingsTab() {
                                 className="form-input w-full text-sm font-mono"
                             />
                             <p className="text-[11px] text-muted-foreground mt-1">
-                                Jadwal masuk resmi sekolah.
+                                {t('attendanceSettings.workStartHint')}
                             </p>
                         </div>
 
                         <div>
                             <label className="block text-xs font-semibold mb-1.5">
-                                Toleransi Keterlambatan (Menit)
+                                {t('attendanceSettings.lateToleranceLabel')}
                             </label>
                             <input
                                 type="number"
@@ -914,13 +971,15 @@ export function AttendanceSettingsTab() {
                                 className="form-input w-full text-sm font-mono"
                             />
                             <p className="text-[11px] text-muted-foreground mt-1">
-                                Isi <strong>0</strong> jika tanpa toleransi.
+                                {t('attendanceSettings.lateToleranceHintPrefix')}
+                                <strong>0</strong>
+                                {t('attendanceSettings.lateToleranceHintSuffix')}
                             </p>
                         </div>
 
                         <div>
                             <label className="block text-xs font-semibold mb-1.5">
-                                Jam Pulang Kerja *
+                                {t('attendanceSettings.workEndLabel')}
                             </label>
                             <input
                                 type="time"
@@ -930,7 +989,7 @@ export function AttendanceSettingsTab() {
                                 className="form-input w-full text-sm font-mono"
                             />
                             <p className="text-[11px] text-muted-foreground mt-1">
-                                Acuan jadwal pulang pada kartu presensi.
+                                {t('attendanceSettings.workEndHint')}
                             </p>
                         </div>
                     </div>
@@ -939,23 +998,33 @@ export function AttendanceSettingsTab() {
                         <span className="font-medium">
                             {lateToleranceMinutes > 0 ? (
                                 <>
-                                    Toleransi aktif <strong>{lateToleranceMinutes} menit</strong>: Check-in s.d. pukul{' '}
+                                    {t('attendanceSettings.toleranceActivePrefix')}
+                                    <strong>
+                                        {t('attendanceSettings.toleranceActiveMinutes', {
+                                            minutes: lateToleranceMinutes,
+                                        })}
+                                    </strong>
+                                    {t('attendanceSettings.toleranceActiveMid1')}
                                     <strong className="font-mono text-emerald-700 dark:text-emerald-300">
                                         {effectiveDeadlinePreview}
-                                    </strong>{' '}
-                                    berstatus <strong>HADIR</strong>, lewat pukul{' '}
+                                    </strong>
+                                    {t('attendanceSettings.toleranceActiveMid2')}
+                                    <strong>{t('attendanceSettings.statusPresent')}</strong>
+                                    {t('attendanceSettings.toleranceActiveMid3')}
                                     <strong className="font-mono text-amber-700 dark:text-amber-300">
                                         {effectiveDeadlinePreview}
-                                    </strong>{' '}
-                                    berstatus <strong>TERLAMBAT</strong>.
+                                    </strong>
+                                    {t('attendanceSettings.toleranceActiveMid4')}
+                                    <strong>{t('attendanceSettings.statusLate')}</strong>.
                                 </>
                             ) : (
                                 <>
-                                    Tanpa toleransi: Check-in melewati pukul{' '}
+                                    {t('attendanceSettings.noTolerancePrefix')}
                                     <strong className="font-mono text-emerald-700 dark:text-emerald-300">
                                         {workStartTime}
-                                    </strong>{' '}
-                                    langsung tercatat <strong>TERLAMBAT</strong>.
+                                    </strong>
+                                    {t('attendanceSettings.noToleranceMid')}
+                                    <strong>{t('attendanceSettings.statusLate')}</strong>.
                                 </>
                             )}
                         </span>
@@ -965,10 +1034,10 @@ export function AttendanceSettingsTab() {
                     <div className="space-y-2.5 pt-1">
                         <div>
                             <label className="block text-xs font-semibold">
-                                Verifikasi Kamera Selfie Presensi (GPS + Foto Selfie vs GPS Saja)
+                                {t('attendanceSettings.selfieSectionLabel')}
                             </label>
                             <p className="text-[11px] text-muted-foreground mt-0.5">
-                                Matikan jika sekolah hanya mewajibkan validasi titik koordinat GPS tanpa mengambil foto wajah.
+                                {t('attendanceSettings.selfieSectionHint')}
                             </p>
                         </div>
 
@@ -985,27 +1054,27 @@ export function AttendanceSettingsTab() {
                                     }
                                 }}
                                 className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckIn
-                                    ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                                        ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                        : 'border-border bg-muted/25 hover:bg-muted/40'
                                     }`}
                             >
                                 <div className="flex items-start gap-3">
                                     <div
                                         className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckIn
-                                            ? 'bg-emerald-600 text-white'
-                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                                ? 'bg-emerald-600 text-white'
+                                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                                             }`}
                                     >
                                         {requireSelfieCheckIn ? <Camera size={16} /> : <MapPin size={16} />}
                                     </div>
                                     <div>
                                         <div className="text-xs font-bold">
-                                            Selfie Presensi Datang (Check-In)
+                                            {t('attendanceSettings.selfieCheckInTitle')}
                                         </div>
                                         <p className="text-[11px] text-muted-foreground mt-0.5">
                                             {requireSelfieCheckIn
-                                                ? 'Aktif: Guru wajib mengambil foto selfie saat absen masuk.'
-                                                : 'Nonaktif: Absen masuk langsung tercatat dengan GPS saja.'}
+                                                ? t('attendanceSettings.selfieCheckInActive')
+                                                : t('attendanceSettings.selfieCheckInInactive')}
                                         </p>
                                     </div>
                                 </div>
@@ -1033,27 +1102,27 @@ export function AttendanceSettingsTab() {
                                     }
                                 }}
                                 className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckOut
-                                    ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                                        ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                        : 'border-border bg-muted/25 hover:bg-muted/40'
                                     }`}
                             >
                                 <div className="flex items-start gap-3">
                                     <div
                                         className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckOut
-                                            ? 'bg-emerald-600 text-white'
-                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                                ? 'bg-emerald-600 text-white'
+                                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                                             }`}
                                     >
                                         {requireSelfieCheckOut ? <Camera size={16} /> : <MapPin size={16} />}
                                     </div>
                                     <div>
                                         <div className="text-xs font-bold">
-                                            Selfie Presensi Pulang (Check-Out)
+                                            {t('attendanceSettings.selfieCheckOutTitle')}
                                         </div>
                                         <p className="text-[11px] text-muted-foreground mt-0.5">
                                             {requireSelfieCheckOut
-                                                ? 'Aktif: Guru wajib mengambil foto selfie saat absen pulang.'
-                                                : 'Nonaktif: Absen pulang langsung tercatat dengan GPS saja.'}
+                                                ? t('attendanceSettings.selfieCheckOutActive')
+                                                : t('attendanceSettings.selfieCheckOutInactive')}
                                         </p>
                                     </div>
                                 </div>
@@ -1074,15 +1143,15 @@ export function AttendanceSettingsTab() {
                     {/* Pilihan 5 Hari Kerja vs 6 Hari Kerja */}
                     <div>
                         <label className="block text-xs font-semibold mb-2">
-                            Sistem Hari Kerja Sekolah *
+                            {t('attendanceSettings.workDaysLabel')}
                         </label>
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                             <button
                                 type="button"
                                 onClick={() => setWorkDaysMode('FIVE_DAYS')}
                                 className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
-                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
-                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                                        ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                        : 'border-border bg-muted/20 hover:bg-muted/40'
                                     }`}
                             >
                                 <Briefcase
@@ -1095,10 +1164,14 @@ export function AttendanceSettingsTab() {
                                 />
                                 <div>
                                     <div className="text-xs font-bold">
-                                        5 Hari Kerja (Senin – Jumat)
+                                        {t('attendanceSettings.fiveDaysTitle')}
                                     </div>
                                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                                        Hari <strong>Sabtu & Minggu</strong> otomatis ditandai sebagai Tanggal Merah pada kalender presensi.
+                                        {t('attendanceSettings.fiveDaysDescPrefix')}
+                                        <strong>
+                                            {t('attendanceSettings.fiveDaysDescHighlight')}
+                                        </strong>
+                                        {t('attendanceSettings.fiveDaysDescSuffix')}
                                     </p>
                                 </div>
                             </button>
@@ -1107,8 +1180,8 @@ export function AttendanceSettingsTab() {
                                 type="button"
                                 onClick={() => setWorkDaysMode('SIX_DAYS')}
                                 className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
-                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
-                                    : 'border-border bg-muted/20 hover:bg-muted/40'
+                                        ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                        : 'border-border bg-muted/20 hover:bg-muted/40'
                                     }`}
                             >
                                 <Briefcase
@@ -1121,10 +1194,14 @@ export function AttendanceSettingsTab() {
                                 />
                                 <div>
                                     <div className="text-xs font-bold">
-                                        6 Hari Kerja (Senin – Sabtu)
+                                        {t('attendanceSettings.sixDaysTitle')}
                                     </div>
                                     <p className="text-[11px] text-muted-foreground mt-0.5">
-                                        Hari Sabtu tetap dihitung hari masuk; hanya <strong>Minggu, Libur Nasional & Cuti Bersama</strong> yang berwarna merah.
+                                        {t('attendanceSettings.sixDaysDescPrefix')}
+                                        <strong>
+                                            {t('attendanceSettings.sixDaysDescHighlight')}
+                                        </strong>
+                                        {t('attendanceSettings.sixDaysDescSuffix')}
                                     </p>
                                 </div>
                             </button>
@@ -1143,8 +1220,8 @@ export function AttendanceSettingsTab() {
                                 <Save size={15} />
                             )}
                             {isSavingSchedule
-                                ? 'Menyimpan...'
-                                : 'Simpan Pengaturan Jam, Selfie & Hari Kerja'}
+                                ? t('attendanceSettings.btnSaving')
+                                : t('attendanceSettings.btnSaveSchedule')}
                         </button>
                     </div>
                 </form>
@@ -1173,10 +1250,10 @@ export function AttendanceSettingsTab() {
                         <div>
                             <h2 className="text-base font-bold flex items-center gap-2">
                                 <CalendarDays size={18} className="text-red-500" />
-                                Kalender Hari Libur Nasional, Cuti Bersama & Sekolah
+                                {t('attendanceSettings.holidayTitle')}
                             </h2>
                             <p className="text-xs text-muted-foreground mt-0.5">
-                                Sinkronisasi cepat dari server kalender nasional, impor file Excel (.xlsx / .csv), atau input manual.
+                                {t('attendanceSettings.holidaySubtitle')}
                             </p>
                         </div>
 
@@ -1187,12 +1264,12 @@ export function AttendanceSettingsTab() {
                                 className={BTN_STYLE.secondary}
                             >
                                 <Download size={14} className="text-emerald-600" />
-                                Template Excel
+                                {t('attendanceSettings.btnExcelTemplate')}
                             </button>
 
                             <label className={BTN_STYLE.secondary}>
                                 <Upload size={14} className="text-blue-600" />
-                                Import Excel / CSV
+                                {t('attendanceSettings.btnImportExcel')}
                                 <input
                                     type="file"
                                     accept=".xlsx,.csv,.txt"
@@ -1210,7 +1287,7 @@ export function AttendanceSettingsTab() {
                                 <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
                                     <span className="text-xs font-bold text-blue-700 dark:text-blue-300 flex items-center gap-1.5 sm:w-24 shrink-0">
                                         <Server size={15} />
-                                        Server API:
+                                        {t('attendanceSettings.apiServerLabel')}
                                     </span>
                                     <select
                                         value={selectedApiProvider}
@@ -1230,7 +1307,7 @@ export function AttendanceSettingsTab() {
                                 <div className="flex flex-col sm:flex-row sm:items-center gap-1.5 sm:gap-3">
                                     <span className="text-xs font-bold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5 sm:w-24 shrink-0">
                                         <Moon size={15} />
-                                        Kalender:
+                                        {t('attendanceSettings.calendarRefLabel')}
                                     </span>
                                     <select
                                         value={calendarRefMode}
@@ -1240,10 +1317,10 @@ export function AttendanceSettingsTab() {
                                         className="form-input w-full sm:w-72 text-xs py-1.5 px-3 bg-card"
                                     >
                                         <option value="MUHAMMADIYAH">
-                                            Muhammadiyah (KHGT / Hisab)
+                                            {t('attendanceSettings.calRefMuhammadiyah')}
                                         </option>
                                         <option value="PEMERINTAH">
-                                            Pemerintah (SKB 3 Menteri)
+                                            {t('attendanceSettings.calRefGovernment')}
                                         </option>
                                     </select>
                                 </div>
@@ -1261,8 +1338,10 @@ export function AttendanceSettingsTab() {
                                     <Server size={15} />
                                 )}
                                 {isFetchingServer
-                                    ? 'Menarik Data...'
-                                    : `Sync dari Server (${filterYear})`}
+                                    ? t('attendanceSettings.btnFetchingServer')
+                                    : t('attendanceSettings.btnSyncFromServer', {
+                                        year: filterYear,
+                                    })}
                             </button>
                         </div>
 
@@ -1276,7 +1355,10 @@ export function AttendanceSettingsTab() {
                                         className="rounded border-border"
                                     />
                                     <span>
-                                        Sertakan jadwal <strong>Cuti Bersama</strong>
+                                        {t('attendanceSettings.includeCutiPrefix')}
+                                        <strong>
+                                            {t('attendanceSettings.includeCutiHighlight')}
+                                        </strong>
                                     </span>
                                 </label>
 
@@ -1289,7 +1371,10 @@ export function AttendanceSettingsTab() {
                                             className="rounded border-border"
                                         />
                                         <span>
-                                            Sertakan <strong>Awal Puasa (1 Ramadan)</strong>
+                                            {t('attendanceSettings.includeAwalRamadanPrefix')}
+                                            <strong>
+                                                {t('attendanceSettings.includeAwalRamadanHighlight')}
+                                            </strong>
                                         </span>
                                     </label>
                                 )}
@@ -1297,7 +1382,9 @@ export function AttendanceSettingsTab() {
 
                             {isSuperAdmin && (
                                 <div className="flex flex-wrap items-center gap-3">
-                                    <span className="font-semibold">Cakupan Simpan:</span>
+                                    <span className="font-semibold">
+                                        {t('attendanceSettings.saveScopeLabel')}
+                                    </span>
                                     <label className="flex items-center gap-1.5 cursor-pointer">
                                         <input
                                             type="radio"
@@ -1306,7 +1393,7 @@ export function AttendanceSettingsTab() {
                                             onChange={() => setHolidayScope('GLOBAL')}
                                         />
                                         <Globe size={13} className="text-purple-500" />
-                                        <span>Nasional / Global</span>
+                                        <span>{t('attendanceSettings.scopeGlobal')}</span>
                                     </label>
                                     <label className="flex items-center gap-1.5 cursor-pointer">
                                         <input
@@ -1316,7 +1403,7 @@ export function AttendanceSettingsTab() {
                                             onChange={() => setHolidayScope('SCHOOL')}
                                         />
                                         <Building2 size={13} className="text-blue-500" />
-                                        <span>Khusus Sekolah Ini</span>
+                                        <span>{t('attendanceSettings.scopeSchool')}</span>
                                     </label>
                                 </div>
                             )}
@@ -1325,10 +1412,10 @@ export function AttendanceSettingsTab() {
                         {syncFeedback && (
                             <div
                                 className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
-                                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
-                                    : syncFeedback.status === 'success'
-                                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                                        ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
+                                        : syncFeedback.status === 'success'
+                                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                                     }`}
                             >
                                 {syncFeedback.status === 'loading' ? (
@@ -1351,11 +1438,14 @@ export function AttendanceSettingsTab() {
                                     <div className="flex items-center gap-2 text-xs font-bold text-emerald-700 dark:text-emerald-300">
                                         <FileSpreadsheet size={16} />
                                         <span>
-                                            Pratinjau: {previewSourceLabel} ({previewRows.length} Tanggal)
+                                            {t('attendanceSettings.previewTitle', {
+                                                source: previewSourceLabel,
+                                                count: previewRows.length,
+                                            })}
                                         </span>
                                     </div>
                                     <p className="text-[11px] opacity-75 mt-0.5">
-                                        Tip: Klik tanggal atau keterangan di bawah jika ingin menggeser 1 hari sebelum disimpan.
+                                        {t('attendanceSettings.previewTip')}
                                     </p>
                                 </div>
 
@@ -1367,7 +1457,7 @@ export function AttendanceSettingsTab() {
                                                 ...prev,
                                                 {
                                                     date: `${filterYear}-01-01`,
-                                                    name: 'Libur Tambahan',
+                                                    name: t('attendanceSettings.defaultExtraHolidayName'),
                                                     type: 'SEKOLAH',
                                                 },
                                             ])
@@ -1376,7 +1466,7 @@ export function AttendanceSettingsTab() {
                                         disabled={isImporting}
                                     >
                                         <Plus size={13} />
-                                        Tambah Baris
+                                        {t('attendanceSettings.btnAddRow')}
                                     </button>
                                     <button
                                         type="button"
@@ -1387,7 +1477,7 @@ export function AttendanceSettingsTab() {
                                         className={BTN_STYLE.secondaryCompact}
                                         disabled={isImporting}
                                     >
-                                        Batal
+                                        {t('attendanceSettings.btnCancel')}
                                     </button>
                                     <button
                                         type="button"
@@ -1396,7 +1486,9 @@ export function AttendanceSettingsTab() {
                                         className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
                                     >
                                         <Save size={14} />
-                                        {isImporting ? 'Menyimpan...' : 'Simpan ke Database'}
+                                        {isImporting
+                                            ? t('attendanceSettings.btnSaving')
+                                            : t('attendanceSettings.btnSaveToDb')}
                                     </button>
                                 </div>
                             </div>
@@ -1405,11 +1497,21 @@ export function AttendanceSettingsTab() {
                                 <table className="w-full text-xs">
                                     <thead className="bg-muted/60 text-left">
                                         <tr>
-                                            <th className="py-2 px-3 font-semibold w-12">No</th>
-                                            <th className="py-2 px-3 font-semibold w-40">Tanggal</th>
-                                            <th className="py-2 px-3 font-semibold w-36">Pasaran Jawa</th>
-                                            <th className="py-2 px-3 font-semibold">Keterangan Libur / Cuti</th>
-                                            <th className="py-2 px-3 font-semibold w-14 text-right">Hapus</th>
+                                            <th className="py-2 px-3 font-semibold w-12">
+                                                {t('attendanceSettings.colNo')}
+                                            </th>
+                                            <th className="py-2 px-3 font-semibold w-40">
+                                                {t('attendanceSettings.colDate')}
+                                            </th>
+                                            <th className="py-2 px-3 font-semibold w-36">
+                                                {t('attendanceSettings.colJavaneseDay')}
+                                            </th>
+                                            <th className="py-2 px-3 font-semibold">
+                                                {t('attendanceSettings.colHolidayName')}
+                                            </th>
+                                            <th className="py-2 px-3 font-semibold w-14 text-right">
+                                                {t('attendanceSettings.colDelete')}
+                                            </th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-border">
@@ -1467,7 +1569,7 @@ export function AttendanceSettingsTab() {
                                                                 )
                                                             }
                                                             className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 active:scale-95 transition"
-                                                            title="Kecualikan tanggal ini"
+                                                            title={t('attendanceSettings.titleExcludeDate')}
                                                         >
                                                             <Trash2 size={14} />
                                                         </button>
@@ -1488,7 +1590,7 @@ export function AttendanceSettingsTab() {
                     >
                         <div className="sm:col-span-4">
                             <label className="block text-[11px] font-semibold mb-1">
-                                Tanggal Libur / Cuti *
+                                {t('attendanceSettings.labelHolidayDate')}
                             </label>
                             <input
                                 type="date"
@@ -1500,14 +1602,14 @@ export function AttendanceSettingsTab() {
                         </div>
                         <div className="sm:col-span-5">
                             <label className="block text-[11px] font-semibold mb-1">
-                                Keterangan Hari Libur *
+                                {t('attendanceSettings.labelHolidayDesc')}
                             </label>
                             <input
                                 type="text"
                                 required
                                 value={newHolidayName}
                                 onChange={(e) => setNewHolidayName(e.target.value)}
-                                placeholder="Contoh: Libur Awal Ramadan / Rapat Kerja Guru"
+                                placeholder={t('attendanceSettings.placeholderHolidayDesc')}
                                 className="form-input w-full text-xs"
                             />
                         </div>
@@ -1518,7 +1620,9 @@ export function AttendanceSettingsTab() {
                                 className={`${BTN_STYLE.primaryEmerald} w-full py-2!`}
                             >
                                 <Plus size={15} />
-                                {isAddingHoliday ? 'Menyimpan...' : 'Tambah Libur'}
+                                {isAddingHoliday
+                                    ? t('attendanceSettings.btnSaving')
+                                    : t('attendanceSettings.btnAddHoliday')}
                             </button>
                         </div>
                     </form>
@@ -1528,7 +1632,10 @@ export function AttendanceSettingsTab() {
                         <div className="flex flex-wrap items-center justify-between gap-2.5">
                             <div className="flex flex-wrap items-center gap-2.5">
                                 <h3 className="text-xs font-bold">
-                                    Daftar Tanggal Merah Tahun {filterYear} ({holidays.length} hari)
+                                    {t('attendanceSettings.holidayListHeading', {
+                                        year: filterYear,
+                                        count: holidays.length,
+                                    })}
                                 </h3>
 
                                 <div className="inline-flex rounded-xl border border-border bg-muted/60 p-1 gap-1">
@@ -1536,23 +1643,23 @@ export function AttendanceSettingsTab() {
                                         type="button"
                                         onClick={() => setHolidayViewMode('CALENDAR')}
                                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'CALENDAR'
-                                            ? 'bg-card text-foreground shadow-xs'
-                                            : 'text-muted-foreground hover:text-foreground'
+                                                ? 'bg-card text-foreground shadow-xs'
+                                                : 'text-muted-foreground hover:text-foreground'
                                             }`}
                                     >
                                         <Calendar size={13} />
-                                        Kalender
+                                        {t('attendanceSettings.viewCalendar')}
                                     </button>
                                     <button
                                         type="button"
                                         onClick={() => setHolidayViewMode('LIST')}
                                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'LIST'
-                                            ? 'bg-card text-foreground shadow-xs'
-                                            : 'text-muted-foreground hover:text-foreground'
+                                                ? 'bg-card text-foreground shadow-xs'
+                                                : 'text-muted-foreground hover:text-foreground'
                                             }`}
                                     >
                                         <List size={13} />
-                                        Daftar
+                                        {t('attendanceSettings.viewList')}
                                     </button>
                                 </div>
                             </div>
@@ -1565,7 +1672,7 @@ export function AttendanceSettingsTab() {
                                 >
                                     {availableYears.map((yr) => (
                                         <option key={yr} value={yr}>
-                                            Tahun {yr}
+                                            {t('attendanceSettings.yearOption', { year: yr })}
                                         </option>
                                     ))}
                                 </select>
@@ -1574,17 +1681,17 @@ export function AttendanceSettingsTab() {
                                     type="button"
                                     onClick={handleAddNextYear}
                                     className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 shadow-2xs active:scale-[0.98] transition-all duration-200 shrink-0 whitespace-nowrap cursor-pointer"
-                                    title="Tambahkan tahun berikutnya ke daftar pilihan"
+                                    title={t('attendanceSettings.titleAddYear')}
                                 >
                                     <Plus size={14} />
-                                    Tambah Tahun
+                                    {t('attendanceSettings.btnAddYear')}
                                 </button>
 
                                 <button
                                     type="button"
                                     onClick={loadHolidays}
                                     className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all duration-200 shrink-0 cursor-pointer"
-                                    title="Refresh Daftar Libur"
+                                    title={t('attendanceSettings.titleRefreshHolidays')}
                                 >
                                     <RefreshCw
                                         size={14}
@@ -1605,13 +1712,15 @@ export function AttendanceSettingsTab() {
                                             className="rounded border-border w-4 h-4 accent-emerald-600 cursor-pointer"
                                         />
                                         <span>
-                                            Pilih Semua ({selectedHolidayIds.length}/
-                                            {deletableHolidays.length} dipilih)
+                                            {t('attendanceSettings.selectAllHolidays', {
+                                                selected: selectedHolidayIds.length,
+                                                total: deletableHolidays.length,
+                                            })}
                                         </span>
                                     </label>
                                 ) : (
                                     <span className="text-[11px] text-muted-foreground">
-                                        Ketuk tanggal mana pun untuk melihat detail & Pasaran Jawa
+                                        {t('attendanceSettings.tapDateHint')}
                                     </span>
                                 )}
 
@@ -1621,15 +1730,22 @@ export function AttendanceSettingsTab() {
                                             type="button"
                                             onClick={() =>
                                                 setDeleteConfirmModal({
-                                                    title: `Hapus ${selectedHolidayIds.length} Tanggal Merah Terpilih?`,
-                                                    description: `Anda akan menghapus ${selectedHolidayIds.length} data tanggal merah yang dicentang dari database.`,
+                                                    title: t('attendanceSettings.modalDelSelectedTitle', {
+                                                        count: selectedHolidayIds.length,
+                                                    }),
+                                                    description: t(
+                                                        'attendanceSettings.modalDelSelectedDesc',
+                                                        { count: selectedHolidayIds.length }
+                                                    ),
                                                     targetIds: selectedHolidayIds,
                                                 })
                                             }
                                             className="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm active:scale-[0.98] transition-all duration-200 cursor-pointer"
                                         >
                                             <Trash2 size={13} />
-                                            Hapus Terpilih ({selectedHolidayIds.length})
+                                            {t('attendanceSettings.btnDeleteSelected', {
+                                                count: selectedHolidayIds.length,
+                                            })}
                                         </button>
                                     )}
 
@@ -1637,15 +1753,22 @@ export function AttendanceSettingsTab() {
                                         type="button"
                                         onClick={() =>
                                             setDeleteConfirmModal({
-                                                title: `Hapus Semua Tanggal Merah Tahun ${filterYear}?`,
-                                                description: `Seluruh ${deletableHolidays.length} data hari libur tahun ${filterYear} yang dapat Anda kelola akan dihapus permanen dari database.`,
+                                                title: t('attendanceSettings.modalDelAllTitle', {
+                                                    year: filterYear,
+                                                }),
+                                                description: t('attendanceSettings.modalDelAllDesc', {
+                                                    count: deletableHolidays.length,
+                                                    year: filterYear,
+                                                }),
                                                 targetIds: deletableHolidays.map((h) => h.id),
                                             })
                                         }
                                         className={BTN_STYLE.dangerOutline}
                                     >
                                         <Trash2 size={13} />
-                                        Hapus Semua ({deletableHolidays.length})
+                                        {t('attendanceSettings.btnDeleteAll', {
+                                            count: deletableHolidays.length,
+                                        })}
                                     </button>
                                 </div>
                             </div>
@@ -1653,7 +1776,7 @@ export function AttendanceSettingsTab() {
 
                         {isLoadingHolidays ? (
                             <div className="py-8 text-center text-xs opacity-70">
-                                Memuat data hari libur dari database...
+                                {t('attendanceSettings.loadingHolidays')}
                             </div>
                         ) : holidayViewMode === 'CALENDAR' ? (
                             <HolidayCalendarView
@@ -1666,18 +1789,23 @@ export function AttendanceSettingsTab() {
                                     setNewHolidayDate(isoDate);
                                     setSyncFeedback({
                                         status: 'success',
-                                        text: `Tanggal ${isoDate} dipilih pada formulir di atas. Ketik keterangannya lalu klik "+ Tambah Libur".`,
+                                        text: t('attendanceSettings.feedbackDatePicked', {
+                                            date: isoDate,
+                                        }),
                                     });
                                 }}
                             />
                         ) : holidays.length === 0 ? (
                             <div className="py-8 text-center text-xs opacity-75 border border-dashed border-border rounded-xl space-y-2 px-4">
                                 <p>
-                                    Belum ada data hari libur tersimpan untuk tahun{' '}
-                                    <strong>{filterYear}</strong>.
+                                    {t('attendanceSettings.emptyHolidaysTitle', {
+                                        year: filterYear,
+                                    })}
                                 </p>
                                 <p className="text-[11px] opacity-75">
-                                    Klik tombol <strong>Sync dari Server ({filterYear})</strong> di atas untuk menarik otomatis Hari Libur Nasional & Cuti Bersama.
+                                    {t('attendanceSettings.emptyHolidaysDesc', {
+                                        year: filterYear,
+                                    })}
                                 </p>
                             </div>
                         ) : (
@@ -1723,17 +1851,19 @@ export function AttendanceSettingsTab() {
 
                                                 {isCuti && (
                                                     <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300">
-                                                        Cuti Bersama
+                                                        {t('attendanceSettings.badgeCutiBersama')}
                                                     </span>
                                                 )}
 
                                                 {isGlobal ? (
                                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
-                                                        <Globe size={10} /> Nasional
+                                                        <Globe size={10} />{' '}
+                                                        {t('attendanceSettings.badgeNational')}
                                                     </span>
                                                 ) : (
                                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-600 dark:text-blue-300">
-                                                        <Building2 size={10} /> Sekolah
+                                                        <Building2 size={10} />{' '}
+                                                        {t('attendanceSettings.badgeSchool')}
                                                     </span>
                                                 )}
                                             </div>
@@ -1744,7 +1874,7 @@ export function AttendanceSettingsTab() {
                                                         type="button"
                                                         onClick={() => handleOpenEditModal(item)}
                                                         className="p-2 rounded-xl border border-blue-500/25 bg-blue-500/10 text-blue-600 dark:text-blue-300 hover:bg-blue-500/20 active:scale-95 transition-all cursor-pointer"
-                                                        title="Edit tanggal atau keterangan"
+                                                        title={t('attendanceSettings.titleEditHoliday')}
                                                     >
                                                         <Pencil size={13} />
                                                     </button>
@@ -1752,13 +1882,21 @@ export function AttendanceSettingsTab() {
                                                         type="button"
                                                         onClick={() =>
                                                             setDeleteConfirmModal({
-                                                                title: 'Hapus Tanggal Merah?',
-                                                                description: `Apakah Anda yakin ingin menghapus "${item.name}" (${jawaInfo.fullFormattedDate})?`,
+                                                                title: t(
+                                                                    'attendanceSettings.modalDelSingleTitle'
+                                                                ),
+                                                                description: t(
+                                                                    'attendanceSettings.modalDelSingleDesc',
+                                                                    {
+                                                                        name: item.name,
+                                                                        date: jawaInfo.fullFormattedDate,
+                                                                    }
+                                                                ),
                                                                 targetIds: [item.id],
                                                             })
                                                         }
                                                         className="p-2 rounded-xl border border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-95 transition-all cursor-pointer"
-                                                        title="Hapus hari libur"
+                                                        title={t('attendanceSettings.titleDeleteHoliday')}
                                                     >
                                                         <Trash2 size={13} />
                                                     </button>
@@ -1793,9 +1931,11 @@ export function AttendanceSettingsTab() {
                                     <Pencil size={16} />
                                 </div>
                                 <div>
-                                    <h3 className="text-sm font-bold">Edit Tanggal Merah</h3>
+                                    <h3 className="text-sm font-bold">
+                                        {t('attendanceSettings.modalEditTitle')}
+                                    </h3>
                                     <p className="text-[11px] text-muted-foreground">
-                                        Perbarui tanggal atau keterangan hari libur
+                                        {t('attendanceSettings.modalEditSubtitle')}
                                     </p>
                                 </div>
                             </div>
@@ -1811,7 +1951,7 @@ export function AttendanceSettingsTab() {
                         <div className="space-y-3">
                             <div>
                                 <label className="block text-xs font-semibold mb-1">
-                                    Tanggal Libur *
+                                    {t('attendanceSettings.modalEditDateLabel')}
                                 </label>
                                 <input
                                     type="date"
@@ -1822,7 +1962,7 @@ export function AttendanceSettingsTab() {
                                 />
                                 {editDateInput.length === 10 && (
                                     <p className="text-[11px] text-emerald-600 dark:text-emerald-300 mt-1 font-medium">
-                                        Kalender Jawa:{' '}
+                                        {t('attendanceSettings.modalEditJavanesePrefix')}{' '}
                                         {getJavaneseDateInfo(editDateInput).fullFormattedDate}
                                     </p>
                                 )}
@@ -1830,7 +1970,7 @@ export function AttendanceSettingsTab() {
 
                             <div>
                                 <label className="block text-xs font-semibold mb-1">
-                                    Keterangan Hari Libur *
+                                    {t('attendanceSettings.modalEditDescLabel')}
                                 </label>
                                 <input
                                     type="text"
@@ -1849,7 +1989,7 @@ export function AttendanceSettingsTab() {
                                 disabled={isSavingEdit}
                                 className={BTN_STYLE.secondary}
                             >
-                                Batal
+                                {t('attendanceSettings.btnCancel')}
                             </button>
                             <button
                                 type="submit"
@@ -1857,7 +1997,9 @@ export function AttendanceSettingsTab() {
                                 className={BTN_STYLE.primaryEmerald}
                             >
                                 <Save size={14} />
-                                {isSavingEdit ? 'Menyimpan...' : 'Simpan Perubahan'}
+                                {isSavingEdit
+                                    ? t('attendanceSettings.btnSaving')
+                                    : t('attendanceSettings.btnSaveChanges')}
                             </button>
                         </div>
                     </form>
@@ -1889,7 +2031,7 @@ export function AttendanceSettingsTab() {
                                 disabled={isDeletingHolidays}
                                 className={BTN_STYLE.secondary}
                             >
-                                Batal
+                                {t('attendanceSettings.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -1898,7 +2040,9 @@ export function AttendanceSettingsTab() {
                                 className={BTN_STYLE.danger}
                             >
                                 <Trash2 size={14} />
-                                {isDeletingHolidays ? 'Menghapus...' : 'Ya, Hapus Sekarang'}
+                                {isDeletingHolidays
+                                    ? t('attendanceSettings.btnDeleting')
+                                    : t('attendanceSettings.btnConfirmDeleteNow')}
                             </button>
                         </div>
                     </div>
