@@ -55,14 +55,13 @@ import {
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
-import type { CreateTeacherPayload } from '../types/teacher.types';
+import type {
+  CreateTeacherPayload,
+  TeacherDetail,
+} from '../types/teacher.types';
 
 type TeacherTabValue = 'personal' | 'professional' | 'tasks' | 'family';
 
-/**
- * Menerjemahkan error teknis (API, Supabase, Constraint Database, atau Jaringan)
- * menjadi pesan yang jelas dan ramah bagi pengguna.
- */
 const extractFriendlyErrorMessage = (
   error: unknown,
   locale: string,
@@ -87,7 +86,6 @@ const extractFriendlyErrorMessage = (
       code?: string;
     };
 
-    // 1. Prioritaskan pesan dari backend/API
     const apiMessage = errObj.response?.data?.message;
     if (Array.isArray(apiMessage) && apiMessage.length > 0) {
       return apiMessage.join(', ');
@@ -99,7 +97,6 @@ const extractFriendlyErrorMessage = (
       return errObj.response.data.error;
     }
 
-    // 2. Terjemahkan error database Supabase / PostgreSQL / Jaringan
     if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
       const rawMsg = errObj.message;
       const lowerMsg = rawMsg.toLowerCase();
@@ -195,6 +192,7 @@ const teacherSchema = z.object({
   position: z.string().optional(),
   tugasTambahan: z.string().optional(),
   isActive: z.boolean().optional(),
+  allowDesktopAttendance: z.boolean().optional(),
 
   skCpns: z.string().optional(),
   tanggalCpns: z.string().optional(),
@@ -248,7 +246,6 @@ const teacherSchema = z.object({
 
 type TeacherFormValues = z.infer<typeof teacherSchema>;
 
-// Pemetaan nama field ke Tab agar otomatis berpindah jika ada validasi error
 const FIELD_TAB_MAP: Record<keyof TeacherFormValues, TeacherTabValue> = {
   fullName: 'personal',
   gender: 'personal',
@@ -280,6 +277,7 @@ const FIELD_TAB_MAP: Record<keyof TeacherFormValues, TeacherTabValue> = {
   status: 'professional',
   position: 'professional',
   isActive: 'professional',
+  allowDesktopAttendance: 'professional',
   skCpns: 'professional',
   tanggalCpns: 'professional',
   skPengangkatan: 'professional',
@@ -345,70 +343,221 @@ function TeacherFormField({
     <FormField
       control={control}
       name={name}
-      render={({ field }) => (
-        <FormItem className={className}>
-          <FormLabel className={labelClassName}>{label}</FormLabel>
-          {type === 'select' ? (
-            <Select
-              onValueChange={field.onChange}
-              value={(field.value as string) || ''}
-            >
+      render={({ field }) => {
+        const selectStrValue =
+          typeof field.value === 'string' && field.value.trim() !== ''
+            ? field.value
+            : undefined;
+        const boolStrValue = field.value ? 'true' : 'false';
+
+        return (
+          <FormItem className={className}>
+            <FormLabel className={labelClassName}>{label}</FormLabel>
+            {type === 'select' ? (
+              <Select
+                key={`${name}-${selectStrValue ?? 'empty'}`}
+                onValueChange={field.onChange}
+                value={selectStrValue}
+              >
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue placeholder={placeholder || 'Pilih...'} />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  {options.map((opt) => (
+                    <SelectItem key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : type === 'boolean' ? (
+              <Select
+                key={`${name}-${boolStrValue}`}
+                onValueChange={(val) => field.onChange(val === 'true')}
+                value={boolStrValue}
+              >
+                <FormControl>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                </FormControl>
+                <SelectContent>
+                  <SelectItem value="true">Ya</SelectItem>
+                  <SelectItem value="false">Tidak</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : (
               <FormControl>
-                <SelectTrigger>
-                  <SelectValue placeholder={placeholder || 'Pilih...'} />
-                </SelectTrigger>
+                <Input
+                  type={type}
+                  min={type === 'number' ? min : undefined}
+                  placeholder={placeholder}
+                  {...field}
+                  value={typeof field.value === 'boolean' ? '' : (field.value ?? '')}
+                />
               </FormControl>
-              <SelectContent>
-                {options.map((opt) => (
-                  <SelectItem key={opt.value} value={opt.value}>
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          ) : type === 'boolean' ? (
-            <Select
-              onValueChange={(val) => field.onChange(val === 'true')}
-              value={field.value ? 'true' : 'false'}
-            >
-              <FormControl>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-              </FormControl>
-              <SelectContent>
-                <SelectItem value="true">Ya</SelectItem>
-                <SelectItem value="false">Tidak</SelectItem>
-              </SelectContent>
-            </Select>
-          ) : (
-            <FormControl>
-              <Input
-                type={type}
-                min={type === 'number' ? min : undefined}
-                placeholder={placeholder}
-                {...field}
-                value={typeof field.value === 'boolean' ? '' : (field.value ?? '')}
-              />
-            </FormControl>
-          )}
-          <FormMessage />
-        </FormItem>
-      )}
+            )}
+            <FormMessage />
+          </FormItem>
+        );
+      }}
     />
   );
 }
 
+// ============================================================================
+// FUNGSI NORMALISASI NILAI DARI DATABASE KE FORM EDIT (AGAR 100% TAMPIL)
+// ============================================================================
 const formatDateForInput = (dateStr?: string | null): string =>
   dateStr ? String(dateStr).split('T')[0] : '';
 
 const normalizeGenderForForm = (gender?: string | null): 'L' | 'P' | undefined => {
   if (!gender) return undefined;
-  const upper = gender.trim().toUpperCase();
-  if (upper === 'L' || upper === 'LAKI-LAKI' || upper === 'PRIA') return 'L';
-  if (upper === 'P' || upper === 'PEREMPUAN' || upper === 'WANITA') return 'P';
+  const upper = String(gender).trim().toUpperCase();
+  if (
+    upper === 'L' ||
+    upper === 'LAKI-LAKI' ||
+    upper === 'LAKI LAKI' ||
+    upper === 'LAKILAKI' ||
+    upper === 'PRIA' ||
+    upper === 'MALE' ||
+    upper === 'M' ||
+    upper === '1'
+  ) {
+    return 'L';
+  }
+  if (
+    upper === 'P' ||
+    upper === 'PEREMPUAN' ||
+    upper === 'WANITA' ||
+    upper === 'FEMALE' ||
+    upper === 'F' ||
+    upper === '2'
+  ) {
+    return 'P';
+  }
   return undefined;
 };
+
+const normalizeReligionForForm = (religion?: string | null): string => {
+  if (!religion) return '';
+  const upper = String(religion).trim().toUpperCase();
+  if (upper === 'KATHOLIK') return 'KATOLIK';
+  if (upper === 'BUDHA') return 'BUDDHA';
+  if (upper.includes('PROTESTAN') || upper === 'KRISTEN') return 'KRISTEN';
+  if (upper.includes('KEPERCAYAAN')) return 'KEPERCAYAAN';
+  return upper;
+};
+
+const normalizeEducationForForm = (education?: string | null): string => {
+  if (!education) return '';
+  const upper = String(education).trim().toUpperCase();
+  if (upper.includes('S3') || upper.includes('STRATA 3') || upper.includes('DOKTOR')) return 'S3';
+  if (upper.includes('S2') || upper.includes('STRATA 2') || upper.includes('MAGISTER')) return 'S2';
+  if (upper.includes('S1') || upper.includes('STRATA 1') || upper.includes('SARJANA')) return 'S1';
+  if (upper.includes('D4') || upper.includes('D-IV') || upper.includes('DIPLOMA IV')) return 'D4';
+  if (upper.includes('D3') || upper.includes('D-III') || upper.includes('DIPLOMA III')) return 'D3';
+  if (upper.includes('SMA') || upper.includes('SMK') || upper.includes('SLTA')) return 'SMA';
+  return upper;
+};
+
+const normalizeStatusForForm = (status?: string | null): string => {
+  if (!status) return 'HONORER';
+  const upper = String(status).trim().toUpperCase();
+  if (upper.includes('CPNS')) return 'CPNS';
+  if (upper.includes('PNS')) return 'PNS';
+  if (upper.includes('PPPK') || upper.includes('P3K')) return 'PPPK';
+  if (upper.includes('GTY') || upper.includes('YAYASAN')) return 'GTY';
+  if (upper.includes('GTT')) return 'GTT';
+  if (upper.includes('HONOR')) return 'HONORER';
+  return upper;
+};
+
+const normalizeMaritalForForm = (marital?: string | null): string => {
+  if (!marital) return '';
+  const upper = String(marital).trim().toUpperCase();
+  if (upper === 'KAWIN' || upper === 'MENIKAH') return 'Kawin';
+  if (upper === 'BELUM KAWIN' || upper === 'LAJANG') return 'Belum Kawin';
+  if (
+    upper === 'JANDA/DUDA' ||
+    upper === 'JANDA' ||
+    upper === 'DUDA' ||
+    upper.includes('CERAI')
+  ) {
+    return 'Janda/Duda';
+  }
+  return marital.trim();
+};
+
+const mapTeacherDetailToFormValues = (t: TeacherDetail): TeacherFormValues => ({
+  fullName: t.fullName || '',
+  gender: normalizeGenderForForm(t.gender) as 'L' | 'P',
+  photoUrl: t.photoUrl || '',
+  nip: t.nip || '',
+  nuptk: t.nuptk || '',
+  nik: t.nik || '',
+  noKk: t.noKk || '',
+  birthDate: formatDateForInput(t.birthDate),
+  birthPlace: t.birthPlace || '',
+  religion: normalizeReligionForForm(t.religion),
+  telepon: t.telepon || '',
+  phone: t.phone || '',
+  email: t.email || '',
+  address: t.address || '',
+  dusun: t.dusun || '',
+  rt: t.rt || '',
+  rw: t.rw || '',
+  kelurahan: t.kelurahan || '',
+  kecamatan: t.kecamatan || '',
+  city: t.city || '',
+  province: t.province || '',
+  postalCode: t.postalCode || '',
+  lintang: t.lintang || '',
+  bujur: t.bujur || '',
+  education: normalizeEducationForForm(t.education),
+  major: t.major || '',
+  university: t.university || '',
+  status: normalizeStatusForForm(t.status),
+  position: t.position || '',
+  tugasTambahan: t.tugasTambahan || '',
+  isActive: t.isActive ?? true,
+  allowDesktopAttendance: Boolean(t.allowDesktopAttendance),
+  skCpns: t.skCpns || '',
+  tanggalCpns: formatDateForInput(t.tanggalCpns),
+  skPengangkatan: t.skPengangkatan || '',
+  tmtPengangkatan: formatDateForInput(t.tmtPengangkatan),
+  lembagaPengangkatan: t.lembagaPengangkatan || '',
+  pangkatGolongan: t.pangkatGolongan || '',
+  sumberGaji: t.sumberGaji || '',
+  tmtPns: formatDateForInput(t.tmtPns),
+  karpeg: t.karpeg || '',
+  namaIbuKandung: t.namaIbuKandung || '',
+  statusPerkawinan: normalizeMaritalForForm(t.statusPerkawinan),
+  namaSuamiIstri: t.namaSuamiIstri || '',
+  nipSuamiIstri: t.nipSuamiIstri || '',
+  pekerjaanSuamiIstri: t.pekerjaanSuamiIstri || '',
+  karisKarsu: t.karisKarsu || '',
+  kewarganegaraan: t.kewarganegaraan || 'Indonesia',
+  npwp: t.npwp || '',
+  namaWajibPajak: t.namaWajibPajak || '',
+  bank: t.bank || '',
+  nomorRekeningBank: t.nomorRekeningBank || '',
+  rekeningAtasNama: t.rekeningAtasNama || '',
+  isCertified: Boolean(t.isCertified),
+  certificationNumber: t.certificationNumber || '',
+  sudahLisensiKepalaSekolah: Boolean(t.sudahLisensiKepalaSekolah),
+  pernahDiklatKepengawasan: Boolean(t.pernahDiklatKepengawasan),
+  keahlianBraille: Boolean(t.keahlianBraille),
+  keahlianBahasaIsyarat: Boolean(t.keahlianBahasaIsyarat),
+  nuks: t.nuks || '',
+  joinDate: formatDateForInput(t.joinDate),
+  baseSalary:
+    t.baseSalary !== null && t.baseSalary !== undefined ? String(t.baseSalary) : '',
+  subjects: t.subjects || '',
+  maxHoursPerWeek: String(t.maxHoursPerWeek || 24),
+});
 
 export function TeacherFormPage() {
   const { id } = useParams<{ id: string }>();
@@ -466,8 +615,30 @@ export function TeacherFormPage() {
       : 'Please check required or invalid fields.',
   };
 
+  const {
+    data: response,
+    isLoading,
+    isError,
+    error: fetchError,
+    refetch,
+  } = useQuery({
+    queryKey: ['teacher', id, activeSchoolId],
+    queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
+    enabled: isEdit && Boolean(id) && canSubmitForm,
+    retry: false,
+  });
+
+  const hydratedValues = useMemo(() => {
+    if (!response?.data) return undefined;
+    return mapTeacherDetailToFormValues(response.data);
+  }, [response?.data]);
+
   const form = useForm<TeacherFormValues>({
     resolver: zodResolver(teacherSchema),
+    values: hydratedValues,
+    resetOptions: {
+      keepDirtyValues: false,
+    },
     defaultValues: {
       fullName: '',
       gender: undefined,
@@ -500,6 +671,7 @@ export function TeacherFormPage() {
       position: 'Guru',
       tugasTambahan: '',
       isActive: true,
+      allowDesktopAttendance: false,
       skCpns: '',
       tanggalCpns: '',
       skPengangkatan: '',
@@ -535,7 +707,13 @@ export function TeacherFormPage() {
     },
   });
 
-  // Bersihkan ObjectURL pratinjau lokal agar tidak bocor di memori
+  useEffect(() => {
+    if (hydratedValues) {
+      setPhotoLoadError(false);
+      form.reset(hydratedValues);
+    }
+  }, [hydratedValues, form]);
+
   useEffect(() => {
     return () => {
       if (pendingPhotoPreview) {
@@ -543,92 +721,6 @@ export function TeacherFormPage() {
       }
     };
   }, [pendingPhotoPreview]);
-
-  const {
-    data: response,
-    isLoading,
-    isError,
-    error: fetchError,
-    refetch,
-  } = useQuery({
-    queryKey: ['teacher', id, activeSchoolId],
-    queryFn: () => teacherService.getById(id!, activeSchoolId ?? undefined),
-    enabled: isEdit && Boolean(id) && canSubmitForm,
-    retry: false,
-  });
-
-  useEffect(() => {
-    if (response?.data) {
-      const t = response.data;
-      setPhotoLoadError(false);
-      form.reset({
-        fullName: t.fullName || '',
-        gender: normalizeGenderForForm(t.gender),
-        photoUrl: t.photoUrl || '',
-        nip: t.nip || '',
-        nuptk: t.nuptk || '',
-        nik: t.nik || '',
-        noKk: t.noKk || '',
-        birthDate: formatDateForInput(t.birthDate),
-        birthPlace: t.birthPlace || '',
-        religion: t.religion ? t.religion.toUpperCase() : '',
-        telepon: t.telepon || '',
-        phone: t.phone || '',
-        email: t.email || '',
-        address: t.address || '',
-        dusun: t.dusun || '',
-        rt: t.rt || '',
-        rw: t.rw || '',
-        kelurahan: t.kelurahan || '',
-        kecamatan: t.kecamatan || '',
-        city: t.city || '',
-        province: t.province || '',
-        postalCode: t.postalCode || '',
-        lintang: t.lintang || '',
-        bujur: t.bujur || '',
-        education: t.education ? t.education.toUpperCase() : '',
-        major: t.major || '',
-        university: t.university || '',
-        status: t.status ? t.status.toUpperCase() : 'HONORER',
-        position: t.position || '',
-        tugasTambahan: t.tugasTambahan || '',
-        isActive: t.isActive ?? true,
-        skCpns: t.skCpns || '',
-        tanggalCpns: formatDateForInput(t.tanggalCpns),
-        skPengangkatan: t.skPengangkatan || '',
-        tmtPengangkatan: formatDateForInput(t.tmtPengangkatan),
-        lembagaPengangkatan: t.lembagaPengangkatan || '',
-        pangkatGolongan: t.pangkatGolongan || '',
-        sumberGaji: t.sumberGaji || '',
-        tmtPns: formatDateForInput(t.tmtPns),
-        karpeg: t.karpeg || '',
-        namaIbuKandung: t.namaIbuKandung || '',
-        statusPerkawinan: t.statusPerkawinan || '',
-        namaSuamiIstri: t.namaSuamiIstri || '',
-        nipSuamiIstri: t.nipSuamiIstri || '',
-        pekerjaanSuamiIstri: t.pekerjaanSuamiIstri || '',
-        karisKarsu: t.karisKarsu || '',
-        kewarganegaraan: t.kewarganegaraan || 'Indonesia',
-        npwp: t.npwp || '',
-        namaWajibPajak: t.namaWajibPajak || '',
-        bank: t.bank || '',
-        nomorRekeningBank: t.nomorRekeningBank || '',
-        rekeningAtasNama: t.rekeningAtasNama || '',
-        isCertified: Boolean(t.isCertified),
-        certificationNumber: t.certificationNumber || '',
-        sudahLisensiKepalaSekolah: Boolean(t.sudahLisensiKepalaSekolah),
-        pernahDiklatKepengawasan: Boolean(t.pernahDiklatKepengawasan),
-        keahlianBraille: Boolean(t.keahlianBraille),
-        keahlianBahasaIsyarat: Boolean(t.keahlianBahasaIsyarat),
-        nuks: t.nuks || '',
-        joinDate: formatDateForInput(t.joinDate),
-        baseSalary:
-          t.baseSalary !== null && t.baseSalary !== undefined ? String(t.baseSalary) : '',
-        subjects: t.subjects || '',
-        maxHoursPerWeek: String(t.maxHoursPerWeek || 24),
-      });
-    }
-  }, [response, form]);
 
   const watchedFullName = form.watch('fullName');
   const watchedPhotoUrl = form.watch('photoUrl');
@@ -705,6 +797,7 @@ export function TeacherFormPage() {
         gender: values.gender,
         photoUrl: values.photoUrl || null,
         isActive: values.isActive ?? true,
+        allowDesktopAttendance: values.allowDesktopAttendance ?? false,
         isCertified: values.isCertified ?? false,
         baseSalary: parsedSalary,
         maxHoursPerWeek: parsedHours,
@@ -722,7 +815,6 @@ export function TeacherFormPage() {
         return teacherService.update(id, payload);
       }
 
-      // Mode Tambah Guru Baru: buat record dulu agar mendapat teacher.id, lalu unggah foto ke folder {schoolId}/{teacherId}
       const created = await teacherService.create({
         ...payload,
         photoUrl: null,
@@ -762,7 +854,6 @@ export function TeacherFormPage() {
     },
   });
 
-  // Pindahkan tab otomatis ke field yang gagal validasi
   const handleInvalidSubmit = (errors: FieldErrors<TeacherFormValues>) => {
     const firstErrorField = Object.keys(errors)[0] as keyof TeacherFormValues | undefined;
     if (firstErrorField && FIELD_TAB_MAP[firstErrorField]) {
@@ -1030,6 +1121,7 @@ export function TeacherFormPage() {
                       name="gender"
                       label="Jenis Kelamin *"
                       type="select"
+                      placeholder="Pilih Jenis Kelamin"
                       options={[
                         { label: 'Laki-laki', value: 'L' },
                         { label: 'Perempuan', value: 'P' },
@@ -1185,6 +1277,12 @@ export function TeacherFormPage() {
                       control={form.control}
                       name="isActive"
                       label="Status Aktif di Sekolah"
+                      type="boolean"
+                    />
+                    <TeacherFormField
+                      control={form.control}
+                      name="allowDesktopAttendance"
+                      label="Izinkan Presensi via Komputer/Laptop?"
                       type="boolean"
                     />
 

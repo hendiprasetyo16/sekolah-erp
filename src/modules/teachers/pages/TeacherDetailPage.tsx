@@ -24,6 +24,9 @@ import {
   Clock,
   ZoomIn,
   X,
+  Globe,
+  KeyRound,
+  MonitorSmartphone,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -138,6 +141,23 @@ const formatDateTimeShort = (isoString?: string | null): string => {
   });
 };
 
+const formatJakartaDateTime = (isoString?: string | null): string => {
+  if (!isoString) return '-';
+  const dt = new Date(isoString);
+  if (Number.isNaN(dt.getTime())) return '-';
+  return (
+    dt.toLocaleString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      timeZone: 'Asia/Jakarta',
+    }) + ' WIB'
+  );
+};
+
 function InfoItem({
   label,
   value,
@@ -232,6 +252,23 @@ export function TeacherDetailPage() {
       (teacherScope.teacherId && teacherScope.teacherId === teacher.id))
   );
   const canEditPhoto = canManageTeachers || isOwnProfile;
+
+  // Query khusus SUPER_ADMIN: Audit Login & Ganti Password guru ini
+  const {
+    data: teacherSecurityAudit,
+    isLoading: isSecurityAuditLoading,
+  } = useQuery({
+    queryKey: ['teacher-security-audit-single', teacher?.id, teacher?.schoolId],
+    queryFn: async () => {
+      const res = await teacherService.getTeacherSecurityAuditList({
+        schoolId: teacher?.schoolId ?? activeSchoolId ?? null,
+        search: teacher?.fullName,
+      });
+      return res.data.find((item) => item.teacherId === teacher?.id) ?? null;
+    },
+    enabled: isSuperAdmin && Boolean(teacher?.id),
+    retry: false,
+  });
 
   // Query khusus SUPER_ADMIN: Konfigurasi masa simpan histori foto sekolah
   const { data: retentionDays = 30, isLoading: isRetentionLoading } = useQuery({
@@ -580,7 +617,7 @@ export function TeacherDetailPage() {
 
       {/* ================= BAGIAN 2: GRID UTAMA ================= */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[290px_minmax(0,1fr)]">
-        {/* KOLOM KIRI: KARTU PROFIL + PANEL RETENTION SUPER ADMIN */}
+        {/* KOLOM KIRI: KARTU PROFIL + AUDIT KEAMANAN + PANEL RETENTION SUPER ADMIN */}
         <div className="space-y-4">
           <Card className="h-fit border-border shadow-sm">
             <CardContent className="flex flex-col items-center pt-6 text-center">
@@ -750,6 +787,100 @@ export function TeacherDetailPage() {
               </div>
             </CardContent>
           </Card>
+
+          {/* ================= PANEL KHUSUS SUPER ADMIN: AUDIT LOGIN & PASSWORD ================= */}
+          {isSuperAdmin && (
+            <Card className="border-amber-200/80 bg-amber-50/30 shadow-sm dark:border-amber-500/25 dark:bg-amber-500/5">
+              <CardHeader className="pb-3">
+                <CardTitle className="flex items-center gap-1.5 text-sm font-semibold text-amber-900 dark:text-amber-300">
+                  <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                  <span>
+                    {isId ? 'Audit Login & Password' : 'Login & Password Audit'}
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2.5 text-xs">
+                {!teacher.userId ? (
+                  <p className="text-muted-foreground">
+                    {isId
+                      ? 'Guru ini belum tertaut ke akun login aplikasi.'
+                      : 'This teacher is not yet linked to a login account.'}
+                  </p>
+                ) : isSecurityAuditLoading ? (
+                  <div className="flex justify-center py-3">
+                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                  </div>
+                ) : (
+                  <>
+                    <div className="space-y-1 rounded-lg border border-border/70 bg-background p-2">
+                      <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                        <Clock className="h-3.5 w-3.5 text-emerald-600" />
+                        <span>{isId ? 'Login Terakhir:' : 'Last Login:'}</span>
+                      </div>
+                      <p className="pl-5 font-semibold text-foreground">
+                        {teacherSecurityAudit?.lastLogin
+                          ? formatJakartaDateTime(teacherSecurityAudit.lastLogin)
+                          : isId
+                            ? 'Belum pernah login'
+                            : 'Never logged in'}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1 rounded-lg border border-border/70 bg-background p-2">
+                      <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                        <Globe className="h-3.5 w-3.5 text-blue-600" />
+                        <span>{isId ? 'Alamat IP Login:' : 'Login IP Address:'}</span>
+                      </div>
+                      <p className="pl-5 font-mono font-semibold text-foreground">
+                        {teacherSecurityAudit?.lastLoginIp || '-'}
+                      </p>
+                      {teacherSecurityAudit?.lastLoginUserAgent && (
+                        <p
+                          className="flex items-center gap-1 truncate pl-5 text-[10px] text-muted-foreground"
+                          title={teacherSecurityAudit.lastLoginUserAgent}
+                        >
+                          <MonitorSmartphone className="h-3 w-3 shrink-0" />
+                          <span className="truncate">
+                            {teacherSecurityAudit.lastLoginUserAgent}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="space-y-1 rounded-lg border border-border/70 bg-background p-2">
+                      <div className="flex items-center gap-1.5 font-medium text-muted-foreground">
+                        <KeyRound className="h-3.5 w-3.5 text-amber-600" />
+                        <span>{isId ? 'Status Password:' : 'Password Status:'}</span>
+                      </div>
+                      {(teacherSecurityAudit?.passwordChangeCount ?? 0) > 0 ||
+                        teacherSecurityAudit?.passwordChangedAt ? (
+                        <div className="space-y-0.5 pl-5">
+                          <p className="font-semibold text-blue-700 dark:text-blue-300">
+                            {isId
+                              ? `Sudah Diganti (${Math.max(1, teacherSecurityAudit?.passwordChangeCount ?? 1)}x)`
+                              : `Changed (${Math.max(1, teacherSecurityAudit?.passwordChangeCount ?? 1)}x)`}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {isId ? 'Terakhir:' : 'Last:'}{' '}
+                            {formatJakartaDateTime(teacherSecurityAudit?.passwordChangedAt)}
+                          </p>
+                          {teacherSecurityAudit?.passwordChangedIp && (
+                            <p className="font-mono text-[10px] text-muted-foreground">
+                              IP: {teacherSecurityAudit.passwordChangedIp}
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="pl-5 text-muted-foreground">
+                          {isId ? 'Belum pernah mengganti password' : 'Password never changed'}
+                        </p>
+                      )}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          )}
 
           {/* ================= PANEL KHUSUS SUPER ADMIN: RETENSI & HISTORI FOTO ================= */}
           {isSuperAdmin && (
@@ -1038,6 +1169,14 @@ export function TeacherDetailPage() {
                 <InfoItem
                   label="Tanggal Bergabung"
                   value={teacher.joinDate ? formatDate(teacher.joinDate) : dict.noData}
+                />
+                <InfoItem
+                  label={
+                    isId
+                      ? 'Izinkan Presensi via Komputer/Laptop'
+                      : 'Allow Desktop Attendance'
+                  }
+                  value={teacher.allowDesktopAttendance ? dict.yes : dict.no}
                 />
               </CardContent>
             </Card>

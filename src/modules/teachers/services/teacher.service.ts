@@ -16,6 +16,8 @@ import type {
   TeacherBulkImportResult,
   PhotoRetentionDays,
   TeacherPhotoHistoryItem,
+  TeacherSecurityAuditItem,
+  SecurityAuditLogEntry,
 } from '../types/teacher.types';
 
 interface BulkImportTeachersRpcResponse {
@@ -50,8 +52,8 @@ const ALLOWED_SORT_COLUMNS = new Set([
 const BULK_IMPORT_CHUNK_SIZE = 250;
 const BULK_DELETE_CHUNK_SIZE = 200;
 const TEACHER_PHOTOS_BUCKET = 'teacher-photos';
-const MAX_RAW_PHOTO_BYTES = 15 * 1024 * 1024; // 15 MB sebelum kompresi
-const MAX_STORED_PHOTO_BYTES = 2 * 1024 * 1024; // 2 MB batas bucket Supabase
+const MAX_RAW_PHOTO_BYTES = 15 * 1024 * 1024;
+const MAX_STORED_PHOTO_BYTES = 2 * 1024 * 1024;
 const ALLOWED_PHOTO_MIME_TYPES = new Set([
   'image/jpeg',
   'image/jpg',
@@ -62,9 +64,6 @@ const ALLOWED_PHOTO_MIME_TYPES = new Set([
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/**
- * Memvalidasi dan membersihkan string UUID agar aman dikirim ke query PostgreSQL.
- */
 export const normalizeTeacherSchoolId = (value?: string | null): string | null => {
   if (typeof value !== 'string') return null;
   const trimmed = value.trim();
@@ -93,7 +92,6 @@ const compressTeacherPhotoFile = async (
     throw new Error('Ukuran file mentah maksimal 15 MB.');
   }
 
-  // Jika lingkungan non-browser atau gagal decode canvas, gunakan file asli selama <= 2MB
   if (typeof document === 'undefined' || typeof Image === 'undefined') {
     if (file.size > MAX_STORED_PHOTO_BYTES) {
       throw new Error('Ukuran foto maksimal 2 MB.');
@@ -167,7 +165,6 @@ const compressTeacherPhotoFile = async (
 // ============================================================================
 const cleanNullableText = (value?: unknown): string | null => {
   if (value === undefined || value === null) return null;
-  // Hapus tanda petik tunggal di awal (sering muncul pada ekspor Excel Dapodik untuk NIK/NUPTK/NIP)
   const trimmed = String(value)
     .replace(/^'+/, '')
     .replace(/\s+/g, ' ')
@@ -192,10 +189,26 @@ const normalizeGender = (value?: unknown): 'L' | 'P' | null => {
   const cleaned = cleanNullableText(value);
   if (!cleaned) return null;
   const upper = cleaned.toUpperCase();
-  if (upper === 'L' || upper === 'LAKI-LAKI' || upper === 'LAKILAKI' || upper === 'PRIA') {
+  if (
+    upper === 'L' ||
+    upper === 'LAKI-LAKI' ||
+    upper === 'LAKI LAKI' ||
+    upper === 'LAKILAKI' ||
+    upper === 'PRIA' ||
+    upper === 'MALE' ||
+    upper === 'M' ||
+    upper === '1'
+  ) {
     return 'L';
   }
-  if (upper === 'P' || upper === 'PEREMPUAN' || upper === 'WANITA') {
+  if (
+    upper === 'P' ||
+    upper === 'PEREMPUAN' ||
+    upper === 'WANITA' ||
+    upper === 'FEMALE' ||
+    upper === 'F' ||
+    upper === '2'
+  ) {
     return 'P';
   }
   return null;
@@ -207,6 +220,7 @@ const normalizeReligion = (value?: unknown): string | null => {
   const upper = cleaned.toUpperCase();
   if (upper === 'KATHOLIK') return 'KATOLIK';
   if (upper === 'BUDHA') return 'BUDDHA';
+  if (upper.includes('PROTESTAN') || upper === 'KRISTEN') return 'KRISTEN';
   if (upper.includes('KEPERCAYAAN')) return 'KEPERCAYAAN';
   return upper;
 };
@@ -215,9 +229,14 @@ const normalizeMaritalStatus = (value?: unknown): string | null => {
   const cleaned = cleanNullableText(value);
   if (!cleaned) return null;
   const upper = cleaned.toUpperCase();
-  if (upper === 'KAWIN') return 'Kawin';
-  if (upper === 'BELUM KAWIN') return 'Belum Kawin';
-  if (upper === 'JANDA/DUDA' || upper === 'JANDA' || upper === 'DUDA') {
+  if (upper === 'KAWIN' || upper === 'MENIKAH') return 'Kawin';
+  if (upper === 'BELUM KAWIN' || upper === 'LAJANG') return 'Belum Kawin';
+  if (
+    upper === 'JANDA/DUDA' ||
+    upper === 'JANDA' ||
+    upper === 'DUDA' ||
+    upper.includes('CERAI')
+  ) {
     return 'Janda/Duda';
   }
   return cleaned;
@@ -235,7 +254,6 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
 ): Record<string, unknown> => {
   const data: Record<string, unknown> = { ...raw };
 
-  // Hapus field yang dikelola otomatis oleh database
   delete data.id;
   delete data.userId;
   delete data.createdAt;
@@ -320,7 +338,6 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
     }
   }
 
-  // Standarisasi huruf kapital untuk kode pendidikan & status kepegawaian
   if (typeof data.education === 'string') {
     data.education = data.education.toUpperCase();
   }
@@ -335,6 +352,7 @@ const normalizeTeacherFields = <T extends Record<string, unknown>>(
   const booleanFields = [
     'isCertified',
     'isActive',
+    'allowDesktopAttendance',
     'sudahLisensiKepalaSekolah',
     'pernahDiklatKepengawasan',
     'keahlianBraille',
@@ -500,6 +518,7 @@ export const teacherService = {
       tugasTambahan: item.tugasTambahan ?? null,
       isCertified: Boolean(item.isCertified),
       isActive: item.isActive ?? true,
+      allowDesktopAttendance: Boolean(item.allowDesktopAttendance),
       photoUrl: item.photoUrl ?? null,
       createdAt: item.createdAt,
       updatedAt: item.updatedAt,
@@ -585,8 +604,6 @@ export const teacherService = {
     );
     delete normalized.schoolId;
 
-    // Ekstrak photoUrl agar perubahan foto selalu melalui RPC update_own_teacher_photo
-    // sehingga histori foto lama & avatarUrl akun login tetap tersinkronisasi
     const hasPhotoField = 'photoUrl' in normalized;
     const incomingPhotoUrl = (normalized.photoUrl as string | null) ?? null;
     delete normalized.photoUrl;
@@ -615,7 +632,6 @@ export const teacherService = {
 
       if (updateError) throw handleDbError(updateError);
 
-      // Sinkronkan perubahan nama lengkap ke akun login (public.users) jika sudah tertaut
       if (
         existing.userId &&
         typeof normalized.fullName === 'string' &&
@@ -638,7 +654,7 @@ export const teacherService = {
             });
           }
         } catch {
-          // Best-effort sync (tidak menggagalkan update guru jika RLS users membatasi role Operator/TU)
+          // Best-effort sync
         }
       }
     }
@@ -663,7 +679,6 @@ export const teacherService = {
       query = query.eq('schoolId', validSchoolId);
     }
 
-    // Gunakan .select('id') untuk mendeteksi jika RLS menolak penghapusan (0 baris terhapus)
     const { data, error } = await query.select('id');
     if (error) throw handleDbError(error);
 
@@ -838,11 +853,6 @@ export const teacherService = {
   // ==========================================================================
   // MANAJEMEN FOTO PROFIL PTK & HISTORI RETENSI (SUPABASE STORAGE + RPC)
   // ==========================================================================
-
-  /**
-   * Mengompresi dan mengunggah foto profil ke bucket `teacher-photos`
-   * dengan struktur folder wajib `{schoolId}/{teacherId}/{fileName}`.
-   */
   async uploadTeacherPhoto(params: {
     schoolId: string;
     teacherId: string;
@@ -879,10 +889,6 @@ export const teacherService = {
     };
   },
 
-  /**
-   * Memperbarui kolom `photoUrl` guru melalui RPC `update_own_teacher_photo`.
-   * Foto sebelumnya otomatis diarsipkan ke `teacher_photo_history` dan `users.avatarUrl` disinkronkan.
-   */
   async updateTeacherPhoto(
     teacherId: string,
     newPhotoUrl: string | null,
@@ -902,7 +908,6 @@ export const teacherService = {
 
     const result = data as UpdateTeacherPhotoRpcResponse;
 
-    // Sinkronkan avatar pada auth store sesi aktif jika guru mengubah fotonya sendiri
     const authState = useAuthStore.getState();
     if (
       authState.user &&
@@ -926,9 +931,6 @@ export const teacherService = {
     };
   },
 
-  /**
-   * Alur lengkap: kompresi -> unggah ke Storage -> simpan & arsipkan foto lama via RPC.
-   */
   async uploadAndSaveTeacherPhoto(params: {
     schoolId: string;
     teacherId: string;
@@ -944,9 +946,6 @@ export const teacherService = {
     return this.updateTeacherPhoto(params.teacherId, publicUrl, params.linkedUserId);
   },
 
-  /**
-   * Mengambil daftar histori foto lama milik guru (Hanya SUPER_ADMIN yang lolos RLS).
-   */
   async getPhotoHistory(teacherId: string): Promise<ApiResponse<TeacherPhotoHistoryItem[]>> {
     const validTeacherId = assertValidUuid(teacherId);
 
@@ -967,9 +966,6 @@ export const teacherService = {
     };
   },
 
-  /**
-   * Mengambil konfigurasi masa simpan histori foto (7, 14, atau 30 hari) pada sekolah terkait.
-   */
   async getPhotoRetentionDays(schoolId: string): Promise<PhotoRetentionDays> {
     const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
 
@@ -992,9 +988,6 @@ export const teacherService = {
     return 30;
   },
 
-  /**
-   * Mengatur masa simpan histori foto sekolah (7 / 14 / 30 hari) — Khusus SUPER_ADMIN.
-   */
   async setPhotoRetentionDays(
     schoolId: string,
     days: PhotoRetentionDays
@@ -1017,9 +1010,6 @@ export const teacherService = {
     };
   },
 
-  /**
-   * Menghapus satu arsip foto lama secara permanen (Storage + tabel histori) — Khusus SUPER_ADMIN.
-   */
   async deletePhotoHistoryItem(item: TeacherPhotoHistoryItem): Promise<ApiResponse<void>> {
     const validId = assertValidUuid(item.id, 'ID histori foto');
 
@@ -1045,9 +1035,6 @@ export const teacherService = {
     };
   },
 
-  /**
-   * Membersihkan seluruh arsip foto yang sudah melewati `expiresAt` — Khusus SUPER_ADMIN.
-   */
   async purgeExpiredPhotoHistory(
     schoolId?: string
   ): Promise<ApiResponse<{ deleted: number }>> {
@@ -1099,6 +1086,57 @@ export const teacherService = {
       success: true,
       data: { deleted: rows.length },
       message: `${rows.length} arsip foto kedaluwarsa berhasil dibersihkan`,
+    };
+  },
+
+  // ==========================================================================
+  // AUDIT KEAMANAN LOGIN & GANTI PASSWORD GURU (KHUSUS SUPER_ADMIN)
+  // ==========================================================================
+  async getTeacherSecurityAuditList(params?: {
+    schoolId?: string | null;
+    search?: string;
+  }): Promise<ApiResponse<TeacherSecurityAuditItem[]>> {
+    const validSchoolId = normalizeTeacherSchoolId(params?.schoolId);
+    const cleanSearch = params?.search?.trim() || null;
+
+    const { data, error } = await supabase.rpc('get_teacher_security_audit_list', {
+      p_school_id: validSchoolId,
+      p_search: cleanSearch,
+    });
+
+    if (error) {
+      throw handleDbError(error);
+    }
+
+    return {
+      success: true,
+      data: (data || []) as TeacherSecurityAuditItem[],
+      message: 'Berhasil mengambil audit keamanan akun guru',
+    };
+  },
+
+  async getUserSecurityAuditLogs(params?: {
+    targetUserId?: string | null;
+    schoolId?: string | null;
+    limit?: number;
+  }): Promise<ApiResponse<SecurityAuditLogEntry[]>> {
+    const validUserId = normalizeTeacherSchoolId(params?.targetUserId);
+    const validSchoolId = normalizeTeacherSchoolId(params?.schoolId);
+
+    const { data, error } = await supabase.rpc('get_user_security_audit_logs', {
+      p_target_user_id: validUserId,
+      p_school_id: validSchoolId,
+      p_limit: params?.limit ?? 100,
+    });
+
+    if (error) {
+      throw handleDbError(error);
+    }
+
+    return {
+      success: true,
+      data: (data || []) as SecurityAuditLogEntry[],
+      message: 'Berhasil mengambil log aktivitas login dan password',
     };
   },
 };

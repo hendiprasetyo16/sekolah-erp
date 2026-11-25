@@ -46,6 +46,7 @@ export interface TeacherListItem {
 
   isCertified: boolean;
   isActive: boolean;
+  allowDesktopAttendance?: boolean;
   photoUrl?: string | null;
 
   createdAt?: string;
@@ -162,6 +163,7 @@ export interface CreateTeacherPayload {
   certificationNumber?: string | null;
   joinDate?: string | null;
   isActive?: boolean;
+  allowDesktopAttendance?: boolean;
   baseSalary?: number | null;
   subjects?: string | null;
   maxHoursPerWeek?: number;
@@ -198,7 +200,7 @@ export type UpdateTeacherPayload = Partial<Omit<CreateTeacherPayload, 'schoolId'
 
 export interface TeacherListParams {
   schoolId?: string;
-  teacherId?: string; // <-- Tambahkan baris ini
+  teacherId?: string;
   page?: number;
   limit?: number;
   search?: string;
@@ -239,4 +241,46 @@ export interface TeacherPhotoHistoryItem {
   replacedBy?: string | null;
   replacedAt: string;
   expiresAt: string;
+}
+
+/**
+ * 6. AUDIT KEAMANAN LOGIN & GANTI PASSWORD GURU (KHUSUS SUPER ADMIN)
+ */
+export interface TeacherSecurityAuditItem {
+  teacherId: string;
+  schoolId: string;
+  schoolName: string;
+  fullName: string;
+  nip?: string | null;
+  nuptk?: string | null;
+  position?: string | null;
+  employmentStatus?: string | null;
+  photoUrl?: string | null;
+  userId?: string | null;
+  email?: string | null;
+  role?: string | null;
+  isAccountActive: boolean;
+  isFirstLogin: boolean;
+  lastLogin?: string | null;
+  lastLoginIp?: string | null;
+  lastLoginUserAgent?: string | null;
+  passwordChangedAt?: string | null;
+  passwordChangedIp?: string | null;
+  passwordChangeCount: number;
+}
+
+export interface SecurityAuditLogEntry {
+  id: string;
+  userId?: string | null;
+  schoolId?: string | null;
+  schoolName?: string | null;
+  action: 'LOGIN' | 'CHANGE_PASSWORD' | 'RESET_PASSWORD' | string;
+  actorName: string;
+  actorEmail: string;
+  targetName: string;
+  targetEmail: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  details?: Record<string, unknown> | null;
+  createdAt: string;
 }

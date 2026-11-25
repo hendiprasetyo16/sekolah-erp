@@ -7,7 +7,8 @@ import {
   Plus, Upload, Download, Search, Eye, Edit, Trash2, Loader2,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   X, AlertTriangle, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown,
-  FileSpreadsheet, CheckCircle2, RefreshCw, Sparkles, Filter, ZoomIn
+  FileSpreadsheet, CheckCircle2, RefreshCw, Sparkles, Filter, ZoomIn,
+  ShieldCheck, KeyRound, Globe, MonitorSmartphone, Clock, Users, History
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -24,6 +25,7 @@ import type {
   TeacherDetail,
   TeacherBulkImportItem,
   TeacherDiffAction,
+  TeacherSecurityAuditItem,
 } from '../types/teacher.types';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
 
@@ -36,6 +38,7 @@ type DeleteModalState = { isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?:
 type DiffFilterTab = 'all' | 'new' | 'updated' | 'unchanged';
 type DetectedExcelType = 'teacher' | 'student' | 'unknown';
 type PhotoPreviewState = { id: string; fullName: string; photoUrl: string } | null;
+type ActiveMainTab = 'directory' | 'security_audit';
 
 const PAGE_SIZE = 10;
 const FALLBACK_HEADER_ROW = 4;
@@ -132,14 +135,12 @@ const DIFF_FIELD_LABELS: Record<keyof TeacherBulkImportItem, string> = {
   isCertified: 'Sertifikasi',
   certificationNumber: 'No Sertifikasi',
   isActive: 'Aktif',
+  allowDesktopAttendance: 'Presensi PC',
   baseSalary: 'Gaji Pokok',
   subjects: 'Mapel',
   maxHoursPerWeek: 'Jam Mengajar',
 };
 
-// ==========================================
-// ERROR HANDLING HELPER
-// ==========================================
 const extractFriendlyErrorMessage = (
   error: unknown,
   locale: string,
@@ -204,6 +205,47 @@ const extractFriendlyErrorMessage = (
   }
 
   return fallback;
+};
+
+// ==========================================
+// HELPERS FORMAT TANGGAL & DEVICE AUDIT
+// ==========================================
+const formatAuditDateTime = (iso?: string | null): { date: string; time: string } | null => {
+  if (!iso) return null;
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return null;
+  const date = dt.toLocaleDateString('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'Asia/Jakarta',
+  });
+  const time = dt.toLocaleTimeString('id-ID', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    timeZone: 'Asia/Jakarta',
+  });
+  return { date, time: `${time} WIB` };
+};
+
+const summarizeUserAgent = (ua?: string | null): string => {
+  if (!ua) return '-';
+  const lower = ua.toLowerCase();
+  let os = 'Perangkat Lain';
+  if (lower.includes('android')) os = 'Android';
+  else if (lower.includes('iphone') || lower.includes('ipad')) os = 'iOS';
+  else if (lower.includes('windows')) os = 'Windows';
+  else if (lower.includes('mac os') || lower.includes('macintosh')) os = 'macOS';
+  else if (lower.includes('linux')) os = 'Linux';
+
+  let browser = '';
+  if (lower.includes('edg/')) browser = 'Edge';
+  else if (lower.includes('chrome/') && !lower.includes('edg/')) browser = 'Chrome';
+  else if (lower.includes('firefox/')) browser = 'Firefox';
+  else if (lower.includes('safari/') && !lower.includes('chrome/')) browser = 'Safari';
+
+  return browser ? `${os} • ${browser}` : os;
 };
 
 // ==========================================
@@ -802,6 +844,9 @@ export function TeacherListPage() {
   const canExportTeacher = hasPermission('teachers', 'export');
   const canClearAllTeachers = isSuperAdmin && canDeleteTeacher && Boolean(activeSchoolId);
 
+  // Tab Utama (Direktori Guru vs Audit Keamanan Login & Password Khusus Super Admin)
+  const [activeMainTab, setActiveMainTab] = useState<ActiveMainTab>('directory');
+
   // Filter, Pagination, Selection & Sort State
   const [searchInput, setSearchInput] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
@@ -811,6 +856,15 @@ export function TeacherListPage() {
   const [pageInputValue, setPageInputValue] = useState('1');
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'fullName', direction: 'asc' });
+
+  // State Filter & Modal Log Keamanan (Khusus Super Admin)
+  const [auditSearchInput, setAuditSearchInput] = useState('');
+  const [auditSearchQuery, setAuditSearchQuery] = useState('');
+  const [auditFilterMode, setAuditFilterMode] = useState<
+    'all' | 'logged_in' | 'never_logged_in' | 'password_changed'
+  >('all');
+  const [selectedAuditTeacher, setSelectedAuditTeacher] =
+    useState<TeacherSecurityAuditItem | null>(null);
 
   // Photo Lightbox Preview State
   const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
@@ -836,6 +890,13 @@ export function TeacherListPage() {
     }, 300);
     return () => clearTimeout(timer);
   }, [searchInput]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setAuditSearchQuery(auditSearchInput);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [auditSearchInput]);
 
   useEffect(() => {
     setPageInputValue(currentPage.toString());
@@ -913,6 +974,66 @@ export function TeacherListPage() {
     },
     enabled: !teacherScope.isLoading && (isSuperAdmin || Boolean(activeSchoolId)),
   });
+
+  // Query Khusus SUPER_ADMIN: Audit Login & Ganti Password Guru
+  const {
+    data: securityAuditResponse,
+    isLoading: isSecurityAuditLoading,
+    refetch: refetchSecurityAudit,
+  } = useQuery({
+    queryKey: ['teacher-security-audit', activeSchoolId, auditSearchQuery],
+    queryFn: () =>
+      teacherService.getTeacherSecurityAuditList({
+        schoolId: activeSchoolId ?? null,
+        search: auditSearchQuery,
+      }),
+    enabled: isSuperAdmin && activeMainTab === 'security_audit',
+  });
+
+  // Query Khusus SUPER_ADMIN: Riwayat Detail Log Login & Password untuk Guru Terpilih
+  const {
+    data: selectedUserLogsResponse,
+    isLoading: isSelectedUserLogsLoading,
+  } = useQuery({
+    queryKey: [
+      'teacher-security-audit-logs',
+      selectedAuditTeacher?.userId,
+      selectedAuditTeacher?.schoolId,
+    ],
+    queryFn: () =>
+      teacherService.getUserSecurityAuditLogs({
+        targetUserId: selectedAuditTeacher?.userId ?? null,
+        schoolId: selectedAuditTeacher?.schoolId ?? null,
+        limit: 50,
+      }),
+    enabled: isSuperAdmin && Boolean(selectedAuditTeacher?.userId),
+  });
+
+  const securityAuditItems = securityAuditResponse?.data ?? [];
+  const selectedUserLogs = selectedUserLogsResponse?.data ?? [];
+
+  const securityAuditStats = useMemo(() => {
+    const withAccount = securityAuditItems.filter((i) => Boolean(i.userId)).length;
+    const loggedIn = securityAuditItems.filter((i) => Boolean(i.lastLogin)).length;
+    const neverLoggedIn = securityAuditItems.filter(
+      (i) => Boolean(i.userId) && !i.lastLogin
+    ).length;
+    const passwordChanged = securityAuditItems.filter(
+      (i) => i.passwordChangeCount > 0 || Boolean(i.passwordChangedAt)
+    ).length;
+    return { withAccount, loggedIn, neverLoggedIn, passwordChanged };
+  }, [securityAuditItems]);
+
+  const filteredSecurityAuditItems = useMemo(() => {
+    return securityAuditItems.filter((item) => {
+      if (auditFilterMode === 'logged_in') return Boolean(item.lastLogin);
+      if (auditFilterMode === 'never_logged_in')
+        return Boolean(item.userId) && !item.lastLogin;
+      if (auditFilterMode === 'password_changed')
+        return item.passwordChangeCount > 0 || Boolean(item.passwordChangedAt);
+      return true;
+    });
+  }, [securityAuditItems, auditFilterMode]);
 
   const isLoading = teacherScope.isLoading || isTeachersQueryLoading;
 
@@ -1560,743 +1681,1170 @@ export function TeacherListPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {showClearAllButton && (
-            <button
-              type="button"
-              onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
-            >
-              <Trash2 size={16} />
-              <span className="hidden sm:inline">{tr('Kosongkan Data', 'Clear All')}</span>
-            </button>
-          )}
-
-          {canImportTeacher && (
+          {activeMainTab === 'directory' && (
             <>
-              <button
-                type="button"
-                onClick={handleDownloadTemplate}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors shadow-sm"
-              >
-                <FileSpreadsheet size={16} className="text-emerald-600" />
-                <span className="hidden sm:inline">{tr('Template', 'Template')}</span>
-              </button>
+              {showClearAllButton && (
+                <button
+                  type="button"
+                  onClick={() => setDeleteModal({ isOpen: true, type: 'all' })}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg border border-red-200 bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition-colors shadow-sm"
+                >
+                  <Trash2 size={16} />
+                  <span className="hidden sm:inline">{tr('Kosongkan Data', 'Clear All')}</span>
+                </button>
+              )}
 
-              <input
-                type="file"
-                accept=".xlsx, .xls"
-                ref={fileInputRef}
-                className="hidden"
-                onChange={handleFileUpload}
-              />
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={!activeSchoolId || isParsingExcel || bulkImportMutation.isPending}
-                className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
-              >
-                {isParsingExcel ? (
-                  <Loader2 size={16} className="animate-spin text-emerald-600" />
-                ) : (
-                  <Upload size={16} />
-                )}
-                <span className="hidden sm:inline">
-                  {isParsingExcel ? tr('Membaca...', 'Reading...') : tr('Impor Verval PTK', 'Import Verval PTK')}
-                </span>
-              </button>
+              {canImportTeacher && (
+                <>
+                  <button
+                    type="button"
+                    onClick={handleDownloadTemplate}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors shadow-sm"
+                  >
+                    <FileSpreadsheet size={16} className="text-emerald-600" />
+                    <span className="hidden sm:inline">{tr('Template', 'Template')}</span>
+                  </button>
+
+                  <input
+                    type="file"
+                    accept=".xlsx, .xls"
+                    ref={fileInputRef}
+                    className="hidden"
+                    onChange={handleFileUpload}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={!activeSchoolId || isParsingExcel || bulkImportMutation.isPending}
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors disabled:opacity-50 shadow-sm"
+                  >
+                    {isParsingExcel ? (
+                      <Loader2 size={16} className="animate-spin text-emerald-600" />
+                    ) : (
+                      <Upload size={16} />
+                    )}
+                    <span className="hidden sm:inline">
+                      {isParsingExcel ? tr('Membaca...', 'Reading...') : tr('Impor Verval PTK', 'Import Verval PTK')}
+                    </span>
+                  </button>
+                </>
+              )}
+
+              {canExportTeacher && (
+                <button
+                  type="button"
+                  onClick={handleExport}
+                  disabled={isExportDisabled}
+                  title={
+                    totalData === 0 || teachers.length === 0
+                      ? tr('Tidak ada data guru untuk diekspor', 'No teacher data to export')
+                      : undefined
+                  }
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground disabled:hover:bg-muted/50"
+                >
+                  {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
+                  <span className="hidden sm:inline">
+                    {canDeleteTeacher && selectedRows.length > 0
+                      ? tr(`Ekspor (${selectedRows.length})`, `Export (${selectedRows.length})`)
+                      : tr('Ekspor Data', 'Export Data')}
+                  </span>
+                </button>
+              )}
+
+              {canCreateTeacher && activeSchoolId && (
+                <Link
+                  to="/teachers/new"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
+                >
+                  <Plus size={16} />
+                  <span>{tr('Tambah Guru', 'Add Teacher')}</span>
+                </Link>
+              )}
             </>
-          )}
-
-          {canExportTeacher && (
-            <button
-              type="button"
-              onClick={handleExport}
-              disabled={isExportDisabled}
-              title={
-                totalData === 0 || teachers.length === 0
-                  ? tr('Tidak ada data guru untuk diekspor', 'No teacher data to export')
-                  : undefined
-              }
-              className="flex items-center gap-2 px-4 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:bg-muted/50 disabled:text-muted-foreground disabled:hover:bg-muted/50"
-            >
-              {isExporting ? <Loader2 size={16} className="animate-spin" /> : <Download size={16} />}
-              <span className="hidden sm:inline">
-                {canDeleteTeacher && selectedRows.length > 0
-                  ? tr(`Ekspor (${selectedRows.length})`, `Export (${selectedRows.length})`)
-                  : tr('Ekspor Data', 'Export Data')}
-              </span>
-            </button>
-          )}
-
-          {canCreateTeacher && activeSchoolId && (
-            <Link
-              to="/teachers/new"
-              className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 transition-colors shadow-sm"
-            >
-              <Plus size={16} />
-              <span>{tr('Tambah Guru', 'Add Teacher')}</span>
-            </Link>
           )}
         </div>
       </div>
 
-      {/* --- BANNER ERROR IMPOR EXCEL (PERSISTEN) --- */}
-      {importError && (
-        <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm">
-          <div className="flex items-start gap-2.5">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
-            <div>
-              <p className="font-semibold">
-                {tr('Gagal Memproses Impor Data Guru', 'Failed to Process Teacher Import')}
-              </p>
-              <p className="mt-0.5 leading-relaxed">{importError}</p>
-            </div>
-          </div>
+      {/* --- TAB SWITCHER KHUSUS SUPER_ADMIN (DIREKTORI VS AUDIT KEAMANAN LOGIN & PASSWORD) --- */}
+      {isSuperAdmin && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/40 p-1.5 w-fit">
           <button
             type="button"
-            onClick={() => setImportError(null)}
-            title={tr('Tutup pesan error', 'Dismiss error')}
-            className="p-1 rounded-lg text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors shrink-0"
+            onClick={() => setActiveMainTab('directory')}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all',
+              activeMainTab === 'directory'
+                ? 'bg-emerald-600 text-white shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
           >
-            <X size={16} />
+            <Users className="h-4 w-4" />
+            <span>{tr('Daftar Guru & Pegawai', 'Teachers Directory')}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveMainTab('security_audit')}
+            className={cn(
+              'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all',
+              activeMainTab === 'security_audit'
+                ? 'bg-amber-600 text-white shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <ShieldCheck className="h-4 w-4" />
+            <span>
+              {tr('Audit Login & Password Guru', 'Login & Password Audit')}
+            </span>
           </button>
         </div>
       )}
 
-      {isSuperAdmin && !activeSchoolId && (
-        <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-          <div>
-            <p className="font-semibold">
-              {tr('Mode Super Admin Lintas Sekolah', 'Cross-School Super Admin Mode')}
-            </p>
-            <p className="mt-0.5">
-              {tr(
-                'Pilih sekolah aktif terlebih dahulu pada switcher sekolah untuk menambah guru baru atau mengimpor Excel Verval PTK.',
-                'Select an active school from the school switcher before adding new teachers or importing Verval PTK Excel.'
-              )}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* --- TOOLBAR + TABLE --- */}
-      <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col">
-        <div className="p-4 border-b border-border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-muted/20">
-          {/* Kiri: Pencarian */}
-          <div className="relative w-full lg:flex-1 lg:min-w-50 transition-all duration-200">
-            <Search
-              size={16}
-              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
-            />
-            <input
-              type="text"
-              placeholder={tr('Cari nama, NIP, NUPTK, NIK...', 'Search name, NIP, NUPTK, NIK...')}
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-              className={cn(
-                'w-full pl-9 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all',
-                searchInput ? 'pr-8' : 'pr-4'
-              )}
-            />
-            {searchInput && (
-              <button
-                type="button"
-                onClick={() => setSearchInput('')}
-                title={tr('Hapus pencarian', 'Clear search')}
-                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-              >
-                <X size={14} />
-              </button>
-            )}
-          </div>
-
-          {/* Kanan: Filter + Aksi Terpilih */}
-          <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2.5 shrink-0">
-            <div className="flex flex-1 sm:flex-initial items-center gap-2 transition-all duration-200">
-              <div className="relative flex-1 sm:flex-initial">
-                <Filter
-                  size={14}
-                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
-                />
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value);
-                    setCurrentPage(1);
-                  }}
-                  aria-label="Filter Status Kepegawaian"
-                  className="w-full sm:w-auto pl-8 pr-7 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-emerald-500"
-                >
-                  <option value="all">{tr('Semua Status', 'All Status')}</option>
-                  <option value="PNS">PNS</option>
-                  <option value="CPNS">CPNS</option>
-                  <option value="PPPK">PPPK</option>
-                  <option value="HONORER">Honorer</option>
-                  <option value="GTY">GTY</option>
-                  <option value="GTT">GTT</option>
-                </select>
+      {/* ========================================================================
+          TAMPILAN KHUSUS SUPER_ADMIN: AUDIT LOGIN TERAKHIR, IP & GANTI PASSWORD
+      ======================================================================== */}
+      {isSuperAdmin && activeMainTab === 'security_audit' ? (
+        <div className="space-y-4">
+          {/* Ringkasan Statistik Keamanan Akun Guru */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-xl border border-border bg-card p-4 shadow-xs">
+              <div className="text-xs font-medium text-muted-foreground">
+                {tr('Guru Tertaut Akun Login', 'Linked Login Accounts')}
               </div>
-
-              <select
-                value={certifiedFilter}
-                onChange={(e) => {
-                  setCertifiedFilter(e.target.value);
-                  setCurrentPage(1);
-                }}
-                aria-label="Filter Status Sertifikasi"
-                className="flex-1 sm:flex-initial px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-emerald-500"
-              >
-                <option value="all">{tr('Semua Sertifikasi', 'All Certification')}</option>
-                <option value="true">{tr('Sudah Sertifikasi', 'Certified')}</option>
-                <option value="false">{tr('Belum Sertifikasi', 'Uncertified')}</option>
-              </select>
+              <div className="mt-1 text-2xl font-bold text-foreground">
+                {securityAuditStats.withAccount}
+                <span className="ml-1 text-xs font-normal text-muted-foreground">
+                  / {securityAuditItems.length} PTK
+                </span>
+              </div>
             </div>
 
-            {canDeleteTeacher && selectedRows.length > 0 && (
-              <div className="flex items-center gap-2 pl-2 border-l border-border shrink-0 animate-in fade-in zoom-in-95 duration-200">
-                <span className="hidden sm:inline-block text-sm font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/20 whitespace-nowrap">
-                  {selectedRows.length} {tr('Terpilih', 'Selected')}
-                </span>
-                <span className="sm:hidden text-sm font-bold text-emerald-600">
-                  ({selectedRows.length})
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setDeleteModal({ isOpen: true, type: 'bulk' })}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm"
-                >
-                  <Trash2 size={16} />
-                  <span className="hidden sm:inline">{tr('Hapus', 'Delete')}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedRows([])}
-                  title={tr('Batal Pilih', 'Clear Selection')}
-                  className="p-2 text-muted-foreground hover:bg-muted rounded-lg transition-colors"
-                >
-                  <X size={16} />
-                </button>
+            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-4 shadow-xs">
+              <div className="text-xs font-medium text-emerald-700 dark:text-emerald-400">
+                {tr('Sudah Pernah Login', 'Has Logged In')}
               </div>
-            )}
-          </div>
-        </div>
-
-        {/* --- DATA TABLE --- */}
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
-            <thead>
-              <tr className="bg-muted/50 border-b border-border">
-                {canDeleteTeacher && (
-                  <th className="p-4 w-12 text-center">
-                    <input
-                      type="checkbox"
-                      checked={selectedRows.length === teachers.length && teachers.length > 0}
-                      onChange={toggleAll}
-                      className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
-                    />
-                  </th>
-                )}
-                <th className="px-4 py-3 text-sm font-semibold text-muted-foreground w-12 text-center">
-                  No
-                </th>
-                <SortableHeader
-                  columnKey="fullName"
-                  label={tr('Nama Lengkap', 'Full Name')}
-                  sortConfig={sortConfig}
-                  onSort={handleSort}
-                  className="min-w-50"
-                />
-                <SortableHeader
-                  columnKey="nip"
-                  label="NIP / NUPTK"
-                  sortConfig={sortConfig}
-                  onSort={handleSort}
-                />
-                <SortableHeader
-                  columnKey="position"
-                  label={tr('Jabatan', 'Position')}
-                  sortConfig={sortConfig}
-                  onSort={handleSort}
-                />
-                <SortableHeader
-                  columnKey="status"
-                  label="Status"
-                  sortConfig={sortConfig}
-                  onSort={handleSort}
-                />
-                <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">
-                  {tr('Sertifikasi', 'Certification')}
-                </th>
-                <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">
-                  {tr('Aksi', 'Action')}
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-border bg-card">
-              {isLoading ? (
-                <tr>
-                  <td
-                    colSpan={canDeleteTeacher ? 8 : 7}
-                    className="px-6 py-12 text-center text-muted-foreground"
-                  >
-                    <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-2" />
-                    {tr('Memuat data...', 'Loading data...')}
-                  </td>
-                </tr>
-              ) : isError ? (
-                <tr>
-                  <td
-                    colSpan={canDeleteTeacher ? 8 : 7}
-                    className="px-6 py-12 text-center"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2 text-red-600 dark:text-red-400">
-                      <AlertCircle className="h-8 w-8" />
-                      <p className="font-semibold">
-                        {tr('Gagal memuat data guru.', 'Failed to load teacher data.')}
-                      </p>
-                      <p className="text-xs text-muted-foreground max-w-md">
-                        {extractFriendlyErrorMessage(
-                          teachersQueryError,
-                          locale,
-                          'Terjadi gangguan saat mengambil daftar guru dari server.',
-                          'An issue occurred while fetching the teacher list from the server.'
-                        )}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => refetchTeachers()}
-                        className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-border bg-background text-foreground text-xs font-medium hover:bg-muted transition-colors shadow-sm"
-                      >
-                        <RefreshCw size={14} />
-                        <span>{tr('Muat Ulang', 'Retry')}</span>
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ) : teachers.length === 0 ? (
-                <tr>
-                  <td
-                    colSpan={canDeleteTeacher ? 8 : 7}
-                    className="px-6 py-12 text-center text-muted-foreground"
-                  >
-                    {tr('Tidak ada data guru.', 'No teacher data found.')}
-                  </td>
-                </tr>
-              ) : (
-                teachers.map((teacher, idx) => {
-                  const statusConf = STATUS_CONFIG[(teacher.status || 'HONORER').toUpperCase()];
-                  return (
-                    <motion.tr
-                      key={teacher.id}
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      className={cn(
-                        'hover:bg-muted/50 transition-colors group',
-                        canDeleteTeacher && 'cursor-pointer',
-                        selectedRows.includes(teacher.id) && 'bg-emerald-500/5'
-                      )}
-                      onClick={() => canDeleteTeacher && toggleRow(teacher.id)}
-                    >
-                      {canDeleteTeacher && (
-                        <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
-                          <input
-                            type="checkbox"
-                            checked={selectedRows.includes(teacher.id)}
-                            onChange={() => toggleRow(teacher.id)}
-                            className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
-                          />
-                        </td>
-                      )}
-                      <td className="px-4 py-3 text-sm text-muted-foreground text-center">
-                        {(currentPage - 1) * PAGE_SIZE + idx + 1}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <TeacherAvatarCell
-                            id={teacher.id}
-                            fullName={teacher.fullName}
-                            photoUrl={teacher.photoUrl}
-                            previewTitle={tr(
-                              'Klik untuk memperbesar foto profil',
-                              'Click to enlarge profile photo'
-                            )}
-                            onPreview={setPhotoPreview}
-                          />
-                          <div className="min-w-0">
-                            <p className="font-medium text-foreground line-clamp-1">
-                              {teacher.fullName}
-                            </p>
-                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-                              <span>
-                                {teacher.gender === 'L'
-                                  ? tr('Laki-laki', 'Male')
-                                  : tr('Perempuan', 'Female')}
-                              </span>
-                              {teacher.isActive === false && (
-                                <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-400 font-medium">
-                                  {tr('Nonaktif', 'Inactive')}
-                                </span>
-                              )}
-                              {teacher.tugasTambahan && (
-                                <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 font-medium truncate max-w-44">
-                                  {teacher.tugasTambahan}
-                                </span>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm font-medium">{teacher.nip || '-'}</p>
-                        <p className="text-xs text-muted-foreground">
-                          {teacher.nuptk || tr('Tanpa NUPTK', 'No NUPTK')}
-                        </p>
-                      </td>
-                      <td className="px-4 py-3 text-sm">{teacher.position || '-'}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={cn(
-                            'inline-flex px-2 py-1 text-xs font-medium rounded-md border whitespace-nowrap',
-                            statusConf?.color || 'bg-secondary text-secondary-foreground'
-                          )}
-                        >
-                          {statusConf?.label || teacher.status}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={cn(
-                            'inline-flex px-2 py-1 text-xs font-medium rounded-full',
-                            teacher.isCertified
-                              ? 'bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300'
-                              : 'bg-gray-100 text-gray-600 dark:bg-muted dark:text-muted-foreground'
-                          )}
-                        >
-                          {teacher.isCertified ? tr('Sudah', 'Certified') : tr('Belum', 'Uncertified')}
-                        </span>
-                      </td>
-                      <td
-                        className="px-6 py-4 whitespace-nowrap text-sm text-right"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-end space-x-2">
-                          <Link
-                            to={`/teachers/${teacher.id}`}
-                            title={tr('Lihat Detail', 'View Detail')}
-                            className="p-1.5 text-emerald-600 hover:bg-emerald-50 rounded-md transition-colors"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Link>
-                          {canUpdateTeacher && (
-                            <Link
-                              to={`/teachers/${teacher.id}/edit`}
-                              title={tr('Edit Data', 'Edit Data')}
-                              className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-md transition-colors"
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Link>
-                          )}
-                          {canDeleteTeacher && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setDeleteModal({ isOpen: true, type: 'single', id: teacher.id })
-                              }
-                              title={tr('Hapus Data', 'Delete Data')}
-                              className="p-1.5 text-red-600 hover:bg-red-50 rounded-md transition-colors"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </motion.tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* --- PAGINATION --- */}
-        {totalPages > 0 && (
-          <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 text-sm bg-background rounded-b-xl">
-            <div className="text-muted-foreground whitespace-nowrap text-center sm:text-left">
-              {tr('Menampilkan', 'Showing')}{' '}
-              {teachers.length > 0 ? (currentPage - 1) * PAGE_SIZE + 1 : 0} -{' '}
-              {Math.min(currentPage * PAGE_SIZE, totalData)} {tr('dari', 'of')} {totalData}{' '}
-              {tr('data', 'entries')}
+              <div className="mt-1 text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                {securityAuditStats.loggedIn}
+              </div>
             </div>
 
-            <div className="flex items-center gap-2 sm:gap-3 shrink-0 overflow-x-auto max-w-full py-1">
-              <div className="flex items-center gap-2 shrink-0">
-                <span className="text-muted-foreground whitespace-nowrap">
-                  {tr('Lompat ke:', 'Jump to:')}
-                </span>
+            <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-4 shadow-xs">
+              <div className="text-xs font-medium text-amber-700 dark:text-amber-400">
+                {tr('Belum Pernah Login', 'Never Logged In')}
+              </div>
+              <div className="mt-1 text-2xl font-bold text-amber-600 dark:text-amber-400">
+                {securityAuditStats.neverLoggedIn}
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-blue-500/25 bg-blue-500/5 p-4 shadow-xs">
+              <div className="text-xs font-medium text-blue-700 dark:text-blue-400">
+                {tr('Sudah Mengganti Password', 'Password Changed')}
+              </div>
+              <div className="mt-1 text-2xl font-bold text-blue-600 dark:text-blue-400">
+                {securityAuditStats.passwordChanged}
+              </div>
+            </div>
+          </div>
+
+          {/* Toolbar Pencarian & Filter Audit */}
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden">
+            <div className="p-4 border-b border-border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-muted/20">
+              <div className="relative flex-1">
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                />
                 <input
-                  type="number"
-                  value={pageInputValue}
-                  onChange={(e) => setPageInputValue(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handlePageSubmit()}
-                  onBlur={handlePageSubmit}
-                  disabled={isLoading}
-                  className="w-12 h-9 text-center font-medium border border-border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none shadow-sm"
-                  min={1}
-                  max={totalPages}
+                  type="text"
+                  placeholder={tr(
+                    'Cari nama guru, NIP, email, atau alamat IP...',
+                    'Search teacher name, NIP, email, or IP address...'
+                  )}
+                  value={auditSearchInput}
+                  onChange={(e) => setAuditSearchInput(e.target.value)}
+                  className="w-full pl-9 pr-8 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:border-amber-500"
                 />
-              </div>
-
-              <div className="w-px h-5 bg-border shrink-0 mx-0.5" />
-
-              <div className="flex items-center gap-1 shrink-0">
-                <button
-                  type="button"
-                  title={tr('Pertama', 'First')}
-                  onClick={() => setCurrentPage(1)}
-                  disabled={currentPage === 1 || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronsLeft size={16} />
-                </button>
-                <button
-                  type="button"
-                  title={tr('Sebelumnya', 'Previous')}
-                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
-                  disabled={currentPage === 1 || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronLeft size={16} />
-                </button>
-
-                {generatePagination(currentPage, totalPages).map((p, i) => (
+                {auditSearchInput && (
                   <button
                     type="button"
-                    key={i}
-                    disabled={p === '...' || isLoading}
-                    onClick={() => typeof p === 'number' && setCurrentPage(p)}
-                    className={cn(
-                      'min-w-9 h-9 px-2 flex items-center justify-center rounded-md font-medium text-sm transition-colors shadow-sm',
-                      p === '...'
-                        ? 'cursor-default text-muted-foreground border-transparent shadow-none'
-                        : p === currentPage
-                          ? 'bg-emerald-600 text-white border-transparent'
-                          : 'border border-border hover:bg-muted text-foreground'
-                    )}
+                    onClick={() => setAuditSearchInput('')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
-                    {p}
+                    <X size={14} />
                   </button>
-                ))}
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  value={auditFilterMode}
+                  onChange={(e) =>
+                    setAuditFilterMode(
+                      e.target.value as
+                      | 'all'
+                      | 'logged_in'
+                      | 'never_logged_in'
+                      | 'password_changed'
+                    )
+                  }
+                  className="px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-amber-500"
+                >
+                  <option value="all">
+                    {tr('Semua Guru', 'All Teachers')} ({securityAuditItems.length})
+                  </option>
+                  <option value="logged_in">
+                    {tr('Sudah Pernah Login', 'Has Logged In')} ({securityAuditStats.loggedIn})
+                  </option>
+                  <option value="never_logged_in">
+                    {tr('Belum Pernah Login', 'Never Logged In')} ({securityAuditStats.neverLoggedIn})
+                  </option>
+                  <option value="password_changed">
+                    {tr('Sudah Ganti Password', 'Password Changed')} ({securityAuditStats.passwordChanged})
+                  </option>
+                </select>
 
                 <button
                   type="button"
-                  title={tr('Selanjutnya', 'Next')}
-                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={currentPage === totalPages || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
+                  onClick={() => refetchSecurityAudit()}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border bg-background text-sm font-medium hover:bg-muted transition-colors"
                 >
-                  <ChevronRight size={16} />
-                </button>
-                <button
-                  type="button"
-                  title={tr('Terakhir', 'Last')}
-                  onClick={() => setCurrentPage(totalPages)}
-                  disabled={currentPage === totalPages || isLoading}
-                  className="w-9 h-9 flex items-center justify-center border border-border rounded-md hover:bg-muted text-muted-foreground hover:text-foreground disabled:opacity-40 transition-all shadow-sm"
-                >
-                  <ChevronsRight size={16} />
+                  <RefreshCw
+                    size={15}
+                    className={isSecurityAuditLoading ? 'animate-spin' : ''}
+                  />
+                  <span>{tr('Segarkan', 'Refresh')}</span>
                 </button>
               </div>
             </div>
-          </div>
-        )}
-      </div>
 
-      {/* --- SMARTDIFF IMPORT WIZARD MODAL --- */}
-      <AnimatePresence>
-        {canImportTeacher && importModalOpen && (
-          <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-            <div
-              className="absolute inset-0 bg-black/50 backdrop-blur-[2px]"
-              onClick={() => !bulkImportMutation.isPending && setImportModalOpen(false)}
-            />
-            <motion.div
-              initial={{ opacity: 0, scale: 0.96, y: 12 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.96, y: 12 }}
-              className="relative bg-background border border-border rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden z-10"
-            >
-              {/* Modal Header */}
-              <div className="px-6 py-4 border-b border-border flex items-center justify-between bg-muted/30">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
-                    <FileSpreadsheet size={20} />
+            {/* Tabel Audit Keamanan */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-muted/50 border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-3 font-semibold">Guru & Sekolah</th>
+                    <th className="px-4 py-3 font-semibold">Akun Login</th>
+                    <th className="px-4 py-3 font-semibold">Login Terakhir (Tgl & Jam)</th>
+                    <th className="px-4 py-3 font-semibold">Alamat IP & Perangkat</th>
+                    <th className="px-4 py-3 font-semibold">Riwayat Ganti Password</th>
+                    <th className="px-4 py-3 text-right font-semibold">Log</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-card text-sm">
+                  {isSecurityAuditLoading ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
+                        <Loader2 className="h-7 w-7 animate-spin text-amber-600 mx-auto mb-2" />
+                        {tr('Memuat audit keamanan guru...', 'Loading teacher security audit...')}
+                      </td>
+                    </tr>
+                  ) : filteredSecurityAuditItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="px-6 py-12 text-center text-muted-foreground">
+                        {tr(
+                          'Tidak ada data audit guru yang sesuai dengan filter.',
+                          'No teacher audit records match your filter.'
+                        )}
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredSecurityAuditItems.map((item) => {
+                      const lastLoginFmt = formatAuditDateTime(item.lastLogin);
+                      const pwdChangedFmt = formatAuditDateTime(item.passwordChangedAt);
+                      const hasChangedPassword =
+                        item.passwordChangeCount > 0 || Boolean(item.passwordChangedAt);
+
+                      return (
+                        <tr key={item.teacherId} className="hover:bg-muted/40 transition-colors">
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <TeacherAvatarCell
+                                id={item.teacherId}
+                                fullName={item.fullName}
+                                photoUrl={item.photoUrl}
+                                previewTitle={item.fullName}
+                                onPreview={setPhotoPreview}
+                              />
+                              <div className="min-w-0">
+                                <Link
+                                  to={`/teachers/${item.teacherId}`}
+                                  className="font-semibold text-foreground hover:text-emerald-600 transition-colors line-clamp-1"
+                                >
+                                  {item.fullName}
+                                </Link>
+                                <div className="text-xs text-muted-foreground truncate">
+                                  {item.schoolName}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {item.userId ? (
+                              <div className="space-y-0.5">
+                                <div className="text-xs font-medium text-foreground">
+                                  {item.email || '-'}
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <span className="inline-flex px-1.5 py-0.5 rounded bg-muted text-[10px] font-semibold">
+                                    {item.role || 'GURU'}
+                                  </span>
+                                  {!item.isAccountActive && (
+                                    <span className="inline-flex px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 text-[10px] font-semibold">
+                                      Nonaktif
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="inline-flex px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground">
+                                Belum Punya Akun
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            {lastLoginFmt ? (
+                              <div className="space-y-0.5">
+                                <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400">
+                                  <Clock className="h-3.5 w-3.5 shrink-0" />
+                                  <span>{lastLoginFmt.date}</span>
+                                </div>
+                                <div className="text-xs font-mono text-foreground pl-5">
+                                  {lastLoginFmt.time}
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
+                                Belum pernah login
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {item.lastLoginIp ? (
+                              <div className="space-y-1">
+                                <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-border font-mono text-xs font-semibold text-foreground">
+                                  <Globe className="h-3 w-3 text-blue-600 shrink-0" />
+                                  <span>{item.lastLoginIp}</span>
+                                </div>
+                                <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                                  <MonitorSmartphone className="h-3 w-3 shrink-0" />
+                                  <span>{summarizeUserAgent(item.lastLoginUserAgent)}</span>
+                                </div>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">-</span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3">
+                            {!item.userId ? (
+                              <span className="text-xs text-muted-foreground">-</span>
+                            ) : hasChangedPassword ? (
+                              <div className="space-y-1">
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-700 dark:text-blue-300 text-xs font-semibold">
+                                  <KeyRound className="h-3 w-3" />
+                                  <span>
+                                    Sudah Ganti ({Math.max(1, item.passwordChangeCount)}x)
+                                  </span>
+                                </span>
+                                {pwdChangedFmt && (
+                                  <div className="text-[11px] text-muted-foreground">
+                                    {pwdChangedFmt.date}, {pwdChangedFmt.time}
+                                    {item.passwordChangedIp
+                                      ? ` • IP: ${item.passwordChangedIp}`
+                                      : ''}
+                                  </div>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-xs">
+                                Belum Ganti Password
+                              </span>
+                            )}
+                          </td>
+
+                          <td className="px-4 py-3 text-right whitespace-nowrap">
+                            {item.userId && (
+                              <button
+                                type="button"
+                                onClick={() => setSelectedAuditTeacher(item)}
+                                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-muted text-xs font-semibold transition-colors"
+                              >
+                                <History className="h-3.5 w-3.5 text-amber-600" />
+                                <span>Riwayat</span>
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <>
+          {/* --- BANNER ERROR IMPOR EXCEL (PERSISTEN) --- */}
+          {importError && (
+            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm">
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
+                <div>
+                  <p className="font-semibold">
+                    {tr('Gagal Memproses Impor Data Guru', 'Failed to Process Teacher Import')}
+                  </p>
+                  <p className="mt-0.5 leading-relaxed">{importError}</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setImportError(null)}
+                title={tr('Tutup pesan error', 'Dismiss error')}
+                className="p-1 rounded-lg text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors shrink-0"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+
+          {isSuperAdmin && !activeSchoolId && (
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 p-3.5 text-xs text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-semibold">
+                  {tr('Mode Super Admin Lintas Sekolah', 'Cross-School Super Admin Mode')}
+                </p>
+                <p className="mt-0.5">
+                  {tr(
+                    'Pilih sekolah aktif terlebih dahulu pada switcher sekolah untuk menambah guru baru atau mengimpor Excel Verval PTK.',
+                    'Select an active school from the school switcher before adding new teachers or importing Verval PTK Excel.'
+                  )}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* --- TOOLBAR + TABLE --- */}
+          <div className="bg-card border border-border rounded-xl shadow-sm overflow-hidden flex flex-col">
+            <div className="p-4 border-b border-border flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3 bg-muted/20">
+              {/* Kiri: Pencarian */}
+              <div className="relative w-full lg:flex-1 lg:min-w-50 transition-all duration-200">
+                <Search
+                  size={16}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground"
+                />
+                <input
+                  type="text"
+                  placeholder={tr('Cari nama, NIP, NUPTK, NIK...', 'Search name, NIP, NUPTK, NIK...')}
+                  value={searchInput}
+                  onChange={(e) => setSearchInput(e.target.value)}
+                  className={cn(
+                    'w-full pl-9 py-2 bg-background border border-border rounded-lg text-sm focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition-all',
+                    searchInput ? 'pr-8' : 'pr-4'
+                  )}
+                />
+                {searchInput && (
+                  <button
+                    type="button"
+                    onClick={() => setSearchInput('')}
+                    title={tr('Hapus pencarian', 'Clear search')}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                )}
+              </div>
+
+              {/* Kanan: Filter + Aksi Terpilih */}
+              <div className="flex flex-wrap sm:flex-nowrap items-center justify-end gap-2.5 shrink-0">
+                <div className="flex flex-1 sm:flex-initial items-center gap-2 transition-all duration-200">
+                  <div className="relative flex-1 sm:flex-initial">
+                    <Filter
+                      size={14}
+                      className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none"
+                    />
+                    <select
+                      value={statusFilter}
+                      onChange={(e) => {
+                        setStatusFilter(e.target.value);
+                        setCurrentPage(1);
+                      }}
+                      aria-label="Filter Status Kepegawaian"
+                      className="w-full sm:w-auto pl-8 pr-7 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-emerald-500"
+                    >
+                      <option value="all">{tr('Semua Status', 'All Status')}</option>
+                      <option value="PNS">PNS</option>
+                      <option value="CPNS">CPNS</option>
+                      <option value="PPPK">PPPK</option>
+                      <option value="HONORER">Honorer</option>
+                      <option value="GTY">GTY</option>
+                      <option value="GTT">GTT</option>
+                    </select>
                   </div>
-                  <div className="min-w-0">
-                    <h3 className="text-lg font-bold text-foreground flex items-center gap-2">
-                      <span>SmartDiff Impor Dapodik PTK</span>
-                      <span className="inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-500/10 text-emerald-600">
-                        <Sparkles size={12} /> 54 Kolom Dapodik
-                      </span>
+
+                  <select
+                    value={certifiedFilter}
+                    onChange={(e) => {
+                      setCertifiedFilter(e.target.value);
+                      setCurrentPage(1);
+                    }}
+                    aria-label="Filter Status Sertifikasi"
+                    className="flex-1 sm:flex-initial px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-emerald-500"
+                  >
+                    <option value="all">{tr('Semua Sertifikasi', 'All Certification')}</option>
+                    <option value="true">{tr('Sudah Sertifikasi', 'Certified')}</option>
+                    <option value="false">{tr('Belum Sertifikasi', 'Uncertified')}</option>
+                  </select>
+                </div>
+
+                {canDeleteTeacher && selectedRows.length > 0 && (
+                  <div className="flex items-center gap-2 pl-2 border-l border-border shrink-0 animate-in fade-in zoom-in-95 duration-200">
+                    <span className="hidden sm:inline-block text-sm font-medium text-emerald-600 bg-emerald-50 dark:bg-emerald-500/10 dark:text-emerald-400 px-3 py-1.5 rounded-lg border border-emerald-200 dark:border-emerald-500/20 whitespace-nowrap">
+                      {selectedRows.length} {tr('Terpilih', 'Selected')}
+                    </span>
+                    <span className="sm:hidden text-sm font-bold text-emerald-600">
+                      ({selectedRows.length})
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteModal({ isOpen: true, type: 'bulk' })}
+                      className="flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors shadow-sm"
+                    >
+                      <Trash2 size={16} />
+                      <span className="hidden sm:inline">{tr('Hapus', 'Delete')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedRows([])}
+                      title={tr('Batal Pilih', 'Clear Selection')}
+                      className="p-2 text-muted-foreground hover:bg-muted rounded-lg transition-colors"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* --- DATA TABLE --- */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-muted/50 border-b border-border">
+                    {canDeleteTeacher && (
+                      <th className="p-4 w-12 text-center">
+                        <input
+                          type="checkbox"
+                          checked={selectedRows.length === teachers.length && teachers.length > 0}
+                          onChange={toggleAll}
+                          className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
+                        />
+                      </th>
+                    )}
+                    <th className="px-4 py-3 text-sm font-semibold text-muted-foreground w-12 text-center">
+                      No
+                    </th>
+                    <SortableHeader
+                      columnKey="fullName"
+                      label={tr('Nama Lengkap', 'Full Name')}
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                      className="min-w-50"
+                    />
+                    <SortableHeader
+                      columnKey="nip"
+                      label="NIP / NUPTK"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      columnKey="position"
+                      label={tr('Jabatan', 'Position')}
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      columnKey="status"
+                      label="Status"
+                      sortConfig={sortConfig}
+                      onSort={handleSort}
+                    />
+                    <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">
+                      {tr('Sertifikasi', 'Certification')}
+                    </th>
+                    <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">
+                      {tr('Aksi', 'Action')}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border bg-card">
+                  {isLoading ? (
+                    <tr>
+                      <td
+                        colSpan={canDeleteTeacher ? 8 : 7}
+                        className="px-6 py-12 text-center text-muted-foreground"
+                      >
+                        <Loader2 className="h-8 w-8 animate-spin text-emerald-600 mx-auto mb-2" />
+                        {tr('Memuat data...', 'Loading data...')}
+                      </td>
+                    </tr>
+                  ) : isError ? (
+                    <tr>
+                      <td
+                        colSpan={canDeleteTeacher ? 8 : 7}
+                        className="px-6 py-12 text-center"
+                      >
+                        <div className="flex flex-col items-center justify-center gap-2 text-red-600 dark:text-red-400">
+                          <AlertCircle className="h-8 w-8" />
+                          <p className="font-semibold">
+                            {tr('Gagal memuat data guru.', 'Failed to load teacher data.')}
+                          </p>
+                          <p className="text-xs text-muted-foreground max-w-md">
+                            {extractFriendlyErrorMessage(
+                              teachersQueryError,
+                              locale,
+                              'Terjadi gangguan saat mengambil daftar guru dari server.',
+                              'An issue occurred while fetching the teacher list from the server.'
+                            )}
+                          </p>
+                          <button
+                            type="button"
+                            onClick={() => refetchTeachers()}
+                            className="mt-2 inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg border border-border bg-background text-foreground text-xs font-medium hover:bg-muted transition-colors shadow-sm"
+                          >
+                            <RefreshCw size={14} />
+                            <span>{tr('Muat Ulang', 'Retry')}</span>
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : teachers.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={canDeleteTeacher ? 8 : 7}
+                        className="px-6 py-12 text-center text-muted-foreground"
+                      >
+                        {tr('Tidak ada data guru.', 'No teacher data found.')}
+                      </td>
+                    </tr>
+                  ) : (
+                    teachers.map((teacher, idx) => {
+                      const statusConf = STATUS_CONFIG[(teacher.status || 'HONORER').toUpperCase()];
+                      return (
+                        <motion.tr
+                          key={teacher.id}
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className={cn(
+                            'hover:bg-muted/50 transition-colors group',
+                            canDeleteTeacher && 'cursor-pointer',
+                            selectedRows.includes(teacher.id) && 'bg-emerald-500/5'
+                          )}
+                          onClick={() => canDeleteTeacher && toggleRow(teacher.id)}
+                        >
+                          {canDeleteTeacher && (
+                            <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                checked={selectedRows.includes(teacher.id)}
+                                onChange={() => toggleRow(teacher.id)}
+                                className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
+                              />
+                            </td>
+                          )}
+                          <td className="px-4 py-3 text-sm text-muted-foreground text-center">
+                            {(currentPage - 1) * PAGE_SIZE + idx + 1}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <TeacherAvatarCell
+                                id={teacher.id}
+                                fullName={teacher.fullName}
+                                photoUrl={teacher.photoUrl}
+                                previewTitle={tr(
+                                  'Klik untuk memperbesar foto profil',
+                                  'Click to enlarge profile photo'
+                                )}
+                                onPreview={setPhotoPreview}
+                              />
+                              <div className="min-w-0">
+                                <p className="font-medium text-foreground line-clamp-1">
+                                  {teacher.fullName}
+                                </p>
+                                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+                                  <span>
+                                    {teacher.gender === 'L'
+                                      ? tr('Laki-laki', 'Male')
+                                      : tr('Perempuan', 'Female')}
+                                  </span>
+                                  {teacher.isActive === false && (
+                                    <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-400 font-medium">
+                                      {tr('Nonaktif', 'Inactive')}
+                                    </span>
+                                  )}
+                                  {teacher.tugasTambahan && (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 font-medium truncate max-w-44">
+                                      {teacher.tugasTambahan}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3">
+                            <p className="text-sm font-medium">{teacher.nip || '-'}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {teacher.nuptk || tr('Non-NUPTK', 'No NUPTK')}
+                            </p>
+                          </td>
+                          <td className="px-4 py-3 text-sm">{teacher.position || 'Guru'}</td>
+                          <td className="px-4 py-3">
+                            {statusConf ? (
+                              <span
+                                className={cn(
+                                  'px-2.5 py-0.5 rounded-full text-xs font-medium border whitespace-nowrap',
+                                  statusConf.color
+                                )}
+                              >
+                                {statusConf.label}
+                              </span>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">
+                                {teacher.status || '-'}
+                              </span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3">
+                            {teacher.isCertified ? (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                                {tr('Sudah', 'Certified')}
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
+                                {tr('Belum', 'Uncertified')}
+                              </span>
+                            )}
+                          </td>
+                          <td
+                            className="px-4 py-3 text-right whitespace-nowrap"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center justify-end gap-1">
+                              <Link
+                                to={`/teachers/${teacher.id}`}
+                                className="p-1.5 text-muted-foreground hover:text-blue-600 hover:bg-blue-500/10 rounded-lg transition-colors"
+                                title={tr('Lihat Detail', 'View Detail')}
+                              >
+                                <Eye size={16} />
+                              </Link>
+                              {canUpdateTeacher && (
+                                <Link
+                                  to={`/teachers/${teacher.id}/edit`}
+                                  className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10 rounded-lg transition-colors"
+                                  title={tr('Edit Data', 'Edit Data')}
+                                >
+                                  <Edit size={16} />
+                                </Link>
+                              )}
+                              {canDeleteTeacher && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDeleteModal({
+                                      isOpen: true,
+                                      type: 'single',
+                                      id: teacher.id,
+                                    })
+                                  }
+                                  className="p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-500/10 rounded-lg transition-colors"
+                                  title={tr('Hapus Data', 'Delete Data')}
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </motion.tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* --- PAGINATION --- */}
+            {totalPages > 0 && (
+              <div className="p-4 border-t border-border flex flex-col sm:flex-row items-center justify-between gap-4 bg-muted/20">
+                <div className="text-sm text-muted-foreground">
+                  {tr('Menampilkan', 'Showing')}{' '}
+                  <span className="font-medium text-foreground">
+                    {totalData === 0 ? 0 : (currentPage - 1) * PAGE_SIZE + 1}
+                  </span>{' '}
+                  {tr('sampai', 'to')}{' '}
+                  <span className="font-medium text-foreground">
+                    {Math.min(currentPage * PAGE_SIZE, totalData)}
+                  </span>{' '}
+                  {tr('dari', 'of')}{' '}
+                  <span className="font-medium text-foreground">{totalData}</span>{' '}
+                  {tr('data', 'entries')}
+                </div>
+
+                {totalPages > 1 && (
+                  <div className="flex flex-wrap items-center justify-center gap-2">
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(1)}
+                        disabled={currentPage === 1}
+                        className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
+                        title={tr('Halaman Pertama', 'First Page')}
+                      >
+                        <ChevronsLeft size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                        disabled={currentPage === 1}
+                        className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
+                        title={tr('Sebelumnya', 'Previous')}
+                      >
+                        <ChevronLeft size={16} />
+                      </button>
+                      {generatePagination(currentPage, totalPages).map((item, idx) =>
+                        typeof item === 'number' ? (
+                          <button
+                            type="button"
+                            key={idx}
+                            onClick={() => setCurrentPage(item)}
+                            className={cn(
+                              'w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors',
+                              currentPage === item
+                                ? 'bg-emerald-600 text-white shadow-sm'
+                                : 'border border-border hover:bg-muted text-foreground'
+                            )}
+                          >
+                            {item}
+                          </button>
+                        ) : (
+                          <span key={idx} className="px-1 text-muted-foreground select-none">
+                            {item}
+                          </span>
+                        )
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                        disabled={currentPage === totalPages}
+                        className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
+                        title={tr('Selanjutnya', 'Next')}
+                      >
+                        <ChevronRight size={16} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCurrentPage(totalPages)}
+                        disabled={currentPage === totalPages}
+                        className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
+                        title={tr('Halaman Terakhir', 'Last Page')}
+                      >
+                        <ChevronsRight size={16} />
+                      </button>
+                    </div>
+
+                    <div className="flex items-center gap-1.5 text-sm text-muted-foreground pl-2 sm:border-l border-border">
+                      <span>{tr('Hal:', 'Go:')}</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={totalPages}
+                        value={pageInputValue}
+                        onChange={(e) => setPageInputValue(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handlePageSubmit()}
+                        onBlur={handlePageSubmit}
+                        className="w-14 px-2 py-1 text-center bg-background border border-border rounded-lg text-sm focus:outline-none focus:border-emerald-500"
+                      />
+                      <span className="text-xs">/ {totalPages}</span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* ========================================================================
+          MODAL DETAIL RIWAYAT LOG LOGIN & PASSWORD PER GURU (KHUSUS SUPER_ADMIN)
+      ======================================================================== */}
+      <AnimatePresence>
+        {isSuperAdmin && selectedAuditTeacher && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
+            >
+              <div className="p-5 border-b border-border flex items-start justify-between gap-3 bg-muted/20">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-500/15 text-amber-600 flex items-center justify-center shrink-0">
+                    <ShieldCheck size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-foreground">
+                      Riwayat Login & Perubahan Password
                     </h3>
-                    <p className="text-xs text-muted-foreground truncate">{importFileName}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {selectedAuditTeacher.fullName} ({selectedAuditTeacher.email}) •{' '}
+                      {selectedAuditTeacher.schoolName}
+                    </p>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => setImportModalOpen(false)}
-                  disabled={bulkImportMutation.isPending}
-                  className="p-2 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                  onClick={() => setSelectedAuditTeacher(null)}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
                 >
                   <X size={18} />
                 </button>
               </div>
 
-              {/* Ringkasan Statistik Diff */}
-              <div className="p-5 border-b border-border bg-card space-y-4">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setDiffFilterTab('all')}
-                    className={cn(
-                      'p-3 rounded-xl border text-left transition-all',
-                      diffFilterTab === 'all'
-                        ? 'border-foreground bg-muted/50 ring-1 ring-foreground/20'
-                        : 'border-border hover:bg-muted/30'
-                    )}
-                  >
-                    <div className="text-xs text-muted-foreground">Total Baris Valid</div>
-                    <div className="text-xl font-bold text-foreground mt-0.5">
-                      {importPreviewRows.length}
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setDiffFilterTab('new')}
-                    className={cn(
-                      'p-3 rounded-xl border text-left transition-all',
-                      diffFilterTab === 'new'
-                        ? 'border-emerald-500 bg-emerald-500/10 ring-1 ring-emerald-500/30'
-                        : 'border-emerald-500/20 bg-emerald-500/5 hover:bg-emerald-500/10'
-                    )}
-                  >
-                    <div className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">
-                      Data Baru
-                    </div>
-                    <div className="text-xl font-bold text-emerald-600 dark:text-emerald-400 mt-0.5">
-                      {diffStats.newCount}
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setDiffFilterTab('updated')}
-                    className={cn(
-                      'p-3 rounded-xl border text-left transition-all',
-                      diffFilterTab === 'updated'
-                        ? 'border-blue-500 bg-blue-500/10 ring-1 ring-blue-500/30'
-                        : 'border-blue-500/20 bg-blue-500/5 hover:bg-blue-500/10'
-                    )}
-                  >
-                    <div className="text-xs text-blue-700 dark:text-blue-400 font-medium">
-                      Diperbarui (SmartDiff)
-                    </div>
-                    <div className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-0.5">
-                      {diffStats.updatedCount}
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setDiffFilterTab('unchanged')}
-                    className={cn(
-                      'p-3 rounded-xl border text-left transition-all',
-                      diffFilterTab === 'unchanged'
-                        ? 'border-border bg-muted ring-1 ring-border'
-                        : 'border-border bg-muted/20 hover:bg-muted/40'
-                    )}
-                  >
-                    <div className="text-xs text-muted-foreground">Data Sama</div>
-                    <div className="text-xl font-bold text-muted-foreground mt-0.5">
-                      {diffStats.unchangedCount}
-                    </div>
-                  </button>
-                </div>
-
-                {(importSkippedCount > 0 || importDuplicateCount > 0) && (
-                  <div className="space-y-1">
-                    {importSkippedCount > 0 && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400">
-                        &bull; {importSkippedCount} baris kosong/catatan kaki tanpa kolom Nama dilewati otomatis.
-                      </p>
-                    )}
-                    {importDuplicateCount > 0 && (
-                      <p className="text-xs text-amber-600 dark:text-amber-400">
-                        &bull; {importDuplicateCount} baris duplikat (NIP/NUPTK/NIK ganda) di dalam file Excel dilewati otomatis.
-                      </p>
-                    )}
+              <div className="p-5 overflow-y-auto flex-1 space-y-3">
+                {isSelectedUserLogsLoading ? (
+                  <div className="py-12 text-center text-muted-foreground">
+                    <Loader2 className="h-7 w-7 animate-spin text-amber-600 mx-auto mb-2" />
+                    Memuat kronologi aktivitas keamanan...
                   </div>
+                ) : selectedUserLogs.length === 0 ? (
+                  <div className="py-10 text-center text-sm text-muted-foreground">
+                    Belum ada log aktivitas login atau perubahan password yang tercatat pada tabel audit.
+                  </div>
+                ) : (
+                  selectedUserLogs.map((log) => {
+                    const fmt = formatAuditDateTime(log.createdAt);
+                    const isPwdEvent =
+                      log.action === 'CHANGE_PASSWORD' || log.action === 'RESET_PASSWORD';
+                    return (
+                      <div
+                        key={log.id}
+                        className={cn(
+                          'p-3.5 rounded-xl border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5',
+                          isPwdEvent
+                            ? 'bg-blue-500/5 border-blue-500/25'
+                            : 'bg-muted/30 border-border'
+                        )}
+                      >
+                        <div className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span
+                              className={cn(
+                                'px-2 py-0.5 rounded-full text-[11px] font-bold',
+                                log.action === 'RESET_PASSWORD'
+                                  ? 'bg-amber-500/20 text-amber-700 dark:text-amber-300'
+                                  : log.action === 'CHANGE_PASSWORD'
+                                    ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
+                                    : 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300'
+                              )}
+                            >
+                              {log.action === 'RESET_PASSWORD'
+                                ? 'Reset Password oleh Admin'
+                                : log.action === 'CHANGE_PASSWORD'
+                                  ? 'Ganti Password Mandiri'
+                                  : 'Login Berhasil'}
+                            </span>
+                            {fmt && (
+                              <span className="text-xs font-semibold text-foreground">
+                                {fmt.date} • {fmt.time}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Pelaku: <strong className="text-foreground">{log.actorName}</strong> (
+                            {log.actorEmail})
+                          </div>
+                          <div className="text-[11px] text-muted-foreground">
+                            Perangkat: {summarizeUserAgent(log.userAgent)}
+                          </div>
+                        </div>
+
+                        <div className="shrink-0">
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-background border border-border font-mono text-xs font-semibold">
+                            <Globe className="h-3.5 w-3.5 text-blue-600" />
+                            <span>{log.ipAddress || 'Tidak terdeteksi'}</span>
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })
                 )}
               </div>
 
-              {/* Tabel Pratinjau SmartDiff */}
-              <div className="flex-1 overflow-auto">
+              <div className="p-4 border-t border-border bg-muted/20 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => setSelectedAuditTeacher(null)}
+                  className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium transition-colors"
+                >
+                  Tutup
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* --- SMARTDIFF IMPORT PREVIEW MODAL --- */}
+      <AnimatePresence>
+        {importModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-4xl max-h-[88vh] flex flex-col overflow-hidden"
+            >
+              <div className="p-5 border-b border-border flex items-start justify-between gap-4 bg-muted/20">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center shrink-0">
+                    <Sparkles size={20} />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-foreground">
+                      {tr('Pratinjau SmartDiff Impor PTK', 'SmartDiff PTK Import Preview')}
+                    </h3>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      File: <span className="font-medium text-foreground">{importFileName}</span>
+                      {importSkippedCount > 0 && ` • ${importSkippedCount} baris kosong dilewati`}
+                      {importDuplicateCount > 0 && ` • ${importDuplicateCount} baris ganda digabung`}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !bulkImportMutation.isPending && setImportModalOpen(false)}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="px-5 py-3 border-b border-border bg-background flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('all')}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                    diffFilterTab === 'all'
+                      ? 'bg-foreground text-background border-foreground'
+                      : 'bg-muted/40 text-muted-foreground border-border hover:bg-muted'
+                  )}
+                >
+                  {tr('Semua', 'All')} ({importPreviewRows.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('new')}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                    diffFilterTab === 'new'
+                      ? 'bg-emerald-600 text-white border-emerald-600'
+                      : 'bg-emerald-500/10 text-emerald-600 border-emerald-500/20 hover:bg-emerald-500/20'
+                  )}
+                >
+                  + {tr('Data Baru', 'New')} ({diffStats.newCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('updated')}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                    diffFilterTab === 'updated'
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-amber-500/10 text-amber-600 border-amber-500/20 hover:bg-amber-500/20'
+                  )}
+                >
+                  <RefreshCw size={12} className="inline mr-1" />
+                  {tr('Diperbarui', 'Updated')} ({diffStats.updatedCount})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDiffFilterTab('unchanged')}
+                  className={cn(
+                    'px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors',
+                    diffFilterTab === 'unchanged'
+                      ? 'bg-slate-600 text-white border-slate-600'
+                      : 'bg-muted/40 text-muted-foreground border-border hover:bg-muted'
+                  )}
+                >
+                  <CheckCircle2 size={12} className="inline mr-1" />
+                  {tr('Sama / Tidak Berubah', 'Unchanged')} ({diffStats.unchangedCount})
+                </button>
+              </div>
+
+              <div className="overflow-auto flex-1">
                 <table className="w-full text-left border-collapse text-sm">
-                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                  <thead className="bg-muted/50 sticky top-0 z-10 border-b border-border">
                     <tr>
-                      <th className="px-4 py-2.5 font-semibold text-muted-foreground w-12">No</th>
-                      <th className="px-4 py-2.5 font-semibold text-muted-foreground">Aksi</th>
-                      <th className="px-4 py-2.5 font-semibold text-muted-foreground">Nama PTK</th>
-                      <th className="px-4 py-2.5 font-semibold text-muted-foreground">NIP / NUPTK</th>
-                      <th className="px-4 py-2.5 font-semibold text-muted-foreground">Status</th>
-                      <th className="px-4 py-2.5 font-semibold text-muted-foreground">
-                        Perubahan Terdeteksi
+                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground w-12">
+                        No
+                      </th>
+                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                        {tr('Status Diff', 'Diff Status')}
+                      </th>
+                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                        {tr('Nama Lengkap', 'Full Name')}
+                      </th>
+                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                        NIP / NUPTK
+                      </th>
+                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                        {tr('Status / Jabatan', 'Status / Position')}
+                      </th>
+                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                        {tr('Rincian Perubahan', 'Changed Fields')}
                       </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
-                    {filteredPreviewRows.map((row, i) => (
-                      <tr key={`${row.nik || row.nuptk || row.fullName}-${i}`} className="hover:bg-muted/30">
-                        <td className="px-4 py-2.5 text-muted-foreground">{i + 1}</td>
+                    {filteredPreviewRows.map((row, idx) => (
+                      <tr key={idx} className="hover:bg-muted/30">
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground">{idx + 1}</td>
                         <td className="px-4 py-2.5 whitespace-nowrap">
                           {row.diffAction === 'new' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-600">
-                              <CheckCircle2 size={12} /> Baru
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-600 border border-emerald-500/30">
+                              {tr('Baru', 'New')}
                             </span>
                           )}
                           {row.diffAction === 'updated' && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-600">
-                              <RefreshCw size={12} /> Update
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/15 text-amber-600 border border-amber-500/30">
+                              {tr('Update', 'Update')}
                             </span>
                           )}
                           {row.diffAction === 'unchanged' && (
-                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
-                              Sama
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-muted text-muted-foreground">
+                              {tr('Sama', 'Same')}
                             </span>
                           )}
                         </td>
-                        <td className="px-4 py-2.5 font-medium text-foreground">
-                          <div>{row.fullName}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {row.gender === 'L' ? 'L' : 'P'} • {row.religion || '-'} • {row.kelurahan || '-'}
-                          </div>
+                        <td className="px-4 py-2.5 font-medium text-foreground">{row.fullName}</td>
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                          <div>{row.nip || '-'}</div>
+                          <div>{row.nuptk || '-'}</div>
                         </td>
                         <td className="px-4 py-2.5 text-xs">
-                          <div className="font-medium text-foreground">{row.nip || '-'}</div>
-                          <div className="text-muted-foreground">{row.nuptk || 'Tanpa NUPTK'}</div>
+                          <span className="font-medium">{row.status}</span> • {row.position}
                         </td>
-                        <td className="px-4 py-2.5">
-                          <span className="px-2 py-0.5 text-xs font-medium rounded border border-border bg-background">
-                            {row.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground max-w-65">
                           {row.diffAction === 'new'
-                            ? 'Akan ditambahkan sebagai PTK baru'
-                            : row.diffFields && row.diffFields.length > 0
-                              ? row.diffFields.join(', ')
-                              : 'Tidak ada perubahan atribut'}
+                            ? tr('Akan ditambahkan sebagai PTK baru', 'Will be inserted as new PTK')
+                            : row.diffAction === 'updated'
+                              ? row.diffFields?.join(', ')
+                              : tr('Tidak ada perubahan data', 'No field changes')}
                         </td>
                       </tr>
                     ))}
@@ -2304,44 +2852,43 @@ export function TeacherListPage() {
                 </table>
               </div>
 
-              {/* Modal Footer */}
-              <div className="px-6 py-4 border-t border-border bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <p className="text-xs text-muted-foreground">
+              <div className="p-4 border-t border-border bg-muted/20 flex flex-col sm:flex-row items-center justify-between gap-3">
+                <div className="text-xs text-muted-foreground">
                   {actionableImportRows.length > 0
-                    ? `${actionableImportRows.length} data (Baru + Update) siap disinkronkan ke database.`
-                    : 'Seluruh data sudah identik dengan database (tetap dapat disinkronkan ulang).'}
-                </p>
-                <div className="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+                    ? tr(
+                      `${actionableImportRows.length} data akan disinkronkan (${diffStats.newCount} baru, ${diffStats.updatedCount} diperbarui).`,
+                      `${actionableImportRows.length} records will be synced (${diffStats.newCount} new, ${diffStats.updatedCount} updated).`
+                    )
+                    : tr(
+                      'Seluruh data di file Excel sudah sama persis dengan database.',
+                      'All rows in the Excel file already match the database.'
+                    )}
+                </div>
+
+                <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
                   <button
                     type="button"
-                    onClick={() => setImportModalOpen(false)}
                     disabled={bulkImportMutation.isPending}
-                    className="px-4 py-2 rounded-xl border border-border bg-background text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
+                    onClick={() => setImportModalOpen(false)}
+                    className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium transition-colors"
                   >
                     {tr('Batal', 'Cancel')}
                   </button>
                   <button
                     type="button"
+                    disabled={bulkImportMutation.isPending}
                     onClick={handleConfirmSmartImport}
-                    disabled={bulkImportMutation.isPending || importPreviewRows.length === 0}
-                    className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-sm transition-colors flex items-center gap-2 disabled:opacity-50"
+                    className="flex items-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
                   >
-                    {bulkImportMutation.isPending ? (
-                      <>
-                        <Loader2 size={16} className="animate-spin" />
-                        <span>{tr('Menyimpan...', 'Importing...')}</span>
-                      </>
-                    ) : (
-                      <>
-                        <Upload size={16} />
-                        <span>
-                          {tr(
-                            `Sinkronkan (${actionableImportRows.length || importPreviewRows.length})`,
-                            `Sync (${actionableImportRows.length || importPreviewRows.length})`
-                          )}
-                        </span>
-                      </>
-                    )}
+                    {bulkImportMutation.isPending && <Loader2 size={16} className="animate-spin" />}
+                    <span>
+                      {actionableImportRows.length > 0
+                        ? tr(
+                          `Sinkronkan ${actionableImportRows.length} Data`,
+                          `Sync ${actionableImportRows.length} Records`
+                        )
+                        : tr('Tetap Sinkronkan Semua', 'Sync All Anyway')}
+                    </span>
                   </button>
                 </div>
               </div>
@@ -2352,54 +2899,43 @@ export function TeacherListPage() {
 
       {/* --- DELETE CONFIRMATION MODAL --- */}
       <AnimatePresence>
-        {deleteModal.isOpen &&
-          ((deleteModal.type === 'all' && showClearAllButton) ||
-            (deleteModal.type !== 'all' && canDeleteTeacher)) && (
-            <div className="fixed inset-0 z-100 flex items-center justify-center p-4">
-              <div
-                className="absolute inset-0 bg-black/40 backdrop-blur-[2px]"
-                onClick={() => !isDeleteBusy && closeDeleteModal()}
-              />
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: 10 }}
-                className="relative bg-background border border-border rounded-2xl shadow-xl w-full max-w-sm p-6 overflow-hidden z-10"
-              >
-                <div className="flex flex-col items-center text-center">
-                  <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center mb-4 ring-4 ring-red-50">
-                    <AlertTriangle size={28} />
-                  </div>
-                  <h3 className="text-xl font-bold text-foreground">{modalTitle}</h3>
-                  <p className="text-sm text-muted-foreground mt-2 leading-relaxed">{modalDesc}</p>
-                </div>
-                <div className="flex gap-3 mt-8">
-                  <button
-                    type="button"
-                    onClick={closeDeleteModal}
-                    disabled={isDeleteBusy}
-                    className="flex-1 px-4 py-2.5 border border-border rounded-xl text-sm font-semibold hover:bg-muted transition-colors disabled:opacity-50"
-                  >
-                    {tr('Batal', 'Cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={confirmDelete}
-                    disabled={isDeleteBusy}
-                    className="flex-1 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-sm font-semibold shadow-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    {isDeleteBusy ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" /> {tr('Memproses', 'Processing')}
-                      </>
-                    ) : (
-                      tr('Ya, Hapus', 'Yes, Delete')
-                    )}
-                  </button>
-                </div>
-              </motion.div>
-            </div>
-          )}
+        {deleteModal.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 relative overflow-hidden"
+            >
+              <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mb-4">
+                <AlertTriangle size={24} />
+              </div>
+
+              <h3 className="text-lg font-bold text-foreground mb-2">{modalTitle}</h3>
+              <p className="text-sm text-muted-foreground mb-6 leading-relaxed">{modalDesc}</p>
+
+              <div className="flex items-center justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeDeleteModal}
+                  disabled={isDeleteBusy}
+                  className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium text-foreground transition-colors"
+                >
+                  {tr('Batal', 'Cancel')}
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmDelete}
+                  disabled={isDeleteBusy}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors shadow-sm"
+                >
+                  {isDeleteBusy && <Loader2 size={16} className="animate-spin" />}
+                  {tr('Ya, Hapus', 'Yes, Delete')}
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
     </div>
   );
