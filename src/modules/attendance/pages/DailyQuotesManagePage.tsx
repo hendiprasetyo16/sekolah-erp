@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTranslation } from '@/hooks/useTranslation';
 
 export interface DailyQuoteItem {
     id: string;
@@ -42,6 +43,7 @@ function getErrorMessage(error: unknown, fallbackMessage: string): string {
 }
 
 export function DailyQuotesManagePage() {
+    const { t } = useTranslation();
     const { user, school, hasAnyRole } = useAuthStore();
     const isSuperAdmin = hasAnyRole(['SUPER_ADMIN']);
     const isAdmin = hasAnyRole(['ADMIN']);
@@ -69,10 +71,13 @@ export function DailyQuotesManagePage() {
         message: string;
     } | null>(null);
 
-    const showToast = (type: 'success' | 'error', message: string) => {
-        setToast({ type, message });
-        setTimeout(() => setToast(null), 4000);
-    };
+    const showToast = useCallback(
+        (type: 'success' | 'error', message: string) => {
+            setToast({ type, message });
+            setTimeout(() => setToast(null), 4000);
+        },
+        []
+    );
 
     useEffect(() => {
         if (!isSuperAdmin) {
@@ -110,15 +115,12 @@ export function DailyQuotesManagePage() {
         } catch (err: unknown) {
             showToast(
                 'error',
-                getErrorMessage(
-                    err,
-                    'Tabel daily_quotes belum tersedia. Jalankan skrip SQL di Supabase terlebih dahulu.'
-                )
+                getErrorMessage(err, t('dailyQuotes.errTableMissing'))
             );
         } finally {
             setIsLoading(false);
         }
-    }, [canManage, isSuperAdmin, activeSchoolId]);
+    }, [canManage, isSuperAdmin, activeSchoolId, showToast, t]);
 
     useEffect(() => {
         void loadQuotes();
@@ -144,7 +146,7 @@ export function DailyQuotesManagePage() {
         e.preventDefault();
         if (!canManage) return;
         if (quoteText.trim().length < 10) {
-            showToast('error', 'Isi kutipan minimal 10 karakter agar bermakna.');
+            showToast('error', t('dailyQuotes.errMinLength'));
             return;
         }
 
@@ -155,7 +157,7 @@ export function DailyQuotesManagePage() {
             : activeSchoolId;
 
         if (!isSuperAdmin && !resolvedSchoolId) {
-            showToast('error', 'Identitas sekolah belum ditemukan. Muat ulang halaman.');
+            showToast('error', t('dailyQuotes.errNoSchool'));
             return;
         }
 
@@ -178,7 +180,7 @@ export function DailyQuotesManagePage() {
 
                 const { error } = await updateQuery;
                 if (error) throw error;
-                showToast('success', 'Kata Hari Ini berhasil diperbarui!');
+                showToast('success', t('dailyQuotes.toastUpdateSuccess'));
             } else {
                 const { error } = await supabase.from('daily_quotes').insert({
                     quote: quoteText.trim(),
@@ -189,13 +191,13 @@ export function DailyQuotesManagePage() {
                 });
 
                 if (error) throw error;
-                showToast('success', 'Kata Hari Ini baru berhasil ditambahkan!');
+                showToast('success', t('dailyQuotes.toastCreateSuccess'));
             }
 
             resetForm();
             await loadQuotes();
         } catch (err: unknown) {
-            showToast('error', getErrorMessage(err, 'Gagal menyimpan Kata Hari Ini.'));
+            showToast('error', getErrorMessage(err, t('dailyQuotes.errSave')));
         } finally {
             setIsSaving(false);
         }
@@ -203,7 +205,7 @@ export function DailyQuotesManagePage() {
 
     const handleToggleActive = async (item: DailyQuoteItem) => {
         if (!isSuperAdmin && item.schoolId === null) {
-            showToast('error', 'Quote Global hanya dapat diubah oleh Super Admin.');
+            showToast('error', t('dailyQuotes.errGlobalEditRestricted'));
             return;
         }
 
@@ -221,17 +223,22 @@ export function DailyQuotesManagePage() {
             if (error) throw error;
             showToast(
                 'success',
-                !item.isActive ? 'Kutipan diaktifkan.' : 'Kutipan dinonaktifkan.'
+                !item.isActive
+                    ? t('dailyQuotes.toastActivated')
+                    : t('dailyQuotes.toastDeactivated')
             );
             await loadQuotes();
         } catch (err: unknown) {
-            showToast('error', getErrorMessage(err, 'Gagal mengubah status kutipan.'));
+            showToast(
+                'error',
+                getErrorMessage(err, t('dailyQuotes.errToggleStatus'))
+            );
         }
     };
 
     const handleRequestDelete = (item: DailyQuoteItem) => {
         if (!isSuperAdmin && item.schoolId === null) {
-            showToast('error', 'Quote Global hanya dapat dihapus oleh Super Admin.');
+            showToast('error', t('dailyQuotes.errGlobalDeleteRestricted'));
             return;
         }
         setDeleteTarget(item);
@@ -252,12 +259,12 @@ export function DailyQuotesManagePage() {
 
             const { error } = await deleteQuery;
             if (error) throw error;
-            showToast('success', 'Kutipan berhasil dihapus.');
+            showToast('success', t('dailyQuotes.toastDeleteSuccess'));
             if (editingId === deleteTarget.id) resetForm();
             setDeleteTarget(null);
             await loadQuotes();
         } catch (err: unknown) {
-            showToast('error', getErrorMessage(err, 'Gagal menghapus kutipan.'));
+            showToast('error', getErrorMessage(err, t('dailyQuotes.errDelete')));
         } finally {
             setIsDeleting(false);
         }
@@ -268,10 +275,11 @@ export function DailyQuotesManagePage() {
             <div className="page-container">
                 <div className="data-card p-6 text-center space-y-2">
                     <AlertTriangle size={32} className="mx-auto text-amber-500" />
-                    <h2 className="font-bold text-base">Akses Terbatas</h2>
+                    <h2 className="font-bold text-base">
+                        {t('dailyQuotes.accessRestrictedTitle')}
+                    </h2>
                     <p className="text-xs opacity-75">
-                        Halaman pengelolaan Kata Hari Ini hanya tersedia untuk Admin Sekolah
-                        dan Super Admin.
+                        {t('dailyQuotes.accessRestrictedDesc')}
                     </p>
                 </div>
             </div>
@@ -285,12 +293,9 @@ export function DailyQuotesManagePage() {
                 <div>
                     <h1 className="page-title flex items-center gap-2">
                         <Sparkles size={22} className="text-amber-500" />
-                        Kelola Kata Hari Ini (Quotes)
+                        {t('dailyQuotes.pageTitle')}
                     </h1>
-                    <p className="page-subtitle">
-                        Atur kata mutiara & motivasi harian yang tampil pada aplikasi
-                        presensi guru
-                    </p>
+                    <p className="page-subtitle">{t('dailyQuotes.pageSubtitle')}</p>
                 </div>
                 <button
                     type="button"
@@ -299,7 +304,7 @@ export function DailyQuotesManagePage() {
                     className="btn-secondary"
                 >
                     <RefreshCw size={15} className={isLoading ? 'spin' : ''} />
-                    Refresh
+                    {t('dailyQuotes.btnRefresh')}
                 </button>
             </div>
 
@@ -327,7 +332,9 @@ export function DailyQuotesManagePage() {
                         <div className="flex items-center justify-between border-b border-border pb-3">
                             <h2 className="font-bold text-sm flex items-center gap-2">
                                 {editingId ? <Edit3 size={16} /> : <Plus size={16} />}
-                                {editingId ? 'Edit Kata Hari Ini' : 'Tambah Kata Hari Ini'}
+                                {editingId
+                                    ? t('dailyQuotes.formEditTitle')
+                                    : t('dailyQuotes.formAddTitle')}
                             </h2>
                             {editingId && (
                                 <button
@@ -335,7 +342,7 @@ export function DailyQuotesManagePage() {
                                     onClick={resetForm}
                                     className="text-xs text-red-500 flex items-center gap-1 hover:underline"
                                 >
-                                    <X size={14} /> Batal Edit
+                                    <X size={14} /> {t('dailyQuotes.btnCancelEdit')}
                                 </button>
                             )}
                         </div>
@@ -343,7 +350,7 @@ export function DailyQuotesManagePage() {
                         {isSuperAdmin && (
                             <div>
                                 <label className="block text-xs font-semibold mb-1">
-                                    Target Tampilan Sekolah
+                                    {t('dailyQuotes.labelTargetSchool')}
                                 </label>
                                 <select
                                     className="form-input w-full text-xs"
@@ -351,11 +358,11 @@ export function DailyQuotesManagePage() {
                                     onChange={(e) => setTargetSchoolId(e.target.value)}
                                 >
                                     <option value="GLOBAL">
-                                        Semua Sekolah (Global Super Admin)
+                                        {t('dailyQuotes.optionGlobalSchool')}
                                     </option>
                                     {schools.map((s) => (
                                         <option key={s.id} value={s.id}>
-                                            Khusus: {s.name}
+                                            {t('dailyQuotes.optionSpecificSchool', { name: s.name })}
                                         </option>
                                     ))}
                                 </select>
@@ -364,27 +371,27 @@ export function DailyQuotesManagePage() {
 
                         <div>
                             <label className="block text-xs font-semibold mb-1">
-                                Isi Kutipan / Kata Motivasi *
+                                {t('dailyQuotes.labelQuoteText')}
                             </label>
                             <textarea
                                 rows={4}
                                 required
                                 value={quoteText}
                                 onChange={(e) => setQuoteText(e.target.value)}
-                                placeholder="Contoh: Keteladanan guru hari ini adalah inspirasi masa depan bagi setiap peserta didik."
+                                placeholder={t('dailyQuotes.placeholderQuoteText')}
                                 className="form-input w-full text-xs"
                             />
                         </div>
 
                         <div>
                             <label className="block text-xs font-semibold mb-1">
-                                Sumber / Tokoh (Opsional)
+                                {t('dailyQuotes.labelAuthor')}
                             </label>
                             <input
                                 type="text"
                                 value={authorText}
                                 onChange={(e) => setAuthorText(e.target.value)}
-                                placeholder="Contoh: Ki Hajar Dewantara / Kepala Sekolah"
+                                placeholder={t('dailyQuotes.placeholderAuthor')}
                                 className="form-input w-full text-xs"
                             />
                         </div>
@@ -396,7 +403,7 @@ export function DailyQuotesManagePage() {
                                 onChange={(e) => setIsActive(e.target.checked)}
                                 className="rounded"
                             />
-                            <span>Aktifkan kutipan ini agar tampil di layar presensi</span>
+                            <span>{t('dailyQuotes.checkboxActiveLabel')}</span>
                         </label>
 
                         <button
@@ -406,10 +413,10 @@ export function DailyQuotesManagePage() {
                         >
                             <Save size={15} />
                             {isSaving
-                                ? 'Menyimpan...'
+                                ? t('dailyQuotes.btnSaving')
                                 : editingId
-                                    ? 'Simpan Perubahan'
-                                    : 'Tambahkan Kutipan'}
+                                    ? t('dailyQuotes.btnSaveChanges')
+                                    : t('dailyQuotes.btnAddQuote')}
                         </button>
                     </form>
                 </div>
@@ -418,17 +425,17 @@ export function DailyQuotesManagePage() {
                 <div className="lg:col-span-7">
                     <div className="data-card p-5 space-y-3">
                         <h2 className="font-bold text-sm border-b border-border pb-3">
-                            Daftar Kata Hari Ini ({quotes.length})
+                            {t('dailyQuotes.listTitle', { count: quotes.length })}
                         </h2>
 
                         {isLoading ? (
                             <div className="py-10 text-center text-xs opacity-70 flex items-center justify-center gap-2">
-                                <RefreshCw size={16} className="spin" /> Memuat daftar...
+                                <RefreshCw size={16} className="spin" />{' '}
+                                {t('dailyQuotes.loadingList')}
                             </div>
                         ) : quotes.length === 0 ? (
                             <div className="py-10 text-center text-xs opacity-60">
-                                Belum ada kutipan tersimpan di database. Tambahkan kutipan baru
-                                di samping!
+                                {t('dailyQuotes.emptyList')}
                             </div>
                         ) : (
                             <div className="space-y-3 max-h-135 overflow-y-auto pr-1">
@@ -453,11 +460,13 @@ export function DailyQuotesManagePage() {
 
                                                         {isGlobal ? (
                                                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-purple-500/15 text-purple-600 dark:text-purple-300">
-                                                                <Globe size={11} /> Global
+                                                                <Globe size={11} />{' '}
+                                                                {t('dailyQuotes.badgeGlobal')}
                                                             </span>
                                                         ) : (
                                                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-500/15 text-blue-600 dark:text-blue-300">
-                                                                <Building2 size={11} /> Sekolah
+                                                                <Building2 size={11} />{' '}
+                                                                {t('dailyQuotes.badgeSchool')}
                                                             </span>
                                                         )}
 
@@ -467,7 +476,9 @@ export function DailyQuotesManagePage() {
                                                                     : 'bg-slate-500/15 text-slate-500'
                                                                 }`}
                                                         >
-                                                            {item.isActive ? 'Aktif' : 'Nonaktif'}
+                                                            {item.isActive
+                                                                ? t('dailyQuotes.badgeActive')
+                                                                : t('dailyQuotes.badgeInactive')}
                                                         </span>
                                                     </div>
 
@@ -489,8 +500,8 @@ export function DailyQuotesManagePage() {
                                                             className="p-1.5 rounded-lg hover:bg-muted transition"
                                                             title={
                                                                 item.isActive
-                                                                    ? 'Nonaktifkan kutipan'
-                                                                    : 'Aktifkan kutipan'
+                                                                    ? t('dailyQuotes.titleDeactivate')
+                                                                    : t('dailyQuotes.titleActivate')
                                                             }
                                                         >
                                                             {item.isActive ? (
@@ -506,7 +517,7 @@ export function DailyQuotesManagePage() {
                                                             type="button"
                                                             onClick={() => handleEditClick(item)}
                                                             className="p-1.5 rounded-lg text-blue-500 hover:bg-blue-500/15 transition"
-                                                            title="Edit kutipan"
+                                                            title={t('dailyQuotes.titleEdit')}
                                                         >
                                                             <Edit3 size={15} />
                                                         </button>
@@ -514,7 +525,7 @@ export function DailyQuotesManagePage() {
                                                             type="button"
                                                             onClick={() => handleRequestDelete(item)}
                                                             className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                                            title="Hapus kutipan"
+                                                            title={t('dailyQuotes.titleDelete')}
                                                         >
                                                             <Trash2 size={15} />
                                                         </button>
@@ -545,10 +556,13 @@ export function DailyQuotesManagePage() {
                                 <Trash2 size={20} />
                             </div>
                             <div>
-                                <h3 className="font-bold text-base">Hapus Kutipan?</h3>
+                                <h3 className="font-bold text-base">
+                                    {t('dailyQuotes.modalDeleteTitle')}
+                                </h3>
                                 <p className="text-xs opacity-75 mt-1 leading-relaxed">
-                                    Kutipan “{deleteTarget.quote}” akan dihapus secara permanen
-                                    dari daftar Kata Hari Ini.
+                                    {t('dailyQuotes.modalDeleteDesc', {
+                                        quote: deleteTarget.quote,
+                                    })}
                                 </p>
                             </div>
                         </div>
@@ -560,7 +574,7 @@ export function DailyQuotesManagePage() {
                                 disabled={isDeleting}
                                 onClick={() => setDeleteTarget(null)}
                             >
-                                Batal
+                                {t('dailyQuotes.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -568,7 +582,9 @@ export function DailyQuotesManagePage() {
                                 onClick={() => void handleConfirmDelete()}
                                 className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition"
                             >
-                                {isDeleting ? 'Menghapus...' : 'Ya, Hapus'}
+                                {isDeleting
+                                    ? t('dailyQuotes.btnDeleting')
+                                    : t('dailyQuotes.btnConfirmDelete')}
                             </button>
                         </div>
                     </div>

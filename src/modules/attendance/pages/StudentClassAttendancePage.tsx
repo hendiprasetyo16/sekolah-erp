@@ -28,13 +28,14 @@ import {
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
+import { useTranslation } from '@/hooks/useTranslation';
 import { attendanceService } from '../services/attendance.service';
 import { getLocalDateString } from '../services/gps.utils';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
+import type { SupportedAttendanceLocale } from '../types/attendance.types';
 
 const DEFAULT_STUDENT_PAGE_SIZE = 10;
 const STUDENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 0] as const; // 0 = Semua
-const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah';
 const DEFAULT_CLASS_FILTER_FOR_ADMIN = 'ALL';
 
 type StudentAttendanceStatus =
@@ -87,7 +88,6 @@ interface MessageBanner {
 
 const STATUS_OPTIONS: {
     value: StudentAttendanceStatus;
-    label: string;
     short: string;
     activeClass: string;
     badgeClass: string;
@@ -95,7 +95,6 @@ const STATUS_OPTIONS: {
 }[] = [
         {
             value: 'HADIR',
-            label: 'Hadir',
             short: 'H',
             activeClass:
                 'bg-emerald-600 text-white border-emerald-600 shadow-2xs ring-1 ring-emerald-600/30',
@@ -105,7 +104,6 @@ const STATUS_OPTIONS: {
         },
         {
             value: 'TERLAMBAT',
-            label: 'Terlambat',
             short: 'T',
             activeClass:
                 'bg-amber-500 text-white border-amber-500 shadow-2xs ring-1 ring-amber-500/30',
@@ -115,7 +113,6 @@ const STATUS_OPTIONS: {
         },
         {
             value: 'IZIN',
-            label: 'Izin',
             short: 'I',
             activeClass:
                 'bg-blue-600 text-white border-blue-600 shadow-2xs ring-1 ring-blue-600/30',
@@ -125,7 +122,6 @@ const STATUS_OPTIONS: {
         },
         {
             value: 'SAKIT',
-            label: 'Sakit',
             short: 'S',
             activeClass:
                 'bg-purple-600 text-white border-purple-600 shadow-2xs ring-1 ring-purple-600/30',
@@ -135,7 +131,6 @@ const STATUS_OPTIONS: {
         },
         {
             value: 'ALPA',
-            label: 'Alpa',
             short: 'A',
             activeClass:
                 'bg-red-600 text-white border-red-600 shadow-2xs ring-1 ring-red-600/30',
@@ -163,7 +158,10 @@ function buildIsoTimestampForDate(dateStr: string): string {
     return combined.toISOString();
 }
 
-function formatTimeDisplay(value?: string | null): string | null {
+function formatTimeDisplay(
+    value: string | null | undefined,
+    localeCode: string
+): string | null {
     if (!value) return null;
     const trimmed = value.trim();
     if (/^\d{2}:\d{2}(:\d{2})?$/.test(trimmed)) {
@@ -171,13 +169,17 @@ function formatTimeDisplay(value?: string | null): string | null {
     }
     const parsed = new Date(trimmed);
     if (Number.isNaN(parsed.getTime())) return null;
-    return parsed.toLocaleTimeString('id-ID', {
+    return parsed.toLocaleTimeString(localeCode, {
         hour: '2-digit',
         minute: '2-digit',
     });
 }
 
-function getErrorInfo(err: unknown): { code: string; message: string } {
+function getErrorInfo(
+    err: unknown,
+    fallbackProcess: string,
+    fallbackUnexpected: string
+): { code: string; message: string } {
     if (typeof err === 'object' && err !== null) {
         const rec = err as Record<string, unknown>;
         return {
@@ -185,17 +187,17 @@ function getErrorInfo(err: unknown): { code: string; message: string } {
             message:
                 typeof rec.message === 'string' && rec.message.trim().length > 0
                     ? rec.message
-                    : 'Terjadi kesalahan saat memproses data.',
+                    : fallbackProcess,
         };
     }
     if (err instanceof Error) {
         return { code: '', message: err.message };
     }
-    return { code: '', message: 'Terjadi kesalahan tidak terduga.' };
+    return { code: '', message: fallbackUnexpected };
 }
 
 function isMissingColumnError(err: unknown): boolean {
-    const { code, message } = getErrorInfo(err);
+    const { code, message } = getErrorInfo(err, '', '');
     const lower = message.toLowerCase();
     return (
         code === 'PGRST204' ||
@@ -206,6 +208,14 @@ function isMissingColumnError(err: unknown): boolean {
 }
 
 export function StudentClassAttendancePage() {
+    const { t } = useTranslation();
+    const currentLang: SupportedAttendanceLocale =
+        t('common.language') === 'Language' ? 'en' : 'id';
+    const timeLocale = currentLang === 'en' ? 'en-US' : 'id-ID';
+    const defaultSpecialEventNote = t(
+        'studentClassAttendance.defaultSpecialEventNote'
+    );
+
     const { user, school, hasAnyRole } = useAuthStore();
     const isSuperAdmin = hasAnyRole(['SUPER_ADMIN']);
     const isPrivilegedRole = hasAnyRole([
@@ -261,34 +271,59 @@ export function StudentClassAttendancePage() {
     const holidayLock = useStudentHolidayLock({
         schoolId: activeSchoolId,
         targetDate: selectedDate,
+        lang: currentLang,
     });
 
     const [showSpecialEventModal, setShowSpecialEventModal] =
         useState<boolean>(false);
     const [specialEventInput, setSpecialEventInput] = useState<string>('');
 
+    const getStatusLabel = useCallback(
+        (status: StudentAttendanceStatus): string => {
+            switch (status) {
+                case 'HADIR':
+                    return t('studentClassAttendance.status_HADIR');
+                case 'TERLAMBAT':
+                    return t('studentClassAttendance.status_TERLAMBAT');
+                case 'IZIN':
+                    return t('studentClassAttendance.status_IZIN');
+                case 'SAKIT':
+                    return t('studentClassAttendance.status_SAKIT');
+                case 'ALPA':
+                    return t('studentClassAttendance.status_ALPA');
+            }
+        },
+        [t]
+    );
+
     const isSpecialEventMode = Boolean(
         holidayLock.isHoliday && holidayLock.isSpecialEventActive
     );
     const specialEventNote = useMemo(() => {
         const reason = (holidayLock.specialEventReason ?? '').trim();
-        return reason || DEFAULT_SPECIAL_EVENT_NOTE;
-    }, [holidayLock.specialEventReason]);
+        return reason || defaultSpecialEventNote;
+    }, [holidayLock.specialEventReason, defaultSpecialEventNote]);
 
     const lockBannerMessage = useMemo(() => {
         if (holidayLock.isHoliday) {
-            return `Presensi dikunci otomatis karena hari libur (${holidayLock.holidayName || 'Libur Kalender'
-                }).`;
+            return t('studentClassAttendance.lockBannerHoliday', {
+                holiday:
+                    holidayLock.holidayName ||
+                    t('studentClassAttendance.defaultHolidayName'),
+            });
         }
         if (holidayLock.isSpecialEventActive) {
-            return `Mode kegiatan khusus aktif: ${specialEventNote}.`;
+            return t('studentClassAttendance.lockBannerSpecialEvent', {
+                reason: specialEventNote,
+            });
         }
-        return 'Presensi pada tanggal ini sedang dikunci.';
+        return t('studentClassAttendance.lockBannerDefault');
     }, [
         holidayLock.isHoliday,
         holidayLock.holidayName,
         holidayLock.isSpecialEventActive,
         specialEventNote,
+        t,
     ]);
 
     useEffect(() => {
@@ -383,10 +418,14 @@ export function StudentClassAttendancePage() {
                 }
             }
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal memuat daftar kelas: ${errMsg}`,
+                text: t('studentClassAttendance.errLoadClasses', { message: errMsg }),
             });
         } finally {
             setIsLoadingClasses(false);
@@ -397,6 +436,7 @@ export function StudentClassAttendancePage() {
         teacherScope.isLoading,
         isHomeroomRestricted,
         homeroomClassKey,
+        t,
     ]);
 
     useEffect(() => {
@@ -404,11 +444,14 @@ export function StudentClassAttendancePage() {
     }, [loadClassesAndConfig]);
 
     const selectedClassName = useMemo(() => {
-        if (selectedClassId === 'ALL') return 'Semua Kelas';
+        if (selectedClassId === 'ALL') {
+            return t('studentClassAttendance.allClassesOption');
+        }
         return (
-            classesList.find((c) => c.id === selectedClassId)?.name ?? 'Terpilih'
+            classesList.find((c) => c.id === selectedClassId)?.name ??
+            t('studentClassAttendance.selectedClassFallback')
         );
-    }, [classesList, selectedClassId]);
+    }, [classesList, selectedClassId, t]);
 
     const loadClassStudentsAndAttendance = useCallback(async () => {
         if (!activeSchoolId || !selectedClassId || !selectedDate) {
@@ -492,7 +535,8 @@ export function StudentClassAttendancePage() {
 
                 return {
                     studentId: sid,
-                    fullName: st.fullName ?? 'Tanpa Nama',
+                    fullName:
+                        st.fullName ?? t('studentClassAttendance.unnamedStudent'),
                     nisn: st.nisn ?? null,
                     nis: st.nis ?? null,
                     classId: st.classId ?? selectedClassId,
@@ -509,10 +553,17 @@ export function StudentClassAttendancePage() {
 
             setRows(combinedRows);
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal memuat data siswa ${selectedClassName}: ${errMsg}`,
+                text: t('studentClassAttendance.errLoadStudents', {
+                    className: selectedClassName,
+                    message: errMsg,
+                }),
             });
         } finally {
             setIsLoadingRows(false);
@@ -526,6 +577,7 @@ export function StudentClassAttendancePage() {
         homeroomClassKey,
         isSpecialEventMode,
         specialEventNote,
+        t,
     ]);
 
     useEffect(() => {
@@ -633,7 +685,7 @@ export function StudentClassAttendancePage() {
         if (rowsToSave.length === 0) {
             setMessage({
                 status: 'error',
-                text: 'Tidak ada perubahan presensi baru untuk disimpan. Pilih status siswa terlebih dahulu.',
+                text: t('studentClassAttendance.errNoChangesToSave'),
             });
             return;
         }
@@ -752,18 +804,30 @@ export function StudentClassAttendancePage() {
 
             const scopeLabel =
                 selectedClassId === 'ALL'
-                    ? 'Semua Kelas'
-                    : `kelas ${selectedClassName}`;
+                    ? t('studentClassAttendance.allClassesOption')
+                    : t('studentClassAttendance.classOptionPrefix', {
+                        name: selectedClassName,
+                    });
             setMessage({
                 status: 'success',
-                text: `Berhasil menyimpan presensi ${rowsToSave.length} siswa ${scopeLabel} (${selectedDate}).`,
+                text: t('studentClassAttendance.toastSaveSuccess', {
+                    count: rowsToSave.length,
+                    scope: scopeLabel,
+                    date: selectedDate,
+                }),
             });
             await loadClassStudentsAndAttendance();
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal menyimpan presensi kelas: ${errMsg}`,
+                text: t('studentClassAttendance.errSaveAttendance', {
+                    message: errMsg,
+                }),
             });
         } finally {
             setIsSaving(false);
@@ -787,7 +851,7 @@ export function StudentClassAttendancePage() {
 
         try {
             const nowIso = buildIsoTimestampForDate(selectedDate);
-            const formattedClock = formatTimeDisplay(nowIso) ?? '';
+            const formattedClock = formatTimeDisplay(nowIso, timeLocale) ?? '';
 
             const { error } = await supabase
                 .from('attendances')
@@ -806,13 +870,23 @@ export function StudentClassAttendancePage() {
             );
             setMessage({
                 status: 'success',
-                text: `Absen pulang ${row.fullName} berhasil dicatat pukul ${formattedClock}.`,
+                text: t('studentClassAttendance.toastCheckOutSuccess', {
+                    name: row.fullName,
+                    time: formattedClock,
+                }),
             });
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal mencatat absen pulang ${row.fullName}: ${errMsg}`,
+                text: t('studentClassAttendance.errCheckOut', {
+                    name: row.fullName,
+                    message: errMsg,
+                }),
             });
         } finally {
             setCheckingOutId(null);
@@ -845,13 +919,22 @@ export function StudentClassAttendancePage() {
             await loadClassStudentsAndAttendance();
             setMessage({
                 status: 'success',
-                text: `Catatan presensi ${deletedName} pada ${selectedDate} berhasil dihapus.`,
+                text: t('studentClassAttendance.toastDeleteSuccess', {
+                    name: deletedName,
+                    date: selectedDate,
+                }),
             });
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal menghapus data presensi: ${errMsg}`,
+                text: t('studentClassAttendance.errDeleteAttendance', {
+                    message: errMsg,
+                }),
             });
         } finally {
             setIsDeletingRecord(false);
@@ -860,7 +943,7 @@ export function StudentClassAttendancePage() {
 
     const handleConfirmActivateSpecialEvent = async () => {
         const resolvedReason =
-            specialEventInput.trim() || DEFAULT_SPECIAL_EVENT_NOTE;
+            specialEventInput.trim() || defaultSpecialEventNote;
         try {
             await holidayLock.activateSpecialEvent(resolvedReason);
             setShowSpecialEventModal(false);
@@ -878,13 +961,21 @@ export function StudentClassAttendancePage() {
             );
             setMessage({
                 status: 'success',
-                text: `Mode Kegiatan Khusus ("${resolvedReason}") berhasil diaktifkan. Presensi siswa pada tanggal libur ini kini dibuka.`,
+                text: t('studentClassAttendance.toastSpecialActivated', {
+                    reason: resolvedReason,
+                }),
             });
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal mengaktifkan kegiatan khusus: ${errMsg}`,
+                text: t('studentClassAttendance.errActivateSpecial', {
+                    message: errMsg,
+                }),
             });
         }
     };
@@ -901,13 +992,19 @@ export function StudentClassAttendancePage() {
             );
             setMessage({
                 status: 'success',
-                text: 'Mode Kegiatan Khusus dinonaktifkan. Penguncian hari libur kembali berlaku.',
+                text: t('studentClassAttendance.toastSpecialDeactivated'),
             });
         } catch (err: unknown) {
-            const { message: errMsg } = getErrorInfo(err);
+            const { message: errMsg } = getErrorInfo(
+                err,
+                t('studentClassAttendance.errGenericProcess'),
+                t('studentClassAttendance.errUnexpected')
+            );
             setMessage({
                 status: 'error',
-                text: `Gagal menonaktifkan kegiatan khusus: ${errMsg}`,
+                text: t('studentClassAttendance.errDeactivateSpecial', {
+                    message: errMsg,
+                }),
             });
         }
     };
@@ -1003,7 +1100,7 @@ export function StudentClassAttendancePage() {
                 >
                     <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-300">
                         <FlaskConical size={16} />
-                        <span>Mode Simulasi Super Admin:</span>
+                        <span>{t('studentClassAttendance.superAdminSimLabel')}</span>
                     </div>
                     <select
                         className="form-input min-w-60 text-xs"
@@ -1024,11 +1121,10 @@ export function StudentClassAttendancePage() {
                 <div>
                     <h1 className="text-2xl font-bold flex items-center gap-2">
                         <Users className="text-emerald-600" size={24} />
-                        Presensi Siswa per Kelas
+                        {t('studentClassAttendance.pageTitle')}
                     </h1>
                     <p className="text-sm text-muted-foreground mt-0.5">
-                        Input & kelola kehadiran siswa harian secara kolektif oleh Wali
-                        Kelas / Guru Mata Pelajaran.
+                        {t('studentClassAttendance.pageSubtitle')}
                     </p>
                 </div>
 
@@ -1044,8 +1140,8 @@ export function StudentClassAttendancePage() {
                             >
                                 <Lock size={14} />
                                 {holidayLock.isToggling
-                                    ? 'Mengunci...'
-                                    : 'Kunci Kembali Hari Libur'}
+                                    ? t('studentClassAttendance.btnLockingHoliday')
+                                    : t('studentClassAttendance.btnLockHolidayAgain')}
                             </button>
                         ) : (
                             <button
@@ -1054,7 +1150,7 @@ export function StudentClassAttendancePage() {
                                 className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground transition-all cursor-pointer"
                             >
                                 <Sparkles size={14} className="text-amber-500" />
-                                Buka Presensi Kegiatan Khusus
+                                {t('studentClassAttendance.btnOpenSpecialEvent')}
                             </button>
                         ))}
 
@@ -1070,7 +1166,9 @@ export function StudentClassAttendancePage() {
                         className="inline-flex items-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold border border-emerald-600/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/20 disabled:opacity-50 transition-all cursor-pointer"
                     >
                         <CheckCheck size={15} />
-                        Tandai Semua Belum Diabsen = HADIR ({summary.belum})
+                        {t('studentClassAttendance.btnMarkAllHadir', {
+                            count: summary.belum,
+                        })}
                     </button>
 
                     <button
@@ -1087,8 +1185,10 @@ export function StudentClassAttendancePage() {
                             <Save size={15} />
                         )}
                         {isSaving
-                            ? 'Menyimpan...'
-                            : `Simpan Presensi (${summary.dirtyCount})`}
+                            ? t('studentClassAttendance.btnSaving')
+                            : t('studentClassAttendance.btnSaveAttendance', {
+                                count: summary.dirtyCount,
+                            })}
                     </button>
                 </div>
             </div>
@@ -1099,12 +1199,16 @@ export function StudentClassAttendancePage() {
                     <CalendarOff size={20} className="text-amber-600 shrink-0 mt-0.5" />
                     <div className="text-xs space-y-1">
                         <p className="font-bold text-sm">
-                            Hari Libur: {holidayLock.holidayName || 'Libur Kalender'}
+                            {t('studentClassAttendance.holidayBannerTitle', {
+                                holiday:
+                                    holidayLock.holidayName ||
+                                    t('studentClassAttendance.defaultHolidayName'),
+                            })}
                         </p>
                         <p className="opacity-90 leading-relaxed">
-                            Pengisian presensi siswa untuk tanggal{' '}
-                            <strong>{selectedDate}</strong> dikunci otomatis dan tidak
-                            dihitung sebagai Alpa.
+                            {t('studentClassAttendance.holidayBannerDescPrefix')}
+                            <strong>{selectedDate}</strong>
+                            {t('studentClassAttendance.holidayBannerDescSuffix')}
                         </p>
                     </div>
                 </div>
@@ -1113,8 +1217,13 @@ export function StudentClassAttendancePage() {
                     <div className="p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 flex items-center gap-2.5 text-xs">
                         <Unlock size={17} className="text-emerald-600 shrink-0" />
                         <span>
-                            <strong>Mode Kegiatan Khusus Aktif:</strong> {specialEventNote}{' '}
-                            (Pengecualian untuk jadwal libur {holidayLock.holidayName})
+                            <strong>
+                                {t('studentClassAttendance.specialEventBannerPrefix')}
+                            </strong>{' '}
+                            {specialEventNote}{' '}
+                            {t('studentClassAttendance.specialEventBannerHolidayRef', {
+                                holiday: holidayLock.holidayName,
+                            })}
                         </span>
                     </div>
                 )
@@ -1123,11 +1232,7 @@ export function StudentClassAttendancePage() {
             {!enableClassAttendance && (
                 <div className="p-3.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 text-xs flex items-center gap-2">
                     <Info size={16} className="shrink-0" />
-                    <span>
-                        Catatan: Metode presensi manual wali kelas saat ini dinonaktifkan di
-                        Pengaturan Sekolah, namun Anda tetap dapat melihat dan memperbarui
-                        data kelas.
-                    </span>
+                    <span>{t('studentClassAttendance.disabledMethodBanner')}</span>
                 </div>
             )}
 
@@ -1151,7 +1256,7 @@ export function StudentClassAttendancePage() {
             <div className="rounded-xl border border-border bg-card p-4 shadow-sm flex flex-wrap items-end gap-3">
                 <div>
                     <label className="text-[11px] font-semibold block mb-1">
-                        Tanggal Presensi
+                        {t('studentClassAttendance.labelAttendanceDate')}
                     </label>
                     <div className="relative">
                         <input
@@ -1169,7 +1274,7 @@ export function StudentClassAttendancePage() {
 
                 <div className="min-w-44">
                     <label className="text-[11px] font-semibold block mb-1">
-                        Pilih Kelas
+                        {t('studentClassAttendance.labelSelectClass')}
                     </label>
                     <select
                         value={selectedClassId}
@@ -1178,15 +1283,21 @@ export function StudentClassAttendancePage() {
                         className="form-input w-full text-xs font-semibold"
                     >
                         {classesList.length === 0 ? (
-                            <option value="">Belum ada data kelas</option>
+                            <option value="">
+                                {t('studentClassAttendance.noClassesOption')}
+                            </option>
                         ) : (
                             <>
                                 {!isHomeroomRestricted && (
-                                    <option value="ALL">Semua Kelas</option>
+                                    <option value="ALL">
+                                        {t('studentClassAttendance.allClassesOption')}
+                                    </option>
                                 )}
                                 {classesList.map((cls) => (
                                     <option key={cls.id} value={cls.id}>
-                                        Kelas {cls.name}
+                                        {t('studentClassAttendance.classOptionPrefix', {
+                                            name: cls.name,
+                                        })}
                                     </option>
                                 ))}
                             </>
@@ -1197,7 +1308,7 @@ export function StudentClassAttendancePage() {
                 {/* Flex Input Wrapper: Ikon Search Anti-Tumpuk */}
                 <div className="flex-1 min-w-60">
                     <label className="text-[11px] font-semibold block mb-1">
-                        Cari Siswa
+                        {t('studentClassAttendance.labelSearchStudent')}
                     </label>
                     <div className="flex items-center gap-2 rounded-xl border border-border bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-emerald-500/40">
                         <Search
@@ -1212,7 +1323,7 @@ export function StudentClassAttendancePage() {
                                 setSearchQuery(e.target.value);
                                 setCurrentPage(1);
                             }}
-                            placeholder="Cari nama siswa, NISN, atau NIS..."
+                            placeholder={t('studentClassAttendance.searchPlaceholder')}
                             className="w-full min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
                         />
                         {searchQuery && (
@@ -1223,7 +1334,7 @@ export function StudentClassAttendancePage() {
                                     setCurrentPage(1);
                                 }}
                                 className="p-0.5 rounded-md text-muted-foreground hover:text-foreground shrink-0 cursor-pointer"
-                                title="Bersihkan pencarian"
+                                title={t('studentClassAttendance.titleClearSearch')}
                             >
                                 <X size={14} />
                             </button>
@@ -1235,12 +1346,14 @@ export function StudentClassAttendancePage() {
             {/* Ringkasan Statistik Kelas */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2.5">
                 <div className="p-3 rounded-xl border border-border bg-card">
-                    <p className="text-[11px] opacity-65">Total Siswa</p>
+                    <p className="text-[11px] opacity-65">
+                        {t('studentClassAttendance.statTotalStudents')}
+                    </p>
                     <p className="text-xl font-bold mt-0.5">{summary.total}</p>
                 </div>
                 <div className="p-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5">
                     <p className="text-[11px] text-emerald-700 dark:text-emerald-300">
-                        Hadir
+                        {t('studentClassAttendance.statPresent')}
                     </p>
                     <p className="text-xl font-bold text-emerald-600 mt-0.5">
                         {summary.hadir}
@@ -1248,28 +1361,32 @@ export function StudentClassAttendancePage() {
                 </div>
                 <div className="p-3 rounded-xl border border-amber-500/30 bg-amber-500/5">
                     <p className="text-[11px] text-amber-700 dark:text-amber-300">
-                        Terlambat
+                        {t('studentClassAttendance.statLate')}
                     </p>
                     <p className="text-xl font-bold text-amber-600 mt-0.5">
                         {summary.terlambat}
                     </p>
                 </div>
                 <div className="p-3 rounded-xl border border-blue-500/30 bg-blue-500/5">
-                    <p className="text-[11px] text-blue-700 dark:text-blue-300">Izin</p>
+                    <p className="text-[11px] text-blue-700 dark:text-blue-300">
+                        {t('studentClassAttendance.statPermission')}
+                    </p>
                     <p className="text-xl font-bold text-blue-600 mt-0.5">
                         {summary.izin}
                     </p>
                 </div>
                 <div className="p-3 rounded-xl border border-purple-500/30 bg-purple-500/5">
                     <p className="text-[11px] text-purple-700 dark:text-purple-300">
-                        Sakit
+                        {t('studentClassAttendance.statSick')}
                     </p>
                     <p className="text-xl font-bold text-purple-600 mt-0.5">
                         {summary.sakit}
                     </p>
                 </div>
                 <div className="p-3 rounded-xl border border-red-500/30 bg-red-500/5">
-                    <p className="text-[11px] text-red-700 dark:text-red-300">Alpa</p>
+                    <p className="text-[11px] text-red-700 dark:text-red-300">
+                        {t('studentClassAttendance.statAlpha')}
+                    </p>
                     <p className="text-xl font-bold text-red-600 mt-0.5">
                         {summary.alpa}
                     </p>
@@ -1282,21 +1399,29 @@ export function StudentClassAttendancePage() {
                     <table className="w-full text-xs">
                         <thead>
                             <tr className="border-b border-border bg-muted/40 text-left">
-                                <th className="py-3 px-3 w-10 text-center font-semibold">No</th>
-                                <th className="py-3 px-3 font-semibold min-w-44">Nama Siswa</th>
-                                <th className="py-3 px-3 font-semibold min-w-64">
-                                    Status Kehadiran
+                                <th className="py-3 px-3 w-10 text-center font-semibold">
+                                    {t('studentClassAttendance.colNo')}
                                 </th>
-                                <th className="py-3 px-3 font-semibold">Jam Masuk</th>
+                                <th className="py-3 px-3 font-semibold min-w-44">
+                                    {t('studentClassAttendance.colStudentName')}
+                                </th>
+                                <th className="py-3 px-3 font-semibold min-w-64">
+                                    {t('studentClassAttendance.colAttendanceStatus')}
+                                </th>
+                                <th className="py-3 px-3 font-semibold">
+                                    {t('studentClassAttendance.colCheckInTime')}
+                                </th>
                                 {enableStudentCheckOut && (
-                                    <th className="py-3 px-3 font-semibold">Jam Pulang</th>
+                                    <th className="py-3 px-3 font-semibold">
+                                        {t('studentClassAttendance.colCheckOutTime')}
+                                    </th>
                                 )}
                                 <th className="py-3 px-3 font-semibold min-w-40">
-                                    Keterangan
+                                    {t('studentClassAttendance.colNotes')}
                                 </th>
                                 {canDeleteAttendance && (
                                     <th className="py-3 px-3 text-center font-semibold w-24">
-                                        Aksi
+                                        {t('studentClassAttendance.colActions')}
                                     </th>
                                 )}
                             </tr>
@@ -1310,7 +1435,9 @@ export function StudentClassAttendancePage() {
                                     >
                                         <div className="inline-flex items-center gap-2">
                                             <Loader2 size={16} className="animate-spin" />
-                                            Memuat daftar siswa {selectedClassName}...
+                                            {t('studentClassAttendance.loadingStudents', {
+                                                className: selectedClassName,
+                                            })}
                                         </div>
                                     </td>
                                 </tr>
@@ -1321,8 +1448,8 @@ export function StudentClassAttendancePage() {
                                         className="py-12 text-center opacity-65"
                                     >
                                         {classesList.length === 0
-                                            ? 'Belum ada data kelas/siswa terdaftar di sekolah ini.'
-                                            : 'Tidak ada siswa yang sesuai dengan filter kelas/pencarian.'}
+                                            ? t('studentClassAttendance.emptyNoClasses')
+                                            : t('studentClassAttendance.emptyNoFilteredStudents')}
                                     </td>
                                 </tr>
                             ) : (
@@ -1331,8 +1458,14 @@ export function StudentClassAttendancePage() {
                                         pageSize === 0
                                             ? idx + 1
                                             : (safeCurrentPage - 1) * pageSize + idx + 1;
-                                    const formattedIn = formatTimeDisplay(row.checkInTime);
-                                    const formattedOut = formatTimeDisplay(row.checkOutTime);
+                                    const formattedIn = formatTimeDisplay(
+                                        row.checkInTime,
+                                        timeLocale
+                                    );
+                                    const formattedOut = formatTimeDisplay(
+                                        row.checkOutTime,
+                                        timeLocale
+                                    );
                                     const canCheckOut =
                                         enableStudentCheckOut &&
                                         !holidayLock.isLocked &&
@@ -1356,14 +1489,18 @@ export function StudentClassAttendancePage() {
                                                 <div className="text-[11px] opacity-65 font-mono">
                                                     {selectedClassId === 'ALL' && (
                                                         <span className="font-sans font-semibold text-emerald-700 dark:text-emerald-300 mr-1.5">
-                                                            [Kelas {row.className}]
+                                                            {t('studentClassAttendance.classBadgeTag', {
+                                                                name: row.className,
+                                                            })}
                                                         </span>
                                                     )}
                                                     {row.nisn
                                                         ? `NISN: ${row.nisn}`
                                                         : row.nis
                                                             ? `NIS: ${row.nis}`
-                                                            : `Kelas ${row.className}`}
+                                                            : t('studentClassAttendance.classOptionPrefix', {
+                                                                name: row.className,
+                                                            })}
                                                 </div>
                                             </td>
 
@@ -1389,7 +1526,7 @@ export function StudentClassAttendancePage() {
                                                                     }`}
                                                             >
                                                                 <IconComp size={12} />
-                                                                <span>{opt.label}</span>
+                                                                <span>{getStatusLabel(opt.value)}</span>
                                                             </button>
                                                         );
                                                     })}
@@ -1424,7 +1561,7 @@ export function StudentClassAttendancePage() {
                                                             ) : (
                                                                 <LogOut size={11} />
                                                             )}
-                                                            Absen Pulang
+                                                            {t('studentClassAttendance.btnCheckOut')}
                                                         </button>
                                                     ) : (
                                                         <span className="opacity-40 font-mono">-</span>
@@ -1443,7 +1580,9 @@ export function StudentClassAttendancePage() {
                                                     placeholder={
                                                         isSpecialEventMode
                                                             ? specialEventNote
-                                                            : 'Catatan opsional...'
+                                                            : t(
+                                                                'studentClassAttendance.notesPlaceholderDefault'
+                                                            )
                                                     }
                                                     className="form-input w-full text-[11px] py-1 px-2"
                                                 />
@@ -1456,10 +1595,14 @@ export function StudentClassAttendancePage() {
                                                             type="button"
                                                             onClick={() => setDeleteTarget(row)}
                                                             className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold text-red-600 dark:text-red-400 bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all cursor-pointer"
-                                                            title="Hapus catatan presensi tersimpan (Super Admin / Admin)"
+                                                            title={t(
+                                                                'studentClassAttendance.titleDeleteRecord'
+                                                            )}
                                                         >
                                                             <Trash2 size={12} />
-                                                            <span>Hapus</span>
+                                                            <span>
+                                                                {t('studentClassAttendance.btnDeleteRecord')}
+                                                            </span>
                                                         </button>
                                                     ) : (
                                                         <span className="text-[11px] opacity-30">-</span>
@@ -1479,9 +1622,12 @@ export function StudentClassAttendancePage() {
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 border-t border-border bg-muted/25 text-xs">
                         <div className="flex flex-wrap items-center gap-2 text-muted-foreground">
                             <span>
-                                Menampilkan <strong>{startItemNumber}</strong>–
-                                <strong>{endItemNumber}</strong> dari{' '}
-                                <strong>{filteredRows.length}</strong> siswa
+                                {t('studentClassAttendance.paginationShowingPrefix')}
+                                <strong>{startItemNumber}</strong>–
+                                <strong>{endItemNumber}</strong>
+                                {t('studentClassAttendance.paginationShowingMid')}
+                                <strong>{filteredRows.length}</strong>
+                                {t('studentClassAttendance.paginationShowingSuffix')}
                             </span>
                             <select
                                 value={pageSize}
@@ -1489,12 +1635,16 @@ export function StudentClassAttendancePage() {
                                     setPageSize(Number(e.target.value));
                                     setCurrentPage(1);
                                 }}
-                                aria-label="Jumlah siswa per halaman"
+                                aria-label={t('studentClassAttendance.ariaPageSize')}
                                 className="form-input w-auto! text-xs py-1 px-2 bg-card font-medium"
                             >
                                 {STUDENT_PAGE_SIZE_OPTIONS.map((opt) => (
                                     <option key={opt} value={opt}>
-                                        {opt === 0 ? 'Tampilkan Semua' : `${opt} / halaman`}
+                                        {opt === 0
+                                            ? t('studentClassAttendance.showAllOption')
+                                            : t('studentClassAttendance.perPageOption', {
+                                                count: opt,
+                                            })}
                                     </option>
                                 ))}
                             </select>
@@ -1509,11 +1659,14 @@ export function StudentClassAttendancePage() {
                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                 >
                                     <ChevronLeft size={14} />
-                                    Sebelumnya
+                                    {t('studentClassAttendance.btnPrevPage')}
                                 </button>
 
                                 <span className="px-2.5 py-1 font-mono font-semibold text-foreground">
-                                    Hal {safeCurrentPage} / {totalPages}
+                                    {t('studentClassAttendance.pageIndicator', {
+                                        current: safeCurrentPage,
+                                        total: totalPages,
+                                    })}
                                 </span>
 
                                 <button
@@ -1524,7 +1677,7 @@ export function StudentClassAttendancePage() {
                                     }
                                     className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border bg-card hover:bg-muted disabled:opacity-40 cursor-pointer font-medium"
                                 >
-                                    Berikutnya
+                                    {t('studentClassAttendance.btnNextPage')}
                                     <ChevronRight size={14} />
                                 </button>
                             </div>
@@ -1550,10 +1703,10 @@ export function StudentClassAttendancePage() {
                                 </div>
                                 <div>
                                     <h3 className="text-base font-bold text-foreground">
-                                        Hapus Catatan Presensi?
+                                        {t('studentClassAttendance.modalDeleteTitle')}
                                     </h3>
                                     <p className="text-xs text-muted-foreground mt-0.5">
-                                        Status kehadiran siswa akan direset menjadi Belum Diabsen.
+                                        {t('studentClassAttendance.modalDeleteSubtitle')}
                                     </p>
                                 </div>
                             </div>
@@ -1562,7 +1715,7 @@ export function StudentClassAttendancePage() {
                                 disabled={isDeletingRecord}
                                 onClick={() => setDeleteTarget(null)}
                                 className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition cursor-pointer disabled:opacity-40"
-                                aria-label="Tutup dialog"
+                                aria-label={t('studentClassAttendance.ariaCloseDialog')}
                             >
                                 <X size={16} />
                             </button>
@@ -1570,20 +1723,26 @@ export function StudentClassAttendancePage() {
 
                         <div className="p-3.5 rounded-xl border border-border bg-muted/40 space-y-2 text-xs">
                             <div className="flex items-center justify-between gap-2">
-                                <span className="text-muted-foreground">Nama Siswa</span>
+                                <span className="text-muted-foreground">
+                                    {t('studentClassAttendance.modalFieldStudentName')}
+                                </span>
                                 <span className="font-bold text-foreground text-right">
                                     {deleteTarget.fullName}
                                 </span>
                             </div>
                             <div className="flex items-center justify-between gap-2">
-                                <span className="text-muted-foreground">Kelas / NISN</span>
+                                <span className="text-muted-foreground">
+                                    {t('studentClassAttendance.modalFieldClassNisn')}
+                                </span>
                                 <span className="font-mono text-foreground">
                                     {deleteTarget.className}
                                     {deleteTarget.nisn ? ` • ${deleteTarget.nisn}` : ''}
                                 </span>
                             </div>
                             <div className="flex items-center justify-between gap-2">
-                                <span className="text-muted-foreground">Tanggal</span>
+                                <span className="text-muted-foreground">
+                                    {t('studentClassAttendance.modalFieldDate')}
+                                </span>
                                 <span className="font-mono font-semibold text-foreground">
                                     {selectedDate}
                                 </span>
@@ -1591,13 +1750,13 @@ export function StudentClassAttendancePage() {
                             {deleteTargetStatusOption && (
                                 <div className="flex items-center justify-between gap-2 pt-1 border-t border-border/60">
                                     <span className="text-muted-foreground">
-                                        Status Tersimpan
+                                        {t('studentClassAttendance.modalFieldSavedStatus')}
                                     </span>
                                     <span
                                         className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold border ${deleteTargetStatusOption.badgeClass}`}
                                     >
                                         <deleteTargetStatusOption.icon size={11} />
-                                        {deleteTargetStatusOption.label}
+                                        {getStatusLabel(deleteTargetStatusOption.value)}
                                     </span>
                                 </div>
                             )}
@@ -1610,7 +1769,7 @@ export function StudentClassAttendancePage() {
                                 onClick={() => setDeleteTarget(null)}
                                 className="px-4 py-2 rounded-xl text-xs font-semibold border border-border bg-background hover:bg-muted text-foreground transition cursor-pointer disabled:opacity-40"
                             >
-                                Batal
+                                {t('studentClassAttendance.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -1623,7 +1782,9 @@ export function StudentClassAttendancePage() {
                                 ) : (
                                     <Trash2 size={14} />
                                 )}
-                                {isDeletingRecord ? 'Menghapus...' : 'Ya, Hapus Data'}
+                                {isDeletingRecord
+                                    ? t('studentClassAttendance.btnDeleting')
+                                    : t('studentClassAttendance.btnConfirmDelete')}
                             </button>
                         </div>
                     </div>
@@ -1636,22 +1797,25 @@ export function StudentClassAttendancePage() {
                     <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl space-y-4">
                         <h3 className="text-base font-bold flex items-center gap-2">
                             <Sparkles size={18} className="text-amber-500" />
-                            Buka Presensi Kegiatan Khusus
+                            {t('studentClassAttendance.modalSpecialTitle')}
                         </h3>
                         <p className="text-xs text-muted-foreground">
-                            Presensi siswa pada hari libur tanggal{' '}
-                            <strong>{selectedDate}</strong> akan dibuka sementara untuk
-                            kegiatan khusus sekolah.
+                            {t('studentClassAttendance.modalSpecialDescPrefix')}
+                            <strong>{selectedDate}</strong>
+                            {t('studentClassAttendance.modalSpecialDescSuffix')}
                         </p>
                         <div>
                             <label className="text-xs font-semibold block mb-1">
-                                Nama Kegiatan / Alasan Pengecualian
+                                {t('studentClassAttendance.modalSpecialInputLabel')}
                             </label>
                             <input
                                 type="text"
                                 value={specialEventInput}
                                 onChange={(e) => setSpecialEventInput(e.target.value)}
-                                placeholder={`Kosongkan untuk otomatis: ${DEFAULT_SPECIAL_EVENT_NOTE}`}
+                                placeholder={t(
+                                    'studentClassAttendance.modalSpecialInputPlaceholder',
+                                    { defaultNote: defaultSpecialEventNote }
+                                )}
                                 className="form-input w-full text-xs"
                             />
                         </div>
@@ -1661,7 +1825,7 @@ export function StudentClassAttendancePage() {
                                 onClick={() => setShowSpecialEventModal(false)}
                                 className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-border hover:bg-muted cursor-pointer"
                             >
-                                Batal
+                                {t('studentClassAttendance.btnCancel')}
                             </button>
                             <button
                                 type="button"
@@ -1669,7 +1833,9 @@ export function StudentClassAttendancePage() {
                                 onClick={() => void handleConfirmActivateSpecialEvent()}
                                 className="px-4 py-2 rounded-xl text-xs font-bold bg-amber-600 hover:bg-amber-700 text-white disabled:opacity-50 cursor-pointer"
                             >
-                                {holidayLock.isToggling ? 'Menyimpan...' : 'Aktifkan Presensi'}
+                                {holidayLock.isToggling
+                                    ? t('studentClassAttendance.btnSavingModal')
+                                    : t('studentClassAttendance.btnActivateSpecialEvent')}
                             </button>
                         </div>
                     </div>

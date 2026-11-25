@@ -1,5 +1,5 @@
 // src/modules/attendance/pages/AttendanceDashboardPage.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users,
@@ -39,21 +39,23 @@ import { getLocalDateString } from '../services/gps.utils';
 import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
+import { useTranslation } from '@/hooks/useTranslation';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 import type {
   StudentAttendance,
   TeacherAttendance,
   AttendanceSummary,
+  SupportedAttendanceLocale,
 } from '../types/attendance.types';
 
 // ============================================================================
-// PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
+// PARAMETER YANG BISA DISESUAIKAN DENGAN MUDAH
 // ============================================================================
 const ARCHIVE_RETENTION_YEARS = 2; // Batas umur arsip absensi dalam tahun (default: 2 tahun)
 const STORAGE_BUCKET_NAME = 'attendance-selfies'; // Bucket penyimpanan foto selfie
 const ATTACHMENT_BUCKET_NAME = 'attendance-attachments'; // Bucket penyimpanan surat izin/dinas
 const STORAGE_DELETE_BATCH_SIZE = 100; // Jumlah maksimal file yang dihapus per gelombang
-const DEFAULT_SPECIAL_EVENT_NOTE = 'Kegiatan Khusus Sekolah'; // Keterangan otomatis saat presensi hari libur diaktifkan
+const IN_QUERY_CHUNK_SIZE = 100; // Batas aman ukuran array .in('id', ids) pada PostgREST URL
 
 type ActiveTab = 'overview' | 'students' | 'teachers';
 type SortDirection = 'asc' | 'desc';
@@ -74,7 +76,6 @@ type StudentSortKey =
   | 'time'
   | 'checkOutTime';
 
-// Memperluas tipe TeacherAttendance tanpa bentrok dengan tipe securityFlags & deviceTelemetry
 type TeacherAttendanceWithCheckOut = Omit<
   TeacherAttendance,
   'deviceTelemetry' | 'securityFlags'
@@ -90,7 +91,6 @@ type TeacherAttendanceWithCheckOut = Omit<
   securityFlags?: string[] | null;
 };
 
-// Memperluas tipe StudentAttendance agar mencakup kolom Jam Masuk & Jam Pulang
 type StudentAttendanceWithCheckOut = StudentAttendance & {
   checkInTime?: string | null;
   checkOutTime?: string | null;
@@ -128,31 +128,14 @@ const STATUS_COLORS: Record<string, string> = {
   BELUM_ABSEN: '#6B7280',
 };
 
-const STATUS_LABELS: Record<string, string> = {
-  HADIR: 'Hadir',
-  TERLAMBAT: 'Terlambat',
-  SAKIT: 'Sakit',
-  IZIN: 'Izin',
-  ALPA: 'Alpa',
-  BELUM_ABSEN: 'Belum Absen',
-};
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
 
-const NAMA_BULAN_ID = [
-  'Januari',
-  'Februari',
-  'Maret',
-  'April',
-  'Mei',
-  'Juni',
-  'Juli',
-  'Agustus',
-  'September',
-  'Oktober',
-  'November',
-  'Desember',
-];
-
-// Normalisasi status agar variasi penulisan ALPHA tetap terbaca sebagai ALPA
 function normalizeStatusKey(status?: string | null): string {
   const upper = (status ?? '').toUpperCase();
   return upper === 'ALPHA' ? 'ALPA' : upper;
@@ -207,12 +190,14 @@ async function removeFilesFromStorage(
 function isEarlyCheckoutNote(notes?: string | null): boolean {
   if (!notes) return false;
   const lower = notes.toLowerCase();
-  return lower.includes('pulang awal') || lower.includes('pulang lebih awal');
+  return (
+    lower.includes('pulang awal') ||
+    lower.includes('pulang lebih awal') ||
+    lower.includes('early departure') ||
+    lower.includes('early check-out')
+  );
 }
 
-/**
- * Mengambil menit keterlambatan yang tercatat pada telemetri (jika ada)
- */
 function extractLateMinutesFromTelemetry(
   telemetry?: Record<string, unknown> | null
 ): number {
@@ -224,28 +209,21 @@ function extractLateMinutesFromTelemetry(
   return 0;
 }
 
-/**
- * Memformat tanggal YYYY-MM-DD menjadi label Masehi + Kalender Jawa lengkap
- */
-function formatFullDateWithJavanese(dateStr: string): {
-  masehiWithPasaran: string;
-  javaneseCalendarLabel: string;
-} {
-  const jv = getJavaneseDateInfo(dateStr);
-  const [y, m, d] = dateStr.split('-').map(Number);
-  const monthName = NAMA_BULAN_ID[(m || 1) - 1] ?? '';
-  return {
-    masehiWithPasaran: `${jv.hariPasaran}, ${d || 1} ${monthName} ${y || ''}`,
-    javaneseCalendarLabel: `${jv.javaneseDay} ${jv.javaneseMonth} ${jv.javaneseYear} Ja (${jv.winduYearName})`,
-  };
-}
-
 export function AttendanceDashboardPage() {
-  const { user, school } = useAuthStore();
-  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-  // Peran yang diizinkan menghapus baris data presensi satuan (bisa ditambah 'WALI_KELAS' bila perlu)
-  const canDeleteRecord =
-    user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+  const { t } = useTranslation();
+  const currentLang: SupportedAttendanceLocale =
+    t('common.language') === 'Language' ? 'en' : 'id';
+  const timeLocale = currentLang === 'en' ? 'en-US' : 'id-ID';
+  const sortLocale = currentLang === 'en' ? 'en' : 'id';
+
+  const { user, school, hasAnyRole } = useAuthStore();
+  const isSuperAdmin = hasAnyRole(['SUPER_ADMIN']);
+  const isPrivilegedRole = hasAnyRole([
+    'SUPER_ADMIN',
+    'ADMIN',
+    'KEPALA_SEKOLAH',
+  ]);
+  const canDeleteRecord = hasAnyRole(['SUPER_ADMIN', 'ADMIN']);
 
   // State Simulasi Sekolah (Khusus SUPER_ADMIN)
   const [simSchools, setSimSchools] = useState<
@@ -257,6 +235,12 @@ export function AttendanceDashboardPage() {
     : school?.id || user?.schoolId || '';
 
   const teacherScope = useTeacherScope(activeSchoolId);
+  const isHomeroomRestricted =
+    !isPrivilegedRole && Boolean(teacherScope.isElementaryHomeroomRestricted);
+  const homeroomClassSet = useMemo(
+    () => new Set(teacherScope.homeroomClassIds.map((id) => String(id))),
+    [teacherScope.homeroomClassIds]
+  );
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('overview');
   const [selectedDate, setSelectedDate] = useState<string>(getLocalDateString());
@@ -274,21 +258,27 @@ export function AttendanceDashboardPage() {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  const loadRequestSeqRef = useRef<number>(0);
+  const selfieRequestSeqRef = useRef<number>(0);
+
   // Status hari libur & mode kegiatan khusus pada tanggal rekap terpilih
   const holidayLock = useStudentHolidayLock({
     schoolId: activeSchoolId,
     targetDate: selectedDate,
+    lang: currentLang,
   });
 
+  const defaultSpecialEventNote = t(
+    'attendanceDashboard.defaultSpecialEventNote'
+  );
   const isSpecialEventMode = Boolean(
     holidayLock.isHoliday && holidayLock.isSpecialEventActive
   );
   const specialEventNote = useMemo(() => {
     const reason = (holidayLock.specialEventReason ?? '').trim();
-    return reason || DEFAULT_SPECIAL_EVENT_NOTE;
-  }, [holidayLock.specialEventReason]);
+    return reason || defaultSpecialEventNote;
+  }, [holidayLock.specialEventReason, defaultSpecialEventNote]);
 
-  // Resolver keterangan: tampilkan catatan tersimpan, atau otomatis fallback ke nama kegiatan khusus jika hari libur diaktifkan
   const resolveEffectiveNote = useCallback(
     (rawNotes?: string | null): string | null => {
       const trimmed = (rawNotes ?? '').trim();
@@ -299,11 +289,52 @@ export function AttendanceDashboardPage() {
     [isSpecialEventMode, specialEventNote]
   );
 
-  // Label Kalender Masehi + Pasaran Jawa untuk tanggal terpilih
-  const selectedDateDisplay = useMemo(
-    () => formatFullDateWithJavanese(selectedDate),
-    [selectedDate]
+  const getStatusLabel = useCallback(
+    (status?: string | null): string => {
+      const key = normalizeStatusKey(status);
+      switch (key) {
+        case 'HADIR':
+          return t('attendanceDashboard.status_HADIR');
+        case 'TERLAMBAT':
+          return t('attendanceDashboard.status_TERLAMBAT');
+        case 'SAKIT':
+          return t('attendanceDashboard.status_SAKIT');
+        case 'IZIN':
+          return t('attendanceDashboard.status_IZIN');
+        case 'ALPA':
+          return t('attendanceDashboard.status_ALPA');
+        case 'BELUM_ABSEN':
+          return t('attendanceDashboard.status_BELUM_ABSEN');
+        default:
+          return key || '-';
+      }
+    },
+    [t]
   );
+
+  const selectedDateDisplay = useMemo(() => {
+    const jv = getJavaneseDateInfo(selectedDate, currentLang);
+    const [y, m, d] = selectedDate.split('-').map(Number);
+    const monthNames = [
+      t('attendanceDashboard.month_0'),
+      t('attendanceDashboard.month_1'),
+      t('attendanceDashboard.month_2'),
+      t('attendanceDashboard.month_3'),
+      t('attendanceDashboard.month_4'),
+      t('attendanceDashboard.month_5'),
+      t('attendanceDashboard.month_6'),
+      t('attendanceDashboard.month_7'),
+      t('attendanceDashboard.month_8'),
+      t('attendanceDashboard.month_9'),
+      t('attendanceDashboard.month_10'),
+      t('attendanceDashboard.month_11'),
+    ];
+    const monthName = monthNames[(m || 1) - 1] ?? '';
+    return {
+      masehiWithPasaran: `${jv.hariPasaran}, ${d || 1} ${monthName} ${y || ''}`,
+      javaneseCalendarLabel: `${jv.javaneseDay} ${jv.javaneseMonth} ${jv.javaneseYear} Ja (${jv.winduYearName})`,
+    };
+  }, [selectedDate, currentLang, t]);
 
   // State Pengurutan (Sorting) Tabel Guru & Siswa
   const [teacherSort, setTeacherSort] = useState<{
@@ -330,7 +361,7 @@ export function AttendanceDashboardPage() {
     []
   );
 
-  // State Modal Pratinjau Foto Selfie Guru (Datang, Pulang, & Telemetri Perangkat)
+  // State Modal Pratinjau Foto Selfie Guru
   const [selfieModal, setSelfieModal] = useState<{
     teacherName: string;
     status: string;
@@ -372,7 +403,30 @@ export function AttendanceDashboardPage() {
     []
   );
 
-  // 1a. Sinkronkan sekolah aktif secara instan ketika tombol "Ganti Sekolah" di header diklik
+  // Keyboard Escape handler untuk menutup modal aktif
+  useEffect(() => {
+    if (!deleteTarget && !purgeModalOpen && !selfieModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (deleteTarget && !isDeletingRow) {
+        setDeleteTarget(null);
+      } else if (purgeModalOpen && !isPurgingOldRecords) {
+        setPurgeModalOpen(false);
+      } else if (selfieModal) {
+        setSelfieModal(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    deleteTarget,
+    isDeletingRow,
+    purgeModalOpen,
+    isPurgingOldRecords,
+    selfieModal,
+  ]);
+
+  // 1a. Sinkronkan sekolah aktif secara instan ketika sekolah di header diganti
   useEffect(() => {
     if (isSuperAdmin && school?.id) {
       setSimSchoolId(school.id);
@@ -392,9 +446,11 @@ export function AttendanceDashboardPage() {
       .catch(console.error);
   }, [isSuperAdmin, school?.id]);
 
-  // 2. Muat Daftar Kelas untuk Filter Tab Siswa
+  // 2. Muat Daftar Kelas untuk Filter Tab Siswa (dengan pembatasan Wali Kelas SD)
   useEffect(() => {
     if (!activeSchoolId) return;
+    if (!isPrivilegedRole && teacherScope.isLoading) return;
+
     supabase
       .from('classes')
       .select('id, name')
@@ -402,14 +458,31 @@ export function AttendanceDashboardPage() {
       .order('gradeLevel', { ascending: true })
       .order('name', { ascending: true })
       .then(({ data }) => {
-        setClasses(data ?? []);
-        setSelectedClassId('ALL');
+        let loaded = (data ?? []) as Array<{ id: string; name: string }>;
+        if (isHomeroomRestricted) {
+          loaded = loaded.filter((cls) => homeroomClassSet.has(String(cls.id)));
+        }
+        setClasses(loaded);
+        if (isHomeroomRestricted && loaded.length === 1) {
+          setSelectedClassId(loaded[0].id);
+        } else {
+          setSelectedClassId('ALL');
+        }
       });
-  }, [activeSchoolId]);
+  }, [
+    activeSchoolId,
+    isPrivilegedRole,
+    teacherScope.isLoading,
+    isHomeroomRestricted,
+    homeroomClassSet,
+  ]);
 
-  // 3. Muat Ringkasan & Data Absensi Siswa + Guru secara independen (Promise.allSettled)
+  // 3. Muat Ringkasan & Data Absensi Siswa + Guru
   const loadData = useCallback(async () => {
     if (!activeSchoolId) return;
+    if (!isPrivilegedRole && teacherScope.isLoading) return;
+
+    const currentReqSeq = ++loadRequestSeqRef.current;
     setIsLoading(true);
     try {
       const [sumRes, studentsRes, teachersRes] = await Promise.allSettled([
@@ -425,6 +498,8 @@ export function AttendanceDashboardPage() {
           limit: 200,
         }),
       ]);
+
+      if (currentReqSeq !== loadRequestSeqRef.current) return;
 
       if (sumRes.status === 'fulfilled') {
         setSummary(sumRes.value);
@@ -445,8 +520,16 @@ export function AttendanceDashboardPage() {
           'error',
           getErrorMessage(
             studentsRes.reason,
-            'Gagal memuat rekap absensi siswa.'
+            t('attendanceDashboard.errLoadStudents')
           )
+        );
+      }
+
+      if (isHomeroomRestricted) {
+        enrichedStudents = enrichedStudents.filter(
+          (item) =>
+            item.student?.classId &&
+            homeroomClassSet.has(String(item.student.classId))
         );
       }
 
@@ -464,17 +547,29 @@ export function AttendanceDashboardPage() {
 
       if (enrichedStudents.length > 0) {
         const studentAttIds = enrichedStudents.map((s) => s.id);
-        const { data: studentExtraCols, error: studentExtraErr } = await supabase
-          .from('attendances')
-          .select('id, checkInTime, checkOutTime')
-          .in('id', studentAttIds);
+        const studentChunks = chunkArray(studentAttIds, IN_QUERY_CHUNK_SIZE);
+        const studentChunkResults = await Promise.all(
+          studentChunks.map((chunkIds) =>
+            supabase
+              .from('attendances')
+              .select('id, checkInTime, checkOutTime')
+              .eq('schoolId', activeSchoolId)
+              .in('id', chunkIds)
+          )
+        );
 
-        if (!studentExtraErr && studentExtraCols) {
-          const typedStudentCols =
-            studentExtraCols as StudentAttendanceExtraCols[];
-          const studentExtraMap = new Map(
-            typedStudentCols.map((row) => [row.id, row])
-          );
+        if (currentReqSeq !== loadRequestSeqRef.current) return;
+
+        const studentExtraMap = new Map<string, StudentAttendanceExtraCols>();
+        for (const res of studentChunkResults) {
+          if (!res.error && res.data) {
+            for (const row of res.data as StudentAttendanceExtraCols[]) {
+              studentExtraMap.set(row.id, row);
+            }
+          }
+        }
+
+        if (studentExtraMap.size > 0) {
           enrichedStudents = enrichedStudents.map((item) => {
             const extra = studentExtraMap.get(item.id);
             return extra
@@ -489,33 +584,46 @@ export function AttendanceDashboardPage() {
       }
 
       if (enrichedTeachers.length > 0) {
-        const ids = enrichedTeachers.map((t) => t.id);
+        const ids = enrichedTeachers.map((teacherItem) => teacherItem.id);
+        const teacherChunks = chunkArray(ids, IN_QUERY_CHUNK_SIZE);
+        const extraMap = new Map<string, AttendanceExtraCols>();
 
-        // Ambil kolom tambahan + telemetri perangkat (dengan fallback aman)
-        let extraRows: AttendanceExtraCols[] | null = null;
-        const primaryRes = await supabase
-          .from('attendances')
-          .select(
-            'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl, deviceTelemetry, securityFlags'
-          )
-          .in('id', ids);
+        await Promise.all(
+          teacherChunks.map(async (chunkIds) => {
+            const primaryRes = await supabase
+              .from('attendances')
+              .select(
+                'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl, deviceTelemetry, securityFlags'
+              )
+              .eq('schoolId', activeSchoolId)
+              .in('id', chunkIds);
 
-        if (!primaryRes.error && primaryRes.data) {
-          extraRows = primaryRes.data as AttendanceExtraCols[];
-        } else {
-          const fallbackRes = await supabase
-            .from('attendances')
-            .select(
-              'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
-            )
-            .in('id', ids);
-          if (!fallbackRes.error && fallbackRes.data) {
-            extraRows = fallbackRes.data as AttendanceExtraCols[];
-          }
-        }
+            if (!primaryRes.error && primaryRes.data) {
+              for (const row of primaryRes.data as AttendanceExtraCols[]) {
+                extraMap.set(row.id, row);
+              }
+              return;
+            }
 
-        if (extraRows) {
-          const extraMap = new Map(extraRows.map((row) => [row.id, row]));
+            const fallbackRes = await supabase
+              .from('attendances')
+              .select(
+                'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
+              )
+              .eq('schoolId', activeSchoolId)
+              .in('id', chunkIds);
+
+            if (!fallbackRes.error && fallbackRes.data) {
+              for (const row of fallbackRes.data as AttendanceExtraCols[]) {
+                extraMap.set(row.id, row);
+              }
+            }
+          })
+        );
+
+        if (currentReqSeq !== loadRequestSeqRef.current) return;
+
+        if (extraMap.size > 0) {
           enrichedTeachers = enrichedTeachers.map((item) => {
             const extra = extraMap.get(item.id);
             if (!extra) return item;
@@ -536,7 +644,6 @@ export function AttendanceDashboardPage() {
         }
       }
 
-      // Hanya Kepala Sekolah, Admin, dan Super Admin yang melihat semua guru
       if (!teacherScope.canViewAllTeacherAttendance) {
         enrichedTeachers = teacherScope.teacherId
           ? enrichedTeachers.filter(
@@ -547,23 +654,32 @@ export function AttendanceDashboardPage() {
           : [];
       }
 
-      setStudentRecords(enrichedStudents);
-      setTeacherRecords(enrichedTeachers);
+      if (currentReqSeq === loadRequestSeqRef.current) {
+        setStudentRecords(enrichedStudents);
+        setTeacherRecords(enrichedTeachers);
+      }
     } catch (err: unknown) {
       console.error('[AttendanceDashboard] Load error:', err);
     } finally {
-      setIsLoading(false);
+      if (currentReqSeq === loadRequestSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [
     activeSchoolId,
     selectedDate,
-    showToast,
+    isPrivilegedRole,
+    teacherScope.isLoading,
     teacherScope.canViewAllTeacherAttendance,
     teacherScope.teacherId,
+    isHomeroomRestricted,
+    homeroomClassSet,
+    showToast,
+    t,
   ]);
 
   useEffect(() => {
-    loadData();
+    void loadData();
   }, [loadData]);
 
   // Buka Modal Pratinjau Foto Selfie Guru + Telemetri Perangkat
@@ -572,9 +688,13 @@ export function AttendanceDashboardPage() {
     const hasCheckOutPhoto = Boolean(record.checkOutSelfieUrl);
     if (!hasCheckInPhoto && !hasCheckOutPhoto) return;
 
+    const reqId = ++selfieRequestSeqRef.current;
+
     setSelfieModal({
-      teacherName: record.teacher?.fullName ?? 'Guru / PTK',
-      status: record.status,
+      teacherName:
+        record.teacher?.fullName ??
+        t('attendanceDashboard.teacherFallbackName'),
+      status: normalizeStatusKey(record.status),
       checkInTime: record.checkInTime,
       checkOutTime: record.checkOutTime,
       checkInDistance: record.checkInDistance,
@@ -599,6 +719,8 @@ export function AttendanceDashboardPage() {
         : Promise.resolve(null),
     ]);
 
+    if (reqId !== selfieRequestSeqRef.current) return;
+
     setSelfieModal((prev) =>
       prev
         ? {
@@ -611,7 +733,6 @@ export function AttendanceDashboardPage() {
     );
   };
 
-  // Fungsi Toggle Sorting Header Kolom
   const handleSortTeacher = (key: TeacherSortKey) => {
     setTeacherSort((prev) => {
       if (!prev || prev.key !== key) return { key, direction: 'asc' };
@@ -639,7 +760,6 @@ export function AttendanceDashboardPage() {
     );
   };
 
-  // Hitung statistik status siswa berdasarkan kelas terpilih
   const studentStatusCounts = useMemo(() => {
     const classScoped = studentRecords.filter(
       (r) => selectedClassId === 'ALL' || r.student?.classId === selectedClassId
@@ -660,7 +780,6 @@ export function AttendanceDashboardPage() {
     };
   }, [studentRecords, selectedClassId]);
 
-  // Hitung statistik status guru
   const teacherStatusCounts = useMemo(() => {
     return {
       ALL: teacherRecords.length,
@@ -680,7 +799,6 @@ export function AttendanceDashboardPage() {
     };
   }, [teacherRecords]);
 
-  // Filter & Urutkan Data Siswa
   const filteredStudents = useMemo(() => {
     const filtered = studentRecords.filter((r) => {
       const normalizedStatus = normalizeStatusKey(r.status);
@@ -690,12 +808,13 @@ export function AttendanceDashboardPage() {
         studentStatusFilter === 'ALL' ||
         normalizedStatus === studentStatusFilter;
       const effectiveNote = resolveEffectiveNote(r.notes) ?? '';
+      const q = searchQuery.trim().toLowerCase();
       const matchesSearch =
-        !searchQuery.trim() ||
-        r.student?.fullName?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.student?.nisn?.includes(searchQuery.trim()) ||
-        (r.student?.nis && r.student.nis.includes(searchQuery.trim())) ||
-        effectiveNote.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        r.student?.fullName?.toLowerCase().includes(q) ||
+        r.student?.nisn?.toLowerCase().includes(q) ||
+        r.student?.nis?.toLowerCase().includes(q) ||
+        effectiveNote.toLowerCase().includes(q);
       return matchesClass && matchesStatus && matchesSearch;
     });
 
@@ -708,14 +827,14 @@ export function AttendanceDashboardPage() {
           return (
             (a.student?.fullName ?? '').localeCompare(
               b.student?.fullName ?? '',
-              'id'
+              sortLocale
             ) * dir
           );
         case 'className':
           return (
             (a.student?.classes?.name ?? '').localeCompare(
               b.student?.classes?.name ?? '',
-              'id',
+              sortLocale,
               { numeric: true }
             ) * dir
           );
@@ -723,20 +842,17 @@ export function AttendanceDashboardPage() {
           return (
             (a.student?.nisn ?? '').localeCompare(
               b.student?.nisn ?? '',
-              'id',
+              sortLocale,
               { numeric: true }
             ) * dir
           );
-        case 'status': {
-          const stA = normalizeStatusKey(a.status);
-          const stB = normalizeStatusKey(b.status);
+        case 'status':
           return (
-            (STATUS_LABELS[stA] ?? stA).localeCompare(
-              STATUS_LABELS[stB] ?? stB,
-              'id'
+            getStatusLabel(a.status).localeCompare(
+              getStatusLabel(b.status),
+              sortLocale
             ) * dir
           );
-        }
         case 'time': {
           const inA = a.checkInTime || a.time || '';
           const inB = b.checkInTime || b.time || '';
@@ -757,9 +873,10 @@ export function AttendanceDashboardPage() {
     searchQuery,
     studentSort,
     resolveEffectiveNote,
+    sortLocale,
+    getStatusLabel,
   ]);
 
-  // Filter & Urutkan Data Guru
   const filteredTeachers = useMemo(() => {
     const filtered = teacherRecords.filter((r) => {
       const normalizedStatus = normalizeStatusKey(r.status);
@@ -769,12 +886,12 @@ export function AttendanceDashboardPage() {
       if (!matchesStatus) return false;
 
       if (!searchQuery.trim()) return true;
-      const q = searchQuery.toLowerCase();
+      const q = searchQuery.trim().toLowerCase();
       const effectiveNote = resolveEffectiveNote(r.notes) ?? '';
       return (
         r.teacher?.fullName?.toLowerCase().includes(q) ||
-        r.teacher?.nip?.includes(searchQuery.trim()) ||
-        r.teacher?.nuptk?.includes(searchQuery.trim()) ||
+        r.teacher?.nip?.toLowerCase().includes(q) ||
+        r.teacher?.nuptk?.toLowerCase().includes(q) ||
         effectiveNote.toLowerCase().includes(q)
       );
     });
@@ -788,24 +905,21 @@ export function AttendanceDashboardPage() {
           return (
             (a.teacher?.fullName ?? '').localeCompare(
               b.teacher?.fullName ?? '',
-              'id'
+              sortLocale
             ) * dir
           );
         case 'nip': {
           const idA = a.teacher?.nip || a.teacher?.nuptk || '';
           const idB = b.teacher?.nip || b.teacher?.nuptk || '';
-          return idA.localeCompare(idB, 'id', { numeric: true }) * dir;
+          return idA.localeCompare(idB, sortLocale, { numeric: true }) * dir;
         }
-        case 'status': {
-          const stA = normalizeStatusKey(a.status);
-          const stB = normalizeStatusKey(b.status);
+        case 'status':
           return (
-            (STATUS_LABELS[stA] ?? stA).localeCompare(
-              STATUS_LABELS[stB] ?? stB,
-              'id'
+            getStatusLabel(a.status).localeCompare(
+              getStatusLabel(b.status),
+              sortLocale
             ) * dir
           );
-        }
         case 'checkInTime':
           return (
             (a.checkInTime ?? '').localeCompare(b.checkInTime ?? '') * dir
@@ -829,9 +943,11 @@ export function AttendanceDashboardPage() {
     searchQuery,
     teacherSort,
     resolveEffectiveNote,
+    sortLocale,
+    getStatusLabel,
   ]);
 
-  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat (SUPER_ADMIN & ADMIN)
+  // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat
   const handleConfirmDeleteSingle = async () => {
     if (!deleteTarget || !canDeleteRecord || !activeSchoolId) return;
     setIsDeletingRow(true);
@@ -871,17 +987,17 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        `Data absensi ${deleteTarget.name} (${deleteTarget.date}) beserta lampirannya berhasil dihapus.`
+        t('attendanceDashboard.toastDeleteSingleSuccess', {
+          name: deleteTarget.name,
+          date: deleteTarget.date,
+        })
       );
       setDeleteTarget(null);
       await loadData();
     } catch (err: unknown) {
       showToast(
         'error',
-        getErrorMessage(
-          err,
-          'Gagal menghapus data. Pastikan kebijakan RLS DELETE untuk Super Admin / Admin sudah aktif.'
-        )
+        getErrorMessage(err, t('attendanceDashboard.errDeleteSingle'))
       );
     } finally {
       setIsDeletingRow(false);
@@ -892,6 +1008,11 @@ export function AttendanceDashboardPage() {
   const checkOldAttendanceRecords = useCallback(
     async (scope: 'CURRENT_SCHOOL' | 'ALL_SCHOOLS') => {
       if (!isSuperAdmin) return;
+      if (scope === 'CURRENT_SCHOOL' && !activeSchoolId) {
+        setOldRecordsCount(0);
+        return;
+      }
+
       setIsCheckingOldRecords(true);
       setOldRecordsCount(null);
       try {
@@ -900,7 +1021,7 @@ export function AttendanceDashboardPage() {
           .select('id', { count: 'exact', head: true })
           .lt('date', cutoffDate);
 
-        if (scope === 'CURRENT_SCHOOL' && activeSchoolId) {
+        if (scope === 'CURRENT_SCHOOL') {
           query = query.eq('schoolId', activeSchoolId);
         }
 
@@ -908,24 +1029,32 @@ export function AttendanceDashboardPage() {
         if (error) throw error;
         setOldRecordsCount(count ?? 0);
       } catch (err: unknown) {
-        showToast('error', getErrorMessage(err, 'Gagal menghitung arsip lama.'));
+        showToast(
+          'error',
+          getErrorMessage(err, t('attendanceDashboard.errCheckOldRecords'))
+        );
         setOldRecordsCount(0);
       } finally {
         setIsCheckingOldRecords(false);
       }
     },
-    [isSuperAdmin, cutoffDate, activeSchoolId, showToast]
+    [isSuperAdmin, cutoffDate, activeSchoolId, showToast, t]
   );
 
   useEffect(() => {
     if (purgeModalOpen && isSuperAdmin) {
-      checkOldAttendanceRecords(purgeScope);
+      void checkOldAttendanceRecords(purgeScope);
     }
   }, [purgeModalOpen, purgeScope, isSuperAdmin, checkOldAttendanceRecords]);
 
   // Ekspor Backup CSV Arsip Lama (> 2 Tahun)
   const handleBackupOldRecordsCsv = async () => {
     if (!isSuperAdmin) return;
+    if (purgeScope === 'CURRENT_SCHOOL' && !activeSchoolId) {
+      showToast('error', t('attendanceDashboard.errSelectSchoolFirst'));
+      return;
+    }
+
     try {
       let query = supabase
         .from('attendances')
@@ -934,7 +1063,7 @@ export function AttendanceDashboardPage() {
         .order('date', { ascending: true })
         .limit(10000);
 
-      if (purgeScope === 'CURRENT_SCHOOL' && activeSchoolId) {
+      if (purgeScope === 'CURRENT_SCHOOL') {
         query = query.eq('schoolId', activeSchoolId);
       }
 
@@ -943,7 +1072,7 @@ export function AttendanceDashboardPage() {
 
       const rows = (data ?? []) as Array<Record<string, unknown>>;
       if (rows.length === 0) {
-        showToast('error', 'Tidak ada data arsip lama untuk diunduh.');
+        showToast('error', t('attendanceDashboard.errNoOldRecordsToBackup'));
         return;
       }
 
@@ -961,7 +1090,7 @@ export function AttendanceDashboardPage() {
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `Backup_Arsip_Absensi_Sebelum_${cutoffDate}.csv`;
+      a.download = `${t('attendanceDashboard.csvBackupFilePrefix')}_${cutoffDate}.csv`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -969,16 +1098,24 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        `File backup (${rows.length} baris) berhasil diunduh.`
+        t('attendanceDashboard.toastBackupSuccess', { count: rows.length })
       );
     } catch (err: unknown) {
-      showToast('error', getErrorMessage(err, 'Gagal membuat file backup CSV.'));
+      showToast(
+        'error',
+        getErrorMessage(err, t('attendanceDashboard.errBackupCsv'))
+      );
     }
   };
 
   // Eksekusi Hapus Permanen Arsip > 2 Tahun
   const handlePurgeOldRecords = async () => {
     if (!isSuperAdmin) return;
+    if (purgeScope === 'CURRENT_SCHOOL' && !activeSchoolId) {
+      showToast('error', t('attendanceDashboard.errSelectSchoolFirst'));
+      return;
+    }
+
     setIsPurgingOldRecords(true);
     try {
       let fetchFilesQuery = supabase
@@ -987,7 +1124,7 @@ export function AttendanceDashboardPage() {
         .lt('date', cutoffDate)
         .limit(10000);
 
-      if (purgeScope === 'CURRENT_SCHOOL' && activeSchoolId) {
+      if (purgeScope === 'CURRENT_SCHOOL') {
         fetchFilesQuery = fetchFilesQuery.eq('schoolId', activeSchoolId);
       }
 
@@ -1011,7 +1148,7 @@ export function AttendanceDashboardPage() {
         .delete()
         .lt('date', cutoffDate);
 
-      if (purgeScope === 'CURRENT_SCHOOL' && activeSchoolId) {
+      if (purgeScope === 'CURRENT_SCHOOL') {
         deleteQuery = deleteQuery.eq('schoolId', activeSchoolId);
       }
 
@@ -1020,37 +1157,39 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        `Pembersihan selesai! ${oldRecordsCount ?? 0} arsip absensi sebelum ${cutoffDate} beserta foto datang, pulang & lampirannya telah dihapus.`
+        t('attendanceDashboard.toastPurgeSuccess', {
+          count: oldRecordsCount ?? 0,
+          date: cutoffDate,
+        })
       );
       setPurgeModalOpen(false);
       await loadData();
     } catch (err: unknown) {
       showToast(
         'error',
-        getErrorMessage(
-          err,
-          'Gagal menghapus arsip lama. Periksa kebijakan RLS DELETE pada tabel attendances.'
-        )
+        getErrorMessage(err, t('attendanceDashboard.errPurgeOldRecords'))
       );
     } finally {
       setIsPurgingOldRecords(false);
     }
   };
 
-  const formatTime = (iso?: string | null) => {
-    if (!iso) return '-';
-    if (/^\d{2}:\d{2}(:\d{2})?$/.test(iso.trim())) {
-      return iso.trim().slice(0, 5);
-    }
-    const parsed = new Date(iso);
-    if (Number.isNaN(parsed.getTime())) return '-';
-    return parsed.toLocaleTimeString('id-ID', {
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
+  const formatTime = useCallback(
+    (iso?: string | null) => {
+      if (!iso) return '-';
+      if (/^\d{2}:\d{2}(:\d{2})?$/.test(iso.trim())) {
+        return iso.trim().slice(0, 5);
+      }
+      const parsed = new Date(iso);
+      if (Number.isNaN(parsed.getTime())) return '-';
+      return parsed.toLocaleTimeString(timeLocale, {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    },
+    [timeLocale]
+  );
 
-  // Render Kolom Keterangan Siswa dengan dukungan otomatis Mode Kegiatan Khusus
   const renderStudentNotes = (record: StudentAttendanceWithCheckOut) => {
     const effectiveNote = resolveEffectiveNote(record.notes);
     if (!effectiveNote) {
@@ -1072,7 +1211,6 @@ export function AttendanceDashboardPage() {
     return <span className="text-sm opacity-80">{effectiveNote}</span>;
   };
 
-  // Render Kolom Keterangan Guru dengan Penanda Khusus "Pulang Awal", Menit Terlambat, & Kegiatan Khusus
   const renderTeacherNotes = (record: TeacherAttendanceWithCheckOut) => {
     const effectiveNote = resolveEffectiveNote(record.notes);
     const lateMinutes = extractLateMinutesFromTelemetry(record.deviceTelemetry);
@@ -1089,13 +1227,15 @@ export function AttendanceDashboardPage() {
         {lateMinutes > 0 && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/35">
             <Clock size={11} />
-            Terlambat {lateMinutes} menit
+            {t('attendanceDashboard.lateMinutesBadge', {
+              minutes: lateMinutes,
+            })}
           </span>
         )}
         {hasEarlyNote && (
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-rose-500/15 text-rose-700 dark:text-rose-300 border border-rose-500/35">
             <AlertTriangle size={11} />
-            Pulang Awal
+            {t('attendanceDashboard.earlyCheckoutBadge')}
           </span>
         )}
         {effectiveNote &&
@@ -1113,7 +1253,7 @@ export function AttendanceDashboardPage() {
     );
   };
 
-  // Ekspor Laporan CSV (Kompatibel dengan Microsoft Excel + Kalender Jawa + Keterangan Kegiatan Khusus)
+  // Ekspor Laporan CSV (Dwibahasa + Kalender Jawa + Keterangan Kegiatan Khusus)
   const handleExportCsv = () => {
     const escapeCsv = (val: unknown) => {
       const str = String(val ?? '-').replace(/"/g, '""');
@@ -1124,31 +1264,15 @@ export function AttendanceDashboardPage() {
 
     if (activeTab === 'teachers') {
       lines.push(
-        [
-          'No',
-          'Tanggal',
-          'Hari & Pasaran',
-          'Penanggalan Jawa',
-          'Nama Guru / PTK',
-          'NIP',
-          'NUPTK',
-          'Status',
-          'Keterlambatan (Menit)',
-          'Check-In',
-          'Check-Out',
-          'Jarak Datang (m)',
-          'Jarak Pulang (m)',
-          'Status GPS',
-          'Keterangan',
-        ]
+        t('attendanceDashboard.csvTeacherHeaders')
+          .split(',')
           .map(escapeCsv)
           .join(',')
       );
 
       filteredTeachers.forEach((r, idx) => {
-        const st = normalizeStatusKey(r.status);
-        const jvInfo = getJavaneseDateInfo(r.date);
-        const lateMins = extractLateMinutesFromTelemetry(r.deviceTelemetry);
+        const jvInfo = getJavaneseDateInfo(r.date, currentLang);
+        const lateMins = extractLateMinutesFromTelemetry(recordLateTelemetry(r));
         lines.push(
           [
             idx + 1,
@@ -1158,13 +1282,17 @@ export function AttendanceDashboardPage() {
             r.teacher?.fullName ?? '-',
             r.teacher?.nip ?? '-',
             r.teacher?.nuptk ?? '-',
-            STATUS_LABELS[st] ?? st,
+            getStatusLabel(r.status),
             lateMins > 0 ? lateMins : 0,
             formatTime(r.checkInTime),
             formatTime(r.checkOutTime),
             r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
             r.checkOutDistance != null ? Math.round(r.checkOutDistance) : '-',
-            r.checkInTime ? (r.isCheckInMock ? 'Palsu' : 'Valid') : '-',
+            r.checkInTime
+              ? r.isCheckInMock
+                ? t('attendanceDashboard.gpsFake')
+                : t('attendanceDashboard.gpsValid')
+              : '-',
             resolveEffectiveNote(r.notes) ?? '-',
           ]
             .map(escapeCsv)
@@ -1173,27 +1301,14 @@ export function AttendanceDashboardPage() {
       });
     } else {
       lines.push(
-        [
-          'No',
-          'Tanggal',
-          'Hari & Pasaran',
-          'Penanggalan Jawa',
-          'Nama Siswa',
-          'NISN',
-          'Kelas',
-          'Status',
-          'Jam Masuk',
-          'Jam Pulang',
-          'Metode Pencatatan',
-          'Keterangan',
-        ]
+        t('attendanceDashboard.csvStudentHeaders')
+          .split(',')
           .map(escapeCsv)
           .join(',')
       );
 
       filteredStudents.forEach((r, idx) => {
-        const st = normalizeStatusKey(r.status);
-        const jvInfo = getJavaneseDateInfo(r.date);
+        const jvInfo = getJavaneseDateInfo(r.date, currentLang);
         lines.push(
           [
             idx + 1,
@@ -1203,10 +1318,12 @@ export function AttendanceDashboardPage() {
             r.student?.fullName ?? '-',
             r.student?.nisn ?? '-',
             r.student?.classes?.name ?? '-',
-            STATUS_LABELS[st] ?? st,
+            getStatusLabel(r.status),
             formatTime(r.checkInTime || r.time),
             formatTime(r.checkOutTime),
-            r.recordedBy ? 'Wali Kelas / Admin' : 'Kiosk / Mandiri',
+            r.recordedBy
+              ? t('attendanceDashboard.recordedByAdmin')
+              : t('attendanceDashboard.recordedByKiosk'),
             resolveEffectiveNote(r.notes) ?? '-',
           ]
             .map(escapeCsv)
@@ -1220,7 +1337,9 @@ export function AttendanceDashboardPage() {
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     const prefix =
-      activeTab === 'teachers' ? 'Rekap_Absensi_Guru' : 'Rekap_Absensi_Siswa';
+      activeTab === 'teachers'
+        ? t('attendanceDashboard.csvTeacherFilePrefix')
+        : t('attendanceDashboard.csvStudentFilePrefix');
     link.href = url;
     link.setAttribute('download', `${prefix}_${selectedDate}.csv`);
     document.body.appendChild(link);
@@ -1239,8 +1358,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1264,7 +1383,7 @@ export function AttendanceDashboardPage() {
         >
           <div className="flex items-center gap-2 text-sm font-semibold text-purple-600 dark:text-purple-300">
             <FlaskConical size={17} />
-            <span>Mode Monitoring Super Admin</span>
+            <span>{t('attendanceDashboard.superAdminBannerTitle')}</span>
           </div>
 
           <div className="flex flex-wrap items-center gap-2.5">
@@ -1286,11 +1405,15 @@ export function AttendanceDashboardPage() {
               type="button"
               onClick={() => setPurgeModalOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-red-500/15 text-red-600 dark:text-red-300 border border-red-500/30 hover:bg-red-500/25 transition"
-              title={`Kelola & hapus arsip absensi yang berumur lebih dari ${ARCHIVE_RETENTION_YEARS} tahun`}
+              title={t('attendanceDashboard.titleArchiveRetention', {
+                years: ARCHIVE_RETENTION_YEARS,
+              })}
             >
               <ArchiveX size={15} />
               <span>
-                Arsip {'>'} {ARCHIVE_RETENTION_YEARS} Tahun
+                {t('attendanceDashboard.btnArchiveRetention', {
+                  years: ARCHIVE_RETENTION_YEARS,
+                })}
               </span>
             </button>
           </div>
@@ -1300,9 +1423,9 @@ export function AttendanceDashboardPage() {
       {/* Page Header + Kalender Jawa */}
       <div className="page-header">
         <div>
-          <h1 className="page-title">Dashboard Absensi</h1>
+          <h1 className="page-title">{t('attendanceDashboard.pageTitle')}</h1>
           <p className="page-subtitle">
-            Monitor kehadiran harian siswa dan guru secara real-time
+            {t('attendanceDashboard.pageSubtitle')}
           </p>
           <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
             <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-lg bg-primary/10 text-primary font-semibold">
@@ -1324,11 +1447,11 @@ export function AttendanceDashboardPage() {
           <button
             type="button"
             className="btn-secondary"
-            onClick={loadData}
+            onClick={() => void loadData()}
             disabled={isLoading}
           >
             <RefreshCw size={16} className={isLoading ? 'spin' : ''} />
-            Refresh
+            {t('attendanceDashboard.btnRefresh')}
           </button>
           <button
             type="button"
@@ -1342,12 +1465,12 @@ export function AttendanceDashboardPage() {
             }
             title={
               activeTab === 'teachers'
-                ? 'Unduh laporan absensi guru (CSV)'
-                : 'Unduh laporan absensi siswa (CSV)'
+                ? t('attendanceDashboard.titleExportTeachersCsv')
+                : t('attendanceDashboard.titleExportStudentsCsv')
             }
           >
             <Download size={16} />
-            Ekspor CSV
+            {t('attendanceDashboard.btnExportCsv')}
           </button>
         </div>
       </div>
@@ -1357,9 +1480,15 @@ export function AttendanceDashboardPage() {
         <div className="mb-4 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 flex items-center gap-2.5 text-xs">
           <Unlock size={16} className="text-emerald-600 shrink-0" />
           <span>
-            <strong>Mode Kegiatan Khusus Aktif:</strong> {specialEventNote}{' '}
-            (Pengecualian hari libur {holidayLock.holidayName ?? 'Kalender'} —
-            otomatis ditampilkan pada kolom Keterangan)
+            <strong>
+              {t('attendanceDashboard.specialEventBannerPrefix')}
+            </strong>{' '}
+            {specialEventNote}{' '}
+            {t('attendanceDashboard.specialEventBannerSuffix', {
+              holiday:
+                holidayLock.holidayName ??
+                t('attendanceDashboard.defaultHolidayName'),
+            })}
           </span>
         </div>
       ) : (
@@ -1367,9 +1496,10 @@ export function AttendanceDashboardPage() {
           <div className="mb-4 p-3.5 rounded-xl border border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-200 flex items-center gap-2.5 text-xs">
             <CalendarOff size={16} className="text-amber-600 shrink-0" />
             <span>
-              <strong>Hari Libur:</strong>{' '}
-              {holidayLock.holidayName ?? 'Libur Kalender'} (Presensi siswa
-              dikunci otomatis pada tanggal ini)
+              <strong>{t('attendanceDashboard.holidayBannerPrefix')}</strong>{' '}
+              {holidayLock.holidayName ??
+                t('attendanceDashboard.defaultHolidayName')}{' '}
+              {t('attendanceDashboard.holidayBannerSuffix')}
             </span>
           </div>
         )
@@ -1391,7 +1521,9 @@ export function AttendanceDashboardPage() {
               <GraduationCap size={24} />
             </div>
             <div className="summary-card-content">
-              <p className="summary-card-label">Hadir Siswa</p>
+              <p className="summary-card-label">
+                {t('attendanceDashboard.cardStudentPresent')}
+              </p>
               <p className="summary-card-value">
                 {summary.studentPresent + summary.studentLate}{' '}
                 <span className="text-sm font-normal opacity-60">
@@ -1399,7 +1531,9 @@ export function AttendanceDashboardPage() {
                 </span>
               </p>
               <p className="summary-card-sub text-green-500">
-                {summary.studentPercentage}% kehadiran aktif
+                {t('attendanceDashboard.cardStudentActivePct', {
+                  pct: summary.studentPercentage,
+                })}
               </p>
             </div>
           </motion.div>
@@ -1417,10 +1551,14 @@ export function AttendanceDashboardPage() {
               <Clock size={24} />
             </div>
             <div className="summary-card-content">
-              <p className="summary-card-label">Siswa Terlambat</p>
+              <p className="summary-card-label">
+                {t('attendanceDashboard.cardStudentLate')}
+              </p>
               <p className="summary-card-value">{summary.studentLate}</p>
               <p className="summary-card-sub">
-                {summary.studentSick + summary.studentPermission} izin/sakit
+                {t('attendanceDashboard.cardStudentSickPerm', {
+                  count: summary.studentSick + summary.studentPermission,
+                })}
               </p>
             </div>
           </motion.div>
@@ -1438,10 +1576,14 @@ export function AttendanceDashboardPage() {
               <XCircle size={24} />
             </div>
             <div className="summary-card-content">
-              <p className="summary-card-label">Alpa Siswa</p>
+              <p className="summary-card-label">
+                {t('attendanceDashboard.cardStudentAbsent')}
+              </p>
               <p className="summary-card-value">{summary.studentAbsent}</p>
               <p className="summary-card-sub">
-                {summary.studentUnrecorded} belum diabsen
+                {t('attendanceDashboard.cardStudentUnrecorded', {
+                  count: summary.studentUnrecorded,
+                })}
               </p>
             </div>
           </motion.div>
@@ -1460,7 +1602,9 @@ export function AttendanceDashboardPage() {
                 <Users size={24} />
               </div>
               <div className="summary-card-content">
-                <p className="summary-card-label">Hadir Guru & PTK</p>
+                <p className="summary-card-label">
+                  {t('attendanceDashboard.cardTeacherPresent')}
+                </p>
                 <p className="summary-card-value">
                   {summary.teacherPresent + summary.teacherLate}{' '}
                   <span className="text-sm font-normal opacity-60">
@@ -1468,7 +1612,9 @@ export function AttendanceDashboardPage() {
                   </span>
                 </p>
                 <p className="summary-card-sub text-blue-500">
-                  {summary.teacherPercentage}% kehadiran PTK
+                  {t('attendanceDashboard.cardTeacherActivePct', {
+                    pct: summary.teacherPercentage,
+                  })}
                 </p>
               </div>
             </motion.div>
@@ -1494,10 +1640,14 @@ export function AttendanceDashboardPage() {
             {tab === 'students' && <GraduationCap size={16} />}
             {tab === 'teachers' && <Users size={16} />}
             {tab === 'overview'
-              ? 'Ringkasan'
+              ? t('attendanceDashboard.tabOverview')
               : tab === 'students'
-                ? `Absen Siswa (${studentRecords.length})`
-                : `Absen Guru (${teacherRecords.length})`}
+                ? t('attendanceDashboard.tabStudents', {
+                  count: studentRecords.length,
+                })
+                : t('attendanceDashboard.tabTeachers', {
+                  count: teacherRecords.length,
+                })}
           </button>
         ))}
       </div>
@@ -1516,8 +1666,8 @@ export function AttendanceDashboardPage() {
                 type="text"
                 placeholder={
                   activeTab === 'students'
-                    ? 'Cari nama siswa, NISN, NIS, atau keterangan...'
-                    : 'Cari nama guru, NIP, NUPTK, atau keterangan (mis. Pulang Awal)...'
+                    ? t('attendanceDashboard.searchStudentPlaceholder')
+                    : t('attendanceDashboard.searchTeacherPlaceholder')
                 }
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -1528,7 +1678,7 @@ export function AttendanceDashboardPage() {
                   type="button"
                   onClick={() => setSearchQuery('')}
                   className="p-0.5 rounded-md text-muted-foreground hover:text-foreground shrink-0"
-                  title="Bersihkan pencarian"
+                  title={t('attendanceDashboard.titleClearSearch')}
                 >
                   <X size={14} />
                 </button>
@@ -1541,23 +1691,29 @@ export function AttendanceDashboardPage() {
                 value={selectedClassId}
                 onChange={(e) => setSelectedClassId(e.target.value)}
               >
-                <option value="ALL">Semua Kelas</option>
+                {(!isHomeroomRestricted || classes.length > 1) && (
+                  <option value="ALL">
+                    {t('attendanceDashboard.allClassesOption')}
+                  </option>
+                )}
                 {classes.map((cls) => (
                   <option key={cls.id} value={cls.id}>
-                    Kelas {cls.name}
+                    {t('attendanceDashboard.classOptionPrefix', {
+                      name: cls.name,
+                    })}
                   </option>
                 ))}
               </select>
             )}
           </div>
 
-          {/* Filter Pills Status (Berfungsi untuk Tab Siswa maupun Tab Guru) */}
+          {/* Filter Pills Status */}
           <div className="flex flex-wrap items-center gap-1.5">
             {(
               [
                 {
                   key: 'ALL',
-                  label: 'Semua',
+                  label: t('attendanceDashboard.filterAll'),
                   count:
                     activeTab === 'students'
                       ? studentStatusCounts.ALL
@@ -1565,7 +1721,7 @@ export function AttendanceDashboardPage() {
                 },
                 {
                   key: 'HADIR',
-                  label: 'Hadir',
+                  label: getStatusLabel('HADIR'),
                   count:
                     activeTab === 'students'
                       ? studentStatusCounts.HADIR
@@ -1573,7 +1729,7 @@ export function AttendanceDashboardPage() {
                 },
                 {
                   key: 'TERLAMBAT',
-                  label: 'Terlambat',
+                  label: getStatusLabel('TERLAMBAT'),
                   count:
                     activeTab === 'students'
                       ? studentStatusCounts.TERLAMBAT
@@ -1581,7 +1737,7 @@ export function AttendanceDashboardPage() {
                 },
                 {
                   key: 'IZIN',
-                  label: 'Izin',
+                  label: getStatusLabel('IZIN'),
                   count:
                     activeTab === 'students'
                       ? studentStatusCounts.IZIN
@@ -1589,7 +1745,7 @@ export function AttendanceDashboardPage() {
                 },
                 {
                   key: 'SAKIT',
-                  label: 'Sakit',
+                  label: getStatusLabel('SAKIT'),
                   count:
                     activeTab === 'students'
                       ? studentStatusCounts.SAKIT
@@ -1597,7 +1753,7 @@ export function AttendanceDashboardPage() {
                 },
                 {
                   key: 'ALPA',
-                  label: 'Alpa',
+                  label: getStatusLabel('ALPA'),
                   count:
                     activeTab === 'students'
                       ? studentStatusCounts.ALPA
@@ -1627,8 +1783,8 @@ export function AttendanceDashboardPage() {
                     }
                   }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
-                    ? 'text-white shadow-xs'
-                    : 'bg-card/60 border-border opacity-75 hover:opacity-100'
+                      ? 'text-white shadow-xs'
+                      : 'bg-card/60 border-border opacity-75 hover:opacity-100'
                     }`}
                   style={
                     isSelected
@@ -1654,7 +1810,9 @@ export function AttendanceDashboardPage() {
           <div className="overview-grid">
             <div className="data-card">
               <h3 className="card-section-title">
-                Distribusi Kehadiran Siswa ({summary.studentTotal} Siswa Aktif)
+                {t('attendanceDashboard.distStudentTitle', {
+                  total: summary.studentTotal,
+                })}
               </h3>
               <div className="status-distribution">
                 {[
@@ -1674,8 +1832,10 @@ export function AttendanceDashboardPage() {
                           className="status-dot"
                           style={{ background: STATUS_COLORS[key] }}
                         />
-                        <span>{STATUS_LABELS[key]}</span>
-                        <span className="status-dist-count">{count} siswa</span>
+                        <span>{getStatusLabel(key)}</span>
+                        <span className="status-dist-count">
+                          {t('attendanceDashboard.distStudentUnit', { count })}
+                        </span>
                       </div>
                       <div className="status-dist-bar-bg">
                         <div
@@ -1696,7 +1856,9 @@ export function AttendanceDashboardPage() {
             {teacherScope.canViewAllTeacherAttendance && (
               <div className="data-card">
                 <h3 className="card-section-title">
-                  Distribusi Kehadiran Guru & PTK ({summary.teacherTotal} PTK Aktif)
+                  {t('attendanceDashboard.distTeacherTitle', {
+                    total: summary.teacherTotal,
+                  })}
                 </h3>
                 <div className="status-distribution">
                   {[
@@ -1722,8 +1884,12 @@ export function AttendanceDashboardPage() {
                             className="status-dot"
                             style={{ background: STATUS_COLORS[key] }}
                           />
-                          <span>{STATUS_LABELS[key]}</span>
-                          <span className="status-dist-count">{count} PTK</span>
+                          <span>{getStatusLabel(key)}</span>
+                          <span className="status-dist-count">
+                            {t('attendanceDashboard.distTeacherUnit', {
+                              count,
+                            })}
+                          </span>
                         </div>
                         <div className="status-dist-bar-bg">
                           <div
@@ -1749,24 +1915,27 @@ export function AttendanceDashboardPage() {
           <div className="data-card">
             {isLoading ? (
               <div className="table-loading">
-                <RefreshCw size={24} className="spin" /> Memuat data...
+                <RefreshCw size={24} className="spin" />{' '}
+                {t('attendanceDashboard.loadingData')}
               </div>
             ) : filteredStudents.length === 0 ? (
               <div className="table-empty">
                 <AlertCircle size={40} className="opacity-30" />
-                <p>Belum ada data absensi siswa untuk tanggal/filter ini</p>
+                <p>{t('attendanceDashboard.emptyStudents')}</p>
               </div>
             ) : (
               <div className="table-wrapper">
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th className="w-12 text-center">No</th>
+                      <th className="w-12 text-center">
+                        {t('attendanceDashboard.colNo')}
+                      </th>
                       <th
                         onClick={() => handleSortStudent('fullName')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Nama Siswa
+                        {t('attendanceDashboard.colStudentName')}
                         {renderSortIcon(
                           studentSort?.key === 'fullName',
                           studentSort?.direction
@@ -1776,7 +1945,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortStudent('className')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Kelas
+                        {t('attendanceDashboard.colClass')}
                         {renderSortIcon(
                           studentSort?.key === 'className',
                           studentSort?.direction
@@ -1786,7 +1955,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortStudent('nisn')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        NISN
+                        {t('attendanceDashboard.colNisn')}
                         {renderSortIcon(
                           studentSort?.key === 'nisn',
                           studentSort?.direction
@@ -1796,7 +1965,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortStudent('status')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Status
+                        {t('attendanceDashboard.colStatus')}
                         {renderSortIcon(
                           studentSort?.key === 'status',
                           studentSort?.direction
@@ -1806,7 +1975,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortStudent('time')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Jam Masuk
+                        {t('attendanceDashboard.colCheckIn')}
                         {renderSortIcon(
                           studentSort?.key === 'time',
                           studentSort?.direction
@@ -1816,15 +1985,19 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortStudent('checkOutTime')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Jam Pulang
+                        {t('attendanceDashboard.colCheckOut')}
                         {renderSortIcon(
                           studentSort?.key === 'checkOutTime',
                           studentSort?.direction
                         )}
                       </th>
-                      <th>Dicatat Oleh</th>
-                      <th>Keterangan</th>
-                      {canDeleteRecord && <th className="text-center">Aksi</th>}
+                      <th>{t('attendanceDashboard.colRecordedBy')}</th>
+                      <th>{t('attendanceDashboard.colNotes')}</th>
+                      {canDeleteRecord && (
+                        <th className="text-center">
+                          {t('attendanceDashboard.colActions')}
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -1851,7 +2024,7 @@ export function AttendanceDashboardPage() {
                                 color: STATUS_COLORS[stKey] ?? '#6B7280',
                               }}
                             >
-                              {STATUS_LABELS[stKey] ?? stKey}
+                              {getStatusLabel(stKey)}
                             </span>
                           </td>
                           <td className="td-mono">
@@ -1868,8 +2041,8 @@ export function AttendanceDashboardPage() {
                           </td>
                           <td>
                             {record.recordedBy
-                              ? 'Admin/Wali Kelas'
-                              : 'Kiosk/Mandiri'}
+                              ? t('attendanceDashboard.recordedByAdmin')
+                              : t('attendanceDashboard.recordedByKiosk')}
                           </td>
                           <td>{renderStudentNotes(record)}</td>
                           {canDeleteRecord && (
@@ -1879,14 +2052,20 @@ export function AttendanceDashboardPage() {
                                 onClick={() =>
                                   setDeleteTarget({
                                     id: record.id,
-                                    name: record.student?.fullName ?? 'Siswa',
+                                    name:
+                                      record.student?.fullName ??
+                                      t(
+                                        'attendanceDashboard.studentFallbackName'
+                                      ),
                                     date: record.date,
                                     selfiePaths: [],
                                     attachmentPaths: [],
                                   })
                                 }
                                 className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                title="Hapus data absensi ini (Super Admin / Admin)"
+                                title={t(
+                                  'attendanceDashboard.titleDeleteSingleStudent'
+                                )}
                               >
                                 <Trash2 size={15} />
                               </button>
@@ -1907,24 +2086,27 @@ export function AttendanceDashboardPage() {
           <div className="data-card">
             {isLoading ? (
               <div className="table-loading">
-                <RefreshCw size={24} className="spin" /> Memuat data...
+                <RefreshCw size={24} className="spin" />{' '}
+                {t('attendanceDashboard.loadingData')}
               </div>
             ) : filteredTeachers.length === 0 ? (
               <div className="table-empty">
                 <AlertCircle size={40} className="opacity-30" />
-                <p>Belum ada data absensi guru untuk tanggal/filter ini</p>
+                <p>{t('attendanceDashboard.emptyTeachers')}</p>
               </div>
             ) : (
               <div className="table-wrapper">
                 <table className="data-table">
                   <thead>
                     <tr>
-                      <th className="w-12 text-center">No</th>
+                      <th className="w-12 text-center">
+                        {t('attendanceDashboard.colNo')}
+                      </th>
                       <th
                         onClick={() => handleSortTeacher('fullName')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Nama Guru / PTK
+                        {t('attendanceDashboard.colTeacherName')}
                         {renderSortIcon(
                           teacherSort?.key === 'fullName',
                           teacherSort?.direction
@@ -1934,7 +2116,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortTeacher('nip')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        NIP / NUPTK
+                        {t('attendanceDashboard.colNipNuptk')}
                         {renderSortIcon(
                           teacherSort?.key === 'nip',
                           teacherSort?.direction
@@ -1944,7 +2126,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortTeacher('status')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Status
+                        {t('attendanceDashboard.colStatus')}
                         {renderSortIcon(
                           teacherSort?.key === 'status',
                           teacherSort?.direction
@@ -1954,7 +2136,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortTeacher('checkInTime')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Check-In
+                        {t('attendanceDashboard.colTeacherCheckIn')}
                         {renderSortIcon(
                           teacherSort?.key === 'checkInTime',
                           teacherSort?.direction
@@ -1964,7 +2146,7 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortTeacher('checkOutTime')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Check-Out
+                        {t('attendanceDashboard.colTeacherCheckOut')}
                         {renderSortIcon(
                           teacherSort?.key === 'checkOutTime',
                           teacherSort?.direction
@@ -1974,16 +2156,20 @@ export function AttendanceDashboardPage() {
                         onClick={() => handleSortTeacher('checkInDistance')}
                         className="cursor-pointer select-none hover:text-primary transition"
                       >
-                        Lokasi & Jarak
+                        {t('attendanceDashboard.colLocationDistance')}
                         {renderSortIcon(
                           teacherSort?.key === 'checkInDistance',
                           teacherSort?.direction
                         )}
                       </th>
-                      <th>GPS Valid</th>
-                      <th>Foto Selfie</th>
-                      <th>Keterangan & Log</th>
-                      {canDeleteRecord && <th className="text-center">Aksi</th>}
+                      <th>{t('attendanceDashboard.colGpsValid')}</th>
+                      <th>{t('attendanceDashboard.colSelfiePhoto')}</th>
+                      <th>{t('attendanceDashboard.colNotesAndLog')}</th>
+                      {canDeleteRecord && (
+                        <th className="text-center">
+                          {t('attendanceDashboard.colActions')}
+                        </th>
+                      )}
                     </tr>
                   </thead>
                   <tbody>
@@ -2020,7 +2206,7 @@ export function AttendanceDashboardPage() {
                                 color: STATUS_COLORS[stKey] ?? '#6B7280',
                               }}
                             >
-                              {STATUS_LABELS[stKey] ?? stKey}
+                              {getStatusLabel(stKey)}
                             </span>
                           </td>
                           <td className="td-mono">
@@ -2038,12 +2224,14 @@ export function AttendanceDashboardPage() {
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="gps-link"
-                                  title="Titik GPS Datang"
+                                  title={t(
+                                    'attendanceDashboard.titleGpsCheckIn'
+                                  )}
                                 >
                                   <MapPin size={12} />
                                   {record.checkInDistance != null
                                     ? `${Math.round(record.checkInDistance)}m`
-                                    : 'Datang'}
+                                    : t('attendanceDashboard.gpsCheckInLabel')}
                                 </a>
                               ) : (
                                 '-'
@@ -2055,12 +2243,23 @@ export function AttendanceDashboardPage() {
                                     target="_blank"
                                     rel="noopener noreferrer"
                                     className="gps-link text-amber-600 dark:text-amber-400"
-                                    title="Titik GPS Pulang"
+                                    title={t(
+                                      'attendanceDashboard.titleGpsCheckOut'
+                                    )}
                                   >
                                     <MapPin size={12} />
                                     {record.checkOutDistance != null
-                                      ? `Pulang ${Math.round(record.checkOutDistance)}m`
-                                      : 'Pulang'}
+                                      ? t(
+                                        'attendanceDashboard.gpsCheckOutWithDist',
+                                        {
+                                          meters: Math.round(
+                                            record.checkOutDistance
+                                          ),
+                                        }
+                                      )
+                                      : t(
+                                        'attendanceDashboard.gpsCheckOutLabel'
+                                      )}
                                   </a>
                                 )}
                             </div>
@@ -2069,11 +2268,13 @@ export function AttendanceDashboardPage() {
                             {record.checkInTime ? (
                               record.isCheckInMock ? (
                                 <span className="gps-invalid">
-                                  <XCircle size={14} /> Palsu
+                                  <XCircle size={14} />{' '}
+                                  {t('attendanceDashboard.gpsFake')}
                                 </span>
                               ) : (
                                 <span className="gps-valid">
-                                  <Shield size={14} /> Valid
+                                  <Shield size={14} />{' '}
+                                  {t('attendanceDashboard.gpsValid')}
                                 </span>
                               )
                             ) : (
@@ -2088,23 +2289,37 @@ export function AttendanceDashboardPage() {
                                 {hasInPhoto && (
                                   <button
                                     type="button"
-                                    onClick={() => handlePreviewSelfie(record)}
+                                    onClick={() =>
+                                      void handlePreviewSelfie(record)
+                                    }
                                     className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-primary/15 text-primary hover:bg-primary/25 transition"
-                                    title="Lihat foto selfie datang & telemetri perangkat"
+                                    title={t(
+                                      'attendanceDashboard.titlePhotoCheckIn'
+                                    )}
                                   >
                                     <Camera size={12} />
-                                    <span>Foto Datang</span>
+                                    <span>
+                                      {t('attendanceDashboard.btnPhotoCheckIn')}
+                                    </span>
                                   </button>
                                 )}
                                 {hasOutPhoto && (
                                   <button
                                     type="button"
-                                    onClick={() => handlePreviewSelfie(record)}
+                                    onClick={() =>
+                                      void handlePreviewSelfie(record)
+                                    }
                                     className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 transition"
-                                    title="Lihat foto selfie pulang & telemetri perangkat"
+                                    title={t(
+                                      'attendanceDashboard.titlePhotoCheckOut'
+                                    )}
                                   >
                                     <Camera size={12} />
-                                    <span>Foto Pulang</span>
+                                    <span>
+                                      {t(
+                                        'attendanceDashboard.btnPhotoCheckOut'
+                                      )}
+                                    </span>
                                   </button>
                                 )}
                               </div>
@@ -2123,7 +2338,10 @@ export function AttendanceDashboardPage() {
                                   setDeleteTarget({
                                     id: record.id,
                                     name:
-                                      record.teacher?.fullName ?? 'Guru / PTK',
+                                      record.teacher?.fullName ??
+                                      t(
+                                        'attendanceDashboard.teacherFallbackName'
+                                      ),
                                     date: record.date,
                                     selfiePaths: [
                                       record.checkInSelfieUrl,
@@ -2135,7 +2353,9 @@ export function AttendanceDashboardPage() {
                                   })
                                 }
                                 className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                title="Hapus data absensi beserta foto datang & pulang (Super Admin / Admin)"
+                                title={t(
+                                  'attendanceDashboard.titleDeleteSingleTeacher'
+                                )}
                               >
                                 <Trash2 size={15} />
                               </button>
@@ -2176,13 +2396,15 @@ export function AttendanceDashboardPage() {
                   <Trash2 size={20} />
                 </div>
                 <div>
-                  <h3 className="font-bold text-base">Hapus Data Absensi?</h3>
+                  <h3 className="font-bold text-base">
+                    {t('attendanceDashboard.modalDeleteTitle')}
+                  </h3>
                   <p className="text-xs opacity-75 mt-1 leading-relaxed">
-                    Anda akan menghapus catatan absensi milik{' '}
-                    <strong>{deleteTarget.name}</strong> pada tanggal{' '}
-                    <strong>{deleteTarget.date}</strong> beserta seluruh foto
-                    selfie (Datang & Pulang) dan lampirannya dari penyimpanan.
-                    Tindakan ini tidak dapat dibatalkan.
+                    {t('attendanceDashboard.modalDeleteDescPrefix')}
+                    <strong>{deleteTarget.name}</strong>
+                    {t('attendanceDashboard.modalDeleteDescMid')}
+                    <strong>{deleteTarget.date}</strong>
+                    {t('attendanceDashboard.modalDeleteDescSuffix')}
                   </p>
                 </div>
               </div>
@@ -2194,15 +2416,17 @@ export function AttendanceDashboardPage() {
                   disabled={isDeletingRow}
                   onClick={() => setDeleteTarget(null)}
                 >
-                  Batal
+                  {t('attendanceDashboard.btnCancel')}
                 </button>
                 <button
                   type="button"
                   disabled={isDeletingRow}
-                  onClick={handleConfirmDeleteSingle}
+                  onClick={() => void handleConfirmDeleteSingle()}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 text-white transition"
                 >
-                  {isDeletingRow ? 'Menghapus...' : 'Ya, Hapus Permanen'}
+                  {isDeletingRow
+                    ? t('attendanceDashboard.btnDeleting')
+                    : t('attendanceDashboard.btnConfirmDeletePermanent')}
                 </button>
               </div>
             </motion.div>
@@ -2233,7 +2457,9 @@ export function AttendanceDashboardPage() {
                 <div className="flex items-center gap-2">
                   <ArchiveX size={19} className="text-red-500" />
                   <h3 className="font-bold text-base">
-                    Pembersihan Arsip {'>'} {ARCHIVE_RETENTION_YEARS} Tahun
+                    {t('attendanceDashboard.modalPurgeTitle', {
+                      years: ARCHIVE_RETENTION_YEARS,
+                    })}
                   </h3>
                 </div>
                 <button
@@ -2248,51 +2474,53 @@ export function AttendanceDashboardPage() {
 
               <div className="space-y-3 text-xs">
                 <p className="opacity-80 leading-relaxed">
-                  Fitur ini menghapus catatan absensi lama beserta seluruh foto
-                  selfie datang, foto selfie pulang, dan lampiran surat yang
-                  tercatat sebelum tanggal{' '}
-                  <strong className="text-amber-500">{cutoffDate}</strong>{' '}
-                  (lebih dari {ARCHIVE_RETENTION_YEARS} tahun yang lalu) untuk
-                  menjaga performa database dan kapasitas galeri tetap ringan.
+                  {t('attendanceDashboard.modalPurgeDescPrefix')}
+                  <strong className="text-amber-500">{cutoffDate}</strong>
+                  {t('attendanceDashboard.modalPurgeDescMid', {
+                    years: ARCHIVE_RETENTION_YEARS,
+                  })}
                 </p>
 
                 <div>
                   <label className="block font-semibold mb-1.5">
-                    Cakupan Data yang Dibersihkan:
+                    {t('attendanceDashboard.modalPurgeScopeLabel')}
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
-                      Sekolah Terpilih Saja
+                      {t('attendanceDashboard.modalPurgeScopeCurrent')}
                     </button>
                     <button
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
-                      Semua Sekolah
+                      {t('attendanceDashboard.modalPurgeScopeAll')}
                     </button>
                   </div>
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-muted/50 border border-border flex items-center justify-between">
-                  <span>Arsip lama ditemukan:</span>
+                  <span>{t('attendanceDashboard.modalPurgeFoundLabel')}</span>
                   {isCheckingOldRecords ? (
                     <span className="font-semibold flex items-center gap-1.5">
-                      <RefreshCw size={13} className="spin" /> Menghitung...
+                      <RefreshCw size={13} className="spin" />{' '}
+                      {t('attendanceDashboard.modalPurgeChecking')}
                     </span>
                   ) : (
                     <span className="text-sm font-extrabold text-red-500">
-                      {oldRecordsCount ?? 0} data absensi
+                      {t('attendanceDashboard.modalPurgeFoundCount', {
+                        count: oldRecordsCount ?? 0,
+                      })}
                     </span>
                   )}
                 </div>
@@ -2306,11 +2534,11 @@ export function AttendanceDashboardPage() {
                     isCheckingOldRecords ||
                     !oldRecordsCount
                   }
-                  onClick={handleBackupOldRecordsCsv}
+                  onClick={() => void handleBackupOldRecordsCsv()}
                   className="btn-secondary text-xs justify-center"
                 >
                   <Download size={14} />
-                  Backup CSV Dulu
+                  {t('attendanceDashboard.btnBackupCsvFirst')}
                 </button>
 
                 <button
@@ -2320,13 +2548,15 @@ export function AttendanceDashboardPage() {
                     isCheckingOldRecords ||
                     !oldRecordsCount
                   }
-                  onClick={handlePurgeOldRecords}
+                  onClick={() => void handlePurgeOldRecords()}
                   className="px-4 py-2 rounded-xl text-xs font-bold bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white transition flex items-center justify-center gap-1.5"
                 >
                   <Trash2 size={14} />
                   {isPurgingOldRecords
-                    ? 'Membersihkan...'
-                    : `Hapus ${oldRecordsCount ?? 0} Arsip`}
+                    ? t('attendanceDashboard.btnPurging')
+                    : t('attendanceDashboard.btnConfirmPurge', {
+                      count: oldRecordsCount ?? 0,
+                    })}
                 </button>
               </div>
             </motion.div>
@@ -2351,18 +2581,34 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative max-h-[90vh] overflow-y-auto ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                ? 'max-w-2xl'
-                : 'max-w-md'
+                  ? 'max-w-2xl'
+                  : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="flex items-center justify-between mb-3">
+              <div className="flex items-start justify-between gap-2 mb-3">
                 <div>
-                  <h3 className="font-bold text-base">
-                    {selfieModal.teacherName}
-                  </h3>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-bold text-base">
+                      {selfieModal.teacherName}
+                    </h3>
+                    {selfieModal.status && (
+                      <span
+                        className="status-badge text-[10px]"
+                        style={{
+                          background:
+                            (STATUS_COLORS[selfieModal.status] ?? '#6B7280') +
+                            '20',
+                          color:
+                            STATUS_COLORS[selfieModal.status] ?? '#6B7280',
+                        }}
+                      >
+                        {getStatusLabel(selfieModal.status)}
+                      </span>
+                    )}
+                  </div>
                   <p className="text-xs opacity-70">
-                    Dokumentasi Selfie & Audit Telemetri Presensi
+                    {t('attendanceDashboard.modalSelfieSubtitle')}
                   </p>
                 </div>
                 <button
@@ -2377,13 +2623,13 @@ export function AttendanceDashboardPage() {
               {selfieModal.isLoading ? (
                 <div className="rounded-xl bg-black/40 border border-white/10 min-h-65 flex flex-col items-center justify-center gap-2 text-xs opacity-75">
                   <RefreshCw size={24} className="spin" />
-                  <span>Memuat foto dari penyimpanan aman...</span>
+                  <span>{t('attendanceDashboard.modalSelfieLoading')}</span>
                 </div>
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                    ? 'grid-cols-1 sm:grid-cols-2'
-                    : 'grid-cols-1'
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -2391,7 +2637,8 @@ export function AttendanceDashboardPage() {
                     <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/5 p-3 space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="inline-flex items-center gap-1.5 font-bold text-emerald-600 dark:text-emerald-300">
-                          <LogIn size={14} /> Foto Datang
+                          <LogIn size={14} />{' '}
+                          {t('attendanceDashboard.btnPhotoCheckIn')}
                         </span>
                         <span className="font-mono opacity-80">
                           {formatTime(selfieModal.checkInTime)}
@@ -2405,12 +2652,14 @@ export function AttendanceDashboardPage() {
                         {selfieModal.checkInImageUrl ? (
                           <img
                             src={selfieModal.checkInImageUrl}
-                            alt={`Selfie Datang ${selfieModal.teacherName}`}
+                            alt={t('attendanceDashboard.modalSelfieInAlt', {
+                              name: selfieModal.teacherName,
+                            })}
                             className="w-full max-h-80 object-contain"
                           />
                         ) : (
                           <p className="text-xs text-red-400 p-4 text-center">
-                            Foto datang tidak dapat dimuat.
+                            {t('attendanceDashboard.modalSelfieInError')}
                           </p>
                         )}
                       </div>
@@ -2422,7 +2671,8 @@ export function AttendanceDashboardPage() {
                     <div className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-3 space-y-2">
                       <div className="flex items-center justify-between text-xs">
                         <span className="inline-flex items-center gap-1.5 font-bold text-amber-600 dark:text-amber-300">
-                          <LogOut size={14} /> Foto Pulang
+                          <LogOut size={14} />{' '}
+                          {t('attendanceDashboard.btnPhotoCheckOut')}
                         </span>
                         <span className="font-mono opacity-80">
                           {formatTime(selfieModal.checkOutTime)}
@@ -2436,12 +2686,14 @@ export function AttendanceDashboardPage() {
                         {selfieModal.checkOutImageUrl ? (
                           <img
                             src={selfieModal.checkOutImageUrl}
-                            alt={`Selfie Pulang ${selfieModal.teacherName}`}
+                            alt={t('attendanceDashboard.modalSelfieOutAlt', {
+                              name: selfieModal.teacherName,
+                            })}
                             className="w-full max-h-80 object-contain"
                           />
                         ) : (
                           <p className="text-xs text-red-400 p-4 text-center">
-                            Foto pulang tidak dapat dimuat.
+                            {t('attendanceDashboard.modalSelfieOutError')}
                           </p>
                         )}
                       </div>
@@ -2458,17 +2710,19 @@ export function AttendanceDashboardPage() {
                     <div className="flex items-center justify-between font-bold text-foreground">
                       <span className="inline-flex items-center gap-1.5">
                         <Smartphone size={14} className="text-primary" />
-                        Telemetri Perangkat & GPS
+                        {t('attendanceDashboard.telemetryHeading')}
                       </span>
                       {selfieModal.isMock ||
                         (selfieModal.securityFlags &&
                           selfieModal.securityFlags.length > 0) ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-red-500/15 text-red-600 dark:text-red-300">
-                          <ShieldAlert size={12} /> Perlu Audit
+                          <ShieldAlert size={12} />{' '}
+                          {t('attendanceDashboard.telemetryNeedsAudit')}
                         </span>
                       ) : (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-500/15 text-emerald-600 dark:text-emerald-300">
-                          <Shield size={12} /> Terverifikasi
+                          <Shield size={12} />{' '}
+                          {t('attendanceDashboard.telemetryVerified')}
                         </span>
                       )}
                     </div>
@@ -2478,23 +2732,29 @@ export function AttendanceDashboardPage() {
                         {typeof selfieModal.deviceTelemetry.appMode ===
                           'string' && (
                             <div>
-                              <span className="opacity-65">Mode Aplikasi: </span>
+                              <span className="opacity-65">
+                                {t('attendanceDashboard.telemetryAppMode')}
+                              </span>
                               <strong>{selfieModal.deviceTelemetry.appMode}</strong>
                             </div>
                           )}
                         {typeof selfieModal.deviceTelemetry.platform ===
                           'string' && (
                             <div>
-                              <span className="opacity-65">Platform: </span>
+                              <span className="opacity-65">
+                                {t('attendanceDashboard.telemetryPlatform')}
+                              </span>
                               <strong>
                                 {selfieModal.deviceTelemetry.platform}
                               </strong>
                             </div>
                           )}
-                        {typeof selfieModal.deviceTelemetry
-                          .gpsAccuracyMeters === 'number' && (
+                        {typeof selfieModal.deviceTelemetry.gpsAccuracyMeters ===
+                          'number' && (
                             <div>
-                              <span className="opacity-65">Akurasi GPS: </span>
+                              <span className="opacity-65">
+                                {t('attendanceDashboard.telemetryGpsAccuracy')}
+                              </span>
                               <strong>
                                 ±{selfieModal.deviceTelemetry.gpsAccuracyMeters}m
                               </strong>
@@ -2504,19 +2764,24 @@ export function AttendanceDashboardPage() {
                           selfieModal.deviceTelemetry
                         ) > 0 && (
                             <div className="text-amber-600 dark:text-amber-300">
-                              <span className="opacity-75">Keterlambatan: </span>
+                              <span className="opacity-75">
+                                {t('attendanceDashboard.telemetryLate')}
+                              </span>
                               <strong>
-                                {extractLateMinutesFromTelemetry(
-                                  selfieModal.deviceTelemetry
-                                )}{' '}
-                                menit
+                                {t('attendanceDashboard.telemetryLateUnit', {
+                                  minutes: extractLateMinutesFromTelemetry(
+                                    selfieModal.deviceTelemetry
+                                  ),
+                                })}
                               </strong>
                             </div>
                           )}
                         {typeof selfieModal.deviceTelemetry.javaneseDate ===
                           'string' && (
                             <div className="col-span-2">
-                              <span className="opacity-65">Penanggalan Jawa: </span>
+                              <span className="opacity-65">
+                                {t('attendanceDashboard.telemetryJavaneseDate')}
+                              </span>
                               <strong>
                                 {selfieModal.deviceTelemetry.javaneseDate}
                               </strong>
@@ -2544,8 +2809,8 @@ export function AttendanceDashboardPage() {
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                    : 'bg-muted/50 border-border'
+                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                      : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />
@@ -2558,4 +2823,10 @@ export function AttendanceDashboardPage() {
       </AnimatePresence>
     </div>
   );
+}
+
+function recordLateTelemetry(
+  record: TeacherAttendanceWithCheckOut
+): Record<string, unknown> | null {
+  return record.deviceTelemetry ?? null;
 }
