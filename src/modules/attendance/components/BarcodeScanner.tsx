@@ -11,15 +11,15 @@ import {
   FlipHorizontal2,
   Keyboard,
   Send,
+  SwitchCamera,
 } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
 
 // ============================================================================
 // PARAMETER YANG DAPAT DISESUAIKAN
 // ============================================================================
-// Tinggi kamera dikalibrasi agar seluruh komponen (kamera + input bawah) utuh di layar
-const CAMERA_MIN_HEIGHT = '175px';
-const CAMERA_MAX_HEIGHT = '32dvh';
+const CAMERA_MIN_HEIGHT = '185px';
+const CAMERA_MAX_HEIGHT = '34dvh';
 const DEFAULT_COOLDOWN_MS = 2500;
 const CAMERA_STORAGE_KEY = 'sekolah_erp_kiosk_selected_camera_id';
 const CAMERA_ENABLED_STORAGE_KEY = 'sekolah_erp_kiosk_camera_enabled';
@@ -71,6 +71,26 @@ function normalizeStudentCode(rawText: string): string {
   }
 
   return trimmed;
+}
+
+/**
+ * Memilih kamera terbaik secara default:
+ * Di perangkat sentuh (HP/Tablet), prioritaskan kamera belakang (rear/back/environment).
+ */
+function pickPreferredDefaultCamera(devices: CameraDeviceOption[]): string {
+  if (devices.length === 0) return '';
+  const isTouchMobile =
+    typeof window !== 'undefined' &&
+    window.matchMedia('(pointer: coarse)').matches;
+
+  if (isTouchMobile) {
+    const rearCam = devices.find((d) =>
+      /(back|rear|belakang|environment)/i.test(d.label)
+    );
+    if (rearCam) return rearCam.id;
+  }
+
+  return devices[0].id;
 }
 
 export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
@@ -183,7 +203,9 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
 
         const targetId = overrideCameraId ?? selectedCameraId;
         const isSavedValid = mappedDevices.some((d) => d.id === targetId);
-        const activeDeviceId = isSavedValid ? targetId : mappedDevices[0].id;
+        const activeDeviceId = isSavedValid
+          ? targetId
+          : pickPreferredDefaultCamera(mappedDevices);
 
         if (activeDeviceId !== selectedCameraId) {
           setSelectedCameraId(activeDeviceId);
@@ -265,8 +287,15 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPaused, isCameraEnabled]);
 
+  // Auto-focus hanya pada desktop (pointer: fine) agar keyboard virtual HP tidak menutupi kamera
   useEffect(() => {
     if (!isPaused) {
+      const isDesktopPointer =
+        typeof window !== 'undefined' &&
+        window.matchMedia('(pointer: fine)').matches;
+
+      if (!isDesktopPointer) return;
+
       const timer = setTimeout(() => {
         const activeTag = document.activeElement?.tagName.toLowerCase();
         if (
@@ -306,6 +335,14 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     startScanner(newId);
   };
 
+  // Tombol cepat 1-ketuk untuk berpindah kamera depan/belakang di HP
+  const handleCycleCamera = () => {
+    if (cameras.length < 2 || isStarting) return;
+    const currentIndex = cameras.findIndex((c) => c.id === selectedCameraId);
+    const nextIndex = currentIndex >= 0 ? (currentIndex + 1) % cameras.length : 0;
+    handleSelectCameraChange(cameras[nextIndex].id);
+  };
+
   const handleToggleCamera = () => {
     const nextState = !isCameraEnabled;
     setIsCameraEnabled(nextState);
@@ -328,10 +365,10 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
 
   return (
     <div className={`w-full max-w-xl mx-auto flex flex-col gap-2 ${className}`}>
-      {/* Bar Kontrol Pemilih Kamera, Mirror & Saklar Kamera */}
-      <div className="flex items-center justify-between gap-2 shrink-0">
+      {/* Bar Kontrol Pemilih Kamera, Pindah Kamera HP, Mirror & Saklar Kamera */}
+      <div className="flex flex-wrap items-center justify-between gap-1.5 shrink-0">
         {isCameraEnabled && cameras.length > 0 && !cameraError ? (
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+          <div className="flex items-center gap-1.5 flex-1 min-w-36">
             <Camera className="h-4 w-4 text-emerald-400 shrink-0" />
             <select
               value={selectedCameraId}
@@ -354,15 +391,30 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
           </div>
         )}
 
-        <div className="flex items-center gap-1.5 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0 ml-auto">
+          {isCameraEnabled && cameras.length > 1 && (
+            <button
+              type="button"
+              onClick={handleCycleCamera}
+              disabled={isStarting}
+              title={t('attendanceScanner.titleSwitchCamera')}
+              className="inline-flex items-center gap-1 rounded-lg border border-emerald-500/40 bg-emerald-500/15 px-2.5 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/25 transition cursor-pointer disabled:opacity-50"
+            >
+              <SwitchCamera className="h-3.5 w-3.5" />
+              <span className="hidden xs:inline sm:inline">
+                {t('attendanceScanner.btnSwitchCamera')}
+              </span>
+            </button>
+          )}
+
           {isCameraEnabled && (
             <button
               type="button"
               onClick={() => setIsMirrored((prev) => !prev)}
               title={t('attendanceScanner.titleMirrorCamera')}
               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${isMirrored
-                ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
+                  ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                  : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
                 }`}
             >
               <FlipHorizontal2 className="h-3.5 w-3.5" />
@@ -381,8 +433,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
                 : t('attendanceScanner.titleEnableCamera')
             }
             className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${isCameraEnabled
-              ? 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
-              : 'border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+                ? 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
+                : 'border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
               }`}
           >
             {isCameraEnabled ? (
@@ -400,7 +452,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         </div>
       </div>
 
-      {/* Kotak Viewport Kamera: Tinggi proporsional agar input bawah tetap terlihat */}
+      {/* Kotak Viewport Kamera */}
       {isCameraEnabled && (
         <div
           style={{
@@ -488,17 +540,18 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         <input
           ref={manualInputRef}
           type="text"
+          inputMode="numeric"
           value={manualCode}
           onChange={(e) => setManualCode(e.target.value)}
           disabled={isPaused}
           placeholder={t('attendanceScanner.manualInputPlaceholder')}
           aria-label={t('attendanceScanner.ariaManualInput')}
-          className="flex-1 min-w-0 rounded-xl border border-slate-700 bg-slate-900/95 px-3.5 py-2 text-xs text-white placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none"
+          className="flex-1 min-w-0 rounded-xl border border-slate-700 bg-slate-900/95 px-3.5 py-2.5 text-xs text-white placeholder:text-slate-400 focus:border-emerald-500 focus:outline-none"
         />
         <button
           type="submit"
           disabled={!manualCode.trim() || isPaused}
-          className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 px-4 py-2 text-xs font-bold text-white transition cursor-pointer shrink-0"
+          className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 px-4 py-2.5 text-xs font-bold text-white transition cursor-pointer shrink-0"
         >
           <Send className="h-3.5 w-3.5" />
           <span>{t('attendanceScanner.btnSubmitScan')}</span>

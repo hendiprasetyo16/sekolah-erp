@@ -31,9 +31,11 @@ import { getSchoolDateString, isAfterDeadline } from '../services/gps.utils';
 import { getJavaneseDateInfo } from '../utils/javaneseCalendar';
 import { BarcodeScanner } from '../components/BarcodeScanner';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import { useTranslation } from '@/hooks/useTranslation';
 import { AttendanceMap } from '@/components/map/AttendanceMap';
 import { useStudentHolidayLock } from '../hooks/useStudentHolidayLock';
 import { dispatchStudentAttendanceWhatsApp } from '../services/whatsappService';
+import type { SupportedAttendanceLocale } from '../types/attendance.types';
 
 // ============================================================================
 // PARAMETER YANG BISA DISESUAIKAN
@@ -41,13 +43,13 @@ import { dispatchStudentAttendanceWhatsApp } from '../services/whatsappService';
 const MIN_MINUTES_BETWEEN_IN_AND_OUT = 15; // Jeda minimal (menit) agar double-scan pagi tidak dianggap pulang
 const KIOSK_RESET_DELAY_MS = 4000;        // Waktu reset layar otomatis setelah scan (milidetik)
 const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis (milidetik)
-const CLOCK_TICK_INTERVAL_MS = 30000;     // Interval pembaruan jam & tanggal layar Kiosk (milidetik)
+const CLOCK_TICK_INTERVAL_MS = 5000;      // Interval pembaruan jam layar Kiosk (5 detik agar akurat di pergantian menit)
 const DEFAULT_KIOSK_SOUND_VOLUME = 0.5;   // Volume awal efek suara Kiosk (0.5 = 50%, rentang 0.0 - 1.0)
 const KIOSK_SOUND_PREF_KEY = 'sekolaherp_kiosk_sound_enabled';
 const KIOSK_SOUND_VOLUME_KEY = 'sekolaherp_kiosk_sound_volume';
 const FALLBACK_STUDENT_START = '07:00';
-const FALLBACK_STUDENT_CHECKOUT_START = '11:30';
-const FALLBACK_STUDENT_END = '13:30';
+const FALLBACK_STUDENT_CHECKOUT_START = '12:00';
+const FALLBACK_STUDENT_END = '14:00';
 const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';
 const DEFAULT_KIOSK_SPECIAL_EVENT = 'Kegiatan Khusus Sekolah';
 const OFFLINE_QUEUE_STORAGE_PREFIX = 'sekolaherp_kiosk_offline_queue_';
@@ -145,7 +147,6 @@ function playToneStep(
 
   const startAt = ctx.currentTime + startOffsetSec;
   const endAt = startAt + durationSec;
-  // Batasi gain maksimal 0.85 agar suara speaker tetap jernih dan tidak pecah
   const safeGain = Math.min(0.85, Math.max(0.01, peakVolume * 0.85));
 
   gain.gain.setValueAtTime(0.0001, startAt);
@@ -169,20 +170,16 @@ function playKioskFeedbackSound(
     if (!ctx) return;
 
     if (type === 'checkin') {
-      // Nada naik 2 ketuk (Do -> Sol): Absen Datang Berhasil
       playToneStep(ctx, 523.25, 0, 0.13, 'sine', volume);
       playToneStep(ctx, 783.99, 0.12, 0.22, 'sine', volume);
     } else if (type === 'checkout') {
-      // Nada naik 3 ketuk (Mi -> Sol -> Do tinggi): Absen Pulang Berhasil
       playToneStep(ctx, 659.25, 0, 0.1, 'sine', volume);
       playToneStep(ctx, 783.99, 0.1, 0.1, 'sine', volume);
       playToneStep(ctx, 1046.5, 0.2, 0.24, 'sine', volume);
     } else if (type === 'already') {
-      // Nada ganda netral: Sudah Absen / Informasi
       playToneStep(ctx, 466.16, 0, 0.11, 'triangle', volume);
       playToneStep(ctx, 466.16, 0.15, 0.14, 'triangle', volume);
     } else {
-      // Nada rendah peringatan: Gagal / Tidak Ditemukan
       playToneStep(ctx, 230, 0, 0.16, 'sawtooth', volume * 0.75);
       playToneStep(ctx, 175, 0.16, 0.24, 'sawtooth', volume * 0.75);
     }
@@ -191,9 +188,6 @@ function playKioskFeedbackSound(
   }
 }
 
-/**
- * Mengambil pesan error yang jelas dari objek error Supabase maupun JavaScript.
- */
 function extractReadableError(err: unknown): string {
   if (
     typeof err === 'object' &&
@@ -210,9 +204,6 @@ function extractReadableError(err: unknown): string {
   return 'Terjadi kesalahan saat memproses permintaan.';
 }
 
-/**
- * Menambahkan menit toleransi keterlambatan ke jam masuk standar (HH:mm).
- */
 function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
   const [hStr, mStr] = startTime.split(':');
   const h = Number(hStr) || 7;
@@ -224,8 +215,34 @@ function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
 }
 
 /**
- * Membaca daftar antrean absensi offline dari memori lokal perangkat (localStorage).
+ * Mengecek apakah waktu saat ini sudah mencapai atau melewati jam jadwal (HH:mm).
+ * Menggunakan perbandingan inklusif (>=) agar tepat pukul 12:00:00 jam pulang langsung terbuka.
  */
+function isAtOrAfterScheduleTime(
+  scheduleTime: string,
+  now: Date,
+  timeZone: string = DEFAULT_SCHOOL_TIMEZONE
+): boolean {
+  const [targetHStr, targetMStr] = scheduleTime.split(':');
+  const targetTotalMinutes =
+    (Number(targetHStr) || 0) * 60 + (Number(targetMStr) || 0);
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(now);
+
+    const curH = Number(parts.find((p) => p.type === 'hour')?.value ?? '0');
+    const curM = Number(parts.find((p) => p.type === 'minute')?.value ?? '0');
+    return curH * 60 + curM >= targetTotalMinutes;
+  } catch {
+    return now.getHours() * 60 + now.getMinutes() >= targetTotalMinutes;
+  }
+}
+
 function readOfflineQueue(schoolId: string): OfflineKioskQueueItem[] {
   if (!schoolId) return [];
   try {
@@ -238,9 +255,6 @@ function readOfflineQueue(schoolId: string): OfflineKioskQueueItem[] {
   }
 }
 
-/**
- * Menyimpan daftar antrean absensi offline ke memori lokal perangkat (localStorage).
- */
 function writeOfflineQueue(schoolId: string, items: OfflineKioskQueueItem[]) {
   if (!schoolId) return;
   try {
@@ -253,9 +267,6 @@ function writeOfflineQueue(schoolId: string, items: OfflineKioskQueueItem[]) {
   }
 }
 
-/**
- * Membaca daftar siswa dari cache lokal agar kartu tetap dikenali saat internet mati.
- */
 function readStudentDirectoryCache(schoolId: string): FoundStudent[] {
   if (!schoolId) return [];
   try {
@@ -268,9 +279,6 @@ function readStudentDirectoryCache(schoolId: string): FoundStudent[] {
   }
 }
 
-/**
- * Menyimpan daftar siswa aktif sekolah ke cache lokal perangkat.
- */
 function writeStudentDirectoryCache(schoolId: string, students: FoundStudent[]) {
   if (!schoolId) return;
   try {
@@ -283,9 +291,6 @@ function writeStudentDirectoryCache(schoolId: string, students: FoundStudent[]) 
   }
 }
 
-/**
- * Membaca metadata nama & logo sekolah dari cache lokal (untuk tampilan offline).
- */
 function readSchoolMetaCache(schoolId: string): SchoolBrandMeta | null {
   if (!schoolId) return null;
   try {
@@ -304,9 +309,6 @@ function readSchoolMetaCache(schoolId: string): SchoolBrandMeta | null {
   }
 }
 
-/**
- * Menyimpan metadata nama & logo sekolah ke cache lokal.
- */
 function writeSchoolMetaCache(schoolId: string, meta: SchoolBrandMeta) {
   if (!schoolId) return;
   try {
@@ -320,6 +322,11 @@ function writeSchoolMetaCache(schoolId: string, meta: SchoolBrandMeta) {
 }
 
 export function StudentKioskPage() {
+  const { t } = useTranslation();
+  const currentLang: SupportedAttendanceLocale =
+    t('common.language') === 'Language' ? 'en' : 'id';
+  const dateLocale = currentLang === 'en' ? 'en-US' : 'id-ID';
+
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
 
@@ -331,7 +338,6 @@ export function StudentKioskPage() {
     ? simSchoolId || school?.id || ''
     : school?.id || '';
 
-  // State identitas visual sekolah (Nama & Logo otomatis sinkron)
   const [schoolBrand, setSchoolBrand] = useState<SchoolBrandMeta>(() => ({
     name: school?.name ?? 'SekolahERP',
     logoUrl: (school as { logoUrl?: string | null } | null)?.logoUrl ?? null,
@@ -343,7 +349,6 @@ export function StudentKioskPage() {
     DEFAULT_SCHOOL_TIMEZONE
   );
 
-  // Preferensi Efek Suara & Tingkat Volume Kiosk (0.0 - 1.0)
   const [soundEnabled, setSoundEnabled] = useState<boolean>(() => {
     try {
       const saved = localStorage.getItem(KIOSK_SOUND_PREF_KEY);
@@ -411,7 +416,6 @@ export function StudentKioskPage() {
     }
   };
 
-  // Buka kunci AudioContext pada interaksi layar pertama agar tidak diblokir browser
   useEffect(() => {
     const unlockAudio = () => {
       getAudioContext();
@@ -424,13 +428,11 @@ export function StudentKioskPage() {
     };
   }, []);
 
-  // Tanggal aktif selalu mengikuti zona waktu sekolah & otomatis berganti saat tengah malam
   const today = useMemo(
     () => getSchoolDateString(nowTick, schoolTimezone),
     [nowTick, schoolTimezone]
   );
 
-  // Hook terpusat pengunci hari libur & mode kegiatan khusus
   const {
     isLocked: isHolidayLocked,
     isHoliday,
@@ -445,9 +447,9 @@ export function StudentKioskPage() {
   } = useStudentHolidayLock({
     schoolId: activeSchoolId,
     targetDate: today,
+    lang: currentLang,
   });
 
-  // Teks keterangan otomatis untuk kolom `notes` saat Kiosk digunakan di hari libur
   const activeSpecialEventNote = useMemo(() => {
     if (!isHoliday || !isSpecialEventActive) return null;
     return (specialEventReason ?? '').trim() || DEFAULT_KIOSK_SPECIAL_EVENT;
@@ -482,7 +484,6 @@ export function StudentKioskPage() {
     }>
   >([]);
 
-  // Ref aman untuk timer & kunci anti double-scan (penting untuk APK Android & scanner cepat)
   const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const processingLockRef = useRef<boolean>(false);
@@ -518,19 +519,20 @@ export function StudentKioskPage() {
     studentConfig.lateToleranceMinutes,
     schoolTimezone
   );
+
   const isCheckOutWindowOpen =
     studentConfig.enableCheckOut &&
-    isAfterDeadline(
+    isAtOrAfterScheduleTime(
       studentConfig.checkOutStartTime,
       nowTick,
-      0,
       schoolTimezone
     );
 
-  // Kalender Jawa & Pasaran real-time selaras tanggal sekolah
-  const javaneseInfo = useMemo(() => getJavaneseDateInfo(today), [today]);
+  const javaneseInfo = useMemo(
+    () => getJavaneseDateInfo(today, currentLang),
+    [today, currentLang]
+  );
 
-  // Bersihkan seluruh timer saat komponen ditutup / pindah halaman
   useEffect(() => {
     return () => {
       if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
@@ -538,7 +540,6 @@ export function StudentKioskPage() {
     };
   }, []);
 
-  // Pembaruan jam layar Kiosk setiap 30 detik (hemat daya saat APK di-background)
   useEffect(() => {
     const interval = setInterval(() => {
       if (!document.hidden) {
@@ -548,7 +549,6 @@ export function StudentKioskPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // Muat daftar sekolah untuk mode simulasi Super Admin (termasuk logoUrl)
   useEffect(() => {
     if (!isSuperAdmin) return;
     let mounted = true;
@@ -573,7 +573,6 @@ export function StudentKioskPage() {
         if (school?.id) setSimSchoolId(school.id);
         else if (list.length > 0) setSimSchoolId(list[0].id);
       } catch {
-        // Fallback jika offline atau query terbatas
         attendanceService
           .getAllSchoolsForSimulation()
           .then((list) => {
@@ -592,14 +591,13 @@ export function StudentKioskPage() {
     };
   }, [isSuperAdmin, school?.id]);
 
-  // Sinkronkan Nama & Logo Sekolah secara otomatis (dari Store, Cache Offline, & Database)
-  const storeSchoolLogo = (school as { logoUrl?: string | null } | null)?.logoUrl ?? null;
+  const storeSchoolLogo =
+    (school as { logoUrl?: string | null } | null)?.logoUrl ?? null;
 
   useEffect(() => {
     if (!activeSchoolId) return;
     let mounted = true;
 
-    // 1. Terapkan langsung jika cocok dengan data store global atau daftar simulasi
     if (school?.id === activeSchoolId) {
       const nextMeta: SchoolBrandMeta = {
         name: school.name || 'SekolahERP',
@@ -625,7 +623,6 @@ export function StudentKioskPage() {
       }
     }
 
-    // 2. Ambil data terbaru dari database saat online agar perubahan logo langsung muncul
     if (navigator.onLine) {
       void supabase
         .from('schools')
@@ -649,7 +646,6 @@ export function StudentKioskPage() {
     };
   }, [activeSchoolId, school?.id, school?.name, storeSchoolLogo, simSchools]);
 
-  // Muat antrean offline yang tersimpan untuk sekolah aktif
   useEffect(() => {
     if (!activeSchoolId) {
       setOfflineQueue([]);
@@ -658,7 +654,6 @@ export function StudentKioskPage() {
     setOfflineQueue(readOfflineQueue(activeSchoolId));
   }, [activeSchoolId]);
 
-  // Sinkronkan cache direktori siswa AKTIF ke localStorage saat online
   const refreshStudentDirectoryCache = useCallback(async () => {
     if (!activeSchoolId || !navigator.onLine) return;
     try {
@@ -692,7 +687,6 @@ export function StudentKioskPage() {
     refreshStudentDirectoryCache();
   }, [refreshStudentDirectoryCache]);
 
-  // Muat statistik siswa hari ini (termasuk jumlah yang sudah pulang)
   const loadStats = useCallback(async () => {
     if (!activeSchoolId || !navigator.onLine) return;
     try {
@@ -718,7 +712,6 @@ export function StudentKioskPage() {
     }
   }, [activeSchoolId, today]);
 
-  // Sinkronisasi Antrean Offline ke Supabase secara berurutan
   const syncOfflineQueue = useCallback(async () => {
     if (!activeSchoolId || !navigator.onLine || syncLockRef.current) return;
 
@@ -732,7 +725,6 @@ export function StudentKioskPage() {
     let syncedCount = 0;
 
     try {
-      // Urutkan kronologis agar Check-In selalu diproses lebih dulu sebelum Check-Out
       const sortedQueue = [...currentQueue].sort((a, b) =>
         a.timestampIso.localeCompare(b.timestampIso)
       );
@@ -811,7 +803,6 @@ export function StudentKioskPage() {
             }
           }
 
-          // Hapus item yang sudah berhasil diproses dari antrean lokal
           remaining = remaining.filter((q) => q.queueId !== item.queueId);
           writeOfflineQueue(activeSchoolId, remaining);
           setOfflineQueue(remaining);
@@ -834,7 +825,6 @@ export function StudentKioskPage() {
     }
   }, [activeSchoolId, studentConfig.enableCheckOut, loadStats]);
 
-  // Pantau status koneksi Online/Offline & otomatis kirim antrean saat kembali Online
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
@@ -851,14 +841,12 @@ export function StudentKioskPage() {
     };
   }, [refreshStudentDirectoryCache, syncOfflineQueue]);
 
-  // Jalankan sinkronisasi otomatis saat membuka Kiosk dalam keadaan online dan masih ada sisa antrean
   useEffect(() => {
     if (isOnline && activeSchoolId && offlineQueue.length > 0) {
       void syncOfflineQueue();
     }
   }, [isOnline, activeSchoolId, offlineQueue.length, syncOfflineQueue]);
 
-  // Muat koordinat sekolah, zona waktu, & jadwal khusus siswa dari tabel schools
   useEffect(() => {
     if (!activeSchoolId) return;
 
@@ -923,7 +911,6 @@ export function StudentKioskPage() {
     [resetToIdle]
   );
 
-  // Aktivasi Mode Kegiatan Khusus di Kiosk
   const handleActivateSpecialEvent = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
@@ -935,20 +922,20 @@ export function StudentKioskPage() {
     } catch (err: unknown) {
       const detail = extractReadableError(err);
       triggerSound('error');
-      setResultMessage(`Gagal mengaktifkan mode kegiatan khusus: ${detail}`);
+      setResultMessage(
+        t('studentKiosk.msgSpecialEventError', { detail })
+      );
       setKioskState('error');
       scheduleAutoReset(6000);
     }
   };
 
-  // Simpan presensi siswa ke Antrean Offline (localStorage) saat internet mati / timeout
   const enqueueOfflineScan = useCallback(
     (student: FoundStudent, now: Date, timeStr: string) => {
       const existingTodayItems = readOfflineQueue(activeSchoolId).filter(
         (q) => q.studentId === student.id && q.date === today
       );
 
-      // Cegah double-scan beruntun di antrean offline dalam rentang jeda minimal
       if (existingTodayItems.length > 0) {
         const lastQueued = existingTodayItems[existingTodayItems.length - 1];
         const diffMins = Math.floor(
@@ -962,7 +949,10 @@ export function StudentKioskPage() {
         ) {
           triggerSound('already');
           setResultMessage(
-            `${student.fullName} sudah tercatat di antrean offline pukul ${lastQueued.timeFormatted}.`
+            t('studentKiosk.msgOfflineAlready', {
+              name: student.fullName,
+              time: lastQueued.timeFormatted,
+            })
           );
           setKioskState('already');
           scheduleAutoReset();
@@ -970,9 +960,18 @@ export function StudentKioskPage() {
         }
       }
 
+      const checkOutOpenAtScan =
+        studentConfig.enableCheckOut &&
+        isAtOrAfterScheduleTime(
+          studentConfig.checkOutStartTime,
+          now,
+          schoolTimezone
+        );
+
       const isCheckOutAction =
         scanMode === 'CHECK_OUT' ||
-        (scanMode === 'AUTO' && existingTodayItems.length === 1);
+        (scanMode === 'AUTO' &&
+          (existingTodayItems.length === 1 || checkOutOpenAtScan));
 
       const lateNow = isAfterDeadline(
         studentConfig.workStartTime,
@@ -1002,12 +1001,19 @@ export function StudentKioskPage() {
       writeOfflineQueue(activeSchoolId, updatedQueue);
       setOfflineQueue(updatedQueue);
 
+      const displayStatus = isCheckOutAction
+        ? t('studentKiosk.actionOut')
+        : status;
+
       triggerSound(isCheckOutAction ? 'checkout' : 'checkin');
       setLastSavedOffline(true);
       setLastActionType(isCheckOutAction ? 'CHECK_OUT' : 'CHECK_IN');
       setResultMessage(
-        `${student.fullName} — Tersimpan di ANTREAN OFFLINE (${isCheckOutAction ? 'PULANG' : status
-        }) pukul ${timeStr}`
+        t('studentKiosk.msgOfflineQueued', {
+          name: student.fullName,
+          status: displayStatus,
+          time: timeStr,
+        })
       );
       setKioskState('success');
 
@@ -1021,7 +1027,7 @@ export function StudentKioskPage() {
       setRecentList((prev) => [
         {
           name: student.fullName,
-          status: isCheckOutAction ? 'PULANG' : status,
+          status: displayStatus,
           action: isCheckOutAction ? 'PULANG' : 'DATANG',
           time: timeStr,
           isOfflineQueued: true,
@@ -1035,6 +1041,8 @@ export function StudentKioskPage() {
       activeSchoolId,
       today,
       scanMode,
+      studentConfig.enableCheckOut,
+      studentConfig.checkOutStartTime,
       studentConfig.workStartTime,
       studentConfig.lateToleranceMinutes,
       schoolTimezone,
@@ -1042,10 +1050,10 @@ export function StudentKioskPage() {
       user?.id,
       triggerSound,
       scheduleAutoReset,
+      t,
     ]
   );
 
-  // Proses Pencatatan Datang (Check-In) atau Pulang (Check-Out)
   const processStudentScan = useCallback(
     async (student: FoundStudent) => {
       if (!activeSchoolId) {
@@ -1056,7 +1064,9 @@ export function StudentKioskPage() {
       if (isHolidayLocked) {
         triggerSound('error');
         setResultMessage(
-          `Kiosk terkunci karena ${holidayName || 'Hari Libur'}.`
+          t('studentKiosk.msgHolidayLocked', {
+            holiday: holidayName || 'Hari Libur',
+          })
         );
         setKioskState('error');
         scheduleAutoReset();
@@ -1065,18 +1075,18 @@ export function StudentKioskPage() {
 
       const now = new Date();
       const nowIso = now.toISOString();
-      const timeStr = `${String(now.getHours()).padStart(2, '0')}:${String(
-        now.getMinutes()
-      ).padStart(2, '0')}`;
+      const timeStr = now.toLocaleTimeString(dateLocale, {
+        timeZone: schoolTimezone,
+        hour: '2-digit',
+        minute: '2-digit',
+      });
 
-      // Jika sedang offline, langsung masuk ke Antrean Offline lokal
       if (!navigator.onLine) {
         enqueueOfflineScan(student, now, timeStr);
         return;
       }
 
       try {
-        // Cek apakah siswa sudah punya data absensi hari ini
         const { data: existingAtt, error: fetchErr } = await supabase
           .from('attendances')
           .select('id, status, time, checkInTime, checkOutTime')
@@ -1095,7 +1105,7 @@ export function StudentKioskPage() {
           if (scanMode === 'CHECK_OUT') {
             triggerSound('error');
             setResultMessage(
-              `${student.fullName} belum tercatat absen datang hari ini.`
+              t('studentKiosk.msgNotCheckedInYet', { name: student.fullName })
             );
             setKioskState('error');
             scheduleAutoReset();
@@ -1129,7 +1139,11 @@ export function StudentKioskPage() {
           setLastSavedOffline(false);
           setLastActionType('CHECK_IN');
           setResultMessage(
-            `${student.fullName} — ABSEN DATANG (${status}) pukul ${timeStr}`
+            t('studentKiosk.msgCheckInSuccess', {
+              name: student.fullName,
+              status,
+              time: timeStr,
+            })
           );
           setKioskState('success');
 
@@ -1166,7 +1180,10 @@ export function StudentKioskPage() {
         if (['IZIN', 'SAKIT'].includes(existingAtt.status)) {
           triggerSound('already');
           setResultMessage(
-            `${student.fullName} tercatat ${existingAtt.status} hari ini.`
+            t('studentKiosk.msgRecordedLeave', {
+              name: student.fullName,
+              status: existingAtt.status,
+            })
           );
           setKioskState('already');
           scheduleAutoReset();
@@ -1175,12 +1192,19 @@ export function StudentKioskPage() {
 
         if (existingAtt.checkOutTime) {
           const outTime = new Date(existingAtt.checkOutTime).toLocaleTimeString(
-            'id-ID',
-            { hour: '2-digit', minute: '2-digit' }
+            dateLocale,
+            {
+              timeZone: schoolTimezone,
+              hour: '2-digit',
+              minute: '2-digit',
+            }
           );
           triggerSound('already');
           setResultMessage(
-            `${student.fullName} sudah absen datang & pulang (pukul ${outTime}) hari ini.`
+            t('studentKiosk.msgAlreadyBoth', {
+              name: student.fullName,
+              time: outTime,
+            })
           );
           setKioskState('already');
           scheduleAutoReset();
@@ -1189,7 +1213,9 @@ export function StudentKioskPage() {
 
         if (!studentConfig.enableCheckOut || scanMode === 'CHECK_IN') {
           triggerSound('already');
-          setResultMessage(`${student.fullName} sudah absen datang hari ini.`);
+          setResultMessage(
+            t('studentKiosk.msgAlreadyInOnly', { name: student.fullName })
+          );
           setKioskState('already');
           scheduleAutoReset();
           return;
@@ -1202,10 +1228,9 @@ export function StudentKioskPage() {
           )
           : 999;
 
-        const isPastCheckOutOpen = isAfterDeadline(
+        const isPastCheckOutOpen = isAtOrAfterScheduleTime(
           studentConfig.checkOutStartTime,
           now,
-          0,
           schoolTimezone
         );
 
@@ -1215,14 +1240,19 @@ export function StudentKioskPage() {
             minutesSinceCheckIn < MIN_MINUTES_BETWEEN_IN_AND_OUT)
         ) {
           const inTimeLabel = recordedInIso
-            ? new Date(recordedInIso).toLocaleTimeString('id-ID', {
+            ? new Date(recordedInIso).toLocaleTimeString(dateLocale, {
+              timeZone: schoolTimezone,
               hour: '2-digit',
               minute: '2-digit',
             })
-            : '-';
+            : studentConfig.workStartTime;
           triggerSound('already');
           setResultMessage(
-            `${student.fullName} sudah absen datang pukul ${inTimeLabel}. Absen pulang dibuka mulai pukul ${studentConfig.checkOutStartTime}.`
+            t('studentKiosk.msgWaitCheckOutWindow', {
+              name: student.fullName,
+              inTime: inTimeLabel,
+              openTime: studentConfig.checkOutStartTime,
+            })
           );
           setKioskState('already');
           scheduleAutoReset();
@@ -1245,7 +1275,10 @@ export function StudentKioskPage() {
         setLastSavedOffline(false);
         setLastActionType('CHECK_OUT');
         setResultMessage(
-          `${student.fullName} — ABSEN PULANG tercatat pukul ${timeStr}`
+          t('studentKiosk.msgCheckOutSuccess', {
+            name: student.fullName,
+            time: timeStr,
+          })
         );
         setKioskState('success');
 
@@ -1257,7 +1290,7 @@ export function StudentKioskPage() {
         setRecentList((prev) => [
           {
             name: student.fullName,
-            status: 'PULANG',
+            status: t('studentKiosk.actionOut'),
             action: 'PULANG',
             time: timeStr,
           },
@@ -1273,7 +1306,6 @@ export function StudentKioskPage() {
 
         scheduleAutoReset();
       } catch (err) {
-        // Fallback otomatis ke Antrean Offline jika terjadi kegagalan jaringan tiba-tiba
         console.warn(
           '[Kiosk] Gagal mengirim langsung, mengalihkan ke antrean offline:',
           err
@@ -1285,18 +1317,20 @@ export function StudentKioskPage() {
       activeSchoolId,
       isHolidayLocked,
       holidayName,
+      dateLocale,
+      schoolTimezone,
       today,
       scanMode,
       studentConfig.workStartTime,
       studentConfig.lateToleranceMinutes,
       studentConfig.enableCheckOut,
       studentConfig.checkOutStartTime,
-      schoolTimezone,
       activeSpecialEventNote,
       triggerSound,
       scheduleAutoReset,
       enqueueOfflineScan,
       user?.id,
+      t,
     ]
   );
 
@@ -1307,7 +1341,9 @@ export function StudentKioskPage() {
       if (isHolidayLocked) {
         triggerSound('error');
         setResultMessage(
-          `Kiosk terkunci karena ${holidayName || 'Hari Libur'}.`
+          t('studentKiosk.msgHolidayLocked', {
+            holiday: holidayName || 'Hari Libur',
+          })
         );
         setKioskState('error');
         scheduleAutoReset();
@@ -1316,9 +1352,7 @@ export function StudentKioskPage() {
 
       if (!studentConfig.enableKiosk) {
         triggerSound('error');
-        setResultMessage(
-          'Mode Kiosk Siswa sedang dinonaktifkan oleh Admin Sekolah.'
-        );
+        setResultMessage(t('studentKiosk.msgKioskDisabled'));
         setKioskState('error');
         scheduleAutoReset();
         return;
@@ -1330,7 +1364,6 @@ export function StudentKioskPage() {
       processingLockRef.current = true;
       setKioskState('scanning');
 
-      // Helper pencarian siswa dari cache lokal saat offline
       const lookupFromLocalCache = (): FoundStudent | undefined => {
         const cachedList = readStudentDirectoryCache(activeSchoolId);
         return cachedList.find(
@@ -1366,7 +1399,6 @@ export function StudentKioskPage() {
               };
             }
           } catch {
-            // Jika jaringan putus di tengah pencarian, cari lewat cache lokal
             mappedStudent = lookupFromLocalCache() ?? null;
           }
         } else {
@@ -1377,8 +1409,8 @@ export function StudentKioskPage() {
           triggerSound('error');
           setResultMessage(
             navigator.onLine
-              ? `Siswa dengan NISN/NIS "${cleanCode}" tidak ditemukan.`
-              : `Mode Offline: NISN/NIS "${cleanCode}" belum ada di cache perangkat. Hubungkan internet sekali untuk memuat daftar siswa.`
+              ? t('studentKiosk.msgStudentNotFound', { code: cleanCode })
+              : t('studentKiosk.msgOfflineStudentNotCached', { code: cleanCode })
           );
           setKioskState('error');
           scheduleAutoReset();
@@ -1396,9 +1428,7 @@ export function StudentKioskPage() {
       } catch (err) {
         console.error('Gagal mencari data siswa:', err);
         triggerSound('error');
-        setResultMessage(
-          'Terjadi kesalahan saat memproses kartu pelajar. Silakan ulangi.'
-        );
+        setResultMessage(t('studentKiosk.msgScanError'));
         setKioskState('error');
         scheduleAutoReset();
       }
@@ -1411,14 +1441,17 @@ export function StudentKioskPage() {
       triggerSound,
       processStudentScan,
       scheduleAutoReset,
+      t,
     ]
   );
 
-  const currentTime = nowTick.toLocaleTimeString('id-ID', {
+  const currentTime = nowTick.toLocaleTimeString(dateLocale, {
+    timeZone: schoolTimezone,
     hour: '2-digit',
     minute: '2-digit',
   });
-  const currentDate = nowTick.toLocaleDateString('id-ID', {
+  const currentDate = nowTick.toLocaleDateString(dateLocale, {
+    timeZone: schoolTimezone,
     weekday: 'long',
     year: 'numeric',
     month: 'long',
@@ -1441,7 +1474,6 @@ export function StudentKioskPage() {
         flexDirection: 'column',
       }}
     >
-      {/* CSS Khusus Kiosk: Peta & Penggeser Volume Dark-Glass Modern */}
       <style>{`
         .kiosk-map-fill > div,
         .kiosk-map-fill .leaflet-container {
@@ -1482,6 +1514,34 @@ export function StudentKioskPage() {
           cursor: pointer;
           transition: transform 0.15s ease, background-color 0.15s ease;
         }
+        @media (max-width: 768px) {
+          .kiosk-header {
+            flex-direction: column !important;
+            align-items: stretch !important;
+            gap: 0.65rem !important;
+            padding: 0.75rem 0.9rem !important;
+          }
+          .kiosk-header-right {
+            flex-wrap: wrap !important;
+            justify-content: space-between !important;
+            gap: 0.5rem !important;
+          }
+          .kiosk-clock {
+            font-size: 1.35rem !important;
+          }
+          .kiosk-body {
+            flex-direction: column !important;
+            padding: 0.5rem 0.75rem 1.25rem !important;
+            gap: 0.75rem !important;
+          }
+          .kiosk-sidebar {
+            display: none !important;
+          }
+          .kiosk-main {
+            padding: 0.25rem 0 !important;
+            width: 100% !important;
+          }
+        }
       `}</style>
 
       <div className="kiosk-header" style={{ flexShrink: 0 }}>
@@ -1496,13 +1556,16 @@ export function StudentKioskPage() {
               />
             </div>
           ) : (
-            <School size={28} className="kiosk-school-icon" />
+            <School size={28} className="kiosk-school-icon shrink-0" />
           )}
-          <div>
-            <h1 className="kiosk-school-name">{activeSchoolName}</h1>
+          <div className="min-w-0">
+            <h1 className="kiosk-school-name truncate">{activeSchoolName}</h1>
             <p className="kiosk-date">
-              {currentDate} • Masuk {studentConfig.workStartTime} • Pulang{' '}
-              {studentConfig.workEndTime}
+              {currentDate} •{' '}
+              {t('studentKiosk.scheduleSummary', {
+                start: studentConfig.workStartTime,
+                end: studentConfig.workEndTime,
+              })}
             </p>
             <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold">
@@ -1520,19 +1583,18 @@ export function StudentKioskPage() {
         <div className="kiosk-header-right">
           {isSuperAdmin && simSchools.length > 0 && (
             <select
-              className="form-input text-xs py-1 px-2"
+              className="form-input text-xs py-1 px-2 max-w-44"
               value={simSchoolId}
               onChange={(e) => setSimSchoolId(e.target.value)}
             >
               {simSchools.map((s) => (
                 <option key={s.id} value={s.id}>
-                  Simulasi: {s.name}
+                  {t('studentKiosk.simPrefix', { name: s.name })}
                 </option>
               ))}
             </select>
           )}
 
-          {/* Indikator & Tombol Sinkronisasi Antrean Offline */}
           {offlineQueue.length > 0 && (
             <button
               type="button"
@@ -1541,8 +1603,8 @@ export function StudentKioskPage() {
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-amber-500/20 text-amber-700 dark:text-amber-200 border border-amber-500/40 hover:bg-amber-500/30 transition cursor-pointer disabled:opacity-60"
               title={
                 isOnline
-                  ? 'Klik untuk mengirim antrean offline ke server sekarang'
-                  : 'Menunggu koneksi internet untuk mengirim antrean'
+                  ? t('studentKiosk.offlineQueueTitleOnline')
+                  : t('studentKiosk.offlineQueueTitleOffline')
               }
             >
               {isSyncingQueue ? (
@@ -1552,37 +1614,41 @@ export function StudentKioskPage() {
               )}
               <span>
                 {isSyncingQueue
-                  ? 'Mengirim...'
-                  : `Antrean Offline (${offlineQueue.length})`}
+                  ? t('studentKiosk.offlineQueueBtnSyncing')
+                  : t('studentKiosk.offlineQueueBtnLabel', {
+                    count: offlineQueue.length,
+                  })}
               </span>
             </button>
           )}
 
-          {/* Kontrol Suara & Penggeser Volume Dark-Glass Modern */}
-          <div className="inline-flex items-center gap-2.5 px-3 py-1.5 rounded-xl border border-white/15 bg-slate-900/90 backdrop-blur-md shadow-sm">
+          {/* Kontrol Suara & Penggeser Volume */}
+          <div className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xl border border-white/15 bg-slate-900/90 backdrop-blur-md shadow-sm">
             <button
               type="button"
               onClick={toggleSound}
               className={`inline-flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer ${isAudioActive
-                ? 'text-emerald-400 hover:text-emerald-300'
-                : 'text-slate-400 hover:text-slate-200'
+                  ? 'text-emerald-400 hover:text-emerald-300'
+                  : 'text-slate-400 hover:text-slate-200'
                 }`}
               title={
                 isAudioActive
-                  ? 'Klik untuk membisukan suara'
-                  : 'Klik untuk mengaktifkan suara'
+                  ? t('studentKiosk.soundTitleMute')
+                  : t('studentKiosk.soundTitleUnmute')
               }
             >
               <span
                 className={`p-1 rounded-lg transition ${isAudioActive
-                  ? 'bg-emerald-500/15 text-emerald-400'
-                  : 'bg-white/5 text-slate-400'
+                    ? 'bg-emerald-500/15 text-emerald-400'
+                    : 'bg-white/5 text-slate-400'
                   }`}
               >
                 {isAudioActive ? <Volume2 size={14} /> : <VolumeX size={14} />}
               </span>
               <span className="hidden md:inline tracking-tight">
-                {isAudioActive ? 'Suara' : 'Bisu'}
+                {isAudioActive
+                  ? t('studentKiosk.soundLabelOn')
+                  : t('studentKiosk.soundLabelOff')}
               </span>
             </button>
 
@@ -1603,48 +1669,89 @@ export function StudentKioskPage() {
                   playKioskFeedbackSound('checkin', soundVolume);
                 }
               }}
-              aria-label="Volume Suara Kiosk"
-              title={`Volume Suara: ${volumePercent}%`}
+              aria-label={t('studentKiosk.soundAriaVolume')}
+              title={t('studentKiosk.soundTitleVolume', {
+                percent: volumePercent,
+              })}
               style={{
                 background: `linear-gradient(to right, #10b981 0%, #34d399 ${volumePercent}%, rgba(255, 255, 255, 0.16) ${volumePercent}%, rgba(255, 255, 255, 0.16) 100%)`,
               }}
-              className="kiosk-volume-slider w-16 sm:w-20"
+              className="kiosk-volume-slider w-14 sm:w-20"
             />
 
             <span
-              className={`text-[11px] font-mono font-bold min-w-9 text-right select-none ${isAudioActive ? 'text-slate-100' : 'text-slate-400'
+              className={`text-[11px] font-mono font-bold min-w-8 text-right select-none ${isAudioActive ? 'text-slate-100' : 'text-slate-400'
                 }`}
             >
               {volumePercent}%
             </span>
           </div>
 
-          <div className="kiosk-clock">{currentTime}</div>
-          <div className={`kiosk-online-badge ${isOnline ? 'online' : 'offline'}`}>
-            {isOnline ? <Wifi size={14} /> : <WifiOff size={14} />}
-            {isOnline ? 'Online' : 'Offline'}
+          <div className="flex items-center gap-2 ml-auto sm:ml-0">
+            <div className="kiosk-clock">{currentTime}</div>
+            <div
+              className={`kiosk-online-badge ${isOnline ? 'online' : 'offline'}`}
+            >
+              {isOnline ? <Wifi size={14} /> : <WifiOff size={14} />}
+              {isOnline
+                ? t('studentKiosk.statusOnline')
+                : t('studentKiosk.statusOffline')}
+            </div>
           </div>
         </div>
       </div>
 
       {/* Banner Informasi Mode Antrean Offline */}
       {!isOnline && (
-        <div className="mx-4 mt-2.5 p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between gap-2 shrink-0">
+        <div className="mx-3 sm:mx-4 mt-2.5 p-2.5 rounded-xl border border-amber-500/40 bg-amber-500/15 text-amber-800 dark:text-amber-200 text-xs flex items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-2">
             <CloudOff size={16} className="shrink-0 text-amber-500" />
             <span>
-              <strong>Mode Antrean Offline Aktif:</strong> Siswa tetap bisa
-              memindai kartu pelajar. Data tersimpan aman di perangkat dan
-              otomatis terkirim begitu internet kembali menyala.
+              <strong>{t('studentKiosk.offlineBannerTitle')}</strong>{' '}
+              {t('studentKiosk.offlineBannerDesc')}
             </span>
           </div>
           {offlineQueue.length > 0 && (
             <span className="px-2.5 py-0.5 rounded-lg bg-amber-500/25 font-bold shrink-0">
-              {offlineQueue.length} menunggu
+              {t('studentKiosk.offlineWaitingCount', {
+                count: offlineQueue.length,
+              })}
             </span>
           )}
         </div>
       )}
+
+      {/* Bilah Statistik Ringkas Khusus Layar HP (< 768px) agar Kamera Tetap di Atas */}
+      <div className="grid grid-cols-3 gap-2 px-3 pt-2.5 md:hidden shrink-0">
+        <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1.5 text-center">
+          <div className="text-base font-extrabold text-emerald-500 leading-tight">
+            {todayStats.present}
+          </div>
+          <div className="text-[10px] font-medium opacity-75">
+            {t('studentKiosk.statPresent')}
+          </div>
+        </div>
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-center">
+          <div className="text-base font-extrabold text-amber-500 leading-tight">
+            {todayStats.late}
+          </div>
+          <div className="text-[10px] font-medium opacity-75">
+            {t('studentKiosk.statLate')}
+          </div>
+        </div>
+        <div className="rounded-xl border border-blue-500/30 bg-blue-500/10 px-2.5 py-1.5 text-center">
+          <div className="text-base font-extrabold text-blue-500 leading-tight">
+            {studentConfig.enableCheckOut
+              ? todayStats.checkedOut
+              : todayStats.present + todayStats.late}
+          </div>
+          <div className="text-[10px] font-medium opacity-75">
+            {studentConfig.enableCheckOut
+              ? t('studentKiosk.statCheckedOut')
+              : t('studentKiosk.statTotalScan')}
+          </div>
+        </div>
+      </div>
 
       <div
         className="kiosk-body"
@@ -1655,27 +1762,25 @@ export function StudentKioskPage() {
           paddingBottom: '0.85rem',
         }}
       >
-        <div
-          className="kiosk-sidebar"
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '0.75rem',
-          }}
-        >
+        {/* Sidebar Desktop (>= 768px) — disembunyikan di HP melalui CSS media query */}
+        <div className="kiosk-sidebar flex-col gap-3">
           <div className="kiosk-stat-card" style={{ flexShrink: 0 }}>
             <div className="kiosk-stat-header">
               <Users size={20} />
-              <span>Statistik Siswa Hari Ini</span>
+              <span>{t('studentKiosk.statCardTitle')}</span>
             </div>
             <div className="kiosk-stat-grid">
               <div className="kiosk-stat-item hadir">
                 <span className="kiosk-stat-number">{todayStats.present}</span>
-                <span className="kiosk-stat-label">Hadir</span>
+                <span className="kiosk-stat-label">
+                  {t('studentKiosk.statPresent')}
+                </span>
               </div>
               <div className="kiosk-stat-item terlambat">
                 <span className="kiosk-stat-number">{todayStats.late}</span>
-                <span className="kiosk-stat-label">Terlambat</span>
+                <span className="kiosk-stat-label">
+                  {t('studentKiosk.statLate')}
+                </span>
               </div>
               <div className="kiosk-stat-item total">
                 <span className="kiosk-stat-number">
@@ -1684,7 +1789,9 @@ export function StudentKioskPage() {
                     : todayStats.present + todayStats.late}
                 </span>
                 <span className="kiosk-stat-label">
-                  {studentConfig.enableCheckOut ? 'Sudah Pulang' : 'Total Absen'}
+                  {studentConfig.enableCheckOut
+                    ? t('studentKiosk.statCheckedOut')
+                    : t('studentKiosk.statTotalScan')}
                 </span>
               </div>
             </div>
@@ -1705,7 +1812,7 @@ export function StudentKioskPage() {
                 style={{ marginBottom: '8px', flexShrink: 0 }}
               >
                 <MapPin size={20} />
-                <span>Area Absensi Sekolah</span>
+                <span>{t('studentKiosk.mapCardTitle')}</span>
               </div>
               <div
                 className="kiosk-map-fill"
@@ -1737,7 +1844,9 @@ export function StudentKioskPage() {
                 overflowY: 'auto',
               }}
             >
-              <h3 className="kiosk-recent-title">Aktivitas Terakhir</h3>
+              <h3 className="kiosk-recent-title">
+                {t('studentKiosk.recentTitle')}
+              </h3>
               <div className="kiosk-recent-list">
                 {recentList.map((item, i) => (
                   <div
@@ -1749,12 +1858,15 @@ export function StudentKioskPage() {
                         {item.name}{' '}
                         {item.isOfflineQueued && (
                           <span className="text-[10px] font-bold text-amber-500">
-                            (Antrean)
+                            {t('studentKiosk.recentQueuedBadge')}
                           </span>
                         )}
                       </span>
                       <span className="kiosk-recent-time">
-                        {item.action} • {item.time}
+                        {item.action === 'PULANG'
+                          ? t('studentKiosk.actionOut')
+                          : t('studentKiosk.actionIn')}{' '}
+                        • {item.time}
                       </span>
                     </div>
                     <span
@@ -1770,6 +1882,7 @@ export function StudentKioskPage() {
           )}
         </div>
 
+        {/* Area Utama Kamera & Pemindaian */}
         <div
           className="kiosk-main"
           style={{
@@ -1781,17 +1894,20 @@ export function StudentKioskPage() {
             paddingTop: '0.25rem',
           }}
         >
-          {/* Banner Mode Kegiatan Khusus Aktif */}
           {isHoliday && isSpecialEventActive && (
             <div className="mb-3 w-full max-w-xl p-3 rounded-2xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-700 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2 text-xs shrink-0">
               <div className="flex items-center gap-2">
                 <Sparkles size={16} className="text-emerald-500 shrink-0" />
                 <div>
                   <span className="font-bold">
-                    Mode Kegiatan Khusus Aktif: {activeSpecialEventNote}
+                    {t('studentKiosk.specialEventActiveTitle', {
+                      reason: activeSpecialEventNote ?? '',
+                    })}
                   </span>
                   <p className="text-[11px] opacity-80">
-                    Pengecualian untuk jadwal libur ({holidayName})
+                    {t('studentKiosk.specialEventActiveSub', {
+                      holiday: holidayName ?? '',
+                    })}
                   </p>
                 </div>
               </div>
@@ -1803,7 +1919,9 @@ export function StudentKioskPage() {
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl font-bold bg-red-600 hover:bg-red-700 text-white transition cursor-pointer disabled:opacity-50"
                 >
                   <Lock size={13} />
-                  {isTogglingHoliday ? 'Mengunci...' : 'Kunci Kembali'}
+                  {isTogglingHoliday
+                    ? t('studentKiosk.btnLocking')
+                    : t('studentKiosk.btnRelock')}
                 </button>
               )}
             </div>
@@ -1826,14 +1944,15 @@ export function StudentKioskPage() {
                     </div>
                     <div className="space-y-1.5">
                       <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-red-500/20 text-red-600 dark:text-red-300">
-                        <Lock size={12} /> Kiosk Presensi Terkunci
+                        <Lock size={12} /> {t('studentKiosk.lockedBadge')}
                       </span>
                       <h2 className="text-lg font-extrabold text-foreground">
-                        Hari Libur: {holidayName}
+                        {t('studentKiosk.lockedHolidayTitle', {
+                          holiday: holidayName ?? '',
+                        })}
                       </h2>
                       <p className="text-xs opacity-80 leading-relaxed">
-                        Presensi mandiri siswa melalui Kiosk dikunci otomatis
-                        pada hari libur.
+                        {t('studentKiosk.lockedHolidayDesc')}
                       </p>
                     </div>
 
@@ -1843,13 +1962,16 @@ export function StudentKioskPage() {
                         className="pt-3 border-t border-red-500/25 space-y-2.5 text-left"
                       >
                         <label className="block text-xs font-bold text-foreground">
-                          Ada Kegiatan Khusus Sekolah Hari Ini?
+                          {t('studentKiosk.specialEventPromptLabel')}
                         </label>
                         <input
                           type="text"
                           value={specialEventInput}
                           onChange={(e) => setSpecialEventInput(e.target.value)}
-                          placeholder={`Kosongkan untuk otomatis: ${DEFAULT_KIOSK_SPECIAL_EVENT}`}
+                          placeholder={t(
+                            'studentKiosk.specialEventPlaceholder',
+                            { defaultName: DEFAULT_KIOSK_SPECIAL_EVENT }
+                          )}
                           className="form-input w-full text-xs"
                         />
                         <button
@@ -1859,15 +1981,13 @@ export function StudentKioskPage() {
                         >
                           <Unlock size={15} />
                           {isTogglingHoliday
-                            ? 'Membuka Kunci...'
-                            : 'Aktifkan Presensi Kegiatan Khusus'}
+                            ? t('studentKiosk.btnUnlocking')
+                            : t('studentKiosk.btnActivateSpecialEvent')}
                         </button>
                       </form>
                     ) : (
                       <p className="text-[11px] opacity-70 pt-2 border-t border-red-500/20">
-                        Untuk membuka kunci karena kegiatan khusus, silakan
-                        Guru, Wali Kelas, atau Admin masuk (login) terlebih
-                        dahulu.
+                        {t('studentKiosk.lockedLoginHint')}
                       </p>
                     )}
                   </div>
@@ -1878,37 +1998,41 @@ export function StudentKioskPage() {
                       className="mx-auto text-amber-500"
                     />
                     <h2 className="text-base font-bold">
-                      Kiosk Siswa Dinonaktifkan
+                      {t('studentKiosk.kioskDisabledTitle')}
                     </h2>
                     <p className="text-xs opacity-80">
-                      Admin sekolah sedang menonaktifkan absensi mandiri lewat
-                      Kiosk. Silakan hubungi Wali Kelas atau Operator Sekolah.
+                      {t('studentKiosk.kioskDisabledDesc')}
                     </p>
                   </div>
                 ) : (
                   <div className="w-full flex-1 min-h-0 flex flex-col items-center">
-                    {/* Bar Tombol Mode Scan: Sejajar di tengah atas */}
                     {studentConfig.enableCheckOut && (
-                      <div className="flex flex-wrap items-center justify-center gap-2 mb-2 shrink-0">
+                      <div className="flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 mb-2 shrink-0">
                         {(
                           [
                             {
                               id: 'AUTO',
                               label: isCheckOutWindowOpen
-                                ? 'Mode Otomatis (Siap Pulang)'
-                                : 'Mode Otomatis (Datang)',
+                                ? t('studentKiosk.modeAutoReadyOut')
+                                : t('studentKiosk.modeAutoIn'),
                             },
-                            { id: 'CHECK_IN', label: 'Khusus Datang' },
-                            { id: 'CHECK_OUT', label: 'Khusus Pulang' },
+                            {
+                              id: 'CHECK_IN',
+                              label: t('studentKiosk.modeCheckInOnly'),
+                            },
+                            {
+                              id: 'CHECK_OUT',
+                              label: t('studentKiosk.modeCheckOutOnly'),
+                            },
                           ] as const
                         ).map((modeOpt) => (
                           <button
                             key={modeOpt.id}
                             type="button"
                             onClick={() => setScanMode(modeOpt.id)}
-                            className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
-                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                              : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
+                            className={`px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
+                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                                : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
                               }`}
                           >
                             {modeOpt.label}
@@ -1917,21 +2041,20 @@ export function StudentKioskPage() {
                       </div>
                     )}
 
-                    <h2 className="kiosk-idle-title text-xl sm:text-2xl leading-tight shrink-0">
+                    <h2 className="kiosk-idle-title text-lg sm:text-2xl leading-tight shrink-0">
                       {scanMode === 'CHECK_OUT'
-                        ? 'Scan Kartu — Absen Pulang'
+                        ? t('studentKiosk.idleTitleCheckOut')
                         : isCheckOutWindowOpen && scanMode === 'AUTO'
-                          ? 'Scan Kartu Pelajar (Datang / Pulang)'
-                          : 'Scan Kartu Pelajar'}
+                          ? t('studentKiosk.idleTitleAutoOut')
+                          : t('studentKiosk.idleTitleDefault')}
                     </h2>
                     <p className="kiosk-idle-subtitle text-xs mt-1 mb-2.5 shrink-0">
-                      Arahkan kartu ke kamera, gunakan scanner USB, atau ketik
-                      NISN/NIS
+                      {t('studentKiosk.idleSubtitle')}
                     </p>
 
                     <div
                       className="kiosk-scanner-area w-full"
-                      style={{ padding: '0.85rem', minHeight: 'auto' }}
+                      style={{ padding: '0.75rem', minHeight: 'auto' }}
                     >
                       <BarcodeScanner
                         onScanSuccess={(code) => {
@@ -1949,8 +2072,9 @@ export function StudentKioskPage() {
                     {isLateNow && !isCheckOutWindowOpen && (
                       <div className="kiosk-late-warning mt-2 shrink-0">
                         <Clock size={16} />
-                        Waktu melebihi {studentDeadline} — Absen datang dicatat
-                        TERLAMBAT
+                        {t('studentKiosk.lateWarningBanner', {
+                          deadline: studentDeadline,
+                        })}
                       </div>
                     )}
                   </div>
@@ -1967,7 +2091,9 @@ export function StudentKioskPage() {
                 className="kiosk-scanning-state my-auto"
               >
                 <div className="kiosk-spinner" />
-                <p className="kiosk-scanning-text">Memproses...</p>
+                <p className="kiosk-scanning-text">
+                  {t('studentKiosk.processingText')}
+                </p>
               </motion.div>
             )}
 
@@ -1996,7 +2122,7 @@ export function StudentKioskPage() {
                 <p className="kiosk-student-nisn">NISN: {foundStudent.nisn}</p>
                 <div className="kiosk-processing-badge">
                   <div className="kiosk-spinner-sm" />
-                  Mencatat presensi...
+                  {t('studentKiosk.recordingAttendanceText')}
                 </div>
               </motion.div>
             )}
@@ -2015,29 +2141,29 @@ export function StudentKioskPage() {
                   transition={{ type: 'spring', stiffness: 200, delay: 0.1 }}
                 >
                   {lastSavedOffline ? (
-                    <CloudUpload size={100} />
+                    <CloudUpload size={92} />
                   ) : lastActionType === 'CHECK_OUT' ? (
-                    <LogOut size={100} />
+                    <LogOut size={92} />
                   ) : (
-                    <CheckCircle size={100} />
+                    <CheckCircle size={92} />
                   )}
                 </motion.div>
                 <h2 className="kiosk-result-title">
                   {lastSavedOffline
-                    ? 'Tersimpan di Antrean Offline!'
+                    ? t('studentKiosk.resultTitleOfflineSaved')
                     : lastActionType === 'CHECK_OUT'
-                      ? 'Absen Pulang Berhasil!'
-                      : 'Absen Datang Berhasil!'}
+                      ? t('studentKiosk.resultTitleCheckOutSuccess')
+                      : t('studentKiosk.resultTitleCheckInSuccess')}
                 </h2>
                 <p className="kiosk-result-message">{resultMessage}</p>
                 <p className="kiosk-result-hint">
                   {lastSavedOffline
-                    ? 'Otomatis terkirim ke server saat koneksi internet kembali aktif...'
-                    : 'Layar akan kembali otomatis...'}
+                    ? t('studentKiosk.resultHintOffline')
+                    : t('studentKiosk.resultHintOnline')}
                 </p>
                 <button className="btn-outline-kiosk" onClick={resetToIdle}>
                   <RotateCcw size={16} />
-                  Absen Berikutnya
+                  {t('studentKiosk.btnNextScan')}
                 </button>
               </motion.div>
             )}
@@ -2050,12 +2176,14 @@ export function StudentKioskPage() {
                 exit={{ opacity: 0 }}
                 className="kiosk-result-state already my-auto"
               >
-                <LogIn size={80} />
-                <h2 className="kiosk-result-title">Informasi Presensi</h2>
+                <LogIn size={76} />
+                <h2 className="kiosk-result-title">
+                  {t('studentKiosk.resultTitleAlready')}
+                </h2>
                 <p className="kiosk-result-message">{resultMessage}</p>
                 <button className="btn-outline-kiosk" onClick={resetToIdle}>
                   <RotateCcw size={16} />
-                  Kembali
+                  {t('studentKiosk.btnBack')}
                 </button>
               </motion.div>
             )}
@@ -2068,16 +2196,60 @@ export function StudentKioskPage() {
                 exit={{ opacity: 0 }}
                 className="kiosk-result-state error my-auto"
               >
-                <XCircle size={80} />
-                <h2 className="kiosk-result-title">Gagal</h2>
+                <XCircle size={76} />
+                <h2 className="kiosk-result-title">
+                  {t('studentKiosk.resultTitleError')}
+                </h2>
                 <p className="kiosk-result-message">{resultMessage}</p>
                 <button className="btn-outline-kiosk" onClick={resetToIdle}>
                   <RotateCcw size={16} />
-                  Coba Lagi
+                  {t('studentKiosk.btnTryAgain')}
                 </button>
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* Riwayat Aktivitas Terakhir Khusus Layar HP (< 768px) di Bawah Kamera */}
+          {recentList.length > 0 && (
+            <div className="w-full max-w-xl mt-3 md:hidden rounded-2xl border border-border bg-card/70 p-3">
+              <h3 className="text-xs font-bold mb-2 opacity-80">
+                {t('studentKiosk.recentTitle')}
+              </h3>
+              <div className="space-y-1.5 max-h-36 overflow-y-auto">
+                {recentList.slice(0, 4).map((item, i) => (
+                  <div
+                    key={`mob-${item.name}-${item.time}-${i}`}
+                    className="flex items-center justify-between gap-2 text-xs py-1 border-b border-border/50 last:border-b-0"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-semibold truncate">
+                        {item.name}{' '}
+                        {item.isOfflineQueued && (
+                          <span className="text-[10px] font-bold text-amber-500">
+                            {t('studentKiosk.recentQueuedBadge')}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[10px] opacity-70">
+                        {item.action === 'PULANG'
+                          ? t('studentKiosk.actionOut')
+                          : t('studentKiosk.actionIn')}{' '}
+                        • {item.time}
+                      </div>
+                    </div>
+                    <span
+                      className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${item.status === 'TERLAMBAT'
+                          ? 'bg-amber-500/20 text-amber-500'
+                          : 'bg-emerald-500/20 text-emerald-500'
+                        }`}
+                    >
+                      {item.status}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

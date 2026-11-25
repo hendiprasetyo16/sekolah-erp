@@ -923,6 +923,8 @@ export const translations = {
         'Izin kamera ditolak browser. Klik ikon gembok/kamera di sebelah URL lalu pilih Izinkan.',
       ariaSelectCamera: 'Pilih Perangkat Kamera',
       usbManualModeLabel: 'Mode Scanner USB / Ketik Manual',
+      titleSwitchCamera: 'Ganti Kamera Depan / Belakang',
+      btnSwitchCamera: 'Ganti Kamera',
       titleMirrorCamera: 'Balik Tampilan Cermin (Mirror)',
       btnMirror: 'Mirror',
       titleDisableCamera:
@@ -936,6 +938,111 @@ export const translations = {
         'Scan USB atau ketik NISN / NIS lalu Enter...',
       ariaManualInput: 'Input Barcode Scanner atau NISN Manual',
       btnSubmitScan: 'Absen',
+    },
+    // Tambahkan di dalam `translations.id.attendanceScanner`:
+    // titleSwitchCamera: 'Ganti Kamera Depan / Belakang',
+    // btnSwitchCamera: 'Ganti Kamera',
+
+    // Tambahkan di dalam `translations.id` (setelah blok `attendanceScanner`):
+    studentKiosk: {
+      offlineBannerTitle: 'Mode Antrean Offline Aktif:',
+      offlineBannerDesc:
+        'Siswa tetap bisa memindai kartu pelajar. Data tersimpan aman di perangkat dan otomatis terkirim begitu internet kembali menyala.',
+      offlineWaitingCount: '{count} menunggu',
+      offlineQueueBtnSyncing: 'Mengirim...',
+      offlineQueueBtnLabel: 'Antrean Offline ({count})',
+      offlineQueueTitleOnline:
+        'Klik untuk mengirim antrean offline ke server sekarang',
+      offlineQueueTitleOffline:
+        'Menunggu koneksi internet untuk mengirim antrean',
+      soundLabelOn: 'Suara',
+      soundLabelOff: 'Bisu',
+      soundTitleMute: 'Klik untuk membisukan suara',
+      soundTitleUnmute: 'Klik untuk mengaktifkan suara',
+      soundAriaVolume: 'Volume Suara Kiosk',
+      soundTitleVolume: 'Volume Suara: {percent}%',
+      statusOnline: 'Online',
+      statusOffline: 'Offline',
+      simPrefix: 'Simulasi: {name}',
+      scheduleSummary: 'Masuk {start} • Pulang {end}',
+      statCardTitle: 'Statistik Siswa Hari Ini',
+      statPresent: 'Hadir',
+      statLate: 'Terlambat',
+      statCheckedOut: 'Sudah Pulang',
+      statTotalScan: 'Total Absen',
+      mapCardTitle: 'Area Absensi Sekolah',
+      recentTitle: 'Aktivitas Terakhir',
+      recentQueuedBadge: '(Antrean)',
+      actionIn: 'DATANG',
+      actionOut: 'PULANG',
+      specialEventActiveTitle: 'Mode Kegiatan Khusus Aktif: {reason}',
+      specialEventActiveSub: 'Pengecualian untuk jadwal libur ({holiday})',
+      btnLocking: 'Mengunci...',
+      btnRelock: 'Kunci Kembali',
+      lockedBadge: 'Kiosk Presensi Terkunci',
+      lockedHolidayTitle: 'Hari Libur: {holiday}',
+      lockedHolidayDesc:
+        'Presensi mandiri siswa melalui Kiosk dikunci otomatis pada hari libur.',
+      specialEventPromptLabel: 'Ada Kegiatan Khusus Sekolah Hari Ini?',
+      specialEventPlaceholder: 'Kosongkan untuk otomatis: {defaultName}',
+      btnUnlocking: 'Membuka Kunci...',
+      btnActivateSpecialEvent: 'Aktifkan Presensi Kegiatan Khusus',
+      lockedLoginHint:
+        'Untuk membuka kunci karena kegiatan khusus, silakan Guru, Wali Kelas, atau Admin masuk (login) terlebih dahulu.',
+      kioskDisabledTitle: 'Kiosk Siswa Dinonaktifkan',
+      kioskDisabledDesc:
+        'Admin sekolah sedang menonaktifkan absensi mandiri lewat Kiosk. Silakan hubungi Wali Kelas atau Operator Sekolah.',
+      modeAutoReadyOut: 'Mode Otomatis (Siap Pulang)',
+      modeAutoIn: 'Mode Otomatis (Datang)',
+      modeCheckInOnly: 'Khusus Datang',
+      modeCheckOutOnly: 'Khusus Pulang',
+      idleTitleCheckOut: 'Scan Kartu — Absen Pulang',
+      idleTitleAutoOut: 'Scan Kartu Pelajar (Datang / Pulang)',
+      idleTitleDefault: 'Scan Kartu Pelajar',
+      idleSubtitle:
+        'Arahkan kartu ke kamera, gunakan scanner USB, atau ketik NISN/NIS',
+      lateWarningBanner:
+        'Waktu melebihi {deadline} — Absen datang dicatat TERLAMBAT',
+      processingText: 'Memproses...',
+      recordingAttendanceText: 'Mencatat presensi...',
+      resultTitleOfflineSaved: 'Tersimpan di Antrean Offline!',
+      resultTitleCheckOutSuccess: 'Absen Pulang Berhasil!',
+      resultTitleCheckInSuccess: 'Absen Datang Berhasil!',
+      resultHintOffline:
+        'Otomatis terkirim ke server saat koneksi internet kembali aktif...',
+      resultHintOnline: 'Layar akan kembali otomatis...',
+      btnNextScan: 'Absen Berikutnya',
+      resultTitleAlready: 'Informasi Presensi',
+      btnBack: 'Kembali',
+      resultTitleError: 'Gagal',
+      btnTryAgain: 'Coba Lagi',
+      msgHolidayLocked: 'Kiosk terkunci karena {holiday}.',
+      msgKioskDisabled:
+        'Mode Kiosk Siswa sedang dinonaktifkan oleh Admin Sekolah.',
+      msgNotCheckedInYet:
+        '{name} belum tercatat absen datang hari ini.',
+      msgCheckInSuccess:
+        '{name} — ABSEN DATANG ({status}) pukul {time}',
+      msgCheckOutSuccess:
+        '{name} — ABSEN PULANG tercatat pukul {time}',
+      msgOfflineQueued:
+        '{name} — Tersimpan di ANTREAN OFFLINE ({status}) pukul {time}',
+      msgOfflineAlready:
+        '{name} sudah tercatat di antrean offline pukul {time}.',
+      msgRecordedLeave: '{name} tercatat {status} hari ini.',
+      msgAlreadyBoth:
+        '{name} sudah absen datang & pulang (pukul {time}) hari ini.',
+      msgAlreadyInOnly: '{name} sudah absen datang hari ini.',
+      msgWaitCheckOutWindow:
+        '{name} sudah absen datang pukul {inTime}. Absen pulang dibuka mulai pukul {openTime}.',
+      msgStudentNotFound:
+        'Siswa dengan NISN/NIS "{code}" tidak ditemukan.',
+      msgOfflineStudentNotCached:
+        'Mode Offline: NISN/NIS "{code}" belum ada di cache perangkat. Hubungkan internet sekali untuk memuat daftar siswa.',
+      msgScanError:
+        'Terjadi kesalahan saat memproses kartu pelajar. Silakan ulangi.',
+      msgSpecialEventError:
+        'Gagal mengaktifkan mode kegiatan khusus: {detail}',
     },
     studentCardPrint: {
       backToStudentsTitle: 'Kembali ke Daftar Siswa',
@@ -2561,6 +2668,8 @@ export const translations = {
         'Camera permission denied by browser. Click the lock/camera icon next to the URL and select Allow.',
       ariaSelectCamera: 'Select Camera Device',
       usbManualModeLabel: 'USB Scanner / Manual Input Mode',
+      titleSwitchCamera: 'Switch Front / Back Camera',
+      btnSwitchCamera: 'Switch Camera',
       titleMirrorCamera: 'Flip Mirror Preview',
       btnMirror: 'Mirror',
       titleDisableCamera:
@@ -2574,6 +2683,111 @@ export const translations = {
         'Scan via USB or type NISN / NIS then press Enter...',
       ariaManualInput: 'Barcode Scanner or Manual NISN Input',
       btnSubmitScan: 'Check In',
+    },
+    // Tambahkan di dalam `translations.en.attendanceScanner`:
+    // titleSwitchCamera: 'Switch Front / Back Camera',
+    // btnSwitchCamera: 'Switch Camera',
+
+    // Tambahkan di dalam `translations.en` (setelah blok `attendanceScanner`):
+    studentKiosk: {
+      offlineBannerTitle: 'Offline Queue Mode Active:',
+      offlineBannerDesc:
+        'Students can still scan their ID cards. Records are safely stored on this device and automatically synced once internet returns.',
+      offlineWaitingCount: '{count} queued',
+      offlineQueueBtnSyncing: 'Syncing...',
+      offlineQueueBtnLabel: 'Offline Queue ({count})',
+      offlineQueueTitleOnline:
+        'Click to upload offline queue to server now',
+      offlineQueueTitleOffline:
+        'Waiting for internet connection to sync queue',
+      soundLabelOn: 'Sound',
+      soundLabelOff: 'Muted',
+      soundTitleMute: 'Click to mute sound',
+      soundTitleUnmute: 'Click to unmute sound',
+      soundAriaVolume: 'Kiosk Sound Volume',
+      soundTitleVolume: 'Sound Volume: {percent}%',
+      statusOnline: 'Online',
+      statusOffline: 'Offline',
+      simPrefix: 'Simulation: {name}',
+      scheduleSummary: 'In {start} • Out {end}',
+      statCardTitle: "Today's Student Stats",
+      statPresent: 'Present',
+      statLate: 'Late',
+      statCheckedOut: 'Checked Out',
+      statTotalScan: 'Total Scanned',
+      mapCardTitle: 'School Attendance Area',
+      recentTitle: 'Recent Activity',
+      recentQueuedBadge: '(Queued)',
+      actionIn: 'IN',
+      actionOut: 'OUT',
+      specialEventActiveTitle: 'Special Event Mode Active: {reason}',
+      specialEventActiveSub: 'Holiday exception for ({holiday})',
+      btnLocking: 'Locking...',
+      btnRelock: 'Re-Lock',
+      lockedBadge: 'Attendance Kiosk Locked',
+      lockedHolidayTitle: 'Holiday: {holiday}',
+      lockedHolidayDesc:
+        'Self-service student attendance via Kiosk is automatically locked on holidays.',
+      specialEventPromptLabel: 'Special School Event Today?',
+      specialEventPlaceholder: 'Leave empty for default: {defaultName}',
+      btnUnlocking: 'Unlocking...',
+      btnActivateSpecialEvent: 'Enable Special Event Attendance',
+      lockedLoginHint:
+        'To unlock for a special event, please sign in as a Teacher, Homeroom Teacher, or Admin first.',
+      kioskDisabledTitle: 'Student Kiosk Disabled',
+      kioskDisabledDesc:
+        'The school admin has disabled self-service Kiosk attendance. Please contact your Homeroom Teacher or School Operator.',
+      modeAutoReadyOut: 'Auto Mode (Ready for Check-Out)',
+      modeAutoIn: 'Auto Mode (Check-In)',
+      modeCheckInOnly: 'Check-In Only',
+      modeCheckOutOnly: 'Check-Out Only',
+      idleTitleCheckOut: 'Scan ID Card — Check-Out',
+      idleTitleAutoOut: 'Scan Student ID Card (In / Out)',
+      idleTitleDefault: 'Scan Student ID Card',
+      idleSubtitle:
+        'Point ID card at camera, use USB scanner, or type NISN/NIS',
+      lateWarningBanner:
+        'Past {deadline} — Arrival will be recorded as LATE',
+      processingText: 'Processing...',
+      recordingAttendanceText: 'Recording attendance...',
+      resultTitleOfflineSaved: 'Saved to Offline Queue!',
+      resultTitleCheckOutSuccess: 'Check-Out Successful!',
+      resultTitleCheckInSuccess: 'Check-In Successful!',
+      resultHintOffline:
+        'Will automatically upload to server when internet reconnects...',
+      resultHintOnline: 'Screen will reset automatically...',
+      btnNextScan: 'Next Student',
+      resultTitleAlready: 'Attendance Info',
+      btnBack: 'Back',
+      resultTitleError: 'Failed',
+      btnTryAgain: 'Try Again',
+      msgHolidayLocked: 'Kiosk is locked due to {holiday}.',
+      msgKioskDisabled:
+        'Student Kiosk mode is currently disabled by the School Admin.',
+      msgNotCheckedInYet:
+        '{name} has not checked in yet today.',
+      msgCheckInSuccess:
+        '{name} — CHECK-IN ({status}) at {time}',
+      msgCheckOutSuccess:
+        '{name} — CHECK-OUT recorded at {time}',
+      msgOfflineQueued:
+        '{name} — Saved to OFFLINE QUEUE ({status}) at {time}',
+      msgOfflineAlready:
+        '{name} is already recorded in the offline queue at {time}.',
+      msgRecordedLeave: '{name} is recorded as {status} today.',
+      msgAlreadyBoth:
+        '{name} has already checked in and out (at {time}) today.',
+      msgAlreadyInOnly: '{name} has already checked in today.',
+      msgWaitCheckOutWindow:
+        '{name} checked in at {inTime}. Check-out opens at {openTime}.',
+      msgStudentNotFound:
+        'Student with NISN/NIS "{code}" was not found.',
+      msgOfflineStudentNotCached:
+        'Offline Mode: NISN/NIS "{code}" is not cached on this device yet. Connect to the internet once to sync the student directory.',
+      msgScanError:
+        'An error occurred while processing the student ID card. Please try again.',
+      msgSpecialEventError:
+        'Failed to enable special event mode: {detail}',
     },
     studentCardPrint: {
       backToStudentsTitle: 'Back to Student List',
