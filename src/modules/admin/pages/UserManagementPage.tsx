@@ -13,6 +13,7 @@ import {
     ChevronDown,
     DatabaseZap,
     GraduationCap,
+    KeyRound,
     Plus,
     Search,
     ShieldCheck,
@@ -50,6 +51,7 @@ import {
     type BulkTargetGroup,
     type CreateUserFormValues,
     type EditUserFormValues,
+    type MasterAccountCandidate,
     type ResetPasswordFormValues,
     type SortConfig,
     type SortKey,
@@ -62,6 +64,7 @@ import {
     ConfirmUserActionModal,
     EditUserModal,
     ResetPasswordModal,
+    SelectMasterCandidatesModal,
 } from '../components/UserManagementForms';
 import { UserManagementTable } from '../components/UserManagementTable';
 
@@ -124,6 +127,7 @@ export function UserManagementPage() {
     const [userToEdit, setUserToEdit] = useState<AppUser | null>(null);
     const [userToReset, setUserToReset] = useState<AppUser | null>(null);
     const [userToDelete, setUserToDelete] = useState<AppUser | null>(null);
+    const [isSelectMasterModalOpen, setIsSelectMasterModalOpen] = useState(false);
     const [isGenerateSelectedModalOpen, setIsGenerateSelectedModalOpen] = useState(false);
     const [isGenerateAllModalOpen, setIsGenerateAllModalOpen] = useState(false);
     const [isDeleteSelectedModalOpen, setIsDeleteSelectedModalOpen] = useState(false);
@@ -141,7 +145,10 @@ export function UserManagementPage() {
         queryClient.invalidateQueries({ queryKey: ['users-page'] });
         queryClient.invalidateQueries({ queryKey: ['users-tab-counts'] });
         queryClient.invalidateQueries({ queryKey: ['users-list'] });
+        queryClient.invalidateQueries({ queryKey: ['unlinked-master-candidates'] });
     }, [queryClient]);
+
+    const activeBulkGroup = isBulkTargetGroup(activeTab) ? activeTab : null;
 
     // ------------------------------------------
     // DATA FETCHING PARALEL (10 BARIS + TAB COUNTS)
@@ -183,6 +190,20 @@ export function UserManagementPage() {
         enabled: isSuperAdmin || Boolean(activeSchoolId),
         staleTime: 30_000,
         placeholderData: keepPreviousData,
+    });
+
+    const {
+        data: masterCandidates = [],
+        isLoading: isLoadingMasterCandidates,
+    } = useQuery({
+        queryKey: ['unlinked-master-candidates', activeSchoolId, activeBulkGroup],
+        queryFn: () =>
+            userManagementService.fetchUnlinkedMasterCandidates(
+                activeBulkGroup!,
+                activeSchoolId
+            ),
+        enabled: isSelectMasterModalOpen && Boolean(activeBulkGroup) && Boolean(activeSchoolId),
+        staleTime: 0,
     });
 
     const paginatedUsers = pageResult.users;
@@ -348,6 +369,37 @@ export function UserManagementPage() {
         onError: (error: Error) => toast.error(error.message),
     });
 
+    // Aktivasi selektif dari data master (guru / siswa / orang tua yang belum punya akun)
+    const generateFromMasterSelectedMutation = useMutation({
+        mutationFn: (candidates: MasterAccountCandidate[]) =>
+            userManagementService.generateFromMasterCandidates({
+                candidates,
+                activeSchoolId,
+            }),
+        onSuccess: (summary) => {
+            toast.success(
+                lang === 'id'
+                    ? `${summary.success} akun berhasil diaktifkan dari data master.`
+                    : `${summary.success} accounts activated from master data.`,
+                {
+                    description:
+                        lang === 'id'
+                            ? 'Kata sandi awal sistem (Password123!) telah diterapkan.'
+                            : 'Initial system password (Password123!) has been applied.',
+                }
+            );
+            if (summary.failed > 0) {
+                toast.warning(`${summary.failed} akun gagal diaktifkan.`, {
+                    description: summary.firstMessage,
+                });
+            }
+            setIsSelectMasterModalOpen(false);
+            invalidateUsersQueries();
+        },
+        onError: (error: Error) => toast.error(error.message),
+    });
+
+    // Reset massal sandi awal sistem (Password123!) untuk baris akun terpilih di tabel
     const generateSelectedMutation = useMutation({
         mutationFn: (usersTarget: AppUser[]) =>
             userManagementService.generateSelectedUsers({
@@ -357,12 +409,17 @@ export function UserManagementPage() {
                 isSuperAdmin,
             }),
         onSuccess: (summary) => {
-            toast.success(tUM('toastGenSelSuccess', { count: summary.success }), {
-                description:
-                    lang === 'id'
-                        ? 'Kata sandi diatur ulang ke sandi awal sistem (wajib diganti saat login).'
-                        : 'Password reset to system initial password (must be changed on login).',
-            });
+            toast.success(
+                lang === 'id'
+                    ? `Sandi awal ${summary.success} akun berhasil diatur ulang.`
+                    : `Initial password reset for ${summary.success} accounts.`,
+                {
+                    description:
+                        lang === 'id'
+                            ? 'Kata sandi diatur ulang ke sandi awal sistem (Password123!).'
+                            : 'Password reset to system initial password (Password123!).',
+                }
+            );
             if (summary.failed > 0) {
                 toast.warning(`${summary.failed} akun gagal diproses.`, {
                     description: summary.firstMessage,
@@ -582,8 +639,6 @@ export function UserManagementPage() {
         { value: 'orangtua', label: tUM('tabParent'), icon: Users2 },
     ];
 
-    const activeBulkGroup = isBulkTargetGroup(activeTab) ? activeTab : null;
-
     return (
         <div className="relative space-y-6">
             {/* ================= MODALS ================= */}
@@ -652,11 +707,33 @@ export function UserManagementPage() {
                     />
                 )}
 
+                {isSelectMasterModalOpen && canManageUsers && activeBulkGroup && activeSchoolId && (
+                    <SelectMasterCandidatesModal
+                        targetGroup={activeBulkGroup}
+                        lang={lang}
+                        candidates={masterCandidates}
+                        isLoading={isLoadingMasterCandidates}
+                        isSubmitting={generateFromMasterSelectedMutation.isPending}
+                        onClose={() => setIsSelectMasterModalOpen(false)}
+                        onConfirm={(selected) =>
+                            generateFromMasterSelectedMutation.mutate(selected)
+                        }
+                    />
+                )}
+
                 {isGenerateSelectedModalOpen && canManageUsers && (
                     <ConfirmUserActionModal
                         variant="generate-selected"
-                        title={tUM('modalGenSelTitle', { count: eligibleSelectedUsers.length })}
-                        description={tUM('modalGenSelSub', { count: eligibleSelectedUsers.length })}
+                        title={
+                            lang === 'id'
+                                ? `Reset Sandi Awal (${eligibleSelectedUsers.length} Akun)?`
+                                : `Reset Initial Password (${eligibleSelectedUsers.length} Accounts)?`
+                        }
+                        description={
+                            lang === 'id'
+                                ? `Kata sandi ${eligibleSelectedUsers.length} akun terpilih akan diatur ulang ke sandi awal sistem (Password123!) dan disinkronkan ulang.`
+                                : `Passwords for ${eligibleSelectedUsers.length} selected accounts will be reset to the initial system password (Password123!).`
+                        }
                         subNote={
                             selectedUsersList.length > eligibleSelectedUsers.length
                                 ? lang === 'id'
@@ -772,8 +849,8 @@ export function UserManagementPage() {
                                         {label}
                                         <span
                                             className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${isActive
-                                                ? 'bg-white/20 text-white'
-                                                : 'bg-muted text-muted-foreground'
+                                                    ? 'bg-white/20 text-white'
+                                                    : 'bg-muted text-muted-foreground'
                                                 }`}
                                         >
                                             {tabCounts[value] ?? 0}
@@ -866,8 +943,8 @@ export function UserManagementPage() {
                                             handleSortChange({ key: 'none', direction: 'asc' })
                                         }
                                         className={`cursor-pointer ${sortConfig.key === 'none'
-                                            ? 'bg-primary/10 text-primary'
-                                            : ''
+                                                ? 'bg-primary/10 text-primary'
+                                                : ''
                                             }`}
                                     >
                                         <ArrowUpDown className="mr-2 h-4 w-4 shrink-0" /> Reset
@@ -891,7 +968,7 @@ export function UserManagementPage() {
                                         </Button>
                                     </DropdownMenuTrigger>
 
-                                    <DropdownMenuContent align="end" className="w-56">
+                                    <DropdownMenuContent align="end" className="w-64">
                                         <DropdownMenuItem
                                             className="cursor-pointer font-medium text-blue-600 focus:bg-blue-50 focus:text-blue-700 dark:text-blue-400 dark:focus:bg-blue-500/10"
                                             onClick={() => setIsGenerateAllModalOpen(true)}
@@ -902,33 +979,49 @@ export function UserManagementPage() {
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem
                                             className="cursor-pointer"
-                                            disabled={eligibleSelectedUsers.length === 0}
-                                            onClick={() => setIsGenerateSelectedModalOpen(true)}
+                                            onClick={() => setIsSelectMasterModalOpen(true)}
                                         >
-                                            <UserPlus className="mr-2 h-4 w-4 shrink-0" />
+                                            <UserPlus className="mr-2 h-4 w-4 shrink-0 text-emerald-600" />
                                             <span className="truncate">
-                                                {tUM('generateSelected')} (
-                                                {eligibleSelectedUsers.length})
+                                                {lang === 'id'
+                                                    ? 'Generate Terpilih dari Master'
+                                                    : 'Generate Selected from Master'}
                                             </span>
                                         </DropdownMenuItem>
                                     </DropdownMenuContent>
                                 </DropdownMenu>
                             )}
 
-                            {/* HAPUS */}
+                            {/* AKSI BARIS TERCENTANG (RESET SANDI AWAL & HAPUS) */}
                             {canManageUsers &&
                                 (eligibleSelectedUsers.length > 0 ? (
-                                    <Button
-                                        type="button"
-                                        variant="outline"
-                                        className="h-10 grow justify-center gap-2 whitespace-nowrap border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10 sm:grow-0 sm:px-4"
-                                        onClick={() => setIsDeleteSelectedModalOpen(true)}
-                                    >
-                                        <Trash2 className="h-4 w-4 shrink-0" />
-                                        <span>
-                                            {tUM('deleteSelected')} ({eligibleSelectedUsers.length})
-                                        </span>
-                                    </Button>
+                                    <>
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-10 grow justify-center gap-2 whitespace-nowrap border-amber-300 px-3 text-amber-700 hover:bg-amber-50 hover:text-amber-800 dark:border-amber-500/30 dark:text-amber-300 dark:hover:bg-amber-500/10 sm:grow-0 sm:px-4"
+                                            onClick={() => setIsGenerateSelectedModalOpen(true)}
+                                        >
+                                            <KeyRound className="h-4 w-4 shrink-0" />
+                                            <span>
+                                                {lang === 'id'
+                                                    ? `Reset Sandi Awal (${eligibleSelectedUsers.length})`
+                                                    : `Reset Initial Password (${eligibleSelectedUsers.length})`}
+                                            </span>
+                                        </Button>
+
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            className="h-10 grow justify-center gap-2 whitespace-nowrap border-red-200 px-3 text-red-600 hover:bg-red-50 hover:text-red-700 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10 sm:grow-0 sm:px-4"
+                                            onClick={() => setIsDeleteSelectedModalOpen(true)}
+                                        >
+                                            <Trash2 className="h-4 w-4 shrink-0" />
+                                            <span>
+                                                {tUM('deleteSelected')} ({eligibleSelectedUsers.length})
+                                            </span>
+                                        </Button>
+                                    </>
                                 ) : (
                                     isSuperAdmin &&
                                     activeBulkGroup &&

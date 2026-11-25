@@ -8,6 +8,7 @@ import {
     ROLE_VALUES,
     STAFF_ROLES,
     isProtectedAdminAccount,
+    mapTugasTambahanToRoles,
     normalizeSchoolId,
     type AppUser,
     type AppUserRole,
@@ -20,6 +21,7 @@ import {
     type FetchUsersPageParams,
     type FetchUsersPageResult,
     type InvokeResult,
+    type MasterAccountCandidate,
     type UserTabCounts,
     type UserTabKey,
 } from '../types/user-management.types';
@@ -629,6 +631,239 @@ export const userManagementService = {
         return enrichUsersWithMasterData(allUsers, validSchoolId, isSuperAdmin);
     },
 
+    /**
+     * Mengambil daftar data master (Guru/Staff, Siswa, atau Orang Tua) yang BELUM memiliki akun login.
+     */
+    async fetchUnlinkedMasterCandidates(
+        targetGroup: BulkTargetGroup,
+        schoolId: string | null
+    ): Promise<MasterAccountCandidate[]> {
+        const validSchoolId = normalizeSchoolId(schoolId);
+        if (!validSchoolId) return [];
+
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+        if (targetGroup === 'staff') {
+            const { data, error } = await supabase
+                .from('teachers')
+                .select('id, fullName, email, nip, nuptk, tugasTambahan, userId')
+                .eq('schoolId', validSchoolId)
+                .is('userId', null)
+                .order('fullName', { ascending: true });
+
+            if (error) throw new Error(error.message);
+
+            return (data ?? []).map((row) => {
+                const r = row as {
+                    id: string;
+                    fullName?: string | null;
+                    email?: string | null;
+                    nip?: string | null;
+                    nuptk?: string | null;
+                    tugasTambahan?: string | null;
+                };
+                const cleanEmail = (r.email ?? '').trim().toLowerCase();
+                const autoRoles = mapTugasTambahanToRoles(r.tugasTambahan);
+                const primaryRole: AppUserRole = autoRoles.includes('KEPALA_SEKOLAH')
+                    ? 'KEPALA_SEKOLAH'
+                    : 'GURU';
+                const additionalRoles = autoRoles.filter((role) => role !== primaryRole);
+
+                return {
+                    masterId: r.id,
+                    targetGroup: 'staff',
+                    fullName: (r.fullName ?? '').trim() || 'Tanpa Nama',
+                    email: cleanEmail,
+                    role: primaryRole,
+                    additionalRoles,
+                    identifier: (r.nip || r.nuptk || '-').trim(),
+                    subtitle: r.tugasTambahan ?? undefined,
+                    hasValidEmail: emailRegex.test(cleanEmail),
+                };
+            });
+        }
+
+        if (targetGroup === 'siswa') {
+            const [studentsRes, linksRes] = await Promise.all([
+                supabase
+                    .from('students')
+                    .select('id, fullName, email, nisn, nis')
+                    .eq('schoolId', validSchoolId)
+                    .order('fullName', { ascending: true }),
+                supabase
+                    .from('user_student_links')
+                    .select('studentId, users!inner(role)')
+                    .eq('schoolId', validSchoolId)
+                    .eq('users.role', 'SISWA'),
+            ]);
+
+            if (studentsRes.error) throw new Error(studentsRes.error.message);
+            if (linksRes.error) throw new Error(linksRes.error.message);
+
+            const linkedStudentIds = new Set(
+                (linksRes.data ?? [])
+                    .map((l) => (l as { studentId?: string | null }).studentId)
+                    .filter((id): id is string => Boolean(id))
+            );
+
+            return (studentsRes.data ?? [])
+                .filter((s) => !linkedStudentIds.has((s as { id: string }).id))
+                .map((row) => {
+                    const r = row as {
+                        id: string;
+                        fullName?: string | null;
+                        email?: string | null;
+                        nisn?: string | null;
+                        nis?: string | null;
+                    };
+                    const cleanEmail = (r.email ?? '').trim().toLowerCase();
+                    return {
+                        masterId: r.id,
+                        targetGroup: 'siswa',
+                        fullName: (r.fullName ?? '').trim() || 'Tanpa Nama',
+                        email: cleanEmail,
+                        role: 'SISWA',
+                        additionalRoles: [],
+                        identifier: (r.nisn || r.nis || '-').trim(),
+                        hasValidEmail: emailRegex.test(cleanEmail),
+                    };
+                });
+        }
+
+        // targetGroup === 'orangtua'
+        const [studentsRes, parentLinksRes] = await Promise.all([
+            supabase
+                .from('students')
+                .select('id, fullName, nisn, nis, parentName, parentEmail')
+                .eq('schoolId', validSchoolId)
+                .order('fullName', { ascending: true }),
+            supabase
+                .from('user_student_links')
+                .select('studentId, users!inner(role)')
+                .eq('schoolId', validSchoolId)
+                .eq('users.role', 'ORANG_TUA'),
+        ]);
+
+        if (studentsRes.error) throw new Error(studentsRes.error.message);
+        if (parentLinksRes.error) throw new Error(parentLinksRes.error.message);
+
+        const linkedParentStudentIds = new Set(
+            (parentLinksRes.data ?? [])
+                .map((l) => (l as { studentId?: string | null }).studentId)
+                .filter((id): id is string => Boolean(id))
+        );
+
+        return (studentsRes.data ?? [])
+            .filter((s) => !linkedParentStudentIds.has((s as { id: string }).id))
+            .map((row) => {
+                const r = row as {
+                    id: string;
+                    fullName?: string | null;
+                    nisn?: string | null;
+                    nis?: string | null;
+                    parentName?: string | null;
+                    parentEmail?: string | null;
+                };
+                const cleanEmail = (r.parentEmail ?? '').trim().toLowerCase();
+                const fallbackParentName = r.fullName
+                    ? `Wali dari ${r.fullName.trim()}`
+                    : 'Orang Tua / Wali';
+
+                return {
+                    masterId: r.id,
+                    targetGroup: 'orangtua',
+                    fullName: (r.parentName ?? '').trim() || fallbackParentName,
+                    email: cleanEmail,
+                    role: 'ORANG_TUA',
+                    additionalRoles: [],
+                    identifier: (r.nisn || r.nis || '-').trim(),
+                    subtitle: r.fullName ? `Siswa: ${r.fullName.trim()}` : undefined,
+                    hasValidEmail: emailRegex.test(cleanEmail),
+                };
+            });
+    },
+
+    /**
+     * Mengaktifkan/membuat akun login secara selektif dari daftar kandidat master yang dicentang,
+     * lalu menautkannya ke tabel master (`teachers.userId` atau `user_student_links`).
+     */
+    async generateFromMasterCandidates(params: {
+        candidates: MasterAccountCandidate[];
+        activeSchoolId: string | null;
+    }): Promise<BatchExecutionSummary> {
+        const validSchoolId = normalizeSchoolId(params.activeSchoolId);
+        if (!validSchoolId) {
+            throw new Error('Pilih sekolah aktif terlebih dahulu sebelum mengaktifkan akun.');
+        }
+
+        const validCandidates = params.candidates.filter((c) => c.hasValidEmail);
+        const skippedCount = params.candidates.length - validCandidates.length;
+
+        if (validCandidates.length === 0) {
+            throw new Error('Tidak ada kandidat terpilih yang memiliki alamat email valid.');
+        }
+
+        const results = await runWithConcurrency(
+            validCandidates,
+            BULK_CONCURRENCY,
+            async (candidate) => {
+                const res = await invokeSafe('create-user', {
+                    email: candidate.email,
+                    useDefaultPassword: true,
+                    fullName: candidate.fullName,
+                    role: candidate.role,
+                    additionalRoles: candidate.additionalRoles,
+                    schoolId: validSchoolId,
+                });
+
+                if (res.error || res.data?.error) {
+                    return res;
+                }
+
+                // Pastikan relasi master tertaut ke user baru
+                try {
+                    const { data: createdUser } = await supabase
+                        .from('users')
+                        .select('id')
+                        .eq('email', candidate.email)
+                        .maybeSingle();
+
+                    const newUserId = (createdUser as { id?: string } | null)?.id;
+                    if (newUserId) {
+                        if (candidate.targetGroup === 'staff') {
+                            await supabase
+                                .from('teachers')
+                                .update({ userId: newUserId })
+                                .eq('id', candidate.masterId)
+                                .eq('schoolId', validSchoolId)
+                                .is('userId', null);
+                        } else {
+                            await supabase.from('user_student_links').upsert(
+                                {
+                                    schoolId: validSchoolId,
+                                    userId: newUserId,
+                                    studentId: candidate.masterId,
+                                },
+                                { onConflict: 'userId,studentId' }
+                            );
+                        }
+                    }
+                } catch {
+                    // Best-effort linking jika edge function belum menautkan otomatis
+                }
+
+                return res;
+            }
+        );
+
+        const summary = summarizeResults(results, skippedCount);
+        if (summary.success === 0) {
+            throw new Error(summary.firstMessage);
+        }
+
+        return summary;
+    },
+
     async createUser(
         payload: CreateUserFormValues,
         schoolId: string | null,
@@ -840,6 +1075,9 @@ export const userManagementService = {
         }
     },
 
+    /**
+     * Reset massal sandi awal sistem (Password123!) & sinkronisasi ulang pada akun terpilih di tabel.
+     */
     async generateSelectedUsers(params: {
         usersTarget: AppUser[];
         activeSchoolId: string | null;
@@ -856,7 +1094,7 @@ export const userManagementService = {
 
         if (eligibleUsers.length === 0) {
             throw new Error(
-                'Tidak ada akun yang memenuhi syarat untuk di-generate (Admin/Super Admin & akun sendiri dilewati).'
+                'Tidak ada akun yang memenuhi syarat untuk di-reset (Admin/Super Admin & akun sendiri dilewati).'
             );
         }
 

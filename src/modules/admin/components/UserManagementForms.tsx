@@ -13,6 +13,7 @@ import {
     KeyRound,
     Loader2,
     Plus,
+    Search,
     Sparkles,
     Trash2,
     UserPlus,
@@ -44,8 +45,10 @@ import {
     mapTugasTambahanToRoles,
     type AppUser,
     type AppUserRole,
+    type BulkTargetGroup,
     type CreateUserFormValues,
     type EditUserFormValues,
+    type MasterAccountCandidate,
     type ResetPasswordFormValues,
 } from '../types/user-management.types';
 
@@ -864,7 +867,7 @@ export function ResetPasswordModal({
 }
 
 // ==========================================
-// 4. MODAL KONFIRMASI (HAPUS & GENERATE MASSAL)
+// 4. MODAL KONFIRMASI (HAPUS & RESET / GENERATE MASSAL)
 // ==========================================
 
 export type ConfirmDialogVariant =
@@ -902,8 +905,8 @@ export function ConfirmUserActionModal({
     const renderIcon = () => {
         if (variant === 'generate-selected') {
             return (
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-blue-100 dark:bg-blue-500/20">
-                    <UserPlus className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-500/20">
+                    <KeyRound className="h-6 w-6 text-amber-600 dark:text-amber-400" />
                 </div>
             );
         }
@@ -929,13 +932,15 @@ export function ConfirmUserActionModal({
     };
 
     const buttonClass =
-        variant === 'generate-selected' || variant === 'generate-all'
-            ? 'bg-blue-600 text-white hover:bg-blue-700'
-            : 'bg-red-600 text-white hover:bg-red-700';
+        variant === 'generate-selected'
+            ? 'bg-amber-600 text-white hover:bg-amber-700'
+            : variant === 'generate-all'
+                ? 'bg-blue-600 text-white hover:bg-blue-700'
+                : 'bg-red-600 text-white hover:bg-red-700';
 
     const ActionIcon =
         variant === 'generate-selected'
-            ? UserPlus
+            ? KeyRound
             : variant === 'generate-all'
                 ? DatabaseZap
                 : Trash2;
@@ -982,6 +987,270 @@ export function ConfirmUserActionModal({
                     )}
                     {confirmLabel}
                 </Button>
+            </div>
+        </BaseModalWrapper>
+    );
+}
+
+// ==========================================
+// 5. MODAL PILIH DATA MASTER (AKTIVASI AKUN SELEKTIF)
+// ==========================================
+
+interface SelectMasterCandidatesModalProps {
+    targetGroup: BulkTargetGroup;
+    lang: Lang;
+    candidates: MasterAccountCandidate[];
+    isLoading: boolean;
+    isSubmitting: boolean;
+    onClose: () => void;
+    onConfirm: (selected: MasterAccountCandidate[]) => void;
+}
+
+export function SelectMasterCandidatesModal({
+    targetGroup,
+    lang,
+    candidates,
+    isLoading,
+    isSubmitting,
+    onClose,
+    onConfirm,
+}: SelectMasterCandidatesModalProps) {
+    const [search, setSearch] = useState('');
+    const [selectedIds, setSelectedIds] = useState<string[]>([]);
+
+    const groupLabel =
+        targetGroup === 'staff'
+            ? lang === 'id'
+                ? 'Guru & Staff'
+                : 'Teachers & Staff'
+            : targetGroup === 'siswa'
+                ? lang === 'id'
+                    ? 'Siswa'
+                    : 'Students'
+                : lang === 'id'
+                    ? 'Orang Tua / Wali'
+                    : 'Parents / Guardians';
+
+    const filteredCandidates = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        if (!q) return candidates;
+        return candidates.filter(
+            (c) =>
+                c.fullName.toLowerCase().includes(q) ||
+                c.email.toLowerCase().includes(q) ||
+                c.identifier.toLowerCase().includes(q) ||
+                (c.subtitle ?? '').toLowerCase().includes(q)
+        );
+    }, [candidates, search]);
+
+    const selectableFiltered = useMemo(
+        () => filteredCandidates.filter((c) => c.hasValidEmail),
+        [filteredCandidates]
+    );
+
+    const isAllFilteredSelected =
+        selectableFiltered.length > 0 &&
+        selectableFiltered.every((c) => selectedIds.includes(c.masterId));
+
+    const handleToggleAll = (checked: boolean) => {
+        if (checked) {
+            setSelectedIds((prev) =>
+                Array.from(new Set([...prev, ...selectableFiltered.map((c) => c.masterId)]))
+            );
+        } else {
+            const removeSet = new Set(selectableFiltered.map((c) => c.masterId));
+            setSelectedIds((prev) => prev.filter((id) => !removeSet.has(id)));
+        }
+    };
+
+    const handleToggleOne = (masterId: string) => {
+        setSelectedIds((prev) =>
+            prev.includes(masterId) ? prev.filter((id) => id !== masterId) : [...prev, masterId]
+        );
+    };
+
+    const selectedCandidates = useMemo(
+        () => candidates.filter((c) => selectedIds.includes(c.masterId) && c.hasValidEmail),
+        [candidates, selectedIds]
+    );
+
+    const invalidEmailCount = useMemo(
+        () => candidates.filter((c) => !c.hasValidEmail).length,
+        [candidates]
+    );
+
+    return (
+        <BaseModalWrapper onClose={onClose} maxWidthClass="max-w-2xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                    <h3 className="flex items-center gap-2 text-lg font-bold">
+                        <UserPlus className="h-5 w-5 text-blue-600" />
+                        {lang === 'id'
+                            ? `Aktifkan Akun ${groupLabel} dari Data Master`
+                            : `Activate ${groupLabel} Accounts from Master Data`}
+                    </h3>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                        {lang === 'id'
+                            ? 'Centang data master yang belum memiliki akun login untuk dibuatkan akun secara selektif.'
+                            : 'Select unlinked master records to create and activate login accounts selectively.'}
+                    </p>
+                </div>
+                <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    onClick={onClose}
+                    disabled={isSubmitting}
+                >
+                    <X className="h-5 w-5" />
+                </Button>
+            </div>
+
+            {/* Search & Select All Bar */}
+            <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                <div className="relative flex-1">
+                    <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder={
+                            lang === 'id'
+                                ? 'Cari nama, email, atau NIP/NISN...'
+                                : 'Search name, email, or ID...'
+                        }
+                        className="h-9 pl-9 text-sm"
+                    />
+                </div>
+
+                {selectableFiltered.length > 0 && (
+                    <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-border bg-muted/40 px-3 py-1.5 text-xs font-medium">
+                        <input
+                            type="checkbox"
+                            checked={isAllFilteredSelected}
+                            onChange={(e) => handleToggleAll(e.target.checked)}
+                            className="h-4 w-4 rounded accent-blue-600"
+                        />
+                        <span>
+                            {lang === 'id'
+                                ? `Pilih Semua (${selectableFiltered.length})`
+                                : `Select All (${selectableFiltered.length})`}
+                        </span>
+                    </label>
+                )}
+            </div>
+
+            {invalidEmailCount > 0 && (
+                <div className="mb-3 flex items-center gap-2 rounded-lg border border-amber-300/70 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-300">
+                    <AlertCircle className="h-4 w-4 shrink-0" />
+                    <span>
+                        {lang === 'id'
+                            ? `${invalidEmailCount} data tidak memiliki email valid di master sehingga tidak dapat dicentang.`
+                            : `${invalidEmailCount} record(s) have missing/invalid email in master data and cannot be selected.`}
+                    </span>
+                </div>
+            )}
+
+            {/* Daftar Kandidat */}
+            <div className="max-h-80 overflow-y-auto rounded-xl border border-border">
+                {isLoading ? (
+                    <div className="flex items-center justify-center gap-2 py-12 text-sm text-muted-foreground">
+                        <Loader2 className="h-5 w-5 animate-spin text-blue-600" />
+                        <span>
+                            {lang === 'id'
+                                ? 'Memuat data master belum aktif...'
+                                : 'Loading unlinked master records...'}
+                        </span>
+                    </div>
+                ) : filteredCandidates.length === 0 ? (
+                    <div className="py-12 text-center text-sm text-muted-foreground">
+                        {candidates.length === 0
+                            ? lang === 'id'
+                                ? `Semua data ${groupLabel} sudah memiliki akun login.`
+                                : `All ${groupLabel} records already have active accounts.`
+                            : lang === 'id'
+                                ? 'Data tidak ditemukan untuk kata kunci tersebut.'
+                                : 'No matching records found.'}
+                    </div>
+                ) : (
+                    <div className="divide-y divide-border">
+                        {filteredCandidates.map((item) => {
+                            const checked = selectedIds.includes(item.masterId);
+                            return (
+                                <label
+                                    key={item.masterId}
+                                    className={`flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm transition-colors ${!item.hasValidEmail
+                                            ? 'cursor-not-allowed bg-muted/20 opacity-60'
+                                            : checked
+                                                ? 'cursor-pointer bg-blue-500/10'
+                                                : 'cursor-pointer hover:bg-muted/40'
+                                        }`}
+                                >
+                                    <div className="flex min-w-0 items-center gap-3">
+                                        <input
+                                            type="checkbox"
+                                            disabled={!item.hasValidEmail || isSubmitting}
+                                            checked={checked}
+                                            onChange={() => handleToggleOne(item.masterId)}
+                                            className="h-4 w-4 shrink-0 rounded accent-blue-600"
+                                        />
+                                        <div className="min-w-0">
+                                            <p className="truncate font-semibold text-foreground">
+                                                {item.fullName}
+                                            </p>
+                                            <p className="truncate text-xs text-muted-foreground">
+                                                {item.hasValidEmail
+                                                    ? item.email
+                                                    : lang === 'id'
+                                                        ? 'Email belum diisi di data master'
+                                                        : 'Email missing in master record'}
+                                                {item.subtitle ? ` • ${item.subtitle}` : ''}
+                                            </p>
+                                        </div>
+                                    </div>
+
+                                    <span className="shrink-0 rounded bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground">
+                                        {item.identifier}
+                                    </span>
+                                </label>
+                            );
+                        })}
+                    </div>
+                )}
+            </div>
+
+            {/* Footer */}
+            <div className="mt-5 flex flex-col-reverse items-center justify-between gap-3 border-t pt-4 sm:flex-row">
+                <span className="text-xs text-muted-foreground">
+                    {lang === 'id'
+                        ? `${selectedCandidates.length} dari ${candidates.length} data master dipilih`
+                        : `${selectedCandidates.length} of ${candidates.length} master records selected`}
+                </span>
+
+                <div className="flex w-full justify-end gap-2 sm:w-auto">
+                    <Button
+                        type="button"
+                        variant="outline"
+                        onClick={onClose}
+                        disabled={isSubmitting}
+                    >
+                        {lang === 'id' ? 'Batal' : 'Cancel'}
+                    </Button>
+                    <Button
+                        type="button"
+                        disabled={selectedCandidates.length === 0 || isSubmitting}
+                        onClick={() => onConfirm(selectedCandidates)}
+                        className="bg-blue-600 text-white hover:bg-blue-700"
+                    >
+                        {isSubmitting ? (
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                            <UserPlus className="mr-2 h-4 w-4" />
+                        )}
+                        {lang === 'id'
+                            ? `Aktifkan (${selectedCandidates.length})`
+                            : `Activate (${selectedCandidates.length})`}
+                    </Button>
+                </div>
             </div>
         </BaseModalWrapper>
     );

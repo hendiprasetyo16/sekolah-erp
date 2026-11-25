@@ -268,7 +268,6 @@ export function getEffectiveRoles(
     return Array.from(roleSet);
 }
 
-// Tambahkan di bagian bawah src/modules/admin/types/user-management.types.ts
 export interface FetchUsersPageParams {
     schoolId: string | null;
     isSuperAdmin: boolean;
@@ -286,3 +285,15 @@ export interface FetchUsersPageResult {
 }
 
 export type UserTabCounts = Record<UserTabKey, number>;
+
+export interface MasterAccountCandidate {
+    masterId: string;
+    targetGroup: BulkTargetGroup;
+    fullName: string;
+    email: string;
+    role: AppUserRole;
+    additionalRoles: AppUserRole[];
+    identifier: string; // NIP/NUPTK untuk guru, NISN/NIS untuk siswa, NISN anak untuk orang tua
+    subtitle?: string;  // Jabatan/tugas tambahan atau Nama Siswa (untuk Orang Tua)
+    hasValidEmail: boolean;
+}
