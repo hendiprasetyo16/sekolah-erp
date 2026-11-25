@@ -106,6 +106,7 @@ interface TeacherProfile {
   nip?: string | null;
   nuptk?: string | null;
   position?: string | null;
+  additionalDuty?: string | null;
   photoUrl?: string | null;
   allowDesktopAttendance: boolean;
 }
@@ -158,8 +159,12 @@ interface TeacherDbRow {
   nip?: string | null;
   nuptk?: string | null;
   position?: string | null;
+  additionalDuty?: string | null;
+  additionalDuties?: string[] | string | null;
+  tugasTambahan?: string | null;
   photoUrl?: string | null;
   allowDesktopAttendance?: boolean | null;
+  [key: string]: unknown;
 }
 
 interface SchoolDbRow {
@@ -229,6 +234,59 @@ function formatTeacherIdentityLabel(
   }
 
   return fallbackLabel;
+}
+
+function extractAdditionalDuties(
+  rawRow: Record<string, unknown> | null | undefined
+): string | null {
+  if (!rawRow) return null;
+
+  const candidateKeys = [
+    'additionalDuty',
+    'additionalDuties',
+    'tugasTambahan',
+    'additionalTask',
+    'additionalTasks',
+    'additionalPosition',
+    'additionalRole',
+    'tugas_tambahan',
+    'additional_duty',
+    'additional_duties',
+  ];
+
+  const ignoredValues = new Set([
+    '-',
+    '--',
+    '—',
+    'tidak ada',
+    'none',
+    'null',
+    'undefined',
+  ]);
+
+  const normalizeEntry = (entry: unknown): string | null => {
+    if (typeof entry !== 'string') return null;
+    const cleaned = sanitizeIdentityValue(entry);
+    if (!cleaned || ignoredValues.has(cleaned.toLowerCase())) return null;
+    return cleaned;
+  };
+
+  for (const key of candidateKeys) {
+    const rawVal = rawRow[key];
+    if (typeof rawVal === 'string') {
+      const single = normalizeEntry(rawVal);
+      if (single) return single;
+    } else if (Array.isArray(rawVal)) {
+      const items = rawVal
+        .map(normalizeEntry)
+        .filter((item): item is string => Boolean(item));
+      if (items.length > 0) {
+        return Array.from(new Set(items)).join(', ');
+      }
+    }
+  }
+
+  return null;
 }
 
 function extractErrorMessage(error: unknown, fallbackMessage: string): string {
@@ -681,6 +739,8 @@ export function TeacherAttendancePage() {
   // Data Guru, Pengaturan Sekolah, & Riwayat Presensi
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
   const [photoLoadError, setPhotoLoadError] = useState<boolean>(false);
+  const [isProfileHintOpen, setIsProfileHintOpen] = useState<boolean>(false);
+  const profileHintRef = useRef<HTMLDivElement | null>(null);
   const [schoolGeo, setSchoolGeo] = useState<SchoolGeoAndSchedule | null>(null);
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
@@ -706,7 +766,37 @@ export function TeacherAttendancePage() {
 
   useEffect(() => {
     setPhotoLoadError(false);
+    setIsProfileHintOpen(false);
   }, [teacher?.id, resolvedTeacherPhotoUrl]);
+
+  // Tutup otomatis popover informasi status akun saat mengetuk area luar atau setelah 4,5 detik
+  useEffect(() => {
+    if (!isProfileHintOpen) return;
+
+    const handlePointerDownOutside = (event: MouseEvent | TouchEvent) => {
+      if (
+        profileHintRef.current &&
+        !profileHintRef.current.contains(event.target as Node)
+      ) {
+        setIsProfileHintOpen(false);
+      }
+    };
+
+    const autoCloseTimer = setTimeout(() => {
+      setIsProfileHintOpen(false);
+    }, 4500);
+
+    document.addEventListener('mousedown', handlePointerDownOutside);
+    document.addEventListener('touchstart', handlePointerDownOutside, {
+      passive: true,
+    });
+
+    return () => {
+      clearTimeout(autoCloseTimer);
+      document.removeEventListener('mousedown', handlePointerDownOutside);
+      document.removeEventListener('touchstart', handlePointerDownOutside);
+    };
+  }, [isProfileHintOpen]);
 
   const schoolTimezone = schoolGeo?.timezone || DEFAULT_SCHOOL_TIMEZONE;
   const todayStr = useMemo(
@@ -1124,6 +1214,7 @@ export function TeacherAttendancePage() {
           nip: item.nip ?? null,
           nuptk: item.nuptk ?? null,
           position: item.position ?? null,
+          additionalDuty: extractAdditionalDuties(item),
           photoUrl: item.photoUrl ?? null,
           allowDesktopAttendance: Boolean(item.allowDesktopAttendance),
         }));
@@ -1226,6 +1317,7 @@ export function TeacherAttendancePage() {
             nip: tByUser.nip ?? null,
             nuptk: tByUser.nuptk ?? null,
             position: tByUser.position ?? null,
+            additionalDuty: extractAdditionalDuties(tByUser),
             photoUrl: tByUser.photoUrl ?? null,
             allowDesktopAttendance: Boolean(tByUser.allowDesktopAttendance),
           };
@@ -2357,6 +2449,45 @@ export function TeacherAttendancePage() {
     earlyCheckoutReason.trim().length >= MIN_EARLY_CHECKOUT_REASON_LENGTH;
 
   const isTeacherAccountLinked = Boolean(teacher?.userId);
+  const accountStatusHint = useMemo(() => {
+    if (!teacher) {
+      return {
+        title:
+          currentLang === 'en'
+            ? 'Teacher Profile Unlinked'
+            : 'Profil PTK Belum Tertaut',
+        description:
+          currentLang === 'en'
+            ? 'Your login account is not yet connected to a Dapodik teacher record.'
+            : 'Akun login Anda belum terhubung dengan data PTK Dapodik sekolah ini.',
+      };
+    }
+
+    if (isTeacherAccountLinked) {
+      return {
+        title:
+          currentLang === 'en'
+            ? 'Login Account Linked'
+            : 'Akun Login Tertaut',
+        description:
+          currentLang === 'en'
+            ? 'This PTK profile is verified and linked to an active login account.'
+            : 'Data PTK ini sudah terhubung dengan akun pengguna aktif.',
+      };
+    }
+
+    return {
+      title:
+        currentLang === 'en'
+          ? 'Account Not Yet Linked'
+          : 'Akun Belum Tertaut',
+      description:
+        currentLang === 'en'
+          ? 'Dapodik PTK data is registered, but not yet linked to a teacher login account.'
+          : 'Data PTK Dapodik sudah terdaftar, namun belum ditautkan ke akun login guru.',
+    };
+  }, [teacher, isTeacherAccountLinked, currentLang]);
+
   const teacherIdentityLabel = useMemo(
     () =>
       formatTeacherIdentityLabel(
@@ -2733,41 +2864,79 @@ export function TeacherAttendancePage() {
               <div className="grid grid-cols-12 gap-3 items-stretch">
                 <div className="col-span-12 sm:col-span-8 flex flex-col justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    <div className="relative shrink-0 mt-0.5">
-                      <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
-                        {resolvedTeacherPhotoUrl && !photoLoadError ? (
-                          <img
-                            src={resolvedTeacherPhotoUrl}
-                            alt={teacher?.fullName ?? user?.fullName ?? 'Guru'}
-                            onError={() => setPhotoLoadError(true)}
-                            className="w-14 h-14 rounded-[14px] object-cover bg-white"
-                          />
-                        ) : (
-                          <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
-                            {(teacher?.fullName ?? user?.fullName ?? 'G')
-                              .trim()
-                              .charAt(0)
-                              .toUpperCase()}
-                          </div>
-                        )}
-                      </div>
-                      <span
-                        title={
-                          isTeacherAccountLinked
-                            ? currentLang === 'en'
-                              ? 'Linked to Login Account'
-                              : 'Akun Login Tertaut'
-                            : currentLang === 'en'
-                              ? 'Dapodik PTK (Not yet linked to login account)'
-                              : 'PTK Dapodik (Belum tertaut akun login)'
-                        }
-                        className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center shadow border border-white transition-colors ${isTeacherAccountLinked
-                            ? 'bg-emerald-500 text-white'
-                            : 'bg-amber-400 text-slate-900'
-                          }`}
+                    {/* Foto Profil + Lencana Status Akun (Interaktif saat disentuh di HP maupun hover di Komputer) */}
+                    <div ref={profileHintRef} className="relative shrink-0 mt-0.5">
+                      <button
+                        type="button"
+                        onClick={() => setIsProfileHintOpen((prev) => !prev)}
+                        aria-expanded={isProfileHintOpen}
+                        aria-label={`${accountStatusHint.title}: ${accountStatusHint.description}`}
+                        title={`${accountStatusHint.title} — ${accountStatusHint.description}`}
+                        className="group relative block rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 active:scale-95 transition-transform cursor-pointer"
                       >
-                        <ShieldCheck size={12} />
-                      </span>
+                        <div className="p-0.5 rounded-2xl bg-linear-to-br from-amber-400 to-[#1E447A]">
+                          {resolvedTeacherPhotoUrl && !photoLoadError ? (
+                            <img
+                              src={resolvedTeacherPhotoUrl}
+                              alt={teacher?.fullName ?? user?.fullName ?? 'Guru'}
+                              onError={() => setPhotoLoadError(true)}
+                              className="w-14 h-14 rounded-[14px] object-cover bg-white"
+                            />
+                          ) : (
+                            <div className="w-14 h-14 rounded-[14px] bg-linear-to-br from-[#1C3D6E] to-[#2E62A8] text-white flex items-center justify-center text-lg font-bold">
+                              {(teacher?.fullName ?? user?.fullName ?? 'G')
+                                .trim()
+                                .charAt(0)
+                                .toUpperCase()}
+                            </div>
+                          )}
+                        </div>
+                        <span
+                          className={`absolute -bottom-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center shadow border border-white transition-transform group-hover:scale-110 ${isTeacherAccountLinked
+                              ? 'bg-emerald-500 text-white'
+                              : 'bg-amber-400 text-slate-900'
+                            }`}
+                        >
+                          <ShieldCheck size={12} />
+                        </span>
+                      </button>
+
+                      <AnimatePresence>
+                        {isProfileHintOpen && (
+                          <motion.div
+                            role="status"
+                            initial={{ opacity: 0, y: -4, scale: 0.96 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: -4, scale: 0.96 }}
+                            transition={{ duration: 0.16 }}
+                            className="absolute left-0 top-full mt-2 z-30 w-60 rounded-2xl bg-slate-900/95 text-white p-3 shadow-xl border border-white/15 backdrop-blur-md text-left"
+                          >
+                            <div className="flex items-start gap-2">
+                              <span
+                                className={`mt-0.5 w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${isTeacherAccountLinked
+                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                    : 'bg-amber-400/20 text-amber-300'
+                                  }`}
+                              >
+                                <ShieldCheck size={12} />
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <p
+                                  className={`text-[11px] font-bold leading-tight ${isTeacherAccountLinked
+                                      ? 'text-emerald-300'
+                                      : 'text-amber-300'
+                                    }`}
+                                >
+                                  {accountStatusHint.title}
+                                </p>
+                                <p className="text-[10px] text-slate-200/90 leading-snug mt-0.5">
+                                  {accountStatusHint.description}
+                                </p>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </div>
 
                     <div className="flex-1 min-w-0">
@@ -2784,9 +2953,24 @@ export function TeacherAttendancePage() {
                           size={12}
                           className="text-[#1C3D6E] shrink-0 mt-0.5"
                         />
-                        <span>
-                          {teacher?.position ||
-                            t('teacherAttendance.defaultTeacherPosition')}
+                        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                          <span>
+                            {teacher?.position ||
+                              t('teacherAttendance.defaultTeacherPosition')}
+                          </span>
+                          {teacher?.additionalDuty &&
+                            teacher.additionalDuty.toLowerCase() !==
+                            (
+                              teacher?.position ||
+                              t('teacherAttendance.defaultTeacherPosition')
+                            ).toLowerCase() && (
+                              <>
+                                <span className="text-slate-400">•</span>
+                                <span className="inline-flex items-center px-1.5 py-0.5 rounded-md bg-[#1C3D6E]/10 text-[#1C3D6E] font-semibold text-[10px] leading-none">
+                                  {teacher.additionalDuty}
+                                </span>
+                              </>
+                            )}
                         </span>
                       </p>
                       <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-0.5 leading-snug">
@@ -3761,36 +3945,37 @@ export function TeacherAttendancePage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-4 gap-2.5">
-            <div className="data-card p-3 text-center">
+          {/* 4 Kartu Ringkasan Statistik (Responsif di layar HP sempit agar teks tidak keluar kotak) */}
+          <div className="grid grid-cols-4 gap-1.5 sm:gap-2.5">
+            <div className="data-card px-1.5 py-2.5 sm:p-3 text-center min-w-0 overflow-hidden">
               <div className="text-xl sm:text-2xl font-extrabold text-emerald-500">
                 {reportStats.hadir}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">
+              <div className="text-[9.5px] sm:text-[11px] leading-tight tracking-tight opacity-75 mt-1 wrap-break-word">
                 {t('teacherAttendance.statPresentDays')}
               </div>
             </div>
-            <div className="data-card p-3 text-center">
+            <div className="data-card px-1.5 py-2.5 sm:p-3 text-center min-w-0 overflow-hidden">
               <div className="text-xl sm:text-2xl font-extrabold text-amber-500">
                 {reportStats.terlambat}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">
+              <div className="text-[9.5px] sm:text-[11px] leading-tight tracking-tight opacity-75 mt-1 wrap-break-word">
                 {t('teacherAttendance.statLateDays')}
               </div>
             </div>
-            <div className="data-card p-3 text-center">
+            <div className="data-card px-1.5 py-2.5 sm:p-3 text-center min-w-0 overflow-hidden">
               <div className="text-xl sm:text-2xl font-extrabold text-blue-500">
                 {reportStats.izinSakit}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">
+              <div className="text-[9.5px] sm:text-[11px] leading-tight tracking-tight opacity-75 mt-1 wrap-break-word">
                 {t('teacherAttendance.statLeaveSickDays')}
               </div>
             </div>
-            <div className="data-card p-3 text-center">
+            <div className="data-card px-1.5 py-2.5 sm:p-3 text-center min-w-0 overflow-hidden">
               <div className="text-xl sm:text-2xl font-extrabold text-red-500">
                 {reportStats.alpa}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">
+              <div className="text-[9.5px] sm:text-[11px] leading-tight tracking-tight opacity-75 mt-1 wrap-break-word">
                 {t('teacherAttendance.statUnexcusedDays')}
               </div>
             </div>
