@@ -47,6 +47,7 @@ import {
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useUIStore } from '@/stores/ui.store';
+import { useTranslation } from '@/hooks/useTranslation';
 import {
   checkRedDateStatus,
   type WorkDaysMode,
@@ -68,66 +69,30 @@ import {
   stopMediaStreamTracks,
 } from '../utils/apkMediaUtils';
 import { useTeacherHolidayLock } from '../hooks/useTeacherHolidayLock';
+import type { SupportedAttendanceLocale } from '../types/attendance.types';
 
 // ============================================================================
-// PARAMETER YANG BISA KAMU SESUAIKAN DENGAN MUDAH
+// PARAMETER YANG BISA DISESUAIKAN DENGAN MUDAH
 // ============================================================================
-const TEACHER_DASHBOARD_ROUTE = '/dashboard'; // Rute Dashboard Guru jika diakses dari komputer
-const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta'; // Zona waktu standar sekolah (WIB)
-const FALLBACK_WORK_START_TIME = '07:30';      // Jam masuk cadangan jika belum diatur di profil sekolah
-const FALLBACK_WORK_END_TIME = '14:30';        // Jam pulang cadangan jika belum diatur di profil sekolah
-const CHECKOUT_TOLERANCE_MINUTES = 30;         // Toleransi waktu pulang (menit)
-const DEFAULT_RADIUS_METERS = 100;             // Radius GPS cadangan (dalam meter)
-const FALLBACK_REQUIRE_SELFIE_CHECKIN = true;  // Cadangan wajib selfie datang
-const FALLBACK_REQUIRE_SELFIE_CHECKOUT = true; // Cadangan wajib selfie pulang
-const CONFIRM_EARLY_CHECKOUT = true;           // Tampilkan peringatan jika pulang lebih awal
-const CONFIRM_ALL_CHECKOUT = false;            // false = modal HANYA muncul saat pulang lebih awal
-const MIN_EARLY_CHECKOUT_REASON_LENGTH = 10;   // Minimal karakter alasan pulang lebih awal
-const MIN_REASON_LENGTH = 15;                  // Minimal karakter alasan izin/sakit
-const FINGERPRINT_GLOW_DURATION_MS = 550;      // Durasi efek cahaya tombol sidik jari (ms)
-const TOP_REVEAL_SWIPE_THRESHOLD = 45;         // Jarak usap ke bawah (px) untuk memunculkan header
-const HIDE_HEADER_SCROLL_THRESHOLD = 25;       // Jarak scroll ke bawah (px) untuk menyembunyikan header
+const TEACHER_DASHBOARD_ROUTE = '/dashboard';
+const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';
+const FALLBACK_WORK_START_TIME = '07:30';
+const FALLBACK_WORK_END_TIME = '14:30';
+const CHECKOUT_TOLERANCE_MINUTES = 30;
+const DEFAULT_RADIUS_METERS = 100;
+const FALLBACK_REQUIRE_SELFIE_CHECKIN = true;
+const FALLBACK_REQUIRE_SELFIE_CHECKOUT = true;
+const CONFIRM_EARLY_CHECKOUT = true;
+const CONFIRM_ALL_CHECKOUT = false;
+const MIN_EARLY_CHECKOUT_REASON_LENGTH = 10;
+const MIN_REASON_LENGTH = 15;
+const FINGERPRINT_GLOW_DURATION_MS = 550;
+const TOP_REVEAL_SWIPE_THRESHOLD = 45;
+const HIDE_HEADER_SCROLL_THRESHOLD = 25;
 
-// Pengaturan penguncian Tab Izin / Dinas Luar saat hari libur:
 // false = Tab Izin/Dinas Luar ikut terkunci di hari libur (otomatis terbuka saat Kegiatan Khusus Guru aktif)
 // true  = Tab Izin/Dinas Luar tetap bisa diisi meski hari libur
 const ALLOW_LEAVE_ON_HOLIDAY = false;
-
-const DEFAULT_DAILY_QUOTES: Array<{ quote: string; author?: string }> = [
-  {
-    quote:
-      'Persiapan dan perbaikan diri akan menjadi peluang kesuksesan saat bertemu dengan kesempatan.',
-  },
-  {
-    quote:
-      'Disiplin adalah jembatan antara cita-cita dan pencapaian nyata di ruang kelas.',
-  },
-  {
-    quote:
-      'Keteladanan guru hari ini adalah inspirasi masa depan bagi setiap peserta didik.',
-  },
-  {
-    quote:
-      'Langkah kecil yang konsisten setiap pagi membangun perubahan besar bagi pendidikan.',
-  },
-];
-
-const NAMA_BULAN_ID = [
-  'Januari',
-  'Februari',
-  'Maret',
-  'April',
-  'Mei',
-  'Juni',
-  'Juli',
-  'Agustus',
-  'September',
-  'Oktober',
-  'November',
-  'Desember',
-];
-
-const NAMA_HARI_SINGKAT = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
 type SubView = 'beranda' | 'laporan' | 'peta' | 'izin' | 'log';
 type LeaveCategory = 'DINAS_LUAR' | 'IZIN' | 'SAKIT';
@@ -224,7 +189,7 @@ interface SubmitGpsRpcResult {
 }
 
 // ============================================================================
-// FUNGSI BANTUAN (HELPER) ERROR, WAKTU WIB, JARAK GPS, & KETERLAMBATAN
+// FUNGSI BANTUAN (HELPER) ERROR, ZONA WAKTU SEKOLAH, JARAK GPS, & KETERLAMBATAN
 // ============================================================================
 function extractErrorMessage(error: unknown, fallbackMessage: string): string {
   if (error instanceof Error && error.message) {
@@ -234,7 +199,7 @@ function extractErrorMessage(error: unknown, fallbackMessage: string): string {
     typeof error === 'object' &&
     error !== null &&
     'message' in error &&
-    typeof (error as { message: unknown }).message === 'string'
+    typeof (error as { message?: unknown }).message === 'string'
   ) {
     const msg = (error as { message: string }).message.trim();
     if (msg.length > 0) return msg;
@@ -274,6 +239,7 @@ function getClockPartsInTimezone(
   minutes: string;
   seconds: string;
   totalMinutesFromMidnight: number;
+  totalSecondsFromMidnight: number;
 } {
   try {
     const parts = new Intl.DateTimeFormat('en-GB', {
@@ -286,11 +252,15 @@ function getClockPartsInTimezone(
     const hours = parts.find((p) => p.type === 'hour')?.value ?? '00';
     const minutes = parts.find((p) => p.type === 'minute')?.value ?? '00';
     const seconds = parts.find((p) => p.type === 'second')?.value ?? '00';
+    const hNum = Number(hours);
+    const mNum = Number(minutes);
+    const sNum = Number(seconds);
     return {
       hours,
       minutes,
       seconds,
-      totalMinutesFromMidnight: Number(hours) * 60 + Number(minutes),
+      totalMinutesFromMidnight: hNum * 60 + mNum,
+      totalSecondsFromMidnight: hNum * 3600 + mNum * 60 + sNum,
     };
   } catch {
     const h = dateObj.getHours();
@@ -301,6 +271,7 @@ function getClockPartsInTimezone(
       minutes: String(m).padStart(2, '0'),
       seconds: String(s).padStart(2, '0'),
       totalMinutesFromMidnight: h * 60 + m,
+      totalSecondsFromMidnight: h * 3600 + m * 60 + s,
     };
   }
 }
@@ -380,25 +351,16 @@ function calculateLateMinutes(
   return Math.max(0, totalMinutesFromMidnight - deadlineMinutes);
 }
 
-function formatDurationMinutes(totalMinutes: number): string {
-  const hours = Math.floor(totalMinutes / 60);
-  const mins = totalMinutes % 60;
-  if (hours > 0) {
-    return mins > 0 ? `${hours} jam ${mins} menit` : `${hours} jam`;
-  }
-  return `${mins} menit`;
-}
-
 function evaluateCheckOutTiming(
   checkOutDate: Date,
   workEndTime: string,
-  toleranceMinutes: number = CHECKOUT_TOLERANCE_MINUTES
+  toleranceMinutes: number = CHECKOUT_TOLERANCE_MINUTES,
+  timeZone: string = DEFAULT_SCHOOL_TIMEZONE
 ): {
   status: CheckOutTimingStatus;
   isEarly: boolean;
   isOvertime: boolean;
   diffMinutes: number;
-  formattedDiff: string;
 } {
   const [endHStr, endMStr] = workEndTime.split(':');
   const parsedEndH = Number(endHStr);
@@ -406,37 +368,34 @@ function evaluateCheckOutTiming(
   const endH = Number.isFinite(parsedEndH) ? parsedEndH : 14;
   const endM = Number.isFinite(parsedEndM) ? parsedEndM : 30;
 
-  const scheduledEnd = new Date(checkOutDate);
-  scheduledEnd.setHours(endH, endM, 0, 0);
-
-  const latestOnTime = new Date(scheduledEnd);
-  latestOnTime.setMinutes(
-    latestOnTime.getMinutes() + Math.max(0, toleranceMinutes),
-    59,
-    999
+  const { totalSecondsFromMidnight } = getClockPartsInTimezone(
+    checkOutDate,
+    timeZone
   );
 
-  if (checkOutDate < scheduledEnd) {
-    const diffMs = scheduledEnd.getTime() - checkOutDate.getTime();
-    const diffMinutes = Math.max(1, Math.ceil(diffMs / 60000));
+  const scheduledEndSeconds = endH * 3600 + endM * 60;
+  const latestOnTimeSeconds =
+    scheduledEndSeconds + Math.max(0, toleranceMinutes) * 60 + 59;
+
+  if (totalSecondsFromMidnight < scheduledEndSeconds) {
+    const diffSeconds = scheduledEndSeconds - totalSecondsFromMidnight;
+    const diffMinutes = Math.max(1, Math.ceil(diffSeconds / 60));
     return {
       status: 'EARLY',
       isEarly: true,
       isOvertime: false,
       diffMinutes,
-      formattedDiff: formatDurationMinutes(diffMinutes),
     };
   }
 
-  if (checkOutDate > latestOnTime) {
-    const diffMs = checkOutDate.getTime() - scheduledEnd.getTime();
-    const diffMinutes = Math.max(1, Math.floor(diffMs / 60000));
+  if (totalSecondsFromMidnight > latestOnTimeSeconds) {
+    const diffSeconds = totalSecondsFromMidnight - scheduledEndSeconds;
+    const diffMinutes = Math.max(1, Math.floor(diffSeconds / 60));
     return {
       status: 'OVERTIME',
       isEarly: false,
       isOvertime: true,
       diffMinutes,
-      formattedDiff: formatDurationMinutes(diffMinutes),
     };
   }
 
@@ -445,8 +404,18 @@ function evaluateCheckOutTiming(
     isEarly: false,
     isOvertime: false,
     diffMinutes: 0,
-    formattedDiff: '',
   };
+}
+
+function isEarlyDepartureNote(notes?: string | null): boolean {
+  if (!notes) return false;
+  const lower = notes.toLowerCase();
+  return (
+    lower.includes('pulang lebih awal') ||
+    lower.includes('pulang awal') ||
+    lower.includes('early departure') ||
+    lower.includes('early check-out')
+  );
 }
 
 function AutoScrollingText({
@@ -537,7 +506,12 @@ function AutoScrollingText({
 // ============================================================================
 export function TeacherAttendancePage() {
   const navigate = useNavigate();
-  const { user, school } = useAuthStore();
+  const { t } = useTranslation();
+  const currentLang: SupportedAttendanceLocale =
+    t('common.language') === 'Language' ? 'en' : 'id';
+  const dateLocale = currentLang === 'en' ? 'en-US' : 'id-ID';
+
+  const { user, school, hasAnyRole } = useAuthStore();
   const {
     sidebarCollapsed,
     setSidebarCollapsed,
@@ -545,11 +519,87 @@ export function TeacherAttendancePage() {
     setSidebarOpen,
   } = useUIStore();
 
-  const isSuperAdmin = user?.role === 'SUPER_ADMIN';
-  const isAdminOrSuperAdmin =
-    user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+  const isSuperAdmin = hasAnyRole(['SUPER_ADMIN']);
+  const isAdminOrSuperAdmin = hasAnyRole(['SUPER_ADMIN', 'ADMIN']);
 
   const devicePlatform = useMemo(() => detectDevicePlatform(), []);
+
+  const defaultDailyQuotes = useMemo<Array<{ quote: string; author?: string }>>(
+    () => [
+      { quote: t('teacherAttendance.quoteDefault1') },
+      { quote: t('teacherAttendance.quoteDefault2') },
+      { quote: t('teacherAttendance.quoteDefault3') },
+      { quote: t('teacherAttendance.quoteDefault4') },
+    ],
+    [t]
+  );
+
+  const monthNames = useMemo(
+    () => [
+      t('teacherAttendance.month_0'),
+      t('teacherAttendance.month_1'),
+      t('teacherAttendance.month_2'),
+      t('teacherAttendance.month_3'),
+      t('teacherAttendance.month_4'),
+      t('teacherAttendance.month_5'),
+      t('teacherAttendance.month_6'),
+      t('teacherAttendance.month_7'),
+      t('teacherAttendance.month_8'),
+      t('teacherAttendance.month_9'),
+      t('teacherAttendance.month_10'),
+      t('teacherAttendance.month_11'),
+    ],
+    [t]
+  );
+
+  const shortDayNames = useMemo(
+    () => [
+      t('teacherAttendance.dayShort_0'),
+      t('teacherAttendance.dayShort_1'),
+      t('teacherAttendance.dayShort_2'),
+      t('teacherAttendance.dayShort_3'),
+      t('teacherAttendance.dayShort_4'),
+      t('teacherAttendance.dayShort_5'),
+      t('teacherAttendance.dayShort_6'),
+    ],
+    [t]
+  );
+
+  const formatDurationMinutes = useCallback(
+    (totalMinutes: number): string => {
+      const hours = Math.floor(totalMinutes / 60);
+      const mins = totalMinutes % 60;
+      if (hours > 0) {
+        return mins > 0
+          ? t('teacherAttendance.durHoursAndMins', { hours, mins })
+          : t('teacherAttendance.durHoursOnly', { hours });
+      }
+      return t('teacherAttendance.durMinsOnly', { mins });
+    },
+    [t]
+  );
+
+  const formatStatusLabel = useCallback(
+    (status?: string | null): string => {
+      const upper = (status ?? '').toUpperCase();
+      switch (upper) {
+        case 'HADIR':
+          return t('teacherAttendance.status_HADIR');
+        case 'TERLAMBAT':
+          return t('teacherAttendance.status_TERLAMBAT');
+        case 'IZIN':
+          return t('teacherAttendance.status_IZIN');
+        case 'SAKIT':
+          return t('teacherAttendance.status_SAKIT');
+        case 'ALPA':
+        case 'ALPHA':
+          return t('teacherAttendance.status_ALPA');
+        default:
+          return upper || '-';
+      }
+    },
+    [t]
+  );
 
   // State Pelacakan Keamanan & Telemetri Perangkat
   const [securityState, setSecurityState] = useState<{
@@ -573,6 +623,8 @@ export function TeacherAttendancePage() {
   const [simSchoolId, setSimSchoolId] = useState<string>('');
   const [simTeachers, setSimTeachers] = useState<TeacherProfile[]>([]);
   const [simTeacherId, setSimTeacherId] = useState<string>('');
+  const [isLoadingSimTeachers, setIsLoadingSimTeachers] =
+    useState<boolean>(false);
 
   const activeSchoolId = isSuperAdmin
     ? simSchoolId || school?.id || ''
@@ -592,6 +644,7 @@ export function TeacherAttendancePage() {
   const [todayRecord, setTodayRecord] = useState<AttendanceRecord | null>(null);
   const [historyRecords, setHistoryRecords] = useState<AttendanceRecord[]>([]);
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
+  const loadSeqRef = useRef<number>(0);
 
   const schoolTimezone = schoolGeo?.timezone || DEFAULT_SCHOOL_TIMEZONE;
   const todayStr = useMemo(
@@ -601,13 +654,16 @@ export function TeacherAttendancePage() {
 
   // Informasi Kalender Jawa & Pasaran untuk hari ini
   const todayJavaneseInfo = useMemo(
-    () => getJavaneseDateInfo(todayStr),
-    [todayStr]
+    () => getJavaneseDateInfo(todayStr, currentLang),
+    [todayStr, currentLang]
   );
 
   // State Kata Hari Ini (Quotes)
-  const [activeQuotes, setActiveQuotes] =
-    useState<Array<{ quote: string; author?: string }>>(DEFAULT_DAILY_QUOTES);
+  const [customQuotes, setCustomQuotes] = useState<Array<{
+    quote: string;
+    author?: string;
+  }> | null>(null);
+  const activeQuotes = customQuotes ?? defaultDailyQuotes;
   const [quoteOffset, setQuoteOffset] = useState<number>(0);
 
   // State Kalender Laporan & Hari Libur
@@ -625,9 +681,8 @@ export function TeacherAttendancePage() {
   );
 
   // State Kontrol Pembuka Kunci Kegiatan Khusus Guru (Admin / Super Admin)
-  const [specialEventTitleInput, setSpecialEventTitleInput] = useState<string>(
-    'Rapat Kerja / Kegiatan Khusus Guru'
-  );
+  const [specialEventTitleInput, setSpecialEventTitleInput] =
+    useState<string>('');
   const [isTogglingHolidayLock, setIsTogglingHolidayLock] =
     useState<boolean>(false);
   const [isHolidayModalOpen, setIsHolidayModalOpen] = useState<boolean>(false);
@@ -699,20 +754,79 @@ export function TeacherAttendancePage() {
     message: string;
   } | null>(null);
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 5000);
-  };
+  const showToast = useCallback(
+    (type: 'success' | 'error', message: string) => {
+      setToast({ type, message });
+      setTimeout(() => setToast(null), 5000);
+    },
+    []
+  );
 
   // ============================================================================
-  // PEMBERSIH OTOMATIS KAMERA SAAT KOMPONEN DITUTUP (ANTI CAMERA TRACK LEAK)
+  // PEMBERSIH OTOMATIS KAMERA & PENGIKAT ULANG STREAM SAAT KLIK "ULANGI"
   // ============================================================================
+  useEffect(() => {
+    if (
+      cameraModal.open &&
+      !capturedPreview &&
+      videoRef.current &&
+      streamRef.current
+    ) {
+      if (videoRef.current.srcObject !== streamRef.current) {
+        videoRef.current.srcObject = streamRef.current;
+      }
+      void videoRef.current.play().catch(() => null);
+    }
+  }, [cameraModal.open, capturedPreview]);
+
   useEffect(() => {
     return () => {
       stopMediaStreamTracks(streamRef.current);
       streamRef.current = null;
     };
   }, []);
+
+  // ============================================================================
+  // KEYBOARD ESCAPE HANDLER UNTUK MODAL AKTIF
+  // ============================================================================
+  useEffect(() => {
+    if (
+      !isHolidayModalOpen &&
+      !checkoutConfirmModal.open &&
+      !cameraModal.open
+    ) {
+      return;
+    }
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (cameraModal.open && !isSubmittingAttendance) {
+        stopMediaStreamTracks(streamRef.current);
+        streamRef.current = null;
+        setCapturedPreview((prevUrl) => {
+          if (prevUrl) URL.revokeObjectURL(prevUrl);
+          return null;
+        });
+        setCapturedBlob(null);
+        setUploadedSelfiePath(null);
+        setCameraError(null);
+        setCameraModal((prev) => ({ ...prev, open: false }));
+      } else if (checkoutConfirmModal.open) {
+        setCheckoutConfirmModal((prev) => ({ ...prev, open: false }));
+        setEarlyCheckoutReason('');
+        setEarlyReasonError(null);
+      } else if (isHolidayModalOpen && !isTogglingHolidayLock) {
+        setIsHolidayModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    isHolidayModalOpen,
+    isTogglingHolidayLock,
+    checkoutConfirmModal.open,
+    cameraModal.open,
+    isSubmittingAttendance,
+  ]);
 
   // ============================================================================
   // LOGIKA SEMBUNYIKAN / MUNCULKAN HEADER ATAS APLIKASI
@@ -875,17 +989,17 @@ export function TeacherAttendancePage() {
       const { data, error } = await query;
       if (!error && data && data.length > 0) {
         const typedQuotes = data as DailyQuoteDbRow[];
-        setActiveQuotes(
+        setCustomQuotes(
           typedQuotes.map((d) => ({
             quote: d.quote,
             author: d.author ?? undefined,
           }))
         );
       } else {
-        setActiveQuotes(DEFAULT_DAILY_QUOTES);
+        setCustomQuotes(null);
       }
     } catch {
-      setActiveQuotes(DEFAULT_DAILY_QUOTES);
+      setCustomQuotes(null);
     }
   }, [activeSchoolId]);
 
@@ -896,47 +1010,78 @@ export function TeacherAttendancePage() {
   // Mode Simulasi Super Admin
   useEffect(() => {
     if (!isSuperAdmin) return;
-    supabase
-      .from('schools')
-      .select('id, name')
-      .order('name')
-      .then(({ data }) => {
-        const list = (data ?? []) as Array<{ id: string; name: string }>;
-        setSimSchools(list);
-        if (school?.id) setSimSchoolId(school.id);
-        else if (list.length > 0) setSimSchoolId(list[0].id);
-      });
+    let isCancelled = false;
+
+    const loadSimSchools = async () => {
+      const { data } = await supabase
+        .from('schools')
+        .select('id, name')
+        .order('name');
+      if (isCancelled) return;
+      const list = (data ?? []) as Array<{ id: string; name: string }>;
+      setSimSchools(list);
+      if (school?.id) setSimSchoolId(school.id);
+      else if (list.length > 0) setSimSchoolId(list[0].id);
+    };
+
+    void loadSimSchools();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [isSuperAdmin, school?.id]);
 
   useEffect(() => {
     if (!isSuperAdmin || !activeSchoolId) return;
-    supabase
-      .from('teachers')
-      .select('*')
-      .eq('schoolId', activeSchoolId)
-      .eq('isActive', true)
-      .order('fullName')
-      .then(({ data }) => {
+    let isCancelled = false;
+
+    const loadSimTeachers = async () => {
+      setIsLoadingSimTeachers(true);
+      setSimTeachers([]);
+      setSimTeacherId('');
+
+      try {
+        const { data } = await supabase
+          .from('teachers')
+          .select('*')
+          .eq('schoolId', activeSchoolId)
+          .eq('isActive', true)
+          .order('fullName');
+
+        if (isCancelled) return;
         const rows = (data ?? []) as TeacherDbRow[];
-        const list: TeacherProfile[] = rows.map((t) => ({
-          id: t.id,
-          fullName: t.fullName,
-          nik: t.nik ?? null,
-          nip: t.nip ?? null,
-          nuptk: t.nuptk ?? null,
-          position: t.position ?? null,
-          photoUrl: t.photoUrl ?? null,
-          allowDesktopAttendance: Boolean(t.allowDesktopAttendance),
+        const list: TeacherProfile[] = rows.map((item) => ({
+          id: item.id,
+          fullName: item.fullName,
+          nik: item.nik ?? null,
+          nip: item.nip ?? null,
+          nuptk: item.nuptk ?? null,
+          position: item.position ?? null,
+          photoUrl: item.photoUrl ?? null,
+          allowDesktopAttendance: Boolean(item.allowDesktopAttendance),
         }));
         setSimTeachers(list);
-        if (list.length > 0) setSimTeacherId(list[0].id);
-        else setSimTeacherId('');
-      });
+        setSimTeacherId(list.length > 0 ? list[0].id : '');
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingSimTeachers(false);
+        }
+      }
+    };
+
+    void loadSimTeachers();
+
+    return () => {
+      isCancelled = true;
+    };
   }, [isSuperAdmin, activeSchoolId]);
 
   // Muat Data Sekolah, Profil Guru, & Riwayat Presensi
   const loadTeacherAndAttendance = useCallback(async () => {
     if (!activeSchoolId || !user?.id) return;
+    if (isSuperAdmin && isLoadingSimTeachers) return;
+
+    const currentSeq = ++loadSeqRef.current;
     setIsLoadingData(true);
     try {
       const { data: schRaw } = await supabase
@@ -944,6 +1089,8 @@ export function TeacherAttendancePage() {
         .select('*')
         .eq('id', activeSchoolId)
         .maybeSingle();
+
+      if (currentSeq !== loadSeqRef.current) return;
 
       const schData = schRaw as SchoolDbRow | null;
       const resolvedTimezone =
@@ -955,7 +1102,7 @@ export function TeacherAttendancePage() {
       if (schData) {
         setSchoolGeo({
           id: schData.id,
-          name: schData.name ?? 'Sekolah',
+          name: schData.name ?? t('teacherAttendance.defaultSchoolName'),
           latitude: Number(schData.latitude ?? schData.lat ?? -7.7956),
           longitude: Number(schData.longitude ?? schData.lng ?? 110.3695),
           radius: Number(
@@ -986,9 +1133,10 @@ export function TeacherAttendancePage() {
       }
 
       let activeTeacher: TeacherProfile | null = null;
-      if (isSuperAdmin && simTeacherId) {
-        activeTeacher =
-          simTeachers.find((t) => t.id === simTeacherId) ?? null;
+      if (isSuperAdmin) {
+        activeTeacher = simTeacherId
+          ? simTeachers.find((item) => item.id === simTeacherId) ?? null
+          : null;
       } else {
         const { data: tRaw } = await supabase
           .from('teachers')
@@ -997,6 +1145,8 @@ export function TeacherAttendancePage() {
           .or(`userId.eq.${user.id},email.eq.${user.email ?? ''}`)
           .limit(1)
           .maybeSingle();
+
+        if (currentSeq !== loadSeqRef.current) return;
 
         const tByUser = tRaw as TeacherDbRow | null;
 
@@ -1032,6 +1182,8 @@ export function TeacherAttendancePage() {
         .gte('date', `${targetYear}-01-01`)
         .order('date', { ascending: false });
 
+      if (currentSeq !== loadSeqRef.current) return;
+
       const records = (attList ?? []) as AttendanceRecord[];
       setHistoryRecords(records);
 
@@ -1045,19 +1197,23 @@ export function TeacherAttendancePage() {
     } catch (err: unknown) {
       console.error(
         '[TeacherAttendance] Gagal memuat data:',
-        extractErrorMessage(err, 'Kesalahan tidak diketahui')
+        extractErrorMessage(err, 'Unknown error')
       );
     } finally {
-      setIsLoadingData(false);
+      if (currentSeq === loadSeqRef.current) {
+        setIsLoadingData(false);
+      }
     }
   }, [
     activeSchoolId,
     user?.id,
     user?.email,
     isSuperAdmin,
+    isLoadingSimTeachers,
     simTeacherId,
     simTeachers,
     calendarYear,
+    t,
   ]);
 
   useEffect(() => {
@@ -1099,24 +1255,35 @@ export function TeacherAttendancePage() {
     targetDate: todayStr,
     dbHolidaysMap,
     workDaysMode: effectiveWorkDaysMode,
+    lang: currentLang,
   });
 
   const isLeaveFormLocked = !ALLOW_LEAVE_ON_HOLIDAY && isHolidayLocked;
+
+  const handleOpenHolidayModal = () => {
+    if (!specialEventTitleInput.trim()) {
+      setSpecialEventTitleInput(t('teacherAttendance.defaultSpecialEventTitle'));
+    }
+    setIsHolidayModalOpen(true);
+  };
 
   const handleEnableSpecialEvent = async () => {
     if (isTogglingHolidayLock) return;
     setIsTogglingHolidayLock(true);
     try {
-      await enableTeacherSpecialEvent(specialEventTitleInput, user?.id ?? null);
+      const eventTitle =
+        specialEventTitleInput.trim() ||
+        t('teacherAttendance.defaultSpecialEventTitle');
+      await enableTeacherSpecialEvent(eventTitle, user?.id ?? null);
       setIsHolidayModalOpen(false);
       showToast(
         'success',
-        `Presensi Khusus Guru dibuka (${specialEventTitleInput.trim() || 'Kegiatan Khusus Guru'}).`
+        t('teacherAttendance.toastSpecialEventOpened', { title: eventTitle })
       );
     } catch (err: unknown) {
       showToast(
         'error',
-        extractErrorMessage(err, 'Gagal membuka kunci presensi khusus guru.')
+        extractErrorMessage(err, t('teacherAttendance.errOpenSpecialEvent'))
       );
     } finally {
       setIsTogglingHolidayLock(false);
@@ -1129,11 +1296,11 @@ export function TeacherAttendancePage() {
     try {
       await disableTeacherSpecialEvent();
       setIsHolidayModalOpen(false);
-      showToast('success', 'Presensi guru pada hari libur dikunci kembali.');
+      showToast('success', t('teacherAttendance.toastSpecialEventClosed'));
     } catch (err: unknown) {
       showToast(
         'error',
-        extractErrorMessage(err, 'Gagal mengunci kembali presensi hari libur.')
+        extractErrorMessage(err, t('teacherAttendance.errCloseSpecialEvent'))
       );
     } finally {
       setIsTogglingHolidayLock(false);
@@ -1188,7 +1355,7 @@ export function TeacherAttendancePage() {
         setIsLocating(false);
         setUserCoords(null);
         setGpsError(
-          envAudit.blockReason ?? 'Perangkat tidak diizinkan untuk presensi.'
+          envAudit.blockReason ?? t('teacherAttendance.errDeviceNotAllowed')
         );
         return;
       }
@@ -1227,7 +1394,9 @@ export function TeacherAttendancePage() {
       });
     } catch (err: unknown) {
       setUserCoords(null);
-      setGpsError(extractErrorMessage(err, 'Gagal memverifikasi sinyal GPS.'));
+      setGpsError(
+        extractErrorMessage(err, t('teacherAttendance.errGpsVerifyFailed'))
+      );
     } finally {
       setIsLocating(false);
     }
@@ -1235,6 +1404,7 @@ export function TeacherAttendancePage() {
     isSuperAdmin,
     teacher?.allowDesktopAttendance,
     todayJavaneseInfo.fullFormattedDate,
+    t,
   ]);
 
   useEffect(() => {
@@ -1304,7 +1474,7 @@ export function TeacherAttendancePage() {
       fillColor: '#EF4444',
       fillOpacity: 1,
     })
-      .bindPopup('Posisi Anda Saat Ini')
+      .bindPopup(t('teacherAttendance.popupUserPosition'))
       .addTo(map);
 
     userMarkerRef.current = marker;
@@ -1314,7 +1484,7 @@ export function TeacherAttendancePage() {
       [userCoords.lat, userCoords.lng],
     ]);
     map.fitBounds(bounds, { padding: [50, 50], maxZoom: 17 });
-  }, [userCoords, schoolGeo]);
+  }, [userCoords, schoolGeo, t]);
 
   const distanceMeters = useMemo(() => {
     if (!userCoords || !schoolGeo) return null;
@@ -1332,9 +1502,13 @@ export function TeacherAttendancePage() {
   }, [distanceMeters, schoolGeo]);
 
   const formatDistanceLabel = (meters: number | null) => {
-    if (meters === null) return 'Menghitung...';
-    if (meters >= 1000)
-      return `${(meters / 1000).toFixed(2).replace('.', ',')} km`;
+    if (meters === null) return t('teacherAttendance.distanceCalculating');
+    if (meters >= 1000) {
+      const kmStr = (meters / 1000).toFixed(2);
+      return currentLang === 'en'
+        ? `${kmStr} km`
+        : `${kmStr.replace('.', ',')} km`;
+    }
     return `${Math.round(meters)} m`;
   };
 
@@ -1354,15 +1528,15 @@ export function TeacherAttendancePage() {
         isEarly: false,
         isOvertime: false,
         diffMinutes: 0,
-        formattedDiff: '',
       };
     }
     return evaluateCheckOutTiming(
       new Date(todayRecord.checkOutTime),
       effectiveWorkEndTime,
-      CHECKOUT_TOLERANCE_MINUTES
+      CHECKOUT_TOLERANCE_MINUTES,
+      schoolTimezone
     );
-  }, [todayRecord?.checkOutTime, effectiveWorkEndTime]);
+  }, [todayRecord?.checkOutTime, effectiveWorkEndTime, schoolTimezone]);
 
   const isCheckInLocked =
     hasCheckedIn || isOnLeaveToday || isHolidayLoading || isHolidayLocked;
@@ -1395,7 +1569,10 @@ export function TeacherAttendancePage() {
 
   const openCameraModal = async (mode: 'CHECK_IN' | 'CHECK_OUT') => {
     if (isHolidayLocked) {
-      showToast('error', `Hari Libur: ${holidayReason}`);
+      showToast(
+        'error',
+        t('teacherAttendance.toastHolidayError', { reason: holidayReason })
+      );
       return;
     }
 
@@ -1425,7 +1602,10 @@ export function TeacherAttendancePage() {
       const camCheck = validateCameraStream(stream, isSuperAdmin);
       if (!camCheck.valid) {
         stopMediaStreamTracks(stream);
-        showToast('error', camCheck.reason ?? 'Kamera virtual tidak diizinkan.');
+        showToast(
+          'error',
+          camCheck.reason ?? t('teacherAttendance.errVirtualCamera')
+        );
         setCameraModal({ open: false, mode });
         return;
       }
@@ -1437,10 +1617,7 @@ export function TeacherAttendancePage() {
         }
       }, 100);
     } catch {
-      showToast(
-        'error',
-        'Kamera tidak dapat diakses. Izinkan akses kamera di perangkat Anda.'
-      );
+      showToast('error', t('teacherAttendance.errCameraAccess'));
       setCameraModal({ open: false, mode });
     }
   };
@@ -1464,7 +1641,9 @@ export function TeacherAttendancePage() {
       earlyCheckoutReason.trim().length < MIN_EARLY_CHECKOUT_REASON_LENGTH
     ) {
       setEarlyReasonError(
-        `Alasan pulang lebih awal wajib diisi minimal ${MIN_EARLY_CHECKOUT_REASON_LENGTH} karakter.`
+        t('teacherAttendance.errEarlyReasonMin', {
+          min: MIN_EARLY_CHECKOUT_REASON_LENGTH,
+        })
       );
       return;
     }
@@ -1490,10 +1669,22 @@ export function TeacherAttendancePage() {
       setCapturedPreview(URL.createObjectURL(compressedBlob));
     } catch (err: unknown) {
       setCameraError(
-        extractErrorMessage(err, 'Gagal memproses foto selfie dari kamera.')
+        extractErrorMessage(err, t('teacherAttendance.errSnapshotFailed'))
       );
     }
   };
+
+  const formatShortTime = useCallback(
+    (iso?: string | null) => {
+      if (!iso) return '00:00';
+      return new Date(iso).toLocaleTimeString(dateLocale, {
+        timeZone: schoolTimezone,
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    },
+    [dateLocale, schoolTimezone]
+  );
 
   const handleFingerprintAction = () => {
     triggerFingerprintGlow();
@@ -1504,40 +1695,43 @@ export function TeacherAttendancePage() {
       return;
     }
 
-    if (isHolidayLocked) {
-      showToast('error', `Hari Libur: ${holidayReason}`);
-      return;
-    }
-
     if (!teacher) {
-      showToast(
-        'error',
-        'Akun Anda belum terhubung dengan data Master Guru/PTK.'
-      );
+      showToast('error', t('teacherAttendance.errTeacherUnlinked'));
       return;
     }
 
     if (attendancePhase === 'COMPLETED') {
       showToast(
         'success',
-        `Presensi hari ini sudah lengkap (Masuk ${formatShortTime(
-          todayRecord?.checkInTime
-        )} • Pulang ${formatShortTime(todayRecord?.checkOutTime)}).`
+        t('teacherAttendance.toastAttendanceCompleted', {
+          checkIn: formatShortTime(todayRecord?.checkInTime),
+          checkOut: formatShortTime(todayRecord?.checkOutTime),
+        })
       );
       return;
     }
 
     if (attendancePhase === 'ON_LEAVE') {
-      showToast('success', `Hari ini Anda tercatat ${todayRecord?.status}.`);
+      showToast(
+        'success',
+        t('teacherAttendance.toastOnLeaveToday', {
+          status: formatStatusLabel(todayRecord?.status),
+        })
+      );
+      return;
+    }
+
+    if (isHolidayLocked) {
+      showToast(
+        'error',
+        t('teacherAttendance.toastHolidayError', { reason: holidayReason })
+      );
       return;
     }
 
     if (isLocating || !userCoords || distanceMeters === null) {
       void requestGpsPosition();
-      showToast(
-        'error',
-        'Sedang mendeteksi titik GPS Anda. Tunggu sebentar lalu ketuk sidik jari kembali.'
-      );
+      showToast('error', t('teacherAttendance.toastGpsLocatingWait'));
       return;
     }
 
@@ -1545,9 +1739,9 @@ export function TeacherAttendancePage() {
       void requestGpsPosition();
       showToast(
         'error',
-        `Anda masih di luar radius sekolah (${formatDistanceLabel(
-          distanceMeters
-        )}). Lokasi GPS diperbarui.`
+        t('teacherAttendance.toastOutsideRadius', {
+          distance: formatDistanceLabel(distanceMeters),
+        })
       );
       return;
     }
@@ -1557,20 +1751,25 @@ export function TeacherAttendancePage() {
       const timing = evaluateCheckOutTiming(
         currentCheckDate,
         effectiveWorkEndTime,
-        CHECKOUT_TOLERANCE_MINUTES
+        CHECKOUT_TOLERANCE_MINUTES,
+        schoolTimezone
       );
 
       if ((timing.isEarly && CONFIRM_EARLY_CHECKOUT) || CONFIRM_ALL_CHECKOUT) {
-        const currentTimeLabel = currentCheckDate.toLocaleTimeString('id-ID', {
-          hour: '2-digit',
-          minute: '2-digit',
-        });
+        const currentTimeLabel = currentCheckDate.toLocaleTimeString(
+          dateLocale,
+          {
+            timeZone: schoolTimezone,
+            hour: '2-digit',
+            minute: '2-digit',
+          }
+        );
         setEarlyCheckoutReason('');
         setEarlyReasonError(null);
         setCheckoutConfirmModal({
           open: true,
           isEarly: timing.isEarly,
-          formattedDiff: timing.formattedDiff,
+          formattedDiff: formatDurationMinutes(timing.diffMinutes),
           currentTimeLabel,
         });
         return;
@@ -1588,7 +1787,10 @@ export function TeacherAttendancePage() {
     selfieBlob: Blob | null
   ) => {
     if (isHolidayLocked) {
-      showToast('error', `Hari Libur: ${holidayReason}`);
+      showToast(
+        'error',
+        t('teacherAttendance.toastHolidayError', { reason: holidayReason })
+      );
       return;
     }
 
@@ -1629,7 +1831,9 @@ export function TeacherAttendancePage() {
           });
 
         if (uploadErr) {
-          throw new Error(`Gagal mengunggah foto selfie: ${uploadErr.message}`);
+          throw new Error(
+            t('teacherAttendance.errUploadSelfie', { msg: uploadErr.message })
+          );
         }
 
         finalUploadedPath = fileName;
@@ -1662,7 +1866,7 @@ export function TeacherAttendancePage() {
         new Set([...securityState.flags, ...freshTelemetry.securityFlags])
       );
 
-      // 3. Panggil RPC Server (Jam Server + Radius Server + Validasi Libur + Izin Komputer)
+      // 3. Panggil RPC Server
       const { data: rpcRaw, error: rpcError } = await supabase.rpc(
         'submit_teacher_gps_attendance',
         {
@@ -1672,7 +1876,9 @@ export function TeacherAttendancePage() {
           p_accuracy: userCoords.accuracy,
           p_selfie_path: finalUploadedPath,
           p_early_reason:
-            mode === 'CHECK_OUT' ? earlyCheckoutReason.trim() : null,
+            mode === 'CHECK_OUT' && earlyCheckoutReason.trim()
+              ? earlyCheckoutReason.trim()
+              : null,
           p_is_suspected_mock:
             securityState.isSuspectedMock || freshTelemetry.isSuspectedMock,
           p_security_flags: combinedFlags,
@@ -1688,18 +1894,16 @@ export function TeacherAttendancePage() {
 
       if (mode === 'CHECK_IN') {
         const serverStatus = rpcResult?.status;
-        const lateText =
-          lateMinutesAtSubmit > 0
-            ? ` (Terlambat ${formatDurationMinutes(lateMinutesAtSubmit)})`
-            : '';
         showToast(
           'success',
-          serverStatus === 'TERLAMBAT'
-            ? `Check-In tercatat${lateText}.`
-            : 'Check-In Datang berhasil tercatat tepat waktu!'
+          serverStatus === 'TERLAMBAT' && lateMinutesAtSubmit > 0
+            ? t('teacherAttendance.toastCheckInLate', {
+              duration: formatDurationMinutes(lateMinutesAtSubmit),
+            })
+            : t('teacherAttendance.toastCheckInOnTime')
         );
       } else {
-        showToast('success', 'Check-Out Pulang berhasil tercatat!');
+        showToast('success', t('teacherAttendance.toastCheckOutSuccess'));
       }
 
       setEarlyCheckoutReason('');
@@ -1716,7 +1920,10 @@ export function TeacherAttendancePage() {
         setUploadedSelfiePath(null);
       }
 
-      const errMsg = extractErrorMessage(err, 'Gagal menyimpan presensi.');
+      const errMsg = extractErrorMessage(
+        err,
+        t('teacherAttendance.errSaveAttendance')
+      );
       setCameraError(errMsg);
       showToast('error', errMsg);
     } finally {
@@ -1732,35 +1939,34 @@ export function TeacherAttendancePage() {
     if (!teacher || !activeSchoolId) return;
 
     if (isLeaveFormLocked) {
-      showToast('error', `Hari Libur: ${holidayReason}`);
+      showToast(
+        'error',
+        t('teacherAttendance.toastHolidayError', { reason: holidayReason })
+      );
       return;
     }
 
     if (!leaveFile) {
-      showToast(
-        'error',
-        'Wajib mengunggah foto/PDF bukti surat tugas atau surat keterangan dokter!'
-      );
+      showToast('error', t('teacherAttendance.errLeaveFileRequired'));
       return;
     }
 
     if (leaveReason.trim().length < MIN_REASON_LENGTH) {
       showToast(
         'error',
-        `Keterangan harus jelas (minimal ${MIN_REASON_LENGTH} karakter).`
+        t('teacherAttendance.errLeaveReasonMin', { min: MIN_REASON_LENGTH })
       );
       return;
     }
 
     if (leaveEndDate < leaveStartDate) {
-      showToast(
-        'error',
-        'Tanggal selesai tidak boleh lebih awal dari tanggal mulai.'
-      );
+      showToast('error', t('teacherAttendance.errLeaveEndBeforeStart'));
       return;
     }
 
     setIsSubmittingLeave(true);
+    let uploadedAttachmentPath: string | null = null;
+
     try {
       const ext = leaveFile.name.split('.').pop() || 'pdf';
       const schoolFolder = schoolGeo?.name
@@ -1774,8 +1980,13 @@ export function TeacherAttendancePage() {
         .from('attendance-attachments')
         .upload(storagePath, leaveFile, { upsert: true });
 
-      if (upErr)
-        throw new Error(`Gagal mengunggah bukti lampiran: ${upErr.message}`);
+      if (upErr) {
+        throw new Error(
+          t('teacherAttendance.errUploadAttachment', { msg: upErr.message })
+        );
+      }
+
+      uploadedAttachmentPath = storagePath;
 
       const datesToInsert: string[] = [];
       const cursor = new Date(`${leaveStartDate}T00:00:00`);
@@ -1788,19 +1999,38 @@ export function TeacherAttendancePage() {
         cursor.setDate(cursor.getDate() + 1);
       }
 
+      const { data: existingRows } = await supabase
+        .from('attendances')
+        .select('id, date')
+        .eq('schoolId', activeSchoolId)
+        .eq('teacherId', teacher.id)
+        .eq('type', 'GURU')
+        .in('date', datesToInsert);
+
+      const existingByDate = new Map<string, string>(
+        ((existingRows ?? []) as Array<{ id: string; date: string }>).map(
+          (row) => [row.date, row.id]
+        )
+      );
+
       const dbStatus = leaveCategory === 'SAKIT' ? 'SAKIT' : 'IZIN';
       const categoryLabel =
         leaveCategory === 'DINAS_LUAR'
-          ? 'Dinas Luar'
+          ? t('teacherAttendance.leaveCatDinasLuar')
           : leaveCategory === 'SAKIT'
-            ? 'Sakit'
-            : 'Izin Pribadi';
-      const formattedNote = `[${categoryLabel}]${leaveRefNumber.trim() ? ` No. Surat: ${leaveRefNumber.trim()} —` : ''
-        } ${leaveReason.trim()}`;
+            ? t('teacherAttendance.leaveCatSakit')
+            : t('teacherAttendance.leaveCatIzin');
+
+      const refSegment = leaveRefNumber.trim()
+        ? t('teacherAttendance.leaveRefPrefix', {
+          ref: leaveRefNumber.trim(),
+        })
+        : '';
+      const formattedNote = `[${categoryLabel}]${refSegment} ${leaveReason.trim()}`;
 
       for (const dt of datesToInsert) {
-        const existing = historyRecords.find((r) => r.date === dt);
-        if (existing) {
+        const existingId = existingByDate.get(dt);
+        if (existingId) {
           const { error: updateErr } = await supabase
             .from('attendances')
             .update({
@@ -1809,7 +2039,8 @@ export function TeacherAttendancePage() {
               leaveType: leaveCategory,
               attachmentUrl: storagePath,
             })
-            .eq('id', existing.id);
+            .eq('id', existingId)
+            .eq('schoolId', activeSchoolId);
 
           if (updateErr) {
             throw new Error(updateErr.message);
@@ -1841,13 +2072,22 @@ export function TeacherAttendancePage() {
       await loadTeacherAndAttendance();
       showToast(
         'success',
-        `Pengajuan ${categoryLabel} (${datesToInsert.length} hari) berhasil dicatat beserta bukti lampiran.`
+        t('teacherAttendance.toastLeaveSubmitted', {
+          category: categoryLabel,
+          days: datesToInsert.length,
+        })
       );
       setActiveView('beranda');
     } catch (err: unknown) {
+      if (uploadedAttachmentPath) {
+        await supabase.storage
+          .from('attendance-attachments')
+          .remove([uploadedAttachmentPath])
+          .catch(() => null);
+      }
       showToast(
         'error',
-        extractErrorMessage(err, 'Gagal mengirim pengajuan izin/dinas.')
+        extractErrorMessage(err, t('teacherAttendance.errSubmitLeave'))
       );
     } finally {
       setIsSubmittingLeave(false);
@@ -1856,10 +2096,10 @@ export function TeacherAttendancePage() {
 
   // Perhitungan Statistik Laporan
   const selectedMonthPrefix = `${calendarYear}-${String(calendarMonth + 1).padStart(2, '0')}`;
-  const selectedMonthLabel = `${NAMA_BULAN_ID[calendarMonth]} ${calendarYear}`;
+  const selectedMonthLabel = `${monthNames[calendarMonth]} ${calendarYear}`;
   const selectedJavaneseMonthRange = useMemo(
-    () => getJavaneseMonthRangeLabel(calendarYear, calendarMonth),
-    [calendarYear, calendarMonth]
+    () => getJavaneseMonthRangeLabel(calendarYear, calendarMonth, currentLang),
+    [calendarYear, calendarMonth, currentLang]
   );
 
   const reportStats = useMemo(() => {
@@ -1873,7 +2113,9 @@ export function TeacherAttendancePage() {
     const izinSakit = filtered.filter((r) =>
       ['IZIN', 'SAKIT'].includes(r.status)
     ).length;
-    const alpa = filtered.filter((r) => r.status === 'ALPA').length;
+    const alpa = filtered.filter((r) =>
+      ['ALPA', 'ALPHA'].includes(r.status)
+    ).length;
     const totalEfektif = Math.max(filtered.length, 1);
     const pct = Math.round(((hadir + terlambat) / totalEfektif) * 100);
 
@@ -1927,7 +2169,7 @@ export function TeacherAttendancePage() {
         dbHolidaysMap,
         effectiveWorkDaysMode
       );
-      const jvInfo = getJavaneseDateInfo(dateStr);
+      const jvInfo = getJavaneseDateInfo(dateStr, currentLang);
       cells.push({
         dateStr,
         dayNum: d,
@@ -1945,6 +2187,7 @@ export function TeacherAttendancePage() {
     dbHolidaysMap,
     effectiveWorkDaysMode,
     recordsByDate,
+    currentLang,
   ]);
 
   const handlePrevMonth = () => {
@@ -1973,17 +2216,13 @@ export function TeacherAttendancePage() {
       effectiveWorkDaysMode
     );
     const record = recordsByDate.get(selectedCalendarDate);
-    const jvInfo = getJavaneseDateInfo(selectedCalendarDate);
-    const dateObj = new Date(`${selectedCalendarDate}T00:00:00`);
-    const masehiPart = dateObj.toLocaleDateString('id-ID', {
-      day: 'numeric',
-      month: 'long',
-      year: 'numeric',
-    });
+    const jvInfo = getJavaneseDateInfo(selectedCalendarDate, currentLang);
+    const [y, m, d] = selectedCalendarDate.split('-').map(Number);
+    const masehiPart = `${d || 1} ${monthNames[(m || 1) - 1] ?? ''} ${y || ''}`;
     return {
       dateStr: selectedCalendarDate,
       label: `${jvInfo.hariPasaran}, ${masehiPart}`,
-      javaneseSubtitle: `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja (Tahun ${jvInfo.winduYearName})`,
+      javaneseSubtitle: `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja (${jvInfo.winduYearName})`,
       ...redStatus,
       record,
     };
@@ -1992,38 +2231,32 @@ export function TeacherAttendancePage() {
     dbHolidaysMap,
     effectiveWorkDaysMode,
     recordsByDate,
+    currentLang,
+    monthNames,
   ]);
 
   const masehiDateOnly = useMemo(() => {
     const [y, m, d] = todayStr.split('-').map(Number);
-    const monthName = NAMA_BULAN_ID[(m || 1) - 1] ?? '';
+    const monthName = monthNames[(m || 1) - 1] ?? '';
     return `${d} ${monthName} ${y}`;
-  }, [todayStr]);
+  }, [todayStr, monthNames]);
 
   const formattedDateWithPasaran = `${todayJavaneseInfo.hariPasaran}, ${masehiDateOnly}`;
   const javaneseDateBadge = `${todayJavaneseInfo.javaneseDay} ${todayJavaneseInfo.javaneseMonth} ${todayJavaneseInfo.javaneseYear} Ja`;
 
-  const monthYearLabel = now.toLocaleDateString('id-ID', {
-    month: 'long',
-    year: 'numeric',
-  });
+  const monthYearLabel = useMemo(() => {
+    const [y, m] = todayStr.split('-').map(Number);
+    return `${monthNames[(m || 1) - 1] ?? ''} ${y}`;
+  }, [todayStr, monthNames]);
+
   const clockParts = getClockPartsInTimezone(now, schoolTimezone);
   const hoursStr = clockParts.hours;
   const minutesStr = clockParts.minutes;
   const secondsStr = clockParts.seconds;
 
-  const formatShortTime = (iso?: string | null) => {
-    if (!iso) return '00:00';
-    return new Date(iso).toLocaleTimeString('id-ID', {
-      timeZone: schoolTimezone,
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
   const activeQuoteItem =
     activeQuotes[(now.getDate() + quoteOffset) % activeQuotes.length] ??
-    DEFAULT_DAILY_QUOTES[0];
+    defaultDailyQuotes[0];
 
   const isOnMapView = activeView === 'peta';
   const isCheckOutPhase = attendancePhase === 'CHECK_OUT';
@@ -2091,21 +2324,21 @@ export function TeacherAttendancePage() {
 
           <div className="space-y-2">
             <h2 className="text-lg font-extrabold tracking-tight">
-              Presensi Terkunci di Komputer
+              {t('teacherAttendance.desktopBlockedTitle')}
             </h2>
             <p className="text-xs opacity-75 leading-relaxed">
-              Halo <strong>{teacher?.fullName}</strong>, akun Anda saat ini
-              diatur untuk melakukan presensi melalui{' '}
-              <strong>HP / Aplikasi Android</strong>. Halaman komputer hanya
-              digunakan untuk pengelolaan administrasi guru.
+              {t('teacherAttendance.desktopBlockedDescPrefix')}
+              <strong>{teacher?.fullName}</strong>
+              {t('teacherAttendance.desktopBlockedDescMid')}
+              <strong>{t('teacherAttendance.desktopBlockedDescDevice')}</strong>
+              {t('teacherAttendance.desktopBlockedDescSuffix')}
             </p>
           </div>
 
           <div className="p-3.5 rounded-2xl bg-slate-100/80 dark:bg-white/5 border border-slate-200/80 dark:border-white/10 text-[11px] opacity-85 flex items-center justify-center gap-2.5">
             <Smartphone size={16} className="text-emerald-500 shrink-0" />
             <span className="text-left">
-              Hubungi Admin Sekolah jika Anda memerlukan pengecualian presensi
-              menggunakan komputer.
+              {t('teacherAttendance.desktopBlockedHint')}
             </span>
           </div>
 
@@ -2117,7 +2350,7 @@ export function TeacherAttendancePage() {
             <span className="p-1.5 rounded-xl bg-white/15 group-hover:-translate-x-0.5 transition-transform duration-200">
               <LayoutDashboard size={15} />
             </span>
-            <span>Kembali ke Dashboard Guru</span>
+            <span>{t('teacherAttendance.btnBackToDashboard')}</span>
             <ArrowLeft
               size={15}
               className="opacity-75 group-hover:-translate-x-1 transition-transform duration-200"
@@ -2175,8 +2408,8 @@ export function TeacherAttendancePage() {
           >
             <div
               className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                ? 'bg-emerald-600 text-white border-emerald-400'
-                : 'bg-red-600 text-white border-red-400'
+                  ? 'bg-emerald-600 text-white border-emerald-400'
+                  : 'bg-red-600 text-white border-red-400'
                 }`}
             >
               <div className="flex items-center gap-2.5">
@@ -2207,20 +2440,20 @@ export function TeacherAttendancePage() {
           className="group inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-slate-200/75 dark:bg-white/10 hover:bg-slate-300/90 dark:hover:bg-white/20 text-[10px] font-medium text-slate-600 dark:text-slate-300 transition shadow-2xs"
           title={
             isTopHeaderVisible
-              ? 'Sembunyikan header atas'
-              : 'Tampilkan header atas'
+              ? t('teacherAttendance.titleHideTopHeader')
+              : t('teacherAttendance.titleShowTopHeader')
           }
         >
           <span className="w-5 h-1 rounded-full bg-slate-400/80 dark:bg-slate-400/60 group-hover:bg-amber-500 transition" />
           {isTopHeaderVisible ? (
             <>
               <ChevronUp size={11} />
-              <span>Sembunyikan Header</span>
+              <span>{t('teacherAttendance.btnHideHeader')}</span>
             </>
           ) : (
             <>
               <ChevronDown size={11} />
-              <span>Menu Atas</span>
+              <span>{t('teacherAttendance.btnTopMenu')}</span>
             </>
           )}
         </button>
@@ -2232,7 +2465,7 @@ export function TeacherAttendancePage() {
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs font-semibold text-purple-600 dark:text-purple-300">
               <FlaskConical size={16} />
-              <span>Simulasi Super Admin:</span>
+              <span>{t('teacherAttendance.simSuperAdminLabel')}</span>
             </div>
             <div className="flex items-center gap-1.5">
               <button
@@ -2245,7 +2478,7 @@ export function TeacherAttendancePage() {
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
               >
                 <Settings2 size={12} />
-                Jam &amp; Libur
+                {t('teacherAttendance.btnHoursAndHolidays')}
               </button>
               <button
                 type="button"
@@ -2253,7 +2486,7 @@ export function TeacherAttendancePage() {
                 className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-purple-600 text-white hover:bg-purple-700 transition"
               >
                 <Sparkles size={12} />
-                Quotes
+                {t('teacherAttendance.btnQuotes')}
               </button>
             </div>
           </div>
@@ -2275,11 +2508,11 @@ export function TeacherAttendancePage() {
               onChange={(e) => setSimTeacherId(e.target.value)}
             >
               {simTeachers.length === 0 ? (
-                <option value="">Tidak ada data PTK</option>
+                <option value="">{t('teacherAttendance.simNoTeachers')}</option>
               ) : (
-                simTeachers.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.fullName}
+                simTeachers.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.fullName}
                   </option>
                 ))
               )}
@@ -2307,14 +2540,14 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={handleToggleSidebar}
                   className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
-                  title="Tampilkan / Sembunyikan Menu Sidebar"
+                  title={t('teacherAttendance.titleToggleSidebar')}
                   aria-label="Toggle Sidebar"
                 >
                   <Menu size={18} />
                 </button>
                 <div className="min-w-0 flex-1">
                   <h1 className="text-lg sm:text-xl font-bold tracking-tight leading-tight">
-                    Selamat Datang!
+                    {t('teacherAttendance.welcomeTitle')}
                   </h1>
                   <p className="text-xs text-blue-100/95 font-medium mt-0.5 leading-snug">
                     {formattedDateWithPasaran}
@@ -2325,13 +2558,12 @@ export function TeacherAttendancePage() {
                 </div>
               </div>
 
-              {/* Tombol Segarkan di atas & Logo Gembok tepat di bawahnya khusus tampilan HP */}
               <div className="flex flex-col items-end gap-2 sm:flex-row sm:items-center sm:gap-1.5 shrink-0">
                 <button
                   type="button"
                   onClick={() => void loadTeacherAndAttendance()}
                   className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0 sm:order-2"
-                  title="Segarkan Data"
+                  title={t('teacherAttendance.titleRefreshData')}
                 >
                   <RefreshCw
                     size={17}
@@ -2344,31 +2576,48 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => {
                       if (isAdminOrSuperAdmin) {
-                        setIsHolidayModalOpen(true);
+                        handleOpenHolidayModal();
                       } else if (isHolidayLocked) {
-                        showToast('error', `Hari Libur: ${holidayReason}`);
+                        showToast(
+                          'error',
+                          t('teacherAttendance.toastHolidayError', {
+                            reason: holidayReason,
+                          })
+                        );
                       } else {
                         showToast(
                           'success',
-                          `Presensi Khusus Aktif: ${holidayReason}`
+                          t('teacherAttendance.titleSpecialEventActive', {
+                            reason: holidayReason,
+                          })
                         );
                       }
                     }}
                     className={`inline-flex items-center justify-center gap-1.5 p-2.5 sm:px-2.5 sm:py-2 rounded-xl border text-[11px] font-semibold backdrop-blur-xs transition active:scale-95 shrink-0 sm:order-1 ${isHolidayLocked
-                      ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
-                      : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
+                        ? 'bg-rose-500/25 hover:bg-rose-500/35 border-rose-300/40 text-rose-100'
+                        : 'bg-emerald-500/30 hover:bg-emerald-500/40 border-emerald-300/50 text-emerald-100'
                       }`}
                     title={
                       isHolidayLocked
-                        ? `Hari Libur: ${holidayReason}`
-                        : `Presensi Khusus Aktif: ${holidayReason}`
+                        ? t('teacherAttendance.toastHolidayError', {
+                          reason: holidayReason,
+                        })
+                        : t('teacherAttendance.titleSpecialEventActive', {
+                          reason: holidayReason,
+                        })
                     }
-                    aria-label={isHolidayLocked ? 'Hari Libur' : 'Khusus Guru'}
+                    aria-label={
+                      isHolidayLocked
+                        ? t('teacherAttendance.badgeHoliday')
+                        : t('teacherAttendance.badgeSpecialTeacher')
+                    }
                   >
                     {isHolidayLocked ? (
                       <>
                         <Lock size={16} className="text-rose-200 shrink-0" />
-                        <span className="hidden sm:inline">Hari Libur</span>
+                        <span className="hidden sm:inline">
+                          {t('teacherAttendance.badgeHoliday')}
+                        </span>
                       </>
                     ) : (
                       <>
@@ -2376,7 +2625,9 @@ export function TeacherAttendancePage() {
                           size={16}
                           className="text-emerald-200 shrink-0"
                         />
-                        <span className="hidden sm:inline">Khusus Guru</span>
+                        <span className="hidden sm:inline">
+                          {t('teacherAttendance.badgeSpecialTeacher')}
+                        </span>
                       </>
                     )}
                   </button>
@@ -2414,10 +2665,12 @@ export function TeacherAttendancePage() {
                       <h2 className="font-bold text-[15px] sm:text-base text-slate-900 leading-snug wrap-break-word">
                         {teacher?.fullName ??
                           user?.fullName ??
-                          'Profil Guru Belum Tertaut'}
+                          t('teacherAttendance.profileUnlinked')}
                       </h2>
                       <p className="text-[11px] font-mono text-slate-500 mt-0.5">
-                        {teacher?.nip || teacher?.nuptk || 'PTK Terdaftar'}
+                        {teacher?.nip ||
+                          teacher?.nuptk ||
+                          t('teacherAttendance.registeredStaffFallback')}
                       </p>
                       <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-1 leading-snug">
                         <Briefcase
@@ -2425,7 +2678,8 @@ export function TeacherAttendancePage() {
                           className="text-[#1C3D6E] shrink-0 mt-0.5"
                         />
                         <span>
-                          {teacher?.position || 'Guru / Tenaga Pendidik'}
+                          {teacher?.position ||
+                            t('teacherAttendance.defaultTeacherPosition')}
                         </span>
                       </p>
                       <p className="text-[11px] text-slate-600 flex items-start gap-1.5 mt-0.5 leading-snug">
@@ -2433,7 +2687,10 @@ export function TeacherAttendancePage() {
                           size={12}
                           className="text-amber-600 shrink-0 mt-0.5"
                         />
-                        <span>{schoolGeo?.name ?? 'Unit Sekolah'}</span>
+                        <span>
+                          {schoolGeo?.name ??
+                            t('teacherAttendance.defaultSchoolUnit')}
+                        </span>
                       </p>
                     </div>
                   </div>
@@ -2448,7 +2705,7 @@ export function TeacherAttendancePage() {
                           </span>
                           <div className="min-w-0">
                             <p className="text-[10px] font-medium text-slate-500 leading-tight">
-                              Tingkat Kehadiran
+                              {t('teacherAttendance.attendanceRateLabel')}
                             </p>
                             <p className="text-[11px] font-semibold text-slate-700 leading-snug">
                               {monthYearLabel}
@@ -2467,8 +2724,9 @@ export function TeacherAttendancePage() {
                             {reportStats.percentage}%
                           </span>
                           <span className="text-[10px] text-slate-500">
-                            {reportStats.hadir + reportStats.terlambat} hari
-                            hadir
+                            {t('teacherAttendance.presentDaysCount', {
+                              count: reportStats.hadir + reportStats.terlambat,
+                            })}
                           </span>
                         </div>
 
@@ -2490,7 +2748,7 @@ export function TeacherAttendancePage() {
                           {hoursStr}
                         </span>
                         <span className="text-[9px] font-bold tracking-wider text-slate-400">
-                          JAM
+                          {t('teacherAttendance.clockHourUnit')}
                         </span>
                       </div>
 
@@ -2501,7 +2759,7 @@ export function TeacherAttendancePage() {
                           {minutesStr}
                         </span>
                         <span className="text-[9px] font-bold tracking-wider text-slate-400">
-                          MNT
+                          {t('teacherAttendance.clockMinuteUnit')}
                         </span>
                       </div>
 
@@ -2512,7 +2770,7 @@ export function TeacherAttendancePage() {
                           {secondsStr}
                         </span>
                         <span className="text-[9px] font-bold tracking-wider text-rose-400">
-                          DTK
+                          {t('teacherAttendance.clockSecondUnit')}
                         </span>
                       </div>
                     </div>
@@ -2528,7 +2786,7 @@ export function TeacherAttendancePage() {
                       {hoursStr}
                     </span>
                     <span className="text-[10px] font-bold tracking-wider text-slate-400">
-                      JAM
+                      {t('teacherAttendance.clockHourUnit')}
                     </span>
                   </div>
 
@@ -2539,7 +2797,7 @@ export function TeacherAttendancePage() {
                       {minutesStr}
                     </span>
                     <span className="text-[10px] font-bold tracking-wider text-slate-400">
-                      MNT
+                      {t('teacherAttendance.clockMinuteUnit')}
                     </span>
                   </div>
 
@@ -2550,7 +2808,7 @@ export function TeacherAttendancePage() {
                       {secondsStr}
                     </span>
                     <span className="text-[10px] font-bold tracking-wider text-rose-400">
-                      DTK
+                      {t('teacherAttendance.clockSecondUnit')}
                     </span>
                   </div>
                 </div>
@@ -2569,8 +2827,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#475E78] via-[#3A4F68] to-[#2B3D52] text-white border border-white/15 flex flex-col justify-between min-h-43.75 ${isCheckInLocked
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-emerald-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2579,9 +2837,11 @@ export function TeacherAttendancePage() {
                     <LogIn size={16} />
                   </span>
                   <div>
-                    <div className="text-sm font-bold leading-tight">Datang</div>
+                    <div className="text-sm font-bold leading-tight">
+                      {t('teacherAttendance.cardCheckInTitle')}
+                    </div>
                     <div className="text-[10px] font-semibold text-emerald-300">
-                      Check-In
+                      {t('teacherAttendance.cardCheckInSub')}
                     </div>
                   </div>
                 </div>
@@ -2602,7 +2862,9 @@ export function TeacherAttendancePage() {
                   {formatShortTime(todayRecord?.checkInTime)}
                 </div>
                 <div className="text-[10px] text-slate-200/80 mt-1">
-                  Jadwal {effectiveWorkStartTime}
+                  {t('teacherAttendance.scheduleLabel', {
+                    time: effectiveWorkStartTime,
+                  })}
                   {effectiveToleranceMinutes > 0
                     ? ` (+${effectiveToleranceMinutes}m)`
                     : ''}
@@ -2614,44 +2876,59 @@ export function TeacherAttendancePage() {
                   className="text-[11px] text-slate-200/85 w-full"
                   text={
                     isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                      ? `Terkunci • ${holidayReason}`
+                      ? t('teacherAttendance.lockedHolidayShort', {
+                        reason: holidayReason,
+                      })
                       : isOnLeaveToday
-                        ? `Terkunci • ${todayRecord?.status}`
+                        ? t('teacherAttendance.lockedStatusShort', {
+                          status: formatStatusLabel(todayRecord?.status),
+                        })
                         : hasCheckedIn
-                          ? 'Terkunci • Sudah absen datang'
+                          ? t('teacherAttendance.lockedAlreadyCheckedIn')
                           : currentLateMinutes > 0
-                            ? `Terlambat ${formatDurationMinutes(currentLateMinutes)}`
+                            ? t('teacherAttendance.lateDurationLabel', {
+                              duration:
+                                formatDurationMinutes(currentLateMinutes),
+                            })
                             : effectiveToleranceMinutes > 0
-                              ? `Batas toleransi ${effectiveDeadlineStr}`
-                              : 'Ketuk untuk absen datang'
+                              ? t('teacherAttendance.toleranceDeadlineLabel', {
+                                time: effectiveDeadlineStr,
+                              })
+                              : t('teacherAttendance.tapToCheckIn')
                   }
                 />
                 <div className="text-[11px] text-slate-100 flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                      ? 'bg-rose-400'
-                      : hasCheckedIn
-                        ? todayRecord?.status === 'TERLAMBAT'
-                          ? 'bg-amber-400'
-                          : 'bg-emerald-400'
-                        : currentLateMinutes > 0
-                          ? 'bg-rose-400 animate-pulse'
-                          : 'bg-amber-300 animate-pulse'
+                        ? 'bg-rose-400'
+                        : hasCheckedIn
+                          ? todayRecord?.status === 'TERLAMBAT'
+                            ? 'bg-amber-400'
+                            : 'bg-emerald-400'
+                          : currentLateMinutes > 0
+                            ? 'bg-rose-400 animate-pulse'
+                            : 'bg-amber-300 animate-pulse'
                       }`}
                   />
                   <AutoScrollingText
                     className="flex-1 min-w-0"
                     text={
                       isHolidayLocked && !hasCheckedIn && !isOnLeaveToday
-                        ? 'Hari libur'
+                        ? t('teacherAttendance.holidayShortLabel')
                         : hasCheckedIn
                           ? todayRecord?.status === 'TERLAMBAT' &&
                             currentLateMinutes > 0
-                            ? `Terlambat (${currentLateMinutes} mnt)`
-                            : `Status: ${todayRecord?.status}`
+                            ? t('teacherAttendance.lateMinutesShort', {
+                              minutes: currentLateMinutes,
+                            })
+                            : t('teacherAttendance.statusWithLabel', {
+                              status: formatStatusLabel(todayRecord?.status),
+                            })
                           : currentLateMinutes > 0
-                            ? `Lewat batas ${effectiveDeadlineStr}`
-                            : 'Menunggu presensi datang'
+                            ? t('teacherAttendance.pastDeadlineLabel', {
+                              time: effectiveDeadlineStr,
+                            })
+                            : t('teacherAttendance.waitingCheckIn')
                     }
                   />
                 </div>
@@ -2667,8 +2944,8 @@ export function TeacherAttendancePage() {
                 setActiveView('peta');
               }}
               className={`text-left rounded-[26px] p-4 shadow-lg transition bg-linear-to-br from-[#D6B16B] via-[#C59D52] to-[#AD8438] text-white border border-white/20 flex flex-col justify-between min-h-43.75 ${!canCheckOut
-                ? 'opacity-65 cursor-not-allowed saturate-75'
-                : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
+                  ? 'opacity-65 cursor-not-allowed saturate-75'
+                  : 'hover:scale-[1.01] active:scale-[0.99] ring-2 ring-red-400/70'
                 }`}
             >
               <div className="flex items-center justify-between gap-1">
@@ -2677,9 +2954,11 @@ export function TeacherAttendancePage() {
                     <LogOut size={16} />
                   </span>
                   <div>
-                    <div className="text-sm font-bold leading-tight">Pulang</div>
+                    <div className="text-sm font-bold leading-tight">
+                      {t('teacherAttendance.cardCheckOutTitle')}
+                    </div>
                     <div className="text-[10px] font-semibold text-red-100">
-                      Check-Out
+                      {t('teacherAttendance.cardCheckOutSub')}
                     </div>
                   </div>
                 </div>
@@ -2700,7 +2979,9 @@ export function TeacherAttendancePage() {
                   {formatShortTime(todayRecord?.checkOutTime)}
                 </div>
                 <div className="text-[10px] text-amber-50/90 mt-1">
-                  Jadwal {effectiveWorkEndTime}
+                  {t('teacherAttendance.scheduleLabel', {
+                    time: effectiveWorkEndTime,
+                  })}
                 </div>
               </div>
 
@@ -2709,42 +2990,44 @@ export function TeacherAttendancePage() {
                   className="text-[11px] text-amber-50/90 w-full"
                   text={
                     isHolidayLocked && !hasCheckedOut
-                      ? `Terkunci • ${holidayReason}`
+                      ? t('teacherAttendance.lockedHolidayShort', {
+                        reason: holidayReason,
+                      })
                       : !hasCheckedIn
-                        ? 'Terkunci • Absen datang dulu'
+                        ? t('teacherAttendance.lockedCheckInFirst')
                         : hasCheckedOut
-                          ? 'Terkunci • Sudah absen pulang'
-                          : 'Presensi pulang belum tercatat'
+                          ? t('teacherAttendance.lockedAlreadyCheckedOut')
+                          : t('teacherAttendance.checkOutNotRecorded')
                   }
                 />
                 <div className="text-[11px] text-white flex items-center gap-1.5 font-medium min-w-0">
                   <span
                     className={`w-2 h-2 rounded-full shrink-0 ${isHolidayLocked && !hasCheckedOut
-                      ? 'bg-rose-300'
-                      : hasCheckedOut
-                        ? todayCheckOutTimingInfo.isEarly ||
-                          todayCheckOutTimingInfo.isOvertime
-                          ? 'bg-amber-200'
-                          : 'bg-emerald-300'
-                        : canCheckOut
-                          ? 'bg-red-400 animate-ping'
-                          : 'bg-amber-100/60'
+                        ? 'bg-rose-300'
+                        : hasCheckedOut
+                          ? todayCheckOutTimingInfo.isEarly ||
+                            todayCheckOutTimingInfo.isOvertime
+                            ? 'bg-amber-200'
+                            : 'bg-emerald-300'
+                          : canCheckOut
+                            ? 'bg-red-400 animate-ping'
+                            : 'bg-amber-100/60'
                       }`}
                   />
                   <AutoScrollingText
                     className="flex-1 min-w-0"
                     text={
                       isHolidayLocked && !hasCheckedOut
-                        ? 'Hari libur'
+                        ? t('teacherAttendance.holidayShortLabel')
                         : !hasCheckedIn
-                          ? 'Aktif setelah absen masuk'
+                          ? t('teacherAttendance.activeAfterCheckIn')
                           : hasCheckedOut
                             ? todayCheckOutTimingInfo.isEarly
-                              ? 'Status: Pulang Lebih Awal'
+                              ? t('teacherAttendance.statusEarlyCheckOut')
                               : todayCheckOutTimingInfo.isOvertime
-                                ? 'Melewati jadwal pulang'
-                                : 'Selesai tepat waktu'
-                            : 'Ketuk untuk absen pulang'
+                                ? t('teacherAttendance.statusOvertimeCheckOut')
+                                : t('teacherAttendance.statusCompletedOnTime')
+                            : t('teacherAttendance.tapToCheckOut')
                     }
                   />
                 </div>
@@ -2769,37 +3052,39 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={handleToggleSidebar}
                 className="p-2 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
-                title="Toggle Sidebar"
+                title={t('teacherAttendance.titleToggleSidebar')}
               >
                 <Menu size={17} />
               </button>
               <div>
                 <h2 className="font-bold text-base leading-tight">
                   {attendancePhase === 'CHECK_OUT'
-                    ? 'Presensi Pulang'
+                    ? t('teacherAttendance.mapHeaderCheckOut')
                     : attendancePhase === 'COMPLETED'
-                      ? 'Presensi Hari Ini Selesai'
+                      ? t('teacherAttendance.mapHeaderCompleted')
                       : attendancePhase === 'ON_LEAVE'
-                        ? `Status ${todayRecord?.status}`
-                        : 'Presensi Datang'}
+                        ? t('teacherAttendance.mapHeaderOnLeave', {
+                          status: formatStatusLabel(todayRecord?.status),
+                        })
+                        : t('teacherAttendance.mapHeaderCheckIn')}
                 </h2>
                 <div className="flex flex-wrap items-center gap-1.5 mt-1">
                   <span
                     className={`px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide uppercase ${attendancePhase === 'CHECK_OUT'
-                      ? 'bg-red-500/85 text-white'
-                      : 'bg-emerald-500/85 text-white'
+                        ? 'bg-red-500/85 text-white'
+                        : 'bg-emerald-500/85 text-white'
                       }`}
                   >
                     {attendancePhase === 'CHECK_OUT'
-                      ? 'Check-Out'
+                      ? t('teacherAttendance.cardCheckOutSub')
                       : attendancePhase === 'COMPLETED'
-                        ? 'Selesai'
+                        ? t('teacherAttendance.badgeCompleted')
                         : attendancePhase === 'ON_LEAVE'
-                          ? 'Izin / Sakit'
-                          : 'Check-In'}
+                          ? t('teacherAttendance.badgeLeaveOrSick')
+                          : t('teacherAttendance.cardCheckInSub')}
                   </span>
                   <span className="text-[11px] text-white/90 font-medium">
-                    • {formattedDateWithPasaran}
+                    - {formattedDateWithPasaran}
                   </span>
                 </div>
               </div>
@@ -2809,7 +3094,7 @@ export function TeacherAttendancePage() {
               onClick={() => void requestGpsPosition()}
               disabled={isLocating}
               className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
-              title="Perbarui Titik GPS"
+              title={t('teacherAttendance.titleRefreshGps')}
             >
               <LocateFixed
                 size={19}
@@ -2821,35 +3106,41 @@ export function TeacherAttendancePage() {
           {/* INDIKATOR RADIUS GPS REAL-TIME SEBELUM SELFIE */}
           <div
             className={`rounded-2xl p-3 border flex items-center justify-between gap-2.5 text-xs shadow-sm ${isLocating || distanceMeters === null
-              ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-200'
-              : isWithinRadius
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-200'
+                : isWithinRadius
+                  ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                  : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             <div className="flex items-center gap-2.5 min-w-0">
               <Radio
                 size={18}
                 className={`shrink-0 ${isLocating || distanceMeters === null
-                  ? 'animate-pulse text-blue-500'
-                  : isWithinRadius
-                    ? 'text-emerald-500'
-                    : 'text-red-500'
+                    ? 'animate-pulse text-blue-500'
+                    : isWithinRadius
+                      ? 'text-emerald-500'
+                      : 'text-red-500'
                   }`}
               />
               <div className="min-w-0">
                 <p className="font-bold truncate">
                   {isLocating || distanceMeters === null
-                    ? 'Mengunci Sinyal Satelit GPS...'
+                    ? t('teacherAttendance.gpsLocking')
                     : isWithinRadius
-                      ? `Jarak ke Sekolah: ${formatDistanceLabel(distanceMeters)} — Dalam Radius ✅`
-                      : `Jarak ke Sekolah: ${formatDistanceLabel(distanceMeters)} — Di Luar Radius ❌`}
+                      ? t('teacherAttendance.gpsInsideRadius', {
+                        distance: formatDistanceLabel(distanceMeters),
+                      })
+                      : t('teacherAttendance.gpsOutsideRadius', {
+                        distance: formatDistanceLabel(distanceMeters),
+                      })}
                 </p>
                 <p className="text-[10px] opacity-80">
                   {userCoords
-                    ? `Akurasi GPS ±${Math.round(userCoords.accuracy)}m • Batas area ${schoolGeo?.radius ?? DEFAULT_RADIUS_METERS
-                    }m`
-                    : 'Pastikan GPS perangkat dalam keadaan aktif'}
+                    ? t('teacherAttendance.gpsAccuracyInfo', {
+                      accuracy: Math.round(userCoords.accuracy),
+                      radius: schoolGeo?.radius ?? DEFAULT_RADIUS_METERS,
+                    })
+                    : t('teacherAttendance.gpsEnsureActive')}
                 </p>
               </div>
             </div>
@@ -2858,7 +3149,9 @@ export function TeacherAttendancePage() {
               attendancePhase === 'CHECK_IN' &&
               currentLateMinutes > 0 && (
                 <span className="px-2 py-1 rounded-lg bg-amber-500/20 text-amber-700 dark:text-amber-300 text-[10px] font-bold shrink-0">
-                  Terlambat {currentLateMinutes}m
+                  {t('teacherAttendance.lateBadgeShort', {
+                    minutes: currentLateMinutes,
+                  })}
                 </span>
               )}
           </div>
@@ -2882,7 +3175,9 @@ export function TeacherAttendancePage() {
                   <div className="text-sm font-extrabold text-slate-900">
                     {formatDistanceLabel(distanceMeters)}
                   </div>
-                  <div className="text-[11px] text-slate-500">Jarak</div>
+                  <div className="text-[11px] text-slate-500">
+                    {t('teacherAttendance.metricDistance')}
+                  </div>
                 </div>
 
                 <div>
@@ -2893,7 +3188,7 @@ export function TeacherAttendancePage() {
                     {schoolGeo?.radius ?? DEFAULT_RADIUS_METERS} m
                   </div>
                   <div className="text-[11px] text-slate-500">
-                    Radius Sekolah
+                    {t('teacherAttendance.metricSchoolRadius')}
                   </div>
                 </div>
 
@@ -2906,8 +3201,12 @@ export function TeacherAttendancePage() {
                   </div>
                   <div className="text-[11px] text-slate-500">
                     {isCheckOutPhase
-                      ? `Pulang ${effectiveWorkEndTime}`
-                      : `Batas ${effectiveDeadlineStr}`}
+                      ? t('teacherAttendance.metricCheckOutAt', {
+                        time: effectiveWorkEndTime,
+                      })
+                      : t('teacherAttendance.metricDeadlineAt', {
+                        time: effectiveDeadlineStr,
+                      })}
                   </div>
                 </div>
               </div>
@@ -2915,14 +3214,15 @@ export function TeacherAttendancePage() {
               <div className="mt-3 rounded-2xl bg-linear-to-r from-[#1D4E7A] to-[#2B8A78] p-3 text-center text-white relative">
                 <div className="flex items-center justify-center gap-2 mb-1">
                   <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-[10px] font-semibold">
-                    <Sparkles size={11} /> Kata Hari Ini
+                    <Sparkles size={11} />{' '}
+                    {t('teacherAttendance.quoteOfTheDayBadge')}
                   </span>
                   {activeQuotes.length > 1 && (
                     <button
                       type="button"
                       onClick={() => setQuoteOffset((prev) => prev + 1)}
                       className="p-1 rounded-full bg-white/15 hover:bg-white/25 transition"
-                      title="Ganti kutipan berikutnya"
+                      title={t('teacherAttendance.titleNextQuote')}
                     >
                       <RefreshCw size={10} />
                     </button>
@@ -2932,14 +3232,14 @@ export function TeacherAttendancePage() {
                       type="button"
                       onClick={() => navigate('/attendance/quotes')}
                       className="px-2 py-0.5 rounded-full bg-amber-400 text-slate-950 text-[10px] font-bold hover:bg-amber-300 transition"
-                      title="Buka Menu Kata Hari Ini"
+                      title={t('teacherAttendance.titleManageQuotes')}
                     >
-                      Kelola
+                      {t('teacherAttendance.btnManageQuotes')}
                     </button>
                   )}
                 </div>
                 <p className="text-xs italic leading-relaxed text-white/95">
-                  &ldquo;{activeQuoteItem.quote}&rdquo;
+                  “{activeQuoteItem.quote}”
                 </p>
                 {activeQuoteItem.author && (
                   <p className="text-[10px] text-amber-200 font-semibold mt-1">
@@ -2953,32 +3253,40 @@ export function TeacherAttendancePage() {
           {/* Kartu Status & Instruksi Ketuk Tombol Sidik Jari */}
           {!teacher ? (
             <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
-              Akun Anda belum terhubung dengan data Master Guru/PTK.
-            </div>
-          ) : isHolidayLocked ? (
-            <div className="w-full py-3 px-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-200 font-semibold text-xs flex items-center justify-center gap-2 text-center">
-              <Lock size={15} className="shrink-0" />
-              <span>Hari Libur ({holidayReason})</span>
+              {t('teacherAttendance.errTeacherUnlinked')}
             </div>
           ) : attendancePhase === 'COMPLETED' ? (
             <div className="w-full py-3 px-4 rounded-2xl bg-emerald-600/15 border border-emerald-500/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs flex items-center justify-center gap-2 text-center">
               <CheckCircle2 size={17} className="shrink-0" />
               <span>
-                Presensi Lengkap (Masuk{' '}
-                {formatShortTime(todayRecord?.checkInTime)} • Pulang{' '}
-                {formatShortTime(todayRecord?.checkOutTime)}
-                {todayCheckOutTimingInfo.isEarly
-                  ? ' — Pulang Lebih Awal'
-                  : todayCheckOutTimingInfo.isOvertime
-                    ? ' — Melewati Jadwal Pulang'
-                    : ''}
-                )
+                {t('teacherAttendance.completedSummaryBanner', {
+                  checkIn: formatShortTime(todayRecord?.checkInTime),
+                  checkOut: formatShortTime(todayRecord?.checkOutTime),
+                  note: todayCheckOutTimingInfo.isEarly
+                    ? t('teacherAttendance.completedEarlySuffix')
+                    : todayCheckOutTimingInfo.isOvertime
+                      ? t('teacherAttendance.completedOvertimeSuffix')
+                      : '',
+                })}
               </span>
             </div>
           ) : attendancePhase === 'ON_LEAVE' ? (
             <div className="w-full py-3 px-4 rounded-2xl bg-blue-600/15 border border-blue-500/40 text-blue-700 dark:text-blue-300 font-semibold text-xs flex items-center justify-center gap-2">
               <FileCheck2 size={17} className="shrink-0" />
-              <span>Hari Ini Tercatat {todayRecord?.status}</span>
+              <span>
+                {t('teacherAttendance.onLeaveBanner', {
+                  status: formatStatusLabel(todayRecord?.status),
+                })}
+              </span>
+            </div>
+          ) : isHolidayLocked ? (
+            <div className="w-full py-3 px-4 rounded-2xl bg-rose-500/15 border border-rose-500/40 text-rose-700 dark:text-rose-200 font-semibold text-xs flex items-center justify-center gap-2 text-center">
+              <Lock size={15} className="shrink-0" />
+              <span>
+                {t('teacherAttendance.toastHolidayError', {
+                  reason: holidayReason,
+                })}
+              </span>
             </div>
           ) : !isWithinRadius ? (
             <button
@@ -2989,11 +3297,13 @@ export function TeacherAttendancePage() {
               <div className="flex items-center gap-1.5">
                 <XCircle size={16} />
                 <span>
-                  Di Luar Radius ({formatDistanceLabel(distanceMeters)})
+                  {t('teacherAttendance.outsideRadiusBtn', {
+                    distance: formatDistanceLabel(distanceMeters),
+                  })}
                 </span>
               </div>
               <span className="text-[10px] font-normal text-red-100">
-                Ketuk di sini untuk memperbarui lokasi GPS
+                {t('teacherAttendance.outsideRadiusHint')}
               </span>
             </button>
           ) : (
@@ -3002,26 +3312,26 @@ export function TeacherAttendancePage() {
               onClick={handleFingerprintAction}
               disabled={isSubmittingAttendance}
               className={`w-full py-3 px-4 rounded-2xl font-bold text-white shadow-lg flex flex-col items-center justify-center transition ${isCheckOutPhase
-                ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
-                : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
+                  ? 'bg-linear-to-r from-rose-600 to-red-700 hover:opacity-95'
+                  : 'bg-linear-to-r from-emerald-500 to-teal-600 hover:opacity-95'
                 }`}
             >
               <span className="text-sm flex items-center gap-1.5">
                 <Fingerprint size={17} />
                 {isSubmittingAttendance
-                  ? 'Menyimpan Presensi...'
+                  ? t('teacherAttendance.savingAttendance')
                   : isCheckOutPhase
-                    ? 'Presensi Pulang'
-                    : 'Presensi Datang'}
+                    ? t('teacherAttendance.mapHeaderCheckOut')
+                    : t('teacherAttendance.mapHeaderCheckIn')}
               </span>
               <span className="text-[11px] font-medium text-white/90 mt-0.5">
                 {isCheckOutPhase
                   ? isSelfieRequiredForCurrentPhase
-                    ? 'Check-Out (GPS + Selfie) • Ketuk tombol sidik jari merah di bawah'
-                    : 'Check-Out (Verifikasi GPS) • Ketuk tombol sidik jari merah di bawah'
+                    ? t('teacherAttendance.hintCheckOutGpsSelfie')
+                    : t('teacherAttendance.hintCheckOutGpsOnly')
                   : isSelfieRequiredForCurrentPhase
-                    ? 'Check-In (GPS + Selfie) • Ketuk tombol sidik jari hijau di bawah'
-                    : 'Check-In (Verifikasi GPS) • Ketuk tombol sidik jari hijau di bawah'}
+                    ? t('teacherAttendance.hintCheckInGpsSelfie')
+                    : t('teacherAttendance.hintCheckInGpsOnly')}
               </span>
             </button>
           )}
@@ -3041,18 +3351,17 @@ export function TeacherAttendancePage() {
             <div>
               <h2 className="text-base font-bold flex items-center gap-2">
                 <FileCheck2 size={18} className="text-amber-500" />
-                Pengajuan Dinas Luar, Izin, &amp; Sakit
+                {t('teacherAttendance.leaveFormTitle')}
               </h2>
               <p className="text-xs opacity-70 mt-0.5">
-                Wajib melampirkan bukti surat tugas, undangan dinas, atau surat
-                keterangan dokter.
+                {t('teacherAttendance.leaveFormSubtitle')}
               </p>
             </div>
             <button
               type="button"
               onClick={handleToggleSidebar}
               className="p-2 rounded-xl bg-muted hover:bg-muted/80 transition"
-              title="Toggle Sidebar"
+              title={t('teacherAttendance.titleToggleSidebar')}
             >
               <Menu size={16} />
             </button>
@@ -3062,11 +3371,14 @@ export function TeacherAttendancePage() {
             <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-200 text-xs space-y-1.5 leading-relaxed">
               <div className="flex items-center gap-2 font-bold text-sm">
                 <Lock size={16} className="text-amber-500 shrink-0" />
-                <span>Hari Libur ({holidayReason})</span>
+                <span>
+                  {t('teacherAttendance.toastHolidayError', {
+                    reason: holidayReason,
+                  })}
+                </span>
               </div>
               <p className="opacity-85">
-                Formulir pengajuan Izin, Sakit, dan Dinas Luar dinonaktifkan
-                pada hari libur.
+                {t('teacherAttendance.leaveFormHolidayLockedDesc')}
               </p>
             </div>
           ) : (
@@ -3076,14 +3388,23 @@ export function TeacherAttendancePage() {
             >
               <div>
                 <label className="block text-xs font-semibold mb-1.5">
-                  Jenis Ketidakhadiran *
+                  {t('teacherAttendance.leaveTypeLabel')}
                 </label>
                 <div className="grid grid-cols-3 gap-2">
                   {(
                     [
-                      { value: 'DINAS_LUAR', label: 'Dinas Luar' },
-                      { value: 'IZIN', label: 'Izin Pribadi' },
-                      { value: 'SAKIT', label: 'Sakit' },
+                      {
+                        value: 'DINAS_LUAR',
+                        label: t('teacherAttendance.leaveCatDinasLuar'),
+                      },
+                      {
+                        value: 'IZIN',
+                        label: t('teacherAttendance.leaveCatIzin'),
+                      },
+                      {
+                        value: 'SAKIT',
+                        label: t('teacherAttendance.leaveCatSakit'),
+                      },
                     ] as const
                   ).map((item) => (
                     <button
@@ -3091,8 +3412,8 @@ export function TeacherAttendancePage() {
                       type="button"
                       onClick={() => setLeaveCategory(item.value)}
                       className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                          ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                          : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                         }`}
                     >
                       {item.label}
@@ -3104,7 +3425,7 @@ export function TeacherAttendancePage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold mb-1">
-                    Tanggal Mulai *
+                    {t('teacherAttendance.leaveStartDateLabel')}
                   </label>
                   <input
                     type="date"
@@ -3121,7 +3442,7 @@ export function TeacherAttendancePage() {
                 </div>
                 <div>
                   <label className="block text-xs font-semibold mb-1">
-                    Tanggal Selesai *
+                    {t('teacherAttendance.leaveEndDateLabel')}
                   </label>
                   <input
                     type="date"
@@ -3137,8 +3458,8 @@ export function TeacherAttendancePage() {
               <div>
                 <label className="block text-xs font-semibold mb-1">
                   {leaveCategory === 'DINAS_LUAR'
-                    ? 'Nomor Surat Tugas / Instansi Tujuan *'
-                    : 'Nomor Surat / Nama Fasilitas Kesehatan (Opsional)'}
+                    ? t('teacherAttendance.leaveRefRequiredLabel')
+                    : t('teacherAttendance.leaveRefOptionalLabel')}
                 </label>
                 <input
                   type="text"
@@ -3147,8 +3468,8 @@ export function TeacherAttendancePage() {
                   onChange={(e) => setLeaveRefNumber(e.target.value)}
                   placeholder={
                     leaveCategory === 'DINAS_LUAR'
-                      ? 'Contoh: 800/124/2026 — Dinas Pendidikan Kab. Sleman'
-                      : 'Contoh: Puskesmas Berbah / RSUD'
+                      ? t('teacherAttendance.leaveRefRequiredPlaceholder')
+                      : t('teacherAttendance.leaveRefOptionalPlaceholder')
                   }
                   className="form-input w-full text-xs"
                 />
@@ -3157,7 +3478,7 @@ export function TeacherAttendancePage() {
               <div>
                 <div className="flex justify-between text-xs mb-1">
                   <label className="font-semibold">
-                    Keterangan / Uraian Kegiatan *
+                    {t('teacherAttendance.leaveReasonLabel')}
                   </label>
                   <span
                     className={
@@ -3166,7 +3487,10 @@ export function TeacherAttendancePage() {
                         : 'text-amber-600 dark:text-amber-400'
                     }
                   >
-                    {leaveReason.trim().length}/{MIN_REASON_LENGTH} karakter
+                    {t('teacherAttendance.charCounter', {
+                      current: leaveReason.trim().length,
+                      min: MIN_REASON_LENGTH,
+                    })}
                   </span>
                 </div>
                 <textarea
@@ -3174,19 +3498,19 @@ export function TeacherAttendancePage() {
                   required
                   value={leaveReason}
                   onChange={(e) => setLeaveReason(e.target.value)}
-                  placeholder="Tuliskan rincian kegiatan dinas luar, keperluan izin, atau keterangan sakit secara jelas..."
+                  placeholder={t('teacherAttendance.leaveReasonPlaceholder')}
                   className="form-input w-full text-xs"
                 />
               </div>
 
               <div>
                 <label className="block text-xs font-semibold mb-1.5">
-                  Unggah Bukti Surat / Foto Dokumen (Wajib: JPG, PNG, PDF) *
+                  {t('teacherAttendance.leaveFileLabel')}
                 </label>
                 <label
                   className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                    ? 'border-emerald-500/70 bg-emerald-500/10'
-                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                      ? 'border-emerald-500/70 bg-emerald-500/10'
+                      : 'border-border hover:border-emerald-500/60 bg-muted/30'
                     }`}
                 >
                   {leaveFile ? (
@@ -3196,13 +3520,15 @@ export function TeacherAttendancePage() {
                   )}
                   <span className="text-xs font-semibold text-center">
                     {leaveFile
-                      ? `Berkas Siap: ${leaveFile.name}`
-                      : 'Klik untuk memilih foto surat dokter / surat tugas'}
+                      ? t('teacherAttendance.leaveFileReady', {
+                        name: leaveFile.name,
+                      })
+                      : t('teacherAttendance.leaveFilePrompt')}
                   </span>
                   <span className="text-[11px] opacity-60 mt-0.5">
                     {leaveFile
-                      ? 'Ketuk lagi jika ingin mengganti berkas'
-                      : 'Maksimal ukuran berkas 2 MB'}
+                      ? t('teacherAttendance.leaveFileReplaceHint')
+                      : t('teacherAttendance.leaveFileSizeHint')}
                   </span>
                   <input
                     type="file"
@@ -3211,7 +3537,7 @@ export function TeacherAttendancePage() {
                     onChange={(e) => {
                       const file = e.target.files?.[0] ?? null;
                       if (file && file.size > 2 * 1024 * 1024) {
-                        showToast('error', 'Ukuran file maksimal 2 MB.');
+                        showToast('error', t('teacherAttendance.errFileMax2Mb'));
                         return;
                       }
                       setLeaveFile(file);
@@ -3225,19 +3551,23 @@ export function TeacherAttendancePage() {
                   type="submit"
                   disabled={isSubmittingLeave || !teacher}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                      ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                     }`}
                 >
                   {isSubmittingLeave ? (
                     <>
                       <Loader2 size={18} className="animate-spin shrink-0" />
-                      <span>Mengunggah Bukti &amp; Menyimpan...</span>
+                      <span>
+                        {t('teacherAttendance.btnUploadingAndSaving')}
+                      </span>
                     </>
                   ) : (
                     <>
                       <Send size={17} className="shrink-0" />
-                      <span>Kirim Pengajuan Resmi</span>
+                      <span>
+                        {t('teacherAttendance.btnSubmitOfficialLeave')}
+                      </span>
                     </>
                   )}
                 </button>
@@ -3262,20 +3592,22 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={handleToggleSidebar}
                 className="p-2 rounded-xl bg-white/15 hover:bg-white/25 transition"
-                title="Toggle Sidebar"
+                title={t('teacherAttendance.titleToggleSidebar')}
               >
                 <Menu size={17} />
               </button>
               <div>
                 <h2 className="text-lg font-bold">
                   {reportScope === 'monthly'
-                    ? 'Laporan Presensi'
-                    : 'Rekap Presensi'}
+                    ? t('teacherAttendance.reportTitleMonthly')
+                    : t('teacherAttendance.reportTitleYearly')}
                 </h2>
                 <p className="text-xs text-blue-100/80">
                   {reportScope === 'monthly'
                     ? selectedMonthLabel
-                    : `Tahun ${calendarYear}`}
+                    : t('teacherAttendance.yearLabel', {
+                      year: calendarYear,
+                    })}
                 </p>
               </div>
             </div>
@@ -3284,35 +3616,37 @@ export function TeacherAttendancePage() {
                 type="button"
                 onClick={() => setReportScope('monthly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
-                Bulan Ini
+                {t('teacherAttendance.scopeMonthly')}
               </button>
               <button
                 type="button"
                 onClick={() => setReportScope('yearly')}
                 className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                  ? 'bg-white text-slate-900'
-                  : 'text-white'
+                    ? 'bg-white text-slate-900'
+                    : 'text-white'
                   }`}
               >
-                Tahunan
+                {t('teacherAttendance.scopeYearly')}
               </button>
             </div>
           </div>
 
           <div className="rounded-2xl bg-linear-to-r from-[#1E3B5C] via-[#3A5357] to-[#8C7A3E] p-5 text-white shadow-md flex items-center justify-between">
             <div>
-              <p className="text-xs text-white/80">Tingkat Kehadiran</p>
+              <p className="text-xs text-white/80">
+                {t('teacherAttendance.attendanceRateLabel')}
+              </p>
               <p className="text-3xl font-extrabold mt-1">
                 {reportStats.percentage}%
               </p>
               <p className="text-xs text-amber-200 mt-1">
                 {reportStats.percentage >= 80
-                  ? 'Pertahankan kedisiplinan yang baik!'
-                  : 'Perlu ditingkatkan'}
+                  ? t('teacherAttendance.disciplineGood')
+                  : t('teacherAttendance.disciplineNeedsImprovement')}
               </p>
             </div>
             <div className="w-12 h-12 rounded-full bg-white/15 flex items-center justify-center">
@@ -3325,25 +3659,33 @@ export function TeacherAttendancePage() {
               <div className="text-xl sm:text-2xl font-extrabold text-emerald-500">
                 {reportStats.hadir}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">Hari Hadir</div>
+              <div className="text-[11px] opacity-75 mt-1">
+                {t('teacherAttendance.statPresentDays')}
+              </div>
             </div>
             <div className="data-card p-3 text-center">
               <div className="text-xl sm:text-2xl font-extrabold text-amber-500">
                 {reportStats.terlambat}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">Terlambat</div>
+              <div className="text-[11px] opacity-75 mt-1">
+                {t('teacherAttendance.statLateDays')}
+              </div>
             </div>
             <div className="data-card p-3 text-center">
               <div className="text-xl sm:text-2xl font-extrabold text-blue-500">
                 {reportStats.izinSakit}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">Izin / Sakit</div>
+              <div className="text-[11px] opacity-75 mt-1">
+                {t('teacherAttendance.statLeaveSickDays')}
+              </div>
             </div>
             <div className="data-card p-3 text-center">
               <div className="text-xl sm:text-2xl font-extrabold text-red-500">
                 {reportStats.alpa}
               </div>
-              <div className="text-[11px] opacity-75 mt-1">Tanpa Ket.</div>
+              <div className="text-[11px] opacity-75 mt-1">
+                {t('teacherAttendance.statUnexcusedDays')}
+              </div>
             </div>
           </div>
 
@@ -3357,10 +3699,9 @@ export function TeacherAttendancePage() {
                     {selectedJavaneseMonthRange}
                   </p>
                   <p className="text-[10px] opacity-65">
-                    Mode:{' '}
                     {effectiveWorkDaysMode === 'FIVE_DAYS'
-                      ? '5 Hari Kerja (Sabtu & Minggu Libur)'
-                      : '6 Hari Kerja (Minggu Libur)'}
+                      ? t('teacherAttendance.workMode5Days')
+                      : t('teacherAttendance.workMode6Days')}
                   </p>
                 </div>
               </div>
@@ -3378,7 +3719,7 @@ export function TeacherAttendancePage() {
                   }}
                   className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-muted hover:bg-muted/80 transition"
                 >
-                  Hari Ini
+                  {t('teacherAttendance.btnToday')}
                 </button>
                 <button
                   type="button"
@@ -3398,14 +3739,14 @@ export function TeacherAttendancePage() {
             </div>
 
             <div className="grid grid-cols-7 gap-1 text-center">
-              {NAMA_HARI_SINGKAT.map((hari, idx) => (
+              {shortDayNames.map((hari, idx) => (
                 <div
                   key={hari}
                   className={`text-[11px] font-bold py-1 ${idx === 0
-                    ? 'text-red-500'
-                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                       ? 'text-red-500'
-                      : 'opacity-65'
+                      : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                        ? 'text-red-500'
+                        : 'opacity-65'
                     }`}
                 >
                   {hari}
@@ -3430,7 +3771,7 @@ export function TeacherAttendancePage() {
                       ? 'bg-amber-500'
                       : status === 'IZIN' || status === 'SAKIT'
                         ? 'bg-blue-500'
-                        : status === 'ALPA'
+                        : status === 'ALPA' || status === 'ALPHA'
                           ? 'bg-red-500'
                           : null;
 
@@ -3440,10 +3781,10 @@ export function TeacherAttendancePage() {
                     type="button"
                     onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                     className={`h-12 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                      ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                      : isToday
-                        ? 'border-amber-400 font-bold'
-                        : 'border-transparent'
+                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                        : isToday
+                          ? 'border-amber-400 font-bold'
+                          : 'border-transparent'
                       } ${cell.isRedDate
                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                         : 'bg-muted/35 hover:bg-muted/70'
@@ -3470,8 +3811,8 @@ export function TeacherAttendancePage() {
             {selectedDateInfo && (
               <div
                 className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                  ? 'bg-red-500/10 border-red-500/30'
-                  : 'bg-muted/40 border-border'
+                    ? 'bg-red-500/10 border-red-500/30'
+                    : 'bg-muted/40 border-border'
                   }`}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -3485,22 +3826,34 @@ export function TeacherAttendancePage() {
                   </div>
                   {selectedDateInfo.isRedDate && (
                     <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white shrink-0">
-                      Tanggal Merah
+                      {t('teacherAttendance.redDateBadge')}
                     </span>
                   )}
                 </div>
 
                 {selectedDateInfo.holidayName && (
                   <p className="text-[11px] font-semibold text-red-600 dark:text-red-300">
-                    Keterangan Libur: {selectedDateInfo.holidayName}
+                    {t('teacherAttendance.holidayNotePrefix', {
+                      name: selectedDateInfo.holidayName,
+                    })}
                   </p>
                 )}
 
                 {selectedDateInfo.record ? (
                   <p className="text-[11px] opacity-85">
-                    Status: <strong>{selectedDateInfo.record.status}</strong>
+                    {t('teacherAttendance.calStatusLine')}
+                    <strong>
+                      {formatStatusLabel(selectedDateInfo.record.status)}
+                    </strong>
                     {selectedDateInfo.record.checkInTime
-                      ? ` • Masuk ${formatShortTime(selectedDateInfo.record.checkInTime)} • Pulang ${formatShortTime(selectedDateInfo.record.checkOutTime)}`
+                      ? t('teacherAttendance.calInOutTime', {
+                        checkIn: formatShortTime(
+                          selectedDateInfo.record.checkInTime
+                        ),
+                        checkOut: formatShortTime(
+                          selectedDateInfo.record.checkOutTime
+                        ),
+                      })
                       : ''}
                     {selectedDateInfo.record.notes
                       ? ` • ${selectedDateInfo.record.notes}`
@@ -3509,8 +3862,8 @@ export function TeacherAttendancePage() {
                 ) : (
                   <p className="text-[11px] opacity-65">
                     {selectedDateInfo.isRedDate
-                      ? 'Tidak ada jadwal presensi pada hari libur.'
-                      : 'Belum ada catatan presensi pada tanggal ini.'}
+                      ? t('teacherAttendance.calNoScheduleHoliday')
+                      : t('teacherAttendance.calNoRecordDate')}
                   </p>
                 )}
               </div>
@@ -3532,17 +3885,17 @@ export function TeacherAttendancePage() {
             <div>
               <h2 className="text-base font-bold flex items-center gap-2">
                 <History size={18} className="text-emerald-500" />
-                Data Log Kehadiran
+                {t('teacherAttendance.logTitle')}
               </h2>
               <p className="text-xs opacity-70">
-                Catatan waktu check-in, check-out, dan keterangan presensi Anda
+                {t('teacherAttendance.logSubtitle')}
               </p>
             </div>
             <button
               type="button"
               onClick={handleToggleSidebar}
               className="p-2 rounded-xl bg-muted hover:bg-muted/80 transition"
-              title="Toggle Sidebar"
+              title={t('teacherAttendance.titleToggleSidebar')}
             >
               <Menu size={16} />
             </button>
@@ -3550,15 +3903,13 @@ export function TeacherAttendancePage() {
 
           {historyRecords.length === 0 ? (
             <p className="text-xs opacity-60 text-center py-8">
-              Belum ada log presensi tercatat.
+              {t('teacherAttendance.logEmpty')}
             </p>
           ) : (
             <div className="space-y-2.5 max-h-105 overflow-y-auto pr-1">
               {historyRecords.map((item) => {
-                const isEarlyLog = Boolean(
-                  item.notes?.toLowerCase().includes('pulang lebih awal')
-                );
-                const itemJv = getJavaneseDateInfo(item.date);
+                const isEarlyLog = isEarlyDepartureNote(item.notes);
+                const itemJv = getJavaneseDateInfo(item.date, currentLang);
                 const loggedLateMinutes =
                   typeof item.deviceTelemetry?.lateMinutes === 'number'
                     ? item.deviceTelemetry.lateMinutes
@@ -3583,19 +3934,24 @@ export function TeacherAttendancePage() {
                         </span>
                         {loggedLateMinutes > 0 && (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-700 dark:text-amber-300">
-                            Terlambat {loggedLateMinutes} mnt
+                            {t('teacherAttendance.logLateBadge', {
+                              minutes: loggedLateMinutes,
+                            })}
                           </span>
                         )}
                         {isEarlyLog && (
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-500/20 text-rose-700 dark:text-rose-300">
-                            Pulang Lebih Awal
+                            {t('teacherAttendance.logEarlyBadge')}
                           </span>
                         )}
                       </div>
                       <div className="text-[11px] opacity-75">
                         {item.checkInTime
-                          ? `Masuk ${formatShortTime(item.checkInTime)} (${item.checkInDistance ?? 0
-                          }m) • Pulang ${formatShortTime(item.checkOutTime)}`
+                          ? t('teacherAttendance.logInOutDetails', {
+                            checkIn: formatShortTime(item.checkInTime),
+                            distance: item.checkInDistance ?? 0,
+                            checkOut: formatShortTime(item.checkOutTime),
+                          })
                           : item.notes || '-'}
                       </div>
                       {item.checkInTime && item.notes && (
@@ -3606,15 +3962,15 @@ export function TeacherAttendancePage() {
                     </div>
                     <span
                       className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                        : item.status === 'TERLAMBAT'
-                          ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                          : item.status === 'ALPA'
-                            ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                            : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                          ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                          : item.status === 'TERLAMBAT'
+                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                            : item.status === 'ALPA' || item.status === 'ALPHA'
+                              ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                              : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                         }`}
                     >
-                      {item.status}
+                      {formatStatusLabel(item.status)}
                     </span>
                   </div>
                 );
@@ -3636,24 +3992,24 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('beranda')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <Home size={17} />
-            <span>Beranda</span>
+            <span>{t('teacherAttendance.navHome')}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveView('laporan')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileBarChart2 size={17} />
-            <span>Laporan</span>
+            <span>{t('teacherAttendance.navReport')}</span>
           </button>
 
           <div className="flex flex-col items-center justify-center relative">
@@ -3671,19 +4027,21 @@ export function TeacherAttendancePage() {
               className={`-mt-7 w-15 h-15 rounded-full flex items-center justify-center border-4 border-white dark:border-slate-900 transition-all duration-200 select-none ${fingerprintButtonStyle}`}
               title={
                 !isOnMapView
-                  ? 'Buka Peta Presensi'
+                  ? t('teacherAttendance.titleOpenAttendanceMap')
                   : isHolidayLocked
-                    ? `Hari Libur (${holidayReason})`
+                    ? t('teacherAttendance.toastHolidayError', {
+                      reason: holidayReason,
+                    })
                     : isCheckOutPhase
-                      ? 'Presensi Pulang (Check-Out)'
-                      : 'Presensi Datang (Check-In)'
+                      ? t('teacherAttendance.titleFingerprintCheckOut')
+                      : t('teacherAttendance.titleFingerprintCheckIn')
               }
             >
               <Fingerprint
                 size={28}
                 className={`transition-transform duration-150 ${isFingerprintGlowing
-                  ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                  : ''
+                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                    : ''
                   }`}
               />
             </motion.button>
@@ -3693,24 +4051,24 @@ export function TeacherAttendancePage() {
             type="button"
             onClick={() => setActiveView('izin')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <FileCheck2 size={17} />
-            <span>Izin / Dinas</span>
+            <span>{t('teacherAttendance.navLeave')}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setActiveView('log')}
             className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-              ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-              : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
               }`}
           >
             <History size={17} />
-            <span>Data Log</span>
+            <span>{t('teacherAttendance.navLog')}</span>
           </button>
         </div>
       </div>
@@ -3725,19 +4083,23 @@ export function TeacherAttendancePage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={() =>
+              !isTogglingHolidayLock && setIsHolidayModalOpen(false)
+            }
           >
             <motion.div
               initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.94, opacity: 0 }}
               className="data-card max-w-sm w-full p-5 space-y-4 border border-border shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2.5">
                   <div
                     className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${isHolidayLocked
-                      ? 'bg-rose-500/15 text-rose-500'
-                      : 'bg-emerald-500/15 text-emerald-500'
+                        ? 'bg-rose-500/15 text-rose-500'
+                        : 'bg-emerald-500/15 text-emerald-500'
                       }`}
                   >
                     {isHolidayLocked ? (
@@ -3748,13 +4110,16 @@ export function TeacherAttendancePage() {
                   </div>
                   <div>
                     <h3 className="font-bold text-sm leading-snug">
-                      {isHolidayLocked ? 'Hari Libur' : 'Khusus Guru Aktif'}
+                      {isHolidayLocked
+                        ? t('teacherAttendance.badgeHoliday')
+                        : t('teacherAttendance.modalSpecialEventActiveTitle')}
                     </h3>
                     <p className="text-[11px] opacity-70">{holidayReason}</p>
                   </div>
                 </div>
                 <button
                   type="button"
+                  disabled={isTogglingHolidayLock}
                   onClick={() => setIsHolidayModalOpen(false)}
                   className="p-1 rounded-lg hover:bg-muted shrink-0"
                 >
@@ -3766,7 +4131,7 @@ export function TeacherAttendancePage() {
                 <div className="space-y-3">
                   <div>
                     <label className="block text-[11px] font-semibold mb-1">
-                      Nama Kegiatan Khusus Guru
+                      {t('teacherAttendance.labelSpecialEventTitle')}
                     </label>
                     <input
                       type="text"
@@ -3774,7 +4139,9 @@ export function TeacherAttendancePage() {
                       onChange={(e) =>
                         setSpecialEventTitleInput(e.target.value)
                       }
-                      placeholder="Contoh: Rapat Kerja Guru"
+                      placeholder={t(
+                        'teacherAttendance.placeholderSpecialEventTitle'
+                      )}
                       className="form-input text-xs py-2 w-full"
                     />
                   </div>
@@ -3787,15 +4154,15 @@ export function TeacherAttendancePage() {
                     <Unlock size={14} />
                     <span>
                       {isTogglingHolidayLock
-                        ? 'Membuka...'
-                        : 'Buka Presensi Khusus Guru'}
+                        ? t('teacherAttendance.btnUnlocking')
+                        : t('teacherAttendance.btnUnlockSpecialEvent')}
                     </span>
                   </button>
                 </div>
               ) : (
                 <div className="space-y-3">
                   <p className="text-xs opacity-75">
-                    Presensi khusus guru sedang terbuka (siswa tetap libur).
+                    {t('teacherAttendance.descSpecialEventOpen')}
                   </p>
                   <button
                     type="button"
@@ -3806,8 +4173,8 @@ export function TeacherAttendancePage() {
                     <Lock size={14} />
                     <span>
                       {isTogglingHolidayLock
-                        ? 'Mengunci...'
-                        : 'Kunci Kembali Libur'}
+                        ? t('teacherAttendance.btnLocking')
+                        : t('teacherAttendance.btnRelockHoliday')}
                     </span>
                   </button>
                 </div>
@@ -3827,12 +4194,14 @@ export function TeacherAttendancePage() {
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4"
+            onClick={closeCheckoutConfirmModal}
           >
             <motion.div
               initial={{ scale: 0.94, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.94, opacity: 0 }}
               className="data-card max-w-sm w-full p-5 space-y-4 border border-border shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="flex items-center gap-2.5">
@@ -3841,10 +4210,10 @@ export function TeacherAttendancePage() {
                   </div>
                   <div>
                     <h3 className="font-bold text-sm leading-snug">
-                      Peringatan: Pulang Lebih Awal!
+                      {t('teacherAttendance.modalEarlyTitle')}
                     </h3>
                     <p className="text-[11px] opacity-70">
-                      Jadwal kepulangan sekolah belum berakhir
+                      {t('teacherAttendance.modalEarlySubtitle')}
                     </p>
                   </div>
                 </div>
@@ -3859,27 +4228,35 @@ export function TeacherAttendancePage() {
 
               <div className="p-3.5 rounded-2xl border text-xs space-y-2 bg-amber-500/10 border-amber-500/35">
                 <div className="flex items-center justify-between">
-                  <span className="opacity-75">Waktu Saat Ini:</span>
+                  <span className="opacity-75">
+                    {t('teacherAttendance.modalEarlyCurrentTime')}
+                  </span>
                   <span className="font-mono font-extrabold text-sm">
-                    {checkoutConfirmModal.currentTimeLabel} WIB
+                    {checkoutConfirmModal.currentTimeLabel}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="opacity-75">Jadwal Pulang Sekolah:</span>
+                  <span className="opacity-75">
+                    {t('teacherAttendance.modalEarlySchoolEnd')}
+                  </span>
                   <span className="font-mono font-bold">
-                    {effectiveWorkEndTime} WIB
+                    {effectiveWorkEndTime}
                   </span>
                 </div>
                 <div className="pt-2 border-t border-amber-500/25 flex items-center justify-between text-amber-600 dark:text-amber-300 font-bold">
-                  <span>Selisih Waktu:</span>
-                  <span>Lebih awal {checkoutConfirmModal.formattedDiff}</span>
+                  <span>{t('teacherAttendance.modalEarlyDiffLabel')}</span>
+                  <span>
+                    {t('teacherAttendance.modalEarlyDiffValue', {
+                      duration: checkoutConfirmModal.formattedDiff,
+                    })}
+                  </span>
                 </div>
               </div>
 
               <div className="space-y-1.5">
                 <div className="flex items-center justify-between text-[11px]">
                   <label className="font-bold">
-                    Alasan Pulang Lebih Awal{' '}
+                    {t('teacherAttendance.modalEarlyReasonLabel')}{' '}
                     <span className="text-red-500">*</span>
                   </label>
                   <span
@@ -3889,8 +4266,10 @@ export function TeacherAttendancePage() {
                         : 'text-amber-600 dark:text-amber-400'
                     }
                   >
-                    {earlyCheckoutReason.trim().length}/
-                    {MIN_EARLY_CHECKOUT_REASON_LENGTH} karakter
+                    {t('teacherAttendance.charCounter', {
+                      current: earlyCheckoutReason.trim().length,
+                      min: MIN_EARLY_CHECKOUT_REASON_LENGTH,
+                    })}
                   </span>
                 </div>
                 <textarea
@@ -3901,7 +4280,9 @@ export function TeacherAttendancePage() {
                     setEarlyCheckoutReason(e.target.value);
                     if (earlyReasonError) setEarlyReasonError(null);
                   }}
-                  placeholder="Wajib diisi, misal: Izin mengantar keluarga berobat / tugas dinas luar..."
+                  placeholder={t(
+                    'teacherAttendance.modalEarlyReasonPlaceholder'
+                  )}
                   className="form-input w-full text-xs py-2"
                 />
                 {earlyReasonError && (
@@ -3917,7 +4298,7 @@ export function TeacherAttendancePage() {
                   onClick={closeCheckoutConfirmModal}
                   className="btn-secondary justify-center py-2.5 text-xs font-bold rounded-xl"
                 >
-                  Batal
+                  {t('teacherAttendance.btnCancel')}
                 </button>
                 <button
                   type="button"
@@ -3926,7 +4307,7 @@ export function TeacherAttendancePage() {
                   className="py-2.5 px-3 rounded-xl text-xs font-bold text-white flex items-center justify-center gap-1.5 shadow-md transition bg-amber-600 hover:bg-amber-700 disabled:opacity-45 disabled:cursor-not-allowed"
                 >
                   <LogOut size={14} />
-                  Ya, Lanjut Pulang
+                  {t('teacherAttendance.btnProceedCheckOut')}
                 </button>
               </div>
             </motion.div>
@@ -3950,11 +4331,13 @@ export function TeacherAttendancePage() {
                 <div>
                   <h3 className="font-bold text-sm">
                     {cameraModal.mode === 'CHECK_OUT'
-                      ? 'Selfie Verifikasi Pulang'
-                      : 'Selfie Verifikasi Datang'}
+                      ? t('teacherAttendance.modalSelfieOutTitle')
+                      : t('teacherAttendance.modalSelfieInTitle')}
                   </h3>
                   <p className="text-[11px] opacity-70">
-                    {cameraModal.mode === 'CHECK_OUT' ? 'Check-Out' : 'Check-In'}
+                    {cameraModal.mode === 'CHECK_OUT'
+                      ? t('teacherAttendance.cardCheckOutSub')
+                      : t('teacherAttendance.cardCheckInSub')}
                   </p>
                 </div>
                 <button
@@ -3971,7 +4354,7 @@ export function TeacherAttendancePage() {
                 {capturedPreview ? (
                   <img
                     src={capturedPreview}
-                    alt="Hasil Selfie"
+                    alt={t('teacherAttendance.altSelfieResult')}
                     className="w-full h-full object-cover"
                   />
                 ) : (
@@ -3997,12 +4380,12 @@ export function TeacherAttendancePage() {
                   type="button"
                   onClick={() => void handleTakeSnapshot()}
                   className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                    ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                    : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                     }`}
                 >
                   <Camera size={18} className="shrink-0" />
-                  <span>Ambil Foto Selfie</span>
+                  <span>{t('teacherAttendance.btnTakeSelfie')}</span>
                 </button>
               ) : (
                 <div className="grid grid-cols-12 gap-2.5 pt-1">
@@ -4013,7 +4396,7 @@ export function TeacherAttendancePage() {
                     className="col-span-5 py-3 px-3 rounded-2xl font-bold text-xs border border-slate-300 dark:border-white/15 bg-slate-100 hover:bg-slate-200 dark:bg-white/10 dark:hover:bg-white/15 text-slate-700 dark:text-slate-200 flex items-center justify-center gap-1.5 transition-all duration-200 active:scale-[0.97] disabled:opacity-45 disabled:cursor-not-allowed"
                   >
                     <RefreshCw size={15} className="shrink-0" />
-                    <span>Ulangi</span>
+                    <span>{t('teacherAttendance.btnRetake')}</span>
                   </button>
 
                   <button
@@ -4023,19 +4406,19 @@ export function TeacherAttendancePage() {
                     }
                     disabled={isSubmittingAttendance}
                     className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                      ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                      : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                       }`}
                   >
                     {isSubmittingAttendance ? (
                       <>
                         <Loader2 size={16} className="animate-spin shrink-0" />
-                        <span>Menyimpan...</span>
+                        <span>{t('teacherAttendance.btnSaving')}</span>
                       </>
                     ) : (
                       <>
                         <Send size={15} className="shrink-0" />
-                        <span>Kirim Presensi</span>
+                        <span>{t('teacherAttendance.btnSubmitAttendance')}</span>
                       </>
                     )}
                   </button>

@@ -195,7 +195,8 @@ export function getJavaneseDateInfo(
 
 export function getJavaneseMonthRangeLabel(
   year: number,
-  monthIndexZeroBased: number
+  monthIndexZeroBased: number,
+  currentLang: SupportedAttendanceLocale = 'id'
 ): string {
   const firstDayIso = `${year}-${String(monthIndexZeroBased + 1).padStart(2, '0')}-01`;
   const lastDayNumber = new Date(
@@ -203,8 +204,8 @@ export function getJavaneseMonthRangeLabel(
   ).getUTCDate();
   const lastDayIso = `${year}-${String(monthIndexZeroBased + 1).padStart(2, '0')}-${String(lastDayNumber).padStart(2, '0')}`;
 
-  const startInfo = getJavaneseDateInfo(firstDayIso);
-  const endInfo = getJavaneseDateInfo(lastDayIso);
+  const startInfo = getJavaneseDateInfo(firstDayIso, currentLang);
+  const endInfo = getJavaneseDateInfo(lastDayIso, currentLang);
 
   if (
     startInfo.javaneseMonth === endInfo.javaneseMonth &&
