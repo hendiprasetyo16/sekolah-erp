@@ -1,5 +1,6 @@
 // src/modules/admin/components/UserManagementTable.tsx
 import { useEffect, useState, type ChangeEvent, type KeyboardEvent } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import {
     ArrowDown,
     ArrowDownAZ,
@@ -18,6 +19,8 @@ import {
     Loader2,
     MoreVertical,
     Trash2,
+    X,
+    ZoomIn,
 } from 'lucide-react';
 
 import { translations } from '@/constants/translations';
@@ -43,6 +46,66 @@ import {
 } from '../types/user-management.types';
 
 type Lang = 'id' | 'en';
+type UserPhotoPreviewState = { fullName: string; email: string; photoUrl: string } | null;
+
+// ==========================================
+// SUB-COMPONENT: USER AVATAR CELL
+// ==========================================
+interface UserAvatarCellProps {
+    fullName: string;
+    email: string;
+    avatarUrl?: string | null;
+    previewTitle: string;
+    onPreview?: (preview: { fullName: string; email: string; photoUrl: string }) => void;
+}
+
+function UserAvatarCell({
+    fullName,
+    email,
+    avatarUrl,
+    previewTitle,
+    onPreview,
+}: UserAvatarCellProps) {
+    const [hasError, setHasError] = useState(false);
+
+    useEffect(() => {
+        setHasError(false);
+    }, [avatarUrl]);
+
+    const initial = (fullName || '?').trim().charAt(0).toUpperCase() || '?';
+    const showImage = Boolean(avatarUrl && !hasError);
+
+    if (showImage) {
+        return (
+            <button
+                type="button"
+                title={previewTitle}
+                onClick={(e) => {
+                    e.stopPropagation();
+                    onPreview?.({ fullName, email, photoUrl: avatarUrl! });
+                }}
+                className="group/avatar relative h-9 w-9 shrink-0 overflow-hidden rounded-full border border-emerald-500/25 bg-muted shadow-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+            >
+                <img
+                    src={avatarUrl!}
+                    alt={fullName}
+                    loading="lazy"
+                    onError={() => setHasError(true)}
+                    className="h-full w-full object-cover transition-transform duration-150 group-hover/avatar:scale-105"
+                />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover/avatar:opacity-100">
+                    <ZoomIn className="h-3.5 w-3.5 text-white" />
+                </span>
+            </button>
+        );
+    }
+
+    return (
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-100 text-xs font-semibold text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-300">
+            {initial}
+        </div>
+    );
+}
 
 interface SortableHeaderProps {
     columnKey: SortKey;
@@ -147,10 +210,20 @@ export function UserManagementTable({
     onDeleteUser,
 }: UserManagementTableProps) {
     const [pageInput, setPageInput] = useState<string>(String(currentPage));
+    const [photoPreview, setPhotoPreview] = useState<UserPhotoPreviewState>(null);
 
     useEffect(() => {
         setPageInput(String(currentPage));
     }, [currentPage]);
+
+    useEffect(() => {
+        if (!photoPreview) return;
+        const handleKeyDown = (e: globalThis.KeyboardEvent) => {
+            if (e.key === 'Escape') setPhotoPreview(null);
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [photoPreview]);
 
     const tGlobal = (key: keyof typeof translations.id.common) => translations[lang].common[key];
     const tUM = (key: keyof typeof translations.id.userManagement) =>
@@ -206,6 +279,50 @@ export function UserManagementTable({
 
     return (
         <>
+            {/* LIGHTBOX PRATINJAU FOTO PROFIL PENGGUNA */}
+            <AnimatePresence>
+                {photoPreview && (
+                    <div
+                        className="fixed inset-0 z-100 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
+                        onClick={() => setPhotoPreview(null)}
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="relative max-h-[90vh] w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="mb-2.5 flex items-center justify-between gap-2 px-1">
+                                <div className="min-w-0">
+                                    <p className="truncate text-sm font-semibold text-foreground">
+                                        {photoPreview.fullName}
+                                    </p>
+                                    <p className="truncate text-xs text-muted-foreground">
+                                        {photoPreview.email}
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setPhotoPreview(null)}
+                                    aria-label={lang === 'id' ? 'Tutup pratinjau' : 'Close preview'}
+                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
+                            <div className="flex justify-center overflow-hidden rounded-xl bg-muted/40">
+                                <img
+                                    src={photoPreview.photoUrl}
+                                    alt={photoPreview.fullName}
+                                    className="max-h-[70vh] w-auto object-contain"
+                                />
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
             <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left">
                     <thead>
@@ -277,7 +394,6 @@ export function UserManagementTable({
                                 const canControlOtherRow =
                                     canManageUsers && !isSelf && !isProtectedTarget;
 
-                                // Gabungkan additionalRoles manual + tugasTambahan Dapodik tanpa duplikat
                                 const extraDuties = Array.from(
                                     new Set<AppUserRole>([
                                         ...(Array.isArray(user.additionalRoles)
@@ -308,12 +424,20 @@ export function UserManagementTable({
                                         </td>
                                         <td className="px-4 py-3">
                                             <div className="flex items-center gap-3">
-                                                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
-                                                    {user.fullName.charAt(0).toUpperCase()}
-                                                </div>
-                                                <div>
+                                                <UserAvatarCell
+                                                    fullName={user.fullName}
+                                                    email={user.email}
+                                                    avatarUrl={user.avatarUrl}
+                                                    previewTitle={
+                                                        lang === 'id'
+                                                            ? 'Klik untuk memperbesar foto profil'
+                                                            : 'Click to enlarge profile photo'
+                                                    }
+                                                    onPreview={setPhotoPreview}
+                                                />
+                                                <div className="min-w-0">
                                                     <div className="flex items-center gap-1.5">
-                                                        <p className="text-sm font-semibold">
+                                                        <p className="truncate text-sm font-semibold">
                                                             {user.fullName}
                                                         </p>
                                                         {user.isLinkedToMaster && (
@@ -327,7 +451,7 @@ export function UserManagementTable({
                                                                             ? 'Tertaut dengan data master akademik'
                                                                             : 'Linked to master academic record'
                                                                 }
-                                                                className="inline-flex items-center gap-0.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-500/20 dark:text-sky-300"
+                                                                className="inline-flex shrink-0 items-center gap-0.5 rounded bg-sky-100 px-1.5 py-0.5 text-[10px] font-medium text-sky-700 dark:bg-sky-500/20 dark:text-sky-300"
                                                             >
                                                                 <Link2 className="h-2.5 w-2.5" />
                                                                 {user.role === 'ORANG_TUA' &&
@@ -337,7 +461,7 @@ export function UserManagementTable({
                                                             </span>
                                                         )}
                                                     </div>
-                                                    <p className="text-xs text-muted-foreground">
+                                                    <p className="truncate text-xs text-muted-foreground">
                                                         {user.email}
                                                     </p>
                                                 </div>

@@ -1,7 +1,8 @@
 // src/modules/teachers/pages/TeacherDetailPage.tsx
-import { useMemo, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { toast } from 'sonner';
 import {
   ArrowLeft,
   Edit,
@@ -16,17 +17,35 @@ import {
   UserX,
   AlertCircle,
   RefreshCw,
+  Camera,
+  Trash2,
+  History,
+  ShieldCheck,
+  Clock,
+  ZoomIn,
+  X,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 import {
   teacherService,
   normalizeTeacherSchoolId,
 } from '../services/teacher.service';
+import type {
+  PhotoRetentionDays,
+  TeacherPhotoHistoryItem,
+} from '../types/teacher.types';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
@@ -106,6 +125,19 @@ const extractFriendlyErrorMessage = (
   return fallback;
 };
 
+const formatDateTimeShort = (isoString?: string | null): string => {
+  if (!isoString) return '-';
+  const dt = new Date(isoString);
+  if (Number.isNaN(dt.getTime())) return '-';
+  return dt.toLocaleString('id-ID', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+};
+
 function InfoItem({
   label,
   value,
@@ -128,9 +160,18 @@ function InfoItem({
 export function TeacherDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { locale } = useTranslation();
   const { school, user: currentUser } = useAuthStore();
   const { hasPermission } = usePermission();
+  const isId = locale === 'id';
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [avatarLoadError, setAvatarLoadError] = useState(false);
+  const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null);
+  const [previewModalCaption, setPreviewModalCaption] = useState<string>('');
+
+  const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
 
   // Mengecek izin update guru secara terpusat (selaras dengan TeacherListPage & RLS database)
   const canManageTeachers = hasPermission('teachers', 'update');
@@ -148,21 +189,20 @@ export function TeacherDetailPage() {
 
   // Kamus label teks
   const dict = {
-    title: locale === 'id' ? 'Profil Guru & PTK' : 'Teacher Profile',
-    desc:
-      locale === 'id'
-        ? 'Informasi detail kepegawaian dan biodata Dapodik PTK.'
-        : 'Detailed employment and Dapodik PTK information.',
-    back: locale === 'id' ? 'Kembali ke Data Guru' : 'Back to Teachers',
-    retry: locale === 'id' ? 'Muat Ulang' : 'Retry',
-    editBtn: locale === 'id' ? 'Edit Data' : 'Edit Data',
-    tabPersonal: locale === 'id' ? 'Data Pribadi' : 'Personal Info',
-    tabProf: locale === 'id' ? 'Kepegawaian' : 'Employment',
-    tabTask: locale === 'id' ? 'Tugas & Lisensi' : 'Duties & Licenses',
-    tabFamily: locale === 'id' ? 'Keluarga & Finansial' : 'Family & Financial',
+    title: isId ? 'Profil Guru & PTK' : 'Teacher Profile',
+    desc: isId
+      ? 'Informasi detail kepegawaian dan biodata Dapodik PTK.'
+      : 'Detailed employment and Dapodik PTK information.',
+    back: isId ? 'Kembali ke Data Guru' : 'Back to Teachers',
+    retry: isId ? 'Muat Ulang' : 'Retry',
+    editBtn: isId ? 'Edit Data' : 'Edit Data',
+    tabPersonal: isId ? 'Data Pribadi' : 'Personal Info',
+    tabProf: isId ? 'Kepegawaian' : 'Employment',
+    tabTask: isId ? 'Tugas & Lisensi' : 'Duties & Licenses',
+    tabFamily: isId ? 'Keluarga & Finansial' : 'Family & Financial',
     noData: '-',
-    yes: locale === 'id' ? 'Ya' : 'Yes',
-    no: locale === 'id' ? 'Tidak' : 'No',
+    yes: isId ? 'Ya' : 'Yes',
+    no: isId ? 'Tidak' : 'No',
   };
 
   // Mengambil detail data guru berdasarkan ID dari URL
@@ -181,6 +221,175 @@ export function TeacherDetailPage() {
 
   const teacher = response?.data;
 
+  useEffect(() => {
+    setAvatarLoadError(false);
+  }, [teacher?.photoUrl]);
+
+  // Guru pemilik profil ATAU pengelola administrasi/Super Admin berhak mengganti foto
+  const isOwnProfile = Boolean(
+    teacher &&
+    ((currentUser?.id && teacher.userId && currentUser.id === teacher.userId) ||
+      (teacherScope.teacherId && teacherScope.teacherId === teacher.id))
+  );
+  const canEditPhoto = canManageTeachers || isOwnProfile;
+
+  // Query khusus SUPER_ADMIN: Konfigurasi masa simpan histori foto sekolah
+  const { data: retentionDays = 30, isLoading: isRetentionLoading } = useQuery({
+    queryKey: ['teacher-photo-retention', teacher?.schoolId],
+    queryFn: () => teacherService.getPhotoRetentionDays(teacher!.schoolId),
+    enabled: isSuperAdmin && Boolean(teacher?.schoolId),
+    retry: false,
+  });
+
+  // Query khusus SUPER_ADMIN: Daftar histori foto lama guru ini
+  const {
+    data: historyResponse,
+    isLoading: isHistoryLoading,
+    refetch: refetchHistory,
+  } = useQuery({
+    queryKey: ['teacher-photo-history', teacher?.id],
+    queryFn: () => teacherService.getPhotoHistory(teacher!.id),
+    enabled: isSuperAdmin && Boolean(teacher?.id),
+    retry: false,
+  });
+
+  const photoHistory = historyResponse?.data ?? [];
+
+  // Mutasi unggah & simpan foto profil baru
+  const uploadPhotoMutation = useMutation({
+    mutationFn: async (file: File) => {
+      if (!teacher) throw new Error('Data guru tidak tersedia.');
+      return teacherService.uploadAndSaveTeacherPhoto({
+        schoolId: teacher.schoolId,
+        teacherId: teacher.id,
+        file,
+        linkedUserId: teacher.userId,
+      });
+    },
+    onSuccess: (res) => {
+      setAvatarLoadError(false);
+      queryClient.invalidateQueries({ queryKey: ['teacher', id] });
+      queryClient.invalidateQueries({ queryKey: ['teachers'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+      if (isSuperAdmin && teacher?.id) {
+        queryClient.invalidateQueries({ queryKey: ['teacher-photo-history', teacher.id] });
+      }
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = extractFriendlyErrorMessage(
+        err,
+        locale,
+        'Gagal memperbarui foto profil guru.',
+        'Failed to update teacher profile photo.'
+      );
+      toast.error(msg, { duration: 5000 });
+    },
+  });
+
+  // Mutasi hapus foto profil aktif (otomatis masuk ke histori)
+  const removePhotoMutation = useMutation({
+    mutationFn: async () => {
+      if (!teacher) throw new Error('Data guru tidak tersedia.');
+      return teacherService.updateTeacherPhoto(teacher.id, null, teacher.userId);
+    },
+    onSuccess: (res) => {
+      setAvatarLoadError(false);
+      queryClient.invalidateQueries({ queryKey: ['teacher', id] });
+      queryClient.invalidateQueries({ queryKey: ['teachers'] });
+      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+      if (isSuperAdmin && teacher?.id) {
+        queryClient.invalidateQueries({ queryKey: ['teacher-photo-history', teacher.id] });
+      }
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = extractFriendlyErrorMessage(
+        err,
+        locale,
+        'Gagal menghapus foto profil aktif.',
+        'Failed to remove active profile photo.'
+      );
+      toast.error(msg, { duration: 5000 });
+    },
+  });
+
+  // Mutasi khusus SUPER_ADMIN: Ubah masa simpan histori (7 / 14 / 30 hari)
+  const retentionMutation = useMutation({
+    mutationFn: async (days: PhotoRetentionDays) => {
+      if (!teacher) throw new Error('Data sekolah tidak ditemukan.');
+      return teacherService.setPhotoRetentionDays(teacher.schoolId, days);
+    },
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({
+        queryKey: ['teacher-photo-retention', teacher?.schoolId],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ['teacher-photo-history', teacher?.id],
+      });
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = extractFriendlyErrorMessage(
+        err,
+        locale,
+        'Gagal mengubah pengaturan retensi foto.',
+        'Failed to update photo retention setting.'
+      );
+      toast.error(msg);
+    },
+  });
+
+  // Mutasi khusus SUPER_ADMIN: Hapus satu histori foto permanen
+  const deleteHistoryItemMutation = useMutation({
+    mutationFn: (item: TeacherPhotoHistoryItem) =>
+      teacherService.deletePhotoHistoryItem(item),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({
+        queryKey: ['teacher-photo-history', teacher?.id],
+      });
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = extractFriendlyErrorMessage(
+        err,
+        locale,
+        'Gagal menghapus arsip foto lama.',
+        'Failed to delete archived photo.'
+      );
+      toast.error(msg);
+    },
+  });
+
+  // Mutasi khusus SUPER_ADMIN: Bersihkan seluruh histori kedaluwarsa pada sekolah ini
+  const purgeExpiredMutation = useMutation({
+    mutationFn: () => teacherService.purgeExpiredPhotoHistory(teacher?.schoolId),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({
+        queryKey: ['teacher-photo-history', teacher?.id],
+      });
+      toast.success(res.message);
+    },
+    onError: (err: unknown) => {
+      const msg = extractFriendlyErrorMessage(
+        err,
+        locale,
+        'Gagal membersihkan arsip foto kedaluwarsa.',
+        'Failed to purge expired photo history.'
+      );
+      toast.error(msg);
+    },
+  });
+
+  const handlePhotoFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    uploadPhotoMutation.mutate(file);
+  };
+
+  const isPhotoBusy = uploadPhotoMutation.isPending || removePhotoMutation.isPending;
+
   // Tampilan saat data atau hak akses sedang dimuat
   if (teacherScope.isLoading || isDetailLoading) {
     return (
@@ -198,10 +407,10 @@ export function TeacherDetailPage() {
           <AlertCircle className="h-6 w-6" />
         </div>
         <h2 className="text-base font-semibold text-foreground">
-          {locale === 'id' ? 'Akses Profil Dibatasi' : 'Profile Access Restricted'}
+          {isId ? 'Akses Profil Dibatasi' : 'Profile Access Restricted'}
         </h2>
         <p className="max-w-md text-sm text-muted-foreground">
-          {locale === 'id'
+          {isId
             ? 'Anda hanya diperbolehkan melihat biodata kepegawaian milik Anda sendiri.'
             : 'You are only permitted to view your own employment profile.'}
         </p>
@@ -212,7 +421,7 @@ export function TeacherDetailPage() {
               className="bg-emerald-600 text-white hover:bg-emerald-700"
               onClick={() => navigate(`/teachers/${teacherScope.teacherId}`, { replace: true })}
             >
-              {locale === 'id' ? 'Buka Profil Saya' : 'Open My Profile'}
+              {isId ? 'Buka Profil Saya' : 'Open My Profile'}
             </Button>
           )}
           <Button type="button" variant="outline" onClick={() => navigate('/teachers')}>
@@ -227,7 +436,7 @@ export function TeacherDetailPage() {
   // Tampilan jika data tidak ditemukan atau gagal dimuat
   if (!id || isError || !teacher) {
     const errorDescription = !id
-      ? locale === 'id'
+      ? isId
         ? 'ID guru tidak ditemukan pada alamat halaman.'
         : 'Teacher ID is missing from the page URL.'
       : extractFriendlyErrorMessage(
@@ -243,7 +452,7 @@ export function TeacherDetailPage() {
           <AlertCircle className="h-6 w-6" />
         </div>
         <h2 className="text-base font-semibold text-foreground">
-          {locale === 'id' ? 'Gagal Memuat Profil Guru' : 'Failed to Load Teacher Profile'}
+          {isId ? 'Gagal Memuat Profil Guru' : 'Failed to Load Teacher Profile'}
         </h2>
         <p className="max-w-md text-sm text-muted-foreground">{errorDescription}</p>
         <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
@@ -264,6 +473,8 @@ export function TeacherDetailPage() {
 
   const getInitials = (name?: string | null) =>
     (name || '?').trim().charAt(0).toUpperCase() || '?';
+
+  const hasValidPhoto = Boolean(teacher.photoUrl && !avatarLoadError);
 
   // Warna lencana status kepegawaian
   const statusColorMap: Record<string, string> = {
@@ -303,6 +514,39 @@ export function TeacherDetailPage() {
 
   return (
     <div className="w-full min-w-0 space-y-6">
+      {/* ================= MODAL PRATINJAU FOTO ================= */}
+      {previewModalUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
+          onClick={() => setPreviewModalUrl(null)}
+        >
+          <div
+            className="relative max-h-[90vh] max-w-lg overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 flex items-center justify-between gap-2 px-1">
+              <span className="truncate text-xs font-medium text-muted-foreground">
+                {previewModalCaption}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                onClick={() => setPreviewModalUrl(null)}
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            <img
+              src={previewModalUrl}
+              alt={previewModalCaption}
+              className="max-h-[75vh] w-auto rounded-xl object-contain"
+            />
+          </div>
+        </div>
+      )}
+
       {/* ================= BAGIAN 1: HEADER ================= */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
@@ -335,81 +579,335 @@ export function TeacherDetailPage() {
       </div>
 
       {/* ================= BAGIAN 2: GRID UTAMA ================= */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-        {/* KARTU PROFIL SINGKAT (KIRI) */}
-        <Card className="h-fit border-border shadow-sm">
-          <CardContent className="flex flex-col items-center pt-6 text-center">
-            <div className="mb-4 flex h-24 w-24 items-center justify-center rounded-full bg-linear-to-br from-emerald-500 to-teal-600 text-3xl font-bold text-white shadow-lg">
-              {getInitials(teacher.fullName)}
-            </div>
-            <h2 className="text-lg font-bold leading-tight text-foreground">{teacher.fullName}</h2>
-            <p className="mt-1 text-sm text-muted-foreground">{teacher.position || 'Guru'}</p>
-
-            <div className="mt-3 mb-5 flex flex-wrap justify-center gap-2">
-              <Badge
-                className={cn(
-                  normalizedStatus && statusColorMap[normalizedStatus]
-                    ? statusColorMap[normalizedStatus]
-                    : 'bg-muted'
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[290px_minmax(0,1fr)]">
+        {/* KOLOM KIRI: KARTU PROFIL + PANEL RETENTION SUPER ADMIN */}
+        <div className="space-y-4">
+          <Card className="h-fit border-border shadow-sm">
+            <CardContent className="flex flex-col items-center pt-6 text-center">
+              {/* AVATAR FOTO PROFIL / INISIAL */}
+              <div className="relative mb-3">
+                {hasValidPhoto ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPreviewModalUrl(teacher.photoUrl!);
+                      setPreviewModalCaption(teacher.fullName);
+                    }}
+                    title={isId ? 'Klik untuk memperbesar foto' : 'Click to enlarge photo'}
+                    className="group relative h-28 w-28 overflow-hidden rounded-full border-4 border-emerald-500/20 bg-muted shadow-lg focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <img
+                      src={teacher.photoUrl!}
+                      alt={teacher.fullName}
+                      onError={() => setAvatarLoadError(true)}
+                      className="h-full w-full object-cover transition-transform duration-200 group-hover:scale-105"
+                    />
+                    <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover:opacity-100">
+                      <ZoomIn className="h-5 w-5 text-white" />
+                    </span>
+                  </button>
+                ) : (
+                  <div className="flex h-28 w-28 items-center justify-center rounded-full bg-linear-to-br from-emerald-500 to-teal-600 text-3xl font-bold text-white shadow-lg">
+                    {getInitials(teacher.fullName)}
+                  </div>
                 )}
-                variant="outline"
-              >
-                {teacher.status || 'Belum Diatur'}
-              </Badge>
-              {!teacher.isActive && (
-                <Badge
-                  className="border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300"
-                  variant="outline"
-                >
-                  {locale === 'id' ? 'Nonaktif' : 'Inactive'}
-                </Badge>
-              )}
-              {teacher.tugasTambahan && (
-                <Badge
-                  variant="outline"
-                  className="border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300"
-                >
-                  <Briefcase className="mr-1 h-3 w-3 shrink-0" />
-                  <span className="max-w-44 truncate">{teacher.tugasTambahan}</span>
-                </Badge>
-              )}
-            </div>
 
-            <div className="w-full space-y-2.5 border-t border-border/50 pt-5 text-sm">
-              {teacher.phone && (
-                <div className="flex items-center justify-center gap-2.5 text-muted-foreground">
-                  <Phone className="h-4 w-4 shrink-0 text-emerald-600" />
-                  <span className="truncate">{teacher.phone}</span>
+                {canEditPhoto && (
+                  <button
+                    type="button"
+                    disabled={isPhotoBusy}
+                    onClick={() => fileInputRef.current?.click()}
+                    title={isId ? 'Ganti foto profil' : 'Change profile photo'}
+                    className="absolute right-0 bottom-0 flex h-9 w-9 items-center justify-center rounded-full border-2 border-card bg-emerald-600 text-white shadow-md transition-colors hover:bg-emerald-700 disabled:opacity-60"
+                  >
+                    {uploadPhotoMutation.isPending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Camera className="h-4 w-4" />
+                    )}
+                  </button>
+                )}
+
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  className="hidden"
+                  onChange={handlePhotoFileChange}
+                />
+              </div>
+
+              {/* AKSI FOTO PROFIL */}
+              {canEditPhoto && (
+                <div className="mb-3 flex flex-wrap items-center justify-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    disabled={isPhotoBusy}
+                    onClick={() => fileInputRef.current?.click()}
+                    className="h-7 px-2.5 text-xs"
+                  >
+                    {uploadPhotoMutation.isPending ? (
+                      <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                    ) : (
+                      <Camera className="mr-1.5 h-3 w-3 text-emerald-600" />
+                    )}
+                    {hasValidPhoto
+                      ? isId
+                        ? 'Ganti Foto'
+                        : 'Change Photo'
+                      : isId
+                        ? 'Unggah Foto'
+                        : 'Upload Photo'}
+                  </Button>
+
+                  {hasValidPhoto && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      disabled={isPhotoBusy}
+                      onClick={() => removePhotoMutation.mutate()}
+                      className="h-7 px-2 text-xs text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                    >
+                      {removePhotoMutation.isPending ? (
+                        <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                      ) : (
+                        <Trash2 className="mr-1 h-3 w-3" />
+                      )}
+                      {isId ? 'Hapus' : 'Remove'}
+                    </Button>
+                  )}
                 </div>
               )}
-              {teacher.email && (
-                <div className="flex items-center justify-center gap-2.5 text-muted-foreground">
-                  <Mail className="h-4 w-4 shrink-0 text-emerald-600" />
-                  <span className="truncate" title={teacher.email}>
-                    {teacher.email}
-                  </span>
+
+              <h2 className="text-lg font-bold leading-tight text-foreground">{teacher.fullName}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">{teacher.position || 'Guru'}</p>
+
+              <div className="mt-3 mb-5 flex flex-wrap justify-center gap-2">
+                <Badge
+                  className={cn(
+                    normalizedStatus && statusColorMap[normalizedStatus]
+                      ? statusColorMap[normalizedStatus]
+                      : 'bg-muted'
+                  )}
+                  variant="outline"
+                >
+                  {teacher.status || 'Belum Diatur'}
+                </Badge>
+                {!teacher.isActive && (
+                  <Badge
+                    className="border-rose-200 bg-rose-100 text-rose-800 dark:border-rose-500/30 dark:bg-rose-500/15 dark:text-rose-300"
+                    variant="outline"
+                  >
+                    {isId ? 'Nonaktif' : 'Inactive'}
+                  </Badge>
+                )}
+                {teacher.tugasTambahan && (
+                  <Badge
+                    variant="outline"
+                    className="border-amber-200 bg-amber-100 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/15 dark:text-amber-300"
+                  >
+                    <Briefcase className="mr-1 h-3 w-3 shrink-0" />
+                    <span className="max-w-44 truncate">{teacher.tugasTambahan}</span>
+                  </Badge>
+                )}
+              </div>
+
+              <div className="w-full space-y-2.5 border-t border-border/50 pt-5 text-sm">
+                {teacher.phone && (
+                  <div className="flex items-center justify-center gap-2.5 text-muted-foreground">
+                    <Phone className="h-4 w-4 shrink-0 text-emerald-600" />
+                    <span className="truncate">{teacher.phone}</span>
+                  </div>
+                )}
+                {teacher.email && (
+                  <div className="flex items-center justify-center gap-2.5 text-muted-foreground">
+                    <Mail className="h-4 w-4 shrink-0 text-emerald-600" />
+                    <span className="truncate" title={teacher.email}>
+                      {teacher.email}
+                    </span>
+                  </div>
+                )}
+                {teacher.isCertified && (
+                  <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 py-1.5 px-2 text-xs font-medium text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
+                    <Award className="h-4 w-4 shrink-0" />
+                    <span>{isId ? 'Guru Tersertifikasi' : 'Certified Teacher'}</span>
+                  </div>
+                )}
+                {teacher.userId ? (
+                  <div className="flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 py-1.5 px-2 text-xs font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">
+                    <UserCheck className="h-3.5 w-3.5 shrink-0" />
+                    <span>{isId ? 'Terhubung Akun Login' : 'Login Account Linked'}</span>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-center gap-2 rounded-md border border-border bg-muted/50 py-1.5 px-2 text-xs font-medium text-muted-foreground">
+                    <UserX className="h-3.5 w-3.5 shrink-0" />
+                    <span>{isId ? 'Belum Punya Akun Login' : 'No Login Account'}</span>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* ================= PANEL KHUSUS SUPER ADMIN: RETENSI & HISTORI FOTO ================= */}
+          {isSuperAdmin && (
+            <Card className="border-amber-200/80 bg-amber-50/30 shadow-sm dark:border-amber-500/25 dark:bg-amber-500/5">
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between gap-2">
+                  <CardTitle className="flex items-center gap-1.5 text-sm font-semibold text-amber-900 dark:text-amber-300">
+                    <ShieldCheck className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                    <span>{isId ? 'Arsip & Retensi Foto' : 'Photo Retention'}</span>
+                  </CardTitle>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6"
+                    onClick={() => refetchHistory()}
+                    title={isId ? 'Segarkan histori' : 'Refresh history'}
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  </Button>
                 </div>
-              )}
-              {teacher.isCertified && (
-                <div className="mt-2 flex items-center justify-center gap-2 rounded-md border border-emerald-200 bg-emerald-50 py-1.5 px-2 text-xs font-medium text-emerald-700 dark:border-emerald-500/20 dark:bg-emerald-500/10 dark:text-emerald-300">
-                  <Award className="h-4 w-4 shrink-0" />
-                  <span>{locale === 'id' ? 'Guru Tersertifikasi' : 'Certified Teacher'}</span>
+              </CardHeader>
+              <CardContent className="space-y-3 text-xs">
+                {/* Pengaturan Masa Simpan Sekolah (7 / 14 / 30 Hari) */}
+                <div className="space-y-1.5">
+                  <label className="flex items-center gap-1 font-medium text-muted-foreground">
+                    <Clock className="h-3.5 w-3.5" />
+                    <span>
+                      {isId
+                        ? 'Masa Simpan Histori Foto Sekolah'
+                        : 'School Photo Retention Period'}
+                    </span>
+                  </label>
+                  <Select
+                    value={String(retentionDays)}
+                    disabled={isRetentionLoading || retentionMutation.isPending}
+                    onValueChange={(val) =>
+                      retentionMutation.mutate(Number(val) as PhotoRetentionDays)
+                    }
+                  >
+                    <SelectTrigger className="h-8 bg-background text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="7">7 Hari</SelectItem>
+                      <SelectItem value="14">14 Hari</SelectItem>
+                      <SelectItem value="30">30 Hari (Default)</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
-              )}
-              {teacher.userId ? (
-                <div className="flex items-center justify-center gap-2 rounded-md border border-blue-200 bg-blue-50 py-1.5 px-2 text-xs font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300">
-                  <UserCheck className="h-3.5 w-3.5 shrink-0" />
-                  <span>{locale === 'id' ? 'Terhubung Akun Login' : 'Login Account Linked'}</span>
+
+                {/* Tombol Bersihkan Foto Kedaluwarsa */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  disabled={purgeExpiredMutation.isPending}
+                  onClick={() => purgeExpiredMutation.mutate()}
+                  className="h-7 w-full justify-center bg-background text-xs"
+                >
+                  {purgeExpiredMutation.isPending ? (
+                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-1.5 h-3 w-3 text-amber-600" />
+                  )}
+                  {isId ? 'Bersihkan Foto Kedaluwarsa' : 'Purge Expired Photos'}
+                </Button>
+
+                {/* Daftar Histori Foto Lama */}
+                <div className="border-t border-border/60 pt-2.5">
+                  <div className="mb-2 flex items-center justify-between font-medium text-muted-foreground">
+                    <span className="flex items-center gap-1">
+                      <History className="h-3.5 w-3.5" />
+                      {isId ? 'Riwayat Foto Diganti' : 'Replaced Photos'}
+                    </span>
+                    <Badge variant="secondary" className="h-4 px-1.5 text-[10px]">
+                      {photoHistory.length}
+                    </Badge>
+                  </div>
+
+                  {isHistoryLoading ? (
+                    <div className="flex justify-center py-3">
+                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                    </div>
+                  ) : photoHistory.length === 0 ? (
+                    <p className="py-2 text-center text-[11px] text-muted-foreground">
+                      {isId
+                        ? 'Belum ada riwayat pergantian foto.'
+                        : 'No archived photos found.'}
+                    </p>
+                  ) : (
+                    <div className="max-h-60 space-y-2 overflow-y-auto pr-0.5">
+                      {photoHistory.map((item) => {
+                        const isExpired = new Date(item.expiresAt).getTime() <= Date.now();
+                        return (
+                          <div
+                            key={item.id}
+                            className="flex items-center gap-2 rounded-lg border border-border/70 bg-background p-1.5"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPreviewModalUrl(item.photoUrl);
+                                setPreviewModalCaption(
+                                  `${teacher.fullName} — Diganti ${formatDateTimeShort(item.replacedAt)}`
+                                );
+                              }}
+                              className="h-10 w-10 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
+                              title={isId ? 'Lihat foto arsip' : 'View archived photo'}
+                            >
+                              <img
+                                src={item.photoUrl}
+                                alt="Arsip foto"
+                                className="h-full w-full object-cover"
+                              />
+                            </button>
+
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate text-[11px] font-medium text-foreground">
+                                {formatDateTimeShort(item.replacedAt)}
+                              </div>
+                              <div
+                                className={cn(
+                                  'truncate text-[10px]',
+                                  isExpired
+                                    ? 'font-medium text-rose-600 dark:text-rose-400'
+                                    : 'text-muted-foreground'
+                                )}
+                              >
+                                {isExpired
+                                  ? isId
+                                    ? 'Kedaluwarsa'
+                                    : 'Expired'
+                                  : `${isId ? 'Hapus otomatis:' : 'Expires:'} ${formatDateTimeShort(item.expiresAt)}`}
+                              </div>
+                            </div>
+
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              disabled={deleteHistoryItemMutation.isPending}
+                              onClick={() => deleteHistoryItemMutation.mutate(item)}
+                              title={isId ? 'Hapus permanen' : 'Delete permanently'}
+                              className="h-7 w-7 shrink-0 text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
-              ) : (
-                <div className="flex items-center justify-center gap-2 rounded-md border border-border bg-muted/50 py-1.5 px-2 text-xs font-medium text-muted-foreground">
-                  <UserX className="h-3.5 w-3.5 shrink-0" />
-                  <span>{locale === 'id' ? 'Belum Punya Akun Login' : 'No Login Account'}</span>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+              </CardContent>
+            </Card>
+          )}
+        </div>
 
         {/* ================= BAGIAN 3: KONTEN TAB DETAIL (KANAN) ================= */}
         <Tabs defaultValue="personal" className="w-full min-w-0">
@@ -457,37 +955,37 @@ export function TeacherDetailPage() {
               </CardHeader>
               <CardContent className="grid gap-x-6 sm:grid-cols-2">
                 <InfoItem
-                  label={locale === 'id' ? 'Nama Lengkap' : 'Full Name'}
+                  label={isId ? 'Nama Lengkap' : 'Full Name'}
                   value={teacher.fullName}
                 />
                 <InfoItem
-                  label={locale === 'id' ? 'Jenis Kelamin' : 'Gender'}
+                  label={isId ? 'Jenis Kelamin' : 'Gender'}
                   value={genderText}
                 />
                 <InfoItem label="NIK" value={teacher.nik} />
                 <InfoItem label="No. KK" value={teacher.noKk} />
                 <InfoItem
-                  label={locale === 'id' ? 'Tempat, Tanggal Lahir' : 'Birth Info'}
+                  label={isId ? 'Tempat, Tanggal Lahir' : 'Birth Info'}
                   value={`${teacher.birthPlace || dict.noData}, ${teacher.birthDate ? formatDate(teacher.birthDate) : dict.noData
                     }`}
                 />
                 <InfoItem
-                  label={locale === 'id' ? 'Agama / Kepercayaan' : 'Religion'}
+                  label={isId ? 'Agama / Kepercayaan' : 'Religion'}
                   value={teacher.religion}
                 />
                 <InfoItem
-                  label={locale === 'id' ? 'Kewarganegaraan' : 'Nationality'}
+                  label={isId ? 'Kewarganegaraan' : 'Nationality'}
                   value={teacher.kewarganegaraan}
                 />
                 <InfoItem
-                  label={locale === 'id' ? 'Nama Ibu Kandung' : 'Mother Name'}
+                  label={isId ? 'Nama Ibu Kandung' : 'Mother Name'}
                   value={teacher.namaIbuKandung}
                 />
                 <InfoItem label="No. HP / WhatsApp" value={teacher.phone} />
                 <InfoItem label="Telepon Rumah" value={teacher.telepon} />
                 <div className="sm:col-span-2">
                   <InfoItem
-                    label={locale === 'id' ? 'Alamat Lengkap' : 'Address'}
+                    label={isId ? 'Alamat Lengkap' : 'Address'}
                     value={fullAddressParts.length > 0 ? fullAddressParts.join(', ') : dict.noData}
                   />
                 </div>

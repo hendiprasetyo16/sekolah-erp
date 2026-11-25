@@ -224,3 +224,19 @@ export interface TeacherBulkImportResult {
   inserted: number;
   updated: number;
 }
+
+/**
+ * 5. MANAJEMEN FOTO PROFIL & HISTORI (KHUSUS SUPER ADMIN)
+ */
+export type PhotoRetentionDays = 7 | 14 | 30;
+
+export interface TeacherPhotoHistoryItem {
+  id: string;
+  schoolId: string;
+  teacherId: string;
+  photoUrl: string;
+  storagePath: string;
+  replacedBy?: string | null;
+  replacedAt: string;
+  expiresAt: string;
+}

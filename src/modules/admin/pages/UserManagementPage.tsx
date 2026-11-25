@@ -223,6 +223,8 @@ export function UserManagementPage() {
             toast.success(tUM('toastEditSuccess'));
             setUserToEdit(null);
             queryClient.invalidateQueries({ queryKey: ['users-list'] });
+            queryClient.invalidateQueries({ queryKey: ['teachers'] });
+            queryClient.invalidateQueries({ queryKey: ['user-detail'] });
         },
         onError: (error: Error) => toast.error(error.message),
     });
@@ -756,8 +758,8 @@ export function UserManagementPage() {
                                         {label}
                                         <span
                                             className={`ml-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none ${isActive
-                                                    ? 'bg-white/20 text-white'
-                                                    : 'bg-muted text-muted-foreground'
+                                                ? 'bg-white/20 text-white'
+                                                : 'bg-muted text-muted-foreground'
                                                 }`}
                                         >
                                             {tabCounts[value] ?? 0}
@@ -850,8 +852,8 @@ export function UserManagementPage() {
                                             handleSortChange({ key: 'none', direction: 'asc' })
                                         }
                                         className={`cursor-pointer ${sortConfig.key === 'none'
-                                                ? 'bg-primary/10 text-primary'
-                                                : ''
+                                            ? 'bg-primary/10 text-primary'
+                                            : ''
                                             }`}
                                     >
                                         <ArrowUpDown className="mr-2 h-4 w-4 shrink-0" /> Reset

@@ -64,6 +64,39 @@ function canHaveAdditionalRoles(role: AppUserRole): boolean {
     return role !== 'SUPER_ADMIN' && role !== 'SISWA' && role !== 'ORANG_TUA';
 }
 
+function UserModalAvatar({
+    fullName,
+    avatarUrl,
+}: {
+    fullName: string;
+    avatarUrl?: string | null;
+}) {
+    const [hasError, setHasError] = useState(false);
+
+    useEffect(() => {
+        setHasError(false);
+    }, [avatarUrl]);
+
+    const initial = (fullName || '?').trim().charAt(0).toUpperCase() || '?';
+
+    if (avatarUrl && !hasError) {
+        return (
+            <img
+                src={avatarUrl}
+                alt={fullName}
+                onError={() => setHasError(true)}
+                className="h-11 w-11 shrink-0 rounded-full border border-emerald-500/25 object-cover shadow-xs"
+            />
+        );
+    }
+
+    return (
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-100 text-sm font-bold text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-300">
+            {initial}
+        </div>
+    );
+}
+
 interface BaseModalWrapperProps {
     onClose: () => void;
     children: ReactNode;
@@ -323,8 +356,9 @@ export function AddUserModal({
                             </div>
 
                             <div className="grid grid-cols-1 gap-2 pt-1 sm:grid-cols-2">
-                                {assignableDutyOptions.filter((opt) => opt !== selectedRole).map(
-                                    (dutyRole) => {
+                                {assignableDutyOptions
+                                    .filter((opt) => opt !== selectedRole)
+                                    .map((dutyRole) => {
                                         const isChecked =
                                             selectedAdditionalRoles.includes(dutyRole);
                                         return (
@@ -351,8 +385,7 @@ export function AddUserModal({
                                                 </span>
                                             </label>
                                         );
-                                    }
-                                )}
+                                    })}
                             </div>
                         </div>
                     )}
@@ -501,10 +534,13 @@ export function EditUserModal({
 
     return (
         <BaseModalWrapper onClose={onClose} maxWidthClass="max-w-lg">
-            <div className="mb-4 flex justify-between">
-                <div>
-                    <h3 className="text-xl font-bold">{tUM('modalEditTitle')}</h3>
-                    <p className="text-sm text-muted-foreground">{tUM('modalEditSub')}</p>
+            <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="flex min-w-0 items-center gap-3">
+                    <UserModalAvatar fullName={user.fullName} avatarUrl={user.avatarUrl} />
+                    <div className="min-w-0">
+                        <h3 className="text-xl font-bold">{tUM('modalEditTitle')}</h3>
+                        <p className="truncate text-sm text-muted-foreground">{tUM('modalEditSub')}</p>
+                    </div>
                 </div>
                 <Button
                     type="button"
@@ -512,6 +548,7 @@ export function EditUserModal({
                     size="icon"
                     aria-label={tGlobal('cancel')}
                     onClick={onClose}
+                    className="shrink-0"
                 >
                     <X className="h-5 w-5" />
                 </Button>
@@ -520,8 +557,18 @@ export function EditUserModal({
             <Form {...form}>
                 <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
                     <div className="space-y-2">
-                        <FormLabel>Email</FormLabel>
-                        <Input value={user.email} disabled className="bg-muted" />
+                        <label
+                            htmlFor="edit-user-email"
+                            className="block text-sm font-medium leading-none text-foreground"
+                        >
+                            Email
+                        </label>
+                        <Input
+                            id="edit-user-email"
+                            value={user.email}
+                            disabled
+                            className="bg-muted"
+                        />
                     </div>
                     <FormField
                         control={form.control}
@@ -619,8 +666,9 @@ export function EditUserModal({
                             )}
 
                             <div className="grid grid-cols-1 gap-2 pt-0.5 sm:grid-cols-2">
-                                {assignableDutyOptions.filter((opt) => opt !== selectedRole).map(
-                                    (dutyRole) => {
+                                {assignableDutyOptions
+                                    .filter((opt) => opt !== selectedRole)
+                                    .map((dutyRole) => {
                                         const isFromDapodik = dapodikAutoRoles.includes(dutyRole);
                                         const isChecked =
                                             isFromDapodik ||
@@ -661,8 +709,7 @@ export function EditUserModal({
                                                 )}
                                             </label>
                                         );
-                                    }
-                                )}
+                                    })}
                             </div>
                         </div>
                     )}

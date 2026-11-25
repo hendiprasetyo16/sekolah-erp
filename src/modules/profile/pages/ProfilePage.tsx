@@ -4,7 +4,7 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { motion } from 'framer-motion';
+import { AnimatePresence, motion } from 'framer-motion';
 import { toast } from 'sonner';
 import {
     User,
@@ -22,6 +22,8 @@ import {
     CheckCircle2,
     Lock,
     Info,
+    ZoomIn,
+    X,
 } from 'lucide-react';
 
 import { cn } from '@/utils/cn';
@@ -52,6 +54,7 @@ interface LinkedMemberDetail {
     nip?: string | null;
     nuptk?: string | null;
     nisn?: string | null;
+    photoUrl?: string | null;
     canSelfUpdateRecord: boolean;
 }
 
@@ -153,6 +156,8 @@ export function ProfilePage() {
     const [activeTab, setActiveTab] = useState<'profil' | 'keamanan'>('profil');
     const [showNewPassword, setShowNewPassword] = useState<boolean>(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState<boolean>(false);
+    const [avatarError, setAvatarError] = useState<boolean>(false);
+    const [isPhotoPreviewOpen, setIsPhotoPreviewOpen] = useState<boolean>(false);
 
     const activeSchoolId = school?.id ?? user?.schoolId ?? null;
     const linkedTable = user ? resolveLinkedTable(user.role) : null;
@@ -265,9 +270,9 @@ export function ProfilePage() {
         queryFn: async () => {
             if (!user || !linkedTable) return null;
 
-            // KASUS A: PTK / GURU / STAF -> Tabel `teachers` memiliki kolom `userId`
+            // KASUS A: PTK / GURU / STAF -> Tabel `teachers` memiliki kolom `userId` & `photoUrl`
             if (linkedTable === 'teachers') {
-                const selectColumns = 'id, fullName, email, phone, address, nip, nuptk';
+                const selectColumns = 'id, fullName, email, phone, address, nip, nuptk, photoUrl';
 
                 let byUserIdQuery = supabase
                     .from('teachers')
@@ -328,7 +333,7 @@ export function ProfilePage() {
                 if (linkedStudentId) {
                     const { data: studentMatch } = await supabase
                         .from('students')
-                        .select('id, fullName, email, phone, address, nisn')
+                        .select('id, fullName, email, phone, address, nisn, photoUrl')
                         .eq('schoolId', activeSchoolId)
                         .eq('id', linkedStudentId)
                         .maybeSingle();
@@ -388,6 +393,23 @@ export function ProfilePage() {
             return null;
         },
     });
+
+    const storeAvatarUrl =
+        (user as (typeof user & { avatarUrl?: string | null }) | null)?.avatarUrl ?? null;
+    const resolvedAvatarUrl = detailData?.photoUrl || storeAvatarUrl || null;
+
+    useEffect(() => {
+        setAvatarError(false);
+    }, [resolvedAvatarUrl]);
+
+    useEffect(() => {
+        if (!isPhotoPreviewOpen) return;
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') setIsPhotoPreviewOpen(false);
+        };
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [isPhotoPreviewOpen]);
 
     useEffect(() => {
         if (!user) return;
@@ -453,6 +475,8 @@ export function ProfilePage() {
         },
         onSuccess: () => {
             void queryClient.invalidateQueries({ queryKey: ['user-detail'] });
+            void queryClient.invalidateQueries({ queryKey: ['teachers'] });
+            void queryClient.invalidateQueries({ queryKey: ['users-list'] });
             toast.success(isId ? 'Profil berhasil diperbarui.' : 'Profile updated successfully.');
         },
         onError: (err: Error) => {
@@ -516,12 +540,53 @@ export function ProfilePage() {
         (!detailLoading &&
             (Boolean(identityBadge) || Boolean(detailData?.phone) || Boolean(detailData?.address)));
 
+    const showAvatarImage = Boolean(resolvedAvatarUrl && !avatarError);
+
     return (
         <motion.div
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             className="mx-auto max-w-4xl space-y-6"
         >
+            {/* LIGHTBOX PRATINJAU FOTO PROFIL */}
+            <AnimatePresence>
+                {isPhotoPreviewOpen && showAvatarImage && (
+                    <div
+                        className="fixed inset-0 z-100 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
+                        onClick={() => setIsPhotoPreviewOpen(false)}
+                    >
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className="relative max-h-[90vh] w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl"
+                            onClick={(e) => e.stopPropagation()}
+                        >
+                            <div className="mb-2.5 flex items-center justify-between gap-2 px-1">
+                                <span className="truncate text-sm font-semibold text-foreground">
+                                    {user.fullName}
+                                </span>
+                                <button
+                                    type="button"
+                                    onClick={() => setIsPhotoPreviewOpen(false)}
+                                    aria-label={isId ? 'Tutup pratinjau' : 'Close preview'}
+                                    className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                                >
+                                    <X className="h-4 w-4" />
+                                </button>
+                            </div>
+                            <div className="flex justify-center overflow-hidden rounded-xl bg-muted/40">
+                                <img
+                                    src={resolvedAvatarUrl!}
+                                    alt={user.fullName}
+                                    className="max-h-[70vh] w-auto object-contain"
+                                />
+                            </div>
+                        </motion.div>
+                    </div>
+                )}
+            </AnimatePresence>
+
             {/* HERO CARD PROFIL */}
             <div className="relative overflow-hidden rounded-2xl border border-emerald-800/25 text-white shadow-md">
                 <div className="absolute inset-0 bg-linear-to-br from-emerald-600 via-teal-700 to-emerald-950 dark:from-emerald-950 dark:via-teal-950 dark:to-slate-950" />
@@ -544,9 +609,32 @@ export function ProfilePage() {
                 <div className="relative z-10 p-6 sm:p-8">
                     <div className="flex flex-col items-center justify-between gap-5 sm:flex-row sm:items-center">
                         <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:text-left">
-                            <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/15 text-2xl font-bold text-white shadow-lg shadow-emerald-950/25 backdrop-blur-md sm:h-24 sm:w-24 sm:text-3xl">
-                                {getInitials(user.fullName)}
-                            </div>
+                            {showAvatarImage ? (
+                                <button
+                                    type="button"
+                                    onClick={() => setIsPhotoPreviewOpen(true)}
+                                    title={
+                                        isId
+                                            ? 'Klik untuk memperbesar foto profil'
+                                            : 'Click to enlarge profile photo'
+                                    }
+                                    className="group/avatar relative h-20 w-20 shrink-0 overflow-hidden rounded-2xl border border-white/30 bg-white/15 shadow-lg shadow-emerald-950/25 backdrop-blur-md focus:outline-none focus:ring-2 focus:ring-white sm:h-24 sm:w-24"
+                                >
+                                    <img
+                                        src={resolvedAvatarUrl!}
+                                        alt={user.fullName}
+                                        onError={() => setAvatarError(true)}
+                                        className="h-full w-full object-cover transition-transform duration-200 group-hover/avatar:scale-105"
+                                    />
+                                    <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover/avatar:opacity-100">
+                                        <ZoomIn className="h-5 w-5 text-white" />
+                                    </span>
+                                </button>
+                            ) : (
+                                <div className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl border border-white/25 bg-white/15 text-2xl font-bold text-white shadow-lg shadow-emerald-950/25 backdrop-blur-md sm:h-24 sm:w-24 sm:text-3xl">
+                                    {getInitials(user.fullName)}
+                                </div>
+                            )}
 
                             <div>
                                 <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">

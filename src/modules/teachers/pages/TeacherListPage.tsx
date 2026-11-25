@@ -7,7 +7,7 @@ import {
   Plus, Upload, Download, Search, Eye, Edit, Trash2, Loader2,
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   X, AlertTriangle, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown,
-  FileSpreadsheet, CheckCircle2, RefreshCw, Sparkles, Filter
+  FileSpreadsheet, CheckCircle2, RefreshCw, Sparkles, Filter, ZoomIn
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -35,6 +35,7 @@ type SortConfig = { key: string; direction: 'asc' | 'desc' } | null;
 type DeleteModalState = { isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?: string };
 type DiffFilterTab = 'all' | 'new' | 'updated' | 'unchanged';
 type DetectedExcelType = 'teacher' | 'student' | 'unknown';
+type PhotoPreviewState = { id: string; fullName: string; photoUrl: string } | null;
 
 const PAGE_SIZE = 10;
 const FALLBACK_HEADER_ROW = 4;
@@ -139,10 +140,6 @@ const DIFF_FIELD_LABELS: Record<keyof TeacherBulkImportItem, string> = {
 // ==========================================
 // ERROR HANDLING HELPER
 // ==========================================
-/**
- * Mengubah berbagai bentuk error (API/Axios, Validasi, Jaringan, atau Runtime JS)
- * menjadi pesan yang jelas dan ramah bagi pengguna.
- */
 const extractFriendlyErrorMessage = (
   error: unknown,
   locale: string,
@@ -165,7 +162,6 @@ const extractFriendlyErrorMessage = (
       message?: string;
     };
 
-    // 1. Prioritaskan pesan error spesifik dari backend/API
     const apiMessage = errObj.response?.data?.message;
     if (Array.isArray(apiMessage) && apiMessage.length > 0) {
       return apiMessage.join(', ');
@@ -177,7 +173,6 @@ const extractFriendlyErrorMessage = (
       return errObj.response.data.error;
     }
 
-    // 2. Tangani error JavaScript / jaringan agar tidak menampilkan pesan teknis mentah
     if (typeof errObj.message === 'string' && errObj.message.trim() !== '') {
       const rawMsg = errObj.message;
 
@@ -214,16 +209,12 @@ const extractFriendlyErrorMessage = (
 // ==========================================
 // PURE EXCEL PARSING & SMARTDIFF HELPERS
 // ==========================================
-/**
- * Normalisasi nama kolom/teks dengan aman (tahan terhadap nilai null/undefined).
- */
 const normKey = (k: unknown): string =>
   String(k ?? '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim();
 
-// Penanda khusus untuk membedakan Excel Guru (PTK) vs Excel Siswa (PD)
 const TEACHER_COLUMN_MARKERS = new Set([
   'nuptk',
   'nip',
@@ -683,6 +674,65 @@ const generatePagination = (current: number, total: number): (number | string)[]
 };
 
 // ==========================================
+// SUB-COMPONENT: TEACHER AVATAR CELL
+// ==========================================
+interface TeacherAvatarCellProps {
+  id: string;
+  fullName: string;
+  photoUrl?: string | null;
+  previewTitle: string;
+  onPreview?: (preview: { id: string; fullName: string; photoUrl: string }) => void;
+}
+
+function TeacherAvatarCell({
+  id,
+  fullName,
+  photoUrl,
+  previewTitle,
+  onPreview,
+}: TeacherAvatarCellProps) {
+  const [hasError, setHasError] = useState(false);
+
+  useEffect(() => {
+    setHasError(false);
+  }, [photoUrl]);
+
+  const initial = (fullName || '?').trim().charAt(0).toUpperCase() || '?';
+  const showImage = Boolean(photoUrl && !hasError);
+
+  if (showImage) {
+    return (
+      <button
+        type="button"
+        title={previewTitle}
+        onClick={(e) => {
+          e.stopPropagation();
+          onPreview?.({ id, fullName, photoUrl: photoUrl! });
+        }}
+        className="group/avatar relative h-9 w-9 shrink-0 overflow-hidden rounded-full border border-emerald-500/25 bg-muted shadow-xs focus:outline-none focus:ring-2 focus:ring-emerald-500"
+      >
+        <img
+          src={photoUrl!}
+          alt={fullName}
+          loading="lazy"
+          onError={() => setHasError(true)}
+          className="h-full w-full object-cover transition-transform duration-150 group-hover/avatar:scale-105"
+        />
+        <span className="absolute inset-0 flex items-center justify-center bg-black/35 opacity-0 transition-opacity group-hover/avatar:opacity-100">
+          <ZoomIn className="h-3.5 w-3.5 text-white" />
+        </span>
+      </button>
+    );
+  }
+
+  return (
+    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-emerald-200/70 bg-emerald-100 text-xs font-semibold text-emerald-700 dark:border-emerald-500/25 dark:bg-emerald-500/15 dark:text-emerald-300">
+      {initial}
+    </div>
+  );
+}
+
+// ==========================================
 // SUB-COMPONENT: SORTABLE TABLE HEADER
 // ==========================================
 interface SortableHeaderProps {
@@ -762,6 +812,9 @@ export function TeacherListPage() {
   const [selectedRows, setSelectedRows] = useState<string[]>([]);
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'fullName', direction: 'asc' });
 
+  // Photo Lightbox Preview State
+  const [photoPreview, setPhotoPreview] = useState<PhotoPreviewState>(null);
+
   // Export & Delete Modal State
   const [isExporting, setIsExporting] = useState(false);
   const [deleteModal, setDeleteModal] = useState<DeleteModalState>({ isOpen: false, type: 'single' });
@@ -794,6 +847,15 @@ export function TeacherListPage() {
     }
   }, [canDeleteTeacher, selectedRows.length]);
 
+  useEffect(() => {
+    if (!photoPreview) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setPhotoPreview(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [photoPreview]);
+
   const parsedCertifiedFilter =
     certifiedFilter === 'all' ? undefined : certifiedFilter === 'true';
 
@@ -819,7 +881,6 @@ export function TeacherListPage() {
       sortConfig,
     ],
     queryFn: async () => {
-      // Jika akun guru biasa belum tertaut ke tabel teachers, kembalikan kosong
       if (isRestrictedToSelf && !teacherScope.teacherId) {
         return {
           success: true,
@@ -1130,7 +1191,6 @@ export function TeacherListPage() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Reset pesan error lama setiap kali pengguna memilih file baru
     setImportError(null);
 
     if (!canImportTeacher) {
@@ -1155,7 +1215,6 @@ export function TeacherListPage() {
       return;
     }
 
-    // Validasi ekstensi file sebelum diproses
     const lowerFileName = file.name.toLowerCase();
     if (!lowerFileName.endsWith('.xlsx') && !lowerFileName.endsWith('.xls')) {
       const msg = tr(
@@ -1196,7 +1255,6 @@ export function TeacherListPage() {
         );
       }
 
-      // Gunakan defval: '' agar tidak terbentuk sparse array (lubang undefined)
       const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
         header: 1,
         raw: false,
@@ -1210,11 +1268,9 @@ export function TeacherListPage() {
       );
       if (headerRow === -1) headerRow = FALLBACK_HEADER_ROW;
 
-      // Array.from memastikan tidak ada slot kosong (sparse array) saat di-loop
       const rawHeaderRow = Array.isArray(matrix[headerRow]) ? matrix[headerRow] : [];
       const headerCells = Array.from(rawHeaderRow, (c) => String(c ?? ''));
 
-      // Validasi silang: Pastikan file yang diunggah benar-benar file Guru (PTK), bukan file Siswa
       const detectedType = detectTeacherExcelSource(
         workbook.SheetNames,
         matrix.slice(0, headerRow),
@@ -1362,6 +1418,7 @@ export function TeacherListPage() {
         'Tugas Tambahan': t.tugasTambahan || '-',
         'Pangkat/Golongan': t.pangkatGolongan || '-',
         Sertifikasi: t.isCertified ? 'Sudah' : 'Belum',
+        'Foto Profil': t.photoUrl ? 'Ada' : 'Belum',
         Alamat: t.address || '-',
         'Desa/Kelurahan': t.kelurahan || '-',
         Kecamatan: t.kecamatan || '-',
@@ -1385,6 +1442,7 @@ export function TeacherListPage() {
         { wch: 18 },
         { wch: 22 },
         { wch: 14 },
+        { wch: 12 },
         { wch: 12 },
         { wch: 30 },
         { wch: 18 },
@@ -1441,6 +1499,55 @@ export function TeacherListPage() {
 
   return (
     <div className="space-y-6 relative">
+      {/* --- LIGHTBOX PRATINJAU FOTO PROFIL --- */}
+      <AnimatePresence>
+        {photoPreview && (
+          <div
+            className="fixed inset-0 z-100 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
+            onClick={() => setPhotoPreview(null)}
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="relative max-h-[90vh] w-full max-w-md overflow-hidden rounded-2xl border border-border bg-card p-3 shadow-2xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="mb-2.5 flex items-center justify-between gap-2 px-1">
+                <span className="truncate text-sm font-semibold text-foreground">
+                  {photoPreview.fullName}
+                </span>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Link
+                    to={`/teachers/${photoPreview.id}`}
+                    onClick={() => setPhotoPreview(null)}
+                    className="inline-flex items-center gap-1 rounded-lg bg-emerald-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700 transition-colors"
+                  >
+                    <Eye className="h-3.5 w-3.5" />
+                    <span>{tr('Profil', 'Profile')}</span>
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setPhotoPreview(null)}
+                    aria-label={tr('Tutup pratinjau', 'Close preview')}
+                    className="flex h-7 w-7 items-center justify-center rounded-lg text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="flex justify-center overflow-hidden rounded-xl bg-muted/40">
+                <img
+                  src={photoPreview.photoUrl}
+                  alt={photoPreview.fullName}
+                  className="max-h-[70vh] w-auto object-contain"
+                />
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       {/* --- HEADER --- */}
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
@@ -1806,19 +1913,31 @@ export function TeacherListPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-semibold text-xs shrink-0">
-                            {teacher.fullName.charAt(0).toUpperCase()}
-                          </div>
-                          <div>
+                          <TeacherAvatarCell
+                            id={teacher.id}
+                            fullName={teacher.fullName}
+                            photoUrl={teacher.photoUrl}
+                            previewTitle={tr(
+                              'Klik untuk memperbesar foto profil',
+                              'Click to enlarge profile photo'
+                            )}
+                            onPreview={setPhotoPreview}
+                          />
+                          <div className="min-w-0">
                             <p className="font-medium text-foreground line-clamp-1">
                               {teacher.fullName}
                             </p>
-                            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                               <span>
                                 {teacher.gender === 'L'
                                   ? tr('Laki-laki', 'Male')
                                   : tr('Perempuan', 'Female')}
                               </span>
+                              {teacher.isActive === false && (
+                                <span className="px-1.5 py-0.5 rounded bg-rose-500/10 text-rose-700 dark:text-rose-400 font-medium">
+                                  {tr('Nonaktif', 'Inactive')}
+                                </span>
+                              )}
                               {teacher.tugasTambahan && (
                                 <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400 font-medium truncate max-w-44">
                                   {teacher.tugasTambahan}

@@ -97,8 +97,8 @@ const chunkArray = <T>(items: readonly T[], size: number): T[][] => {
 
 /**
  * Memperkaya daftar akun dengan:
- * 1. Status keterhubungan siswa/orang tua di `public.user_student_links`.
- * 2. Status keterhubungan & tugas tambahan Dapodik dari `public.teachers` ("tugasTambahan").
+ * 1. Status keterhubungan & foto profil siswa/orang tua dari `user_student_links` & `students`.
+ * 2. Status keterhubungan, tugas tambahan Dapodik, dan `photoUrl` dari `teachers`.
  */
 const enrichUsersWithMasterData = async (
     users: AppUser[],
@@ -123,17 +123,20 @@ const enrichUsersWithMasterData = async (
         .map((u) => u.id);
 
     const linkedCountMap = new Map<string, number>();
+    const primaryStudentByUser = new Map<string, string>();
+    const studentPhotoMap = new Map<string, string>();
     const linkedTeacherIds = new Set<string>();
     const teacherDutyMap = new Map<string, string>();
+    const teacherPhotoMap = new Map<string, string>();
 
-    // 1. Ambil tautan master siswa / orang tua
+    // 1. Ambil tautan master siswa / orang tua & foto profil siswa
     if (studentParentIds.length > 0) {
         try {
             const idChunks = chunkArray(studentParentIds, 200);
             for (const chunk of idChunks) {
                 let linkQuery = supabase
                     .from('user_student_links')
-                    .select('userId')
+                    .select('userId, studentId')
                     .in('userId', chunk);
 
                 if (!isSuperAdmin && validSchoolId) {
@@ -143,9 +146,46 @@ const enrichUsersWithMasterData = async (
                 const { data: linkRows, error } = await linkQuery;
                 if (!error && Array.isArray(linkRows)) {
                     for (const row of linkRows) {
-                        const uid = (row as { userId?: string | null }).userId;
-                        if (uid) {
-                            linkedCountMap.set(uid, (linkedCountMap.get(uid) ?? 0) + 1);
+                        const typedRow = row as {
+                            userId?: string | null;
+                            studentId?: string | null;
+                        };
+                        if (typedRow.userId) {
+                            linkedCountMap.set(
+                                typedRow.userId,
+                                (linkedCountMap.get(typedRow.userId) ?? 0) + 1
+                            );
+                            if (typedRow.studentId && !primaryStudentByUser.has(typedRow.userId)) {
+                                primaryStudentByUser.set(typedRow.userId, typedRow.studentId);
+                            }
+                        }
+                    }
+                }
+            }
+
+            const uniqueStudentIds = Array.from(new Set(primaryStudentByUser.values()));
+            if (uniqueStudentIds.length > 0) {
+                const studentChunks = chunkArray(uniqueStudentIds, 200);
+                for (const sChunk of studentChunks) {
+                    let studentQuery = supabase
+                        .from('students')
+                        .select('id, photoUrl')
+                        .in('id', sChunk);
+
+                    if (!isSuperAdmin && validSchoolId) {
+                        studentQuery = studentQuery.eq('schoolId', validSchoolId);
+                    }
+
+                    const { data: studentRows, error } = await studentQuery;
+                    if (!error && Array.isArray(studentRows)) {
+                        for (const row of studentRows) {
+                            const typedRow = row as {
+                                id?: string | null;
+                                photoUrl?: string | null;
+                            };
+                            if (typedRow.id && typedRow.photoUrl) {
+                                studentPhotoMap.set(typedRow.id, typedRow.photoUrl);
+                            }
                         }
                     }
                 }
@@ -155,14 +195,14 @@ const enrichUsersWithMasterData = async (
         }
     }
 
-    // 2. Ambil tautan master & tugasTambahan dari tabel teachers (Dapodik)
+    // 2. Ambil tautan master, tugasTambahan & photoUrl dari tabel teachers (Dapodik)
     if (staffUserIds.length > 0) {
         try {
             const staffChunks = chunkArray(staffUserIds, 200);
             for (const chunk of staffChunks) {
                 let teacherQuery = supabase
                     .from('teachers')
-                    .select('userId, tugasTambahan')
+                    .select('userId, tugasTambahan, photoUrl')
                     .in('userId', chunk);
 
                 if (!isSuperAdmin && validSchoolId) {
@@ -175,11 +215,15 @@ const enrichUsersWithMasterData = async (
                         const typedRow = row as {
                             userId?: string | null;
                             tugasTambahan?: string | null;
+                            photoUrl?: string | null;
                         };
                         if (typedRow.userId) {
                             linkedTeacherIds.add(typedRow.userId);
                             if (typedRow.tugasTambahan) {
                                 teacherDutyMap.set(typedRow.userId, typedRow.tugasTambahan);
+                            }
+                            if (typedRow.photoUrl) {
+                                teacherPhotoMap.set(typedRow.userId, typedRow.photoUrl);
                             }
                         }
                     }
@@ -197,8 +241,14 @@ const enrichUsersWithMasterData = async (
 
         if (u.role === 'SISWA') {
             const count = linkedCountMap.get(u.id) ?? 0;
+            const linkedStudentId = primaryStudentByUser.get(u.id);
+            const studentPhoto = linkedStudentId
+                ? studentPhotoMap.get(linkedStudentId)
+                : undefined;
+
             return {
                 ...u,
+                avatarUrl: studentPhoto ?? u.avatarUrl ?? null,
                 additionalRoles: [],
                 isLinkedToMaster: count > 0,
             };
@@ -214,6 +264,7 @@ const enrichUsersWithMasterData = async (
         }
         return {
             ...u,
+            avatarUrl: teacherPhotoMap.get(u.id) ?? u.avatarUrl ?? null,
             additionalRoles: normalizedAdditionalRoles,
             isLinkedToMaster: linkedTeacherIds.has(u.id),
             tugasTambahan: teacherDutyMap.get(u.id) ?? u.tugasTambahan ?? null,
@@ -243,8 +294,6 @@ export const userManagementService = {
 
             if (validSchoolId) {
                 if (isSuperAdmin) {
-                    // SUPER_ADMIN memiliki schoolId = NULL (level sistem lintas sekolah),
-                    // sehingga tetap disertakan bersama seluruh pengguna sekolah yang sedang dipilih.
                     query = query.or(`schoolId.eq.${validSchoolId},role.eq.SUPER_ADMIN`);
                 } else {
                     query = query.eq('schoolId', validSchoolId);

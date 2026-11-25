@@ -1,5 +1,5 @@
 // src/modules/teachers/pages/TeacherFormPage.tsx
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
 import {
   useForm,
@@ -24,6 +24,8 @@ import {
   AlertCircle,
   AlertTriangle,
   RefreshCw,
+  Camera,
+  Trash2,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -163,6 +165,7 @@ const teacherSchema = z.object({
   gender: z.enum(['L', 'P'], {
     message: 'Jenis kelamin wajib dipilih',
   }),
+  photoUrl: z.string().optional(),
   nip: z.string().optional(),
   nuptk: z.string().optional(),
   nik: z.string().optional(),
@@ -249,6 +252,7 @@ type TeacherFormValues = z.infer<typeof teacherSchema>;
 const FIELD_TAB_MAP: Record<keyof TeacherFormValues, TeacherTabValue> = {
   fullName: 'personal',
   gender: 'personal',
+  photoUrl: 'personal',
   nip: 'professional',
   nuptk: 'professional',
   nik: 'personal',
@@ -416,8 +420,12 @@ export function TeacherFormPage() {
   const isEdit = Boolean(id);
   const isId = locale === 'id';
 
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTab, setActiveTab] = useState<TeacherTabValue>('personal');
   const [formError, setFormError] = useState<string | null>(null);
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
+  const [pendingPhotoPreview, setPendingPhotoPreview] = useState<string | null>(null);
+  const [photoLoadError, setPhotoLoadError] = useState(false);
 
   const canSubmitForm = isEdit
     ? hasPermission('teachers', 'update')
@@ -463,6 +471,7 @@ export function TeacherFormPage() {
     defaultValues: {
       fullName: '',
       gender: undefined,
+      photoUrl: '',
       nip: '',
       nuptk: '',
       nik: '',
@@ -526,6 +535,15 @@ export function TeacherFormPage() {
     },
   });
 
+  // Bersihkan ObjectURL pratinjau lokal agar tidak bocor di memori
+  useEffect(() => {
+    return () => {
+      if (pendingPhotoPreview) {
+        URL.revokeObjectURL(pendingPhotoPreview);
+      }
+    };
+  }, [pendingPhotoPreview]);
+
   const {
     data: response,
     isLoading,
@@ -542,9 +560,11 @@ export function TeacherFormPage() {
   useEffect(() => {
     if (response?.data) {
       const t = response.data;
+      setPhotoLoadError(false);
       form.reset({
         fullName: t.fullName || '',
         gender: normalizeGenderForForm(t.gender),
+        photoUrl: t.photoUrl || '',
         nip: t.nip || '',
         nuptk: t.nuptk || '',
         nik: t.nik || '',
@@ -610,8 +630,54 @@ export function TeacherFormPage() {
     }
   }, [response, form]);
 
+  const watchedFullName = form.watch('fullName');
+  const watchedPhotoUrl = form.watch('photoUrl');
+  const displayedAvatarUrl =
+    pendingPhotoPreview || (!photoLoadError && watchedPhotoUrl ? watchedPhotoUrl : null);
+
+  const handleSelectPhotoFile = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (!allowedTypes.includes(file.type)) {
+      toast.error(
+        isId
+          ? 'Format foto harus berupa JPG, PNG, atau WEBP.'
+          : 'Photo must be JPG, PNG, or WEBP.'
+      );
+      return;
+    }
+
+    if (file.size > 15 * 1024 * 1024) {
+      toast.error(
+        isId ? 'Ukuran file mentah maksimal 15 MB.' : 'Maximum raw file size is 15 MB.'
+      );
+      return;
+    }
+
+    if (pendingPhotoPreview) {
+      URL.revokeObjectURL(pendingPhotoPreview);
+    }
+
+    setPhotoLoadError(false);
+    setPendingPhotoFile(file);
+    setPendingPhotoPreview(URL.createObjectURL(file));
+  };
+
+  const handleClearPhoto = () => {
+    if (pendingPhotoPreview) {
+      URL.revokeObjectURL(pendingPhotoPreview);
+    }
+    setPendingPhotoFile(null);
+    setPendingPhotoPreview(null);
+    setPhotoLoadError(false);
+    form.setValue('photoUrl', '', { shouldDirty: true });
+  };
+
   const mutation = useMutation({
-    mutationFn: (values: TeacherFormValues) => {
+    mutationFn: async (values: TeacherFormValues) => {
       setFormError(null);
       const targetSchoolId =
         activeSchoolId ?? normalizeTeacherSchoolId(response?.data?.schoolId);
@@ -637,13 +703,41 @@ export function TeacherFormPage() {
         ...values,
         schoolId: targetSchoolId,
         gender: values.gender,
+        photoUrl: values.photoUrl || null,
         isActive: values.isActive ?? true,
         isCertified: values.isCertified ?? false,
         baseSalary: parsedSalary,
         maxHoursPerWeek: parsedHours,
       };
 
-      return isEdit ? teacherService.update(id!, payload) : teacherService.create(payload);
+      if (isEdit && id) {
+        if (pendingPhotoFile) {
+          const uploaded = await teacherService.uploadTeacherPhoto({
+            schoolId: targetSchoolId,
+            teacherId: id,
+            file: pendingPhotoFile,
+          });
+          payload.photoUrl = uploaded.publicUrl;
+        }
+        return teacherService.update(id, payload);
+      }
+
+      // Mode Tambah Guru Baru: buat record dulu agar mendapat teacher.id, lalu unggah foto ke folder {schoolId}/{teacherId}
+      const created = await teacherService.create({
+        ...payload,
+        photoUrl: null,
+      });
+
+      if (pendingPhotoFile && created.data?.id) {
+        await teacherService.uploadAndSaveTeacherPhoto({
+          schoolId: targetSchoolId,
+          teacherId: created.data.id,
+          file: pendingPhotoFile,
+          linkedUserId: created.data.userId,
+        });
+      }
+
+      return created;
     },
     onSuccess: () => {
       setFormError(null);
@@ -651,6 +745,7 @@ export function TeacherFormPage() {
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
       if (id) {
         queryClient.invalidateQueries({ queryKey: ['teacher', id] });
+        queryClient.invalidateQueries({ queryKey: ['teacher-photo-history', id] });
       }
       toast.success(isEdit ? dict.toastUpdateSuccess : dict.toastCreateSuccess);
       navigate('/teachers');
@@ -733,6 +828,8 @@ export function TeacherFormPage() {
       </div>
     );
   }
+
+  const initials = (watchedFullName || '?').trim().charAt(0).toUpperCase() || '?';
 
   return (
     <div className="space-y-6">
@@ -845,6 +942,83 @@ export function TeacherFormPage() {
                 {/* TAB 1: Data Pribadi & Alamat Dapodik */}
                 <TabsContent value="personal" className="m-0">
                   <div className="grid gap-4 sm:grid-cols-2 pt-2">
+                    {/* UNGGAH FOTO PROFIL PTK */}
+                    <div className="sm:col-span-2 flex flex-col sm:flex-row items-center gap-4 rounded-xl border border-border/70 bg-muted/25 p-4">
+                      <div className="relative h-20 w-20 shrink-0 overflow-hidden rounded-full border-2 border-emerald-500/25 bg-muted shadow-sm">
+                        {displayedAvatarUrl ? (
+                          <img
+                            src={displayedAvatarUrl}
+                            alt={watchedFullName || 'Foto Guru'}
+                            onError={() => setPhotoLoadError(true)}
+                            className="h-full w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-full w-full items-center justify-center bg-linear-to-br from-emerald-500 to-teal-600 text-2xl font-bold text-white">
+                            {initials}
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="flex-1 text-center sm:text-left space-y-1">
+                        <p className="text-sm font-semibold text-foreground">
+                          {isId ? 'Foto Profil Guru / PTK' : 'Teacher Profile Photo'}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {isId
+                            ? 'Format JPG, PNG, atau WEBP (otomatis dikompresi <= 2 MB). Digunakan untuk kartu profil dan verifikasi presensi.'
+                            : 'JPG, PNG, or WEBP format (auto-compressed <= 2 MB). Used for profile card and attendance verification.'}
+                        </p>
+                        {pendingPhotoFile && (
+                          <p className="text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                            {isId
+                              ? `File siap disimpan: ${pendingPhotoFile.name}`
+                              : `Ready to save: ${pendingPhotoFile.name}`}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-center gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={mutation.isPending}
+                          onClick={() => photoInputRef.current?.click()}
+                        >
+                          <Camera className="mr-1.5 h-4 w-4 text-emerald-600" />
+                          {displayedAvatarUrl
+                            ? isId
+                              ? 'Ganti Foto'
+                              : 'Change Photo'
+                            : isId
+                              ? 'Pilih Foto'
+                              : 'Choose Photo'}
+                        </Button>
+
+                        {displayedAvatarUrl && (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={mutation.isPending}
+                            onClick={handleClearPhoto}
+                            className="text-rose-600 hover:bg-rose-50 hover:text-rose-700 dark:text-rose-400 dark:hover:bg-rose-500/10"
+                          >
+                            <Trash2 className="mr-1.5 h-4 w-4" />
+                            {isId ? 'Hapus' : 'Remove'}
+                          </Button>
+                        )}
+
+                        <input
+                          ref={photoInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp"
+                          className="hidden"
+                          onChange={handleSelectPhotoFile}
+                        />
+                      </div>
+                    </div>
+
                     <TeacherFormField
                       control={form.control}
                       name="fullName"
