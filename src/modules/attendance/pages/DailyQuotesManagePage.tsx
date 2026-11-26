@@ -1,5 +1,13 @@
 // src/modules/attendance/pages/DailyQuotesManagePage.tsx
-import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+    useState,
+    useEffect,
+    useCallback,
+    useRef,
+    useMemo,
+    useDeferredValue,
+    memo,
+} from 'react';
 import {
     Sparkles,
     Plus,
@@ -13,6 +21,8 @@ import {
     Power,
     ShieldAlert,
     RefreshCw,
+    ChevronLeft,
+    ChevronRight,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -22,6 +32,7 @@ import type { DailyQuoteRow } from '../types/attendance.types';
 
 const GLOBAL_SCHOOL_VALUE = '__GLOBAL__';
 const MIN_QUOTE_LENGTH = 10;
+const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 
 function isMissingTableError(err: unknown): boolean {
     if (typeof err !== 'object' || err === null) return false;
@@ -43,6 +54,129 @@ function isMissingTableError(err: unknown): boolean {
     );
 }
 
+interface QuoteCardItemProps {
+    item: DailyQuoteRow;
+    rowNumber: number;
+    isSuperAdmin: boolean;
+    isBeingEdited: boolean;
+    badgeGlobalLabel: string;
+    badgeSchoolLabel: string;
+    badgeActiveLabel: string;
+    badgeInactiveLabel: string;
+    titleDeactivate: string;
+    titleActivate: string;
+    titleEdit: string;
+    titleDelete: string;
+    onToggleActive: (item: DailyQuoteRow) => void;
+    onEdit: (item: DailyQuoteRow) => void;
+    onDelete: (item: DailyQuoteRow) => void;
+}
+
+const QuoteCardItem = memo(function QuoteCardItem({
+    item,
+    rowNumber,
+    isSuperAdmin,
+    isBeingEdited,
+    badgeGlobalLabel,
+    badgeSchoolLabel,
+    badgeActiveLabel,
+    badgeInactiveLabel,
+    titleDeactivate,
+    titleActivate,
+    titleEdit,
+    titleDelete,
+    onToggleActive,
+    onEdit,
+    onDelete,
+}: QuoteCardItemProps) {
+    const isGlobal = item.schoolId === null;
+    const canModify = !isGlobal || isSuperAdmin;
+
+    return (
+        <div
+            className={`rounded-2xl border p-4 transition-colors ${isBeingEdited
+                    ? 'border-emerald-500 ring-1 ring-emerald-500/40 bg-emerald-500/5'
+                    : item.isActive
+                        ? 'border-border bg-card'
+                        : 'border-border/60 bg-muted/30 opacity-75'
+                }`}
+        >
+            <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                <div className="space-y-2 flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center justify-center min-w-7 px-2 py-0.5 rounded-md text-[11px] font-bold tabular-nums bg-muted text-foreground border border-border">
+                            #{rowNumber}
+                        </span>
+
+                        {isGlobal ? (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
+                                {badgeGlobalLabel}
+                            </span>
+                        ) : (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/25">
+                                {badgeSchoolLabel}
+                            </span>
+                        )}
+
+                        <span
+                            className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${item.isActive
+                                    ? 'bg-emerald-500/15 text-emerald-600'
+                                    : 'bg-red-500/15 text-red-500'
+                                }`}
+                        >
+                            {item.isActive ? badgeActiveLabel : badgeInactiveLabel}
+                        </span>
+                    </div>
+
+                    <blockquote className="text-sm font-medium italic text-foreground leading-relaxed wrap-break-word">
+                        “{item.quote}”
+                    </blockquote>
+
+                    {item.author && (
+                        <p className="text-xs font-semibold text-muted-foreground">
+                            — {item.author}
+                        </p>
+                    )}
+                </div>
+
+                {canModify && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                        <button
+                            type="button"
+                            onClick={() => onToggleActive(item)}
+                            className="p-2 rounded-xl border border-border hover:bg-muted transition-colors cursor-pointer"
+                            title={item.isActive ? titleDeactivate : titleActivate}
+                        >
+                            <Power
+                                size={14}
+                                className={item.isActive ? 'text-emerald-600' : 'opacity-40'}
+                            />
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => onEdit(item)}
+                            className="p-2 rounded-xl border border-border hover:bg-muted transition-colors cursor-pointer"
+                            title={titleEdit}
+                        >
+                            <Edit3 size={14} />
+                        </button>
+
+                        <button
+                            type="button"
+                            onClick={() => onDelete(item)}
+                            className="p-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/15 transition-colors cursor-pointer"
+                            title={titleDelete}
+                        >
+                            <Trash2 size={14} />
+                        </button>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+});
+
 export function DailyQuotesManagePage() {
     const { t } = useTranslation();
     const { user, school, hasAnyRole } = useAuthStore();
@@ -61,11 +195,14 @@ export function DailyQuotesManagePage() {
         defaultSchoolId || GLOBAL_SCHOOL_VALUE
     );
 
-    // Filter cakupan list (ALL | GLOBAL | SCHOOL)
+    // Filter cakupan list, pencarian (deferred), & paginasi
     const [scopeFilter, setScopeFilter] = useState<'ALL' | 'GLOBAL' | 'SCHOOL'>(
         'ALL'
     );
     const [searchQuery, setSearchQuery] = useState<string>('');
+    const deferredSearchQuery = useDeferredValue(searchQuery);
+    const [currentPage, setCurrentPage] = useState<number>(1);
+    const [pageSize, setPageSize] = useState<number>(10);
 
     const [quotes, setQuotes] = useState<DailyQuoteRow[]>([]);
     const [isLoading, setIsLoading] = useState<boolean>(false);
@@ -85,6 +222,7 @@ export function DailyQuotesManagePage() {
         message: string;
     } | null>(null);
     const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const requestSeqRef = useRef<number>(0);
 
     const showToast = useCallback(
         (type: 'success' | 'error', message: string) => {
@@ -151,11 +289,12 @@ export function DailyQuotesManagePage() {
         if (!canManageQuotes) return;
         if (!isSuperAdmin && !activeSchoolFilterId) return;
 
+        const seq = ++requestSeqRef.current;
         setIsLoading(true);
         try {
             let query = supabase
                 .from('daily_quotes')
-                .select('*')
+                .select('id, schoolId, quote, author, isActive, createdAt')
                 .order('createdAt', { ascending: false });
 
             if (activeSchoolFilterId) {
@@ -167,10 +306,12 @@ export function DailyQuotesManagePage() {
             }
 
             const { data, error } = await query;
+            if (seq !== requestSeqRef.current) return;
             if (error) throw error;
 
             setQuotes((data ?? []) as DailyQuoteRow[]);
         } catch (err: unknown) {
+            if (seq !== requestSeqRef.current) return;
             showToast(
                 'error',
                 isMissingTableError(err)
@@ -178,7 +319,9 @@ export function DailyQuotesManagePage() {
                     : t('dailyQuotes.errSave')
             );
         } finally {
-            setIsLoading(false);
+            if (seq === requestSeqRef.current) {
+                setIsLoading(false);
+            }
         }
     }, [
         canManageQuotes,
@@ -192,7 +335,12 @@ export function DailyQuotesManagePage() {
         void loadQuotes();
     }, [loadQuotes]);
 
-    const resetForm = () => {
+    // Reset halaman ke 1 saat filter atau pencarian berubah
+    useEffect(() => {
+        setCurrentPage(1);
+    }, [scopeFilter, deferredSearchQuery, pageSize, activeSchoolFilterId]);
+
+    const resetForm = useCallback(() => {
         setEditingId(null);
         setQuoteContent('');
         setAuthorName('');
@@ -200,21 +348,24 @@ export function DailyQuotesManagePage() {
         if (!isSuperAdmin) {
             setTargetSchoolScope(defaultSchoolId);
         }
-    };
+    }, [isSuperAdmin, defaultSchoolId]);
 
-    const handleStartEdit = (item: DailyQuoteRow) => {
-        if (item.schoolId === null && !isSuperAdmin) {
-            showToast('error', t('dailyQuotes.errGlobalEditRestricted'));
-            return;
-        }
-        setEditingId(item.id);
-        setQuoteContent(item.quote);
-        setAuthorName(item.author ?? '');
-        setIsActive(item.isActive);
-        if (isSuperAdmin) {
-            setTargetSchoolScope(item.schoolId ?? GLOBAL_SCHOOL_VALUE);
-        }
-    };
+    const handleStartEdit = useCallback(
+        (item: DailyQuoteRow) => {
+            if (item.schoolId === null && !isSuperAdmin) {
+                showToast('error', t('dailyQuotes.errGlobalEditRestricted'));
+                return;
+            }
+            setEditingId(item.id);
+            setQuoteContent(item.quote);
+            setAuthorName(item.author ?? '');
+            setIsActive(item.isActive);
+            if (isSuperAdmin) {
+                setTargetSchoolScope(item.schoolId ?? GLOBAL_SCHOOL_VALUE);
+            }
+        },
+        [isSuperAdmin, showToast, t]
+    );
 
     const handleSaveQuote = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -285,44 +436,50 @@ export function DailyQuotesManagePage() {
         }
     };
 
-    const handleToggleActive = async (item: DailyQuoteRow) => {
-        if (item.schoolId === null && !isSuperAdmin) {
-            showToast('error', t('dailyQuotes.errGlobalEditRestricted'));
-            return;
-        }
-
-        try {
-            let toggleQuery = supabase
-                .from('daily_quotes')
-                .update({ isActive: !item.isActive })
-                .eq('id', item.id);
-
-            if (!isSuperAdmin && defaultSchoolId) {
-                toggleQuery = toggleQuery.eq('schoolId', defaultSchoolId);
+    const handleToggleActive = useCallback(
+        async (item: DailyQuoteRow) => {
+            if (item.schoolId === null && !isSuperAdmin) {
+                showToast('error', t('dailyQuotes.errGlobalEditRestricted'));
+                return;
             }
 
-            const { error } = await toggleQuery;
-            if (error) throw error;
+            try {
+                let toggleQuery = supabase
+                    .from('daily_quotes')
+                    .update({ isActive: !item.isActive })
+                    .eq('id', item.id);
 
-            showToast(
-                'success',
-                item.isActive
-                    ? t('dailyQuotes.toastDeactivated')
-                    : t('dailyQuotes.toastActivated')
-            );
-            await loadQuotes();
-        } catch {
-            showToast('error', t('dailyQuotes.errToggleStatus'));
-        }
-    };
+                if (!isSuperAdmin && defaultSchoolId) {
+                    toggleQuery = toggleQuery.eq('schoolId', defaultSchoolId);
+                }
 
-    const handleRequestDelete = (item: DailyQuoteRow) => {
-        if (item.schoolId === null && !isSuperAdmin) {
-            showToast('error', t('dailyQuotes.errGlobalDeleteRestricted'));
-            return;
-        }
-        setDeleteTarget(item);
-    };
+                const { error } = await toggleQuery;
+                if (error) throw error;
+
+                showToast(
+                    'success',
+                    item.isActive
+                        ? t('dailyQuotes.toastDeactivated')
+                        : t('dailyQuotes.toastActivated')
+                );
+                await loadQuotes();
+            } catch {
+                showToast('error', t('dailyQuotes.errToggleStatus'));
+            }
+        },
+        [isSuperAdmin, defaultSchoolId, showToast, t, loadQuotes]
+    );
+
+    const handleRequestDelete = useCallback(
+        (item: DailyQuoteRow) => {
+            if (item.schoolId === null && !isSuperAdmin) {
+                showToast('error', t('dailyQuotes.errGlobalDeleteRestricted'));
+                return;
+            }
+            setDeleteTarget(item);
+        },
+        [isSuperAdmin, showToast, t]
+    );
 
     const handleConfirmDelete = async () => {
         if (!deleteTarget) return;
@@ -359,6 +516,44 @@ export function DailyQuotesManagePage() {
         }
     };
 
+    const schoolOptions = useMemo(() => {
+        const map = new Map<string, { id: string; name: string }>();
+        if (school?.id && school?.name) {
+            map.set(school.id, { id: school.id, name: school.name });
+        }
+        for (const s of simSchools) {
+            map.set(s.id, { id: s.id, name: s.name });
+        }
+        return Array.from(map.values());
+    }, [school?.id, school?.name, simSchools]);
+
+    const filteredQuotes = useMemo(() => {
+        const q = deferredSearchQuery.trim().toLowerCase();
+        return quotes.filter((item) => {
+            const matchesScope =
+                scopeFilter === 'ALL' ||
+                (scopeFilter === 'GLOBAL' && item.schoolId === null) ||
+                (scopeFilter === 'SCHOOL' && item.schoolId !== null);
+
+            if (!matchesScope) return false;
+            if (!q) return true;
+
+            return (
+                item.quote.toLowerCase().includes(q) ||
+                (item.author ?? '').toLowerCase().includes(q)
+            );
+        });
+    }, [quotes, scopeFilter, deferredSearchQuery]);
+
+    const totalPages = Math.max(1, Math.ceil(filteredQuotes.length / pageSize));
+    const safePage = Math.min(currentPage, totalPages);
+    const startIndex = (safePage - 1) * pageSize;
+
+    const paginatedQuotes = useMemo(
+        () => filteredQuotes.slice(startIndex, startIndex + pageSize),
+        [filteredQuotes, startIndex, pageSize]
+    );
+
     // Pembatasan akses jika bukan Admin Sekolah atau Super Admin
     if (!canManageQuotes) {
         return (
@@ -375,32 +570,6 @@ export function DailyQuotesManagePage() {
             </div>
         );
     }
-
-    const schoolOptions = (() => {
-        const map = new Map<string, { id: string; name: string }>();
-        if (school?.id && school?.name) {
-            map.set(school.id, { id: school.id, name: school.name });
-        }
-        for (const s of simSchools) {
-            map.set(s.id, { id: s.id, name: s.name });
-        }
-        return Array.from(map.values());
-    })();
-
-    const filteredQuotes = quotes.filter((item) => {
-        const matchesScope =
-            scopeFilter === 'ALL' ||
-            (scopeFilter === 'GLOBAL' && item.schoolId === null) ||
-            (scopeFilter === 'SCHOOL' && item.schoolId !== null);
-
-        const q = searchQuery.trim().toLowerCase();
-        const matchesSearch =
-            !q ||
-            item.quote.toLowerCase().includes(q) ||
-            (item.author ?? '').toLowerCase().includes(q);
-
-        return matchesScope && matchesSearch;
-    });
 
     return (
         <div className="space-y-5 max-w-6xl mx-auto">
@@ -437,7 +606,7 @@ export function DailyQuotesManagePage() {
                     type="button"
                     onClick={() => void loadQuotes()}
                     disabled={isLoading}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted transition cursor-pointer self-start sm:self-auto"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted transition-colors cursor-pointer self-start sm:self-auto"
                 >
                     <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
                     {t('dailyQuotes.btnRefresh')}
@@ -538,7 +707,7 @@ export function DailyQuotesManagePage() {
                         <button
                             type="submit"
                             disabled={isSaving}
-                            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-50 cursor-pointer transition"
+                            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm disabled:opacity-50 cursor-pointer transition-colors"
                         >
                             {editingId ? <Save size={15} /> : <Plus size={15} />}
                             {isSaving
@@ -570,7 +739,7 @@ export function DailyQuotesManagePage() {
                                         key={item.key}
                                         type="button"
                                         onClick={() => setScopeFilter(item.key)}
-                                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition cursor-pointer ${scopeFilter === item.key
+                                        className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${scopeFilter === item.key
                                                 ? 'bg-emerald-600 text-white border-emerald-600'
                                                 : 'bg-background border-border opacity-75 hover:opacity-100'
                                             }`}
@@ -621,101 +790,89 @@ export function DailyQuotesManagePage() {
                             </p>
                         </div>
                     ) : (
-                        <div className="space-y-3">
-                            {filteredQuotes.map((item) => {
-                                const isGlobal = item.schoolId === null;
-                                const canModify = !isGlobal || isSuperAdmin;
-
-                                return (
-                                    <div
+                        <>
+                            <div className="space-y-3">
+                                {paginatedQuotes.map((item, idx) => (
+                                    <QuoteCardItem
                                         key={item.id}
-                                        className={`rounded-2xl border p-4 transition ${item.isActive
-                                                ? 'border-border bg-card'
-                                                : 'border-border/60 bg-muted/30 opacity-75'
-                                            }`}
+                                        item={item}
+                                        rowNumber={startIndex + idx + 1}
+                                        isSuperAdmin={isSuperAdmin}
+                                        isBeingEdited={editingId === item.id}
+                                        badgeGlobalLabel={t('dailyQuotes.badgeGlobal')}
+                                        badgeSchoolLabel={t('dailyQuotes.badgeSchool')}
+                                        badgeActiveLabel={t('dailyQuotes.badgeActive')}
+                                        badgeInactiveLabel={t('dailyQuotes.badgeInactive')}
+                                        titleDeactivate={t('dailyQuotes.titleDeactivate')}
+                                        titleActivate={t('dailyQuotes.titleActivate')}
+                                        titleEdit={t('dailyQuotes.titleEdit')}
+                                        titleDelete={t('dailyQuotes.titleDelete')}
+                                        onToggleActive={handleToggleActive}
+                                        onEdit={handleStartEdit}
+                                        onDelete={handleRequestDelete}
+                                    />
+                                ))}
+                            </div>
+
+                            {/* Paginasi Daftar Kutipan */}
+                            <div className="rounded-2xl border border-border bg-card px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+                                <span className="text-muted-foreground">
+                                    {t('common.showing')}{' '}
+                                    <strong className="text-foreground">{startIndex + 1}</strong>–
+                                    <strong className="text-foreground">
+                                        {Math.min(startIndex + pageSize, filteredQuotes.length)}
+                                    </strong>{' '}
+                                    {t('common.of')}{' '}
+                                    <strong className="text-foreground">
+                                        {filteredQuotes.length}
+                                    </strong>{' '}
+                                    {t('common.entries')}
+                                </span>
+
+                                <div className="flex items-center gap-2">
+                                    <select
+                                        aria-label={t('common.rowsPerPage')}
+                                        value={pageSize}
+                                        onChange={(e) => setPageSize(Number(e.target.value))}
+                                        className="form-input text-xs py-1 px-2"
                                     >
-                                        <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                                            <div className="space-y-2 flex-1">
-                                                <div className="flex flex-wrap items-center gap-2">
-                                                    {isGlobal ? (
-                                                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/25">
-                                                            {t('dailyQuotes.badgeGlobal')}
-                                                        </span>
-                                                    ) : (
-                                                        <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/25">
-                                                            {t('dailyQuotes.badgeSchool')}
-                                                        </span>
-                                                    )}
+                                        {PAGE_SIZE_OPTIONS.map((size) => (
+                                            <option key={size} value={size}>
+                                                {size}
+                                            </option>
+                                        ))}
+                                    </select>
 
-                                                    <span
-                                                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${item.isActive
-                                                                ? 'bg-emerald-500/15 text-emerald-600'
-                                                                : 'bg-red-500/15 text-red-500'
-                                                            }`}
-                                                    >
-                                                        {item.isActive
-                                                            ? t('dailyQuotes.badgeActive')
-                                                            : t('dailyQuotes.badgeInactive')}
-                                                    </span>
-                                                </div>
+                                    <div className="flex items-center gap-1">
+                                        <button
+                                            type="button"
+                                            disabled={safePage <= 1}
+                                            onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                                            title={t('common.previous')}
+                                            className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-40 cursor-pointer"
+                                        >
+                                            <ChevronLeft size={14} />
+                                        </button>
 
-                                                <blockquote className="text-sm font-medium italic text-foreground leading-relaxed">
-                                                    “{item.quote}”
-                                                </blockquote>
+                                        <span className="px-2 font-semibold tabular-nums">
+                                            {safePage} / {totalPages}
+                                        </span>
 
-                                                {item.author && (
-                                                    <p className="text-xs font-semibold text-muted-foreground">
-                                                        — {item.author}
-                                                    </p>
-                                                )}
-                                            </div>
-
-                                            {canModify && (
-                                                <div className="flex items-center gap-1.5 shrink-0">
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => void handleToggleActive(item)}
-                                                        className="p-2 rounded-xl border border-border hover:bg-muted transition cursor-pointer"
-                                                        title={
-                                                            item.isActive
-                                                                ? t('dailyQuotes.titleDeactivate')
-                                                                : t('dailyQuotes.titleActivate')
-                                                        }
-                                                    >
-                                                        <Power
-                                                            size={14}
-                                                            className={
-                                                                item.isActive
-                                                                    ? 'text-emerald-600'
-                                                                    : 'opacity-40'
-                                                            }
-                                                        />
-                                                    </button>
-
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleStartEdit(item)}
-                                                        className="p-2 rounded-xl border border-border hover:bg-muted transition cursor-pointer"
-                                                        title={t('dailyQuotes.titleEdit')}
-                                                    >
-                                                        <Edit3 size={14} />
-                                                    </button>
-
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleRequestDelete(item)}
-                                                        className="p-2 rounded-xl border border-red-500/30 text-red-500 hover:bg-red-500/15 transition cursor-pointer"
-                                                        title={t('dailyQuotes.titleDelete')}
-                                                    >
-                                                        <Trash2 size={14} />
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </div>
+                                        <button
+                                            type="button"
+                                            disabled={safePage >= totalPages}
+                                            onClick={() =>
+                                                setCurrentPage((p) => Math.min(totalPages, p + 1))
+                                            }
+                                            title={t('common.next')}
+                                            className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-40 cursor-pointer"
+                                        >
+                                            <ChevronRight size={14} />
+                                        </button>
                                     </div>
-                                );
-                            })}
-                        </div>
+                                </div>
+                            </div>
+                        </>
                     )}
                 </div>
             </div>
