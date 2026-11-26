@@ -3,7 +3,7 @@
 // FUNGSI: Pengaturan Lock Hari Libur & Kegiatan Khusus Presensi Guru (SQL v22.2)
 // ============================================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/services/supabase.client';
 import type {
   SpecialEventTargetType,
@@ -70,7 +70,11 @@ export function useTeacherHolidayLock({
     specialEventTargetType: null,
   });
 
+  const requestSeqRef = useRef<number>(0);
+
   const checkLockStatus = useCallback(async () => {
+    const seq = ++requestSeqRef.current;
+
     const redStatus = checkRedDateStatus(
       targetDate,
       dbHolidaysMap,
@@ -80,7 +84,9 @@ export function useTeacherHolidayLock({
 
     const defaultHolidayLabel =
       redStatus.holidayName ||
-      (lang === 'en' ? 'School / Weekend Holiday' : 'Hari Libur Sekolah / Akhir Pekan');
+      (lang === 'en'
+        ? 'School / Weekend Holiday'
+        : 'Hari Libur Sekolah / Akhir Pekan');
 
     if (!schoolId || targetDate.length !== 10) {
       setState({
@@ -105,6 +111,7 @@ export function useTeacherHolidayLock({
         .eq('eventDate', targetDate)
         .eq('isActive', true);
 
+      if (seq !== requestSeqRef.current) return;
       if (error) throw error;
 
       const rows = (data ?? []) as SchoolSpecialEventDbRow[];
@@ -157,6 +164,7 @@ export function useTeacherHolidayLock({
         });
       }
     } catch (err: unknown) {
+      if (seq !== requestSeqRef.current) return;
       console.error('[useTeacherHolidayLock] Gagal memeriksa status libur:', err);
       setState({
         loading: false,
@@ -281,7 +289,7 @@ export function useTeacherHolidayLock({
 
     const { data: existingRows, error: fetchErr } = await supabase
       .from('school_special_events')
-      .select('id, targetType, isActive')
+      .select('id, reason, targetType, isActive')
       .eq('schoolId', schoolId)
       .eq('eventDate', targetDate);
 
@@ -290,9 +298,9 @@ export function useTeacherHolidayLock({
     }
 
     const rows = (existingRows ?? []) as Array<
-      Pick<SchoolSpecialEventDbRow, 'id' | 'targetType' | 'isActive'>
+      Pick<SchoolSpecialEventDbRow, 'id' | 'reason' | 'targetType' | 'isActive'>
     >;
-    const hasSeparateSiswaRow = rows.some(
+    const existingSiswaRow = rows.find(
       (r) => normalizeTargetType(r.targetType) === 'SISWA'
     );
 
@@ -305,18 +313,28 @@ export function useTeacherHolidayLock({
           .eq('id', row.id);
         if (error) throw new Error(error.message);
       } else if (target === 'ALL' && row.isActive) {
-        if (!hasSeparateSiswaRow) {
+        if (!existingSiswaRow) {
           const { error } = await supabase
             .from('school_special_events')
             .update({ targetType: 'SISWA' })
             .eq('id', row.id);
           if (error) throw new Error(error.message);
         } else {
-          const { error } = await supabase
+          // Baris SISWA sudah ada di DB: pertahankan status aktifnya lalu tutup baris ALL
+          const { error: siswaActErr } = await supabase
+            .from('school_special_events')
+            .update({
+              isActive: true,
+              reason: existingSiswaRow.reason || row.reason,
+            })
+            .eq('id', existingSiswaRow.id);
+          if (siswaActErr) throw new Error(siswaActErr.message);
+
+          const { error: allDeactErr } = await supabase
             .from('school_special_events')
             .update({ isActive: false })
             .eq('id', row.id);
-          if (error) throw new Error(error.message);
+          if (allDeactErr) throw new Error(allDeactErr.message);
         }
       }
     }

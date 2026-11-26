@@ -7,7 +7,7 @@
 //   2. Halaman Presensi Siswa per Kelas (StudentClassAttendancePage.tsx)
 // ============================================================================
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type {
@@ -52,8 +52,12 @@ export interface StudentHolidayLockState {
   refreshLockState: () => Promise<void>;
 }
 
-function normalizeTargetType(raw: string | null | undefined): SpecialEventTargetType {
-  const upper = String(raw ?? 'ALL').trim().toUpperCase();
+function normalizeTargetType(
+  raw: string | null | undefined
+): SpecialEventTargetType {
+  const upper = String(raw ?? 'ALL')
+    .trim()
+    .toUpperCase();
   if (upper === 'GURU' || upper === 'SISWA' || upper === 'ALL') {
     return upper;
   }
@@ -93,10 +97,13 @@ export function useStudentHolidayLock(params?: {
 
   const [isHoliday, setIsHoliday] = useState<boolean>(false);
   const [holidayName, setHolidayName] = useState<string>('');
-  const [isSpecialEventActive, setIsSpecialEventActive] = useState<boolean>(false);
+  const [isSpecialEventActive, setIsSpecialEventActive] =
+    useState<boolean>(false);
   const [specialEventReason, setSpecialEventReason] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [isToggling, setIsToggling] = useState<boolean>(false);
+
+  const requestSeqRef = useRef<number>(0);
 
   const userWithAdditionalRoles = user as
     | (typeof user & { additionalRoles?: string[] })
@@ -114,6 +121,8 @@ export function useStudentHolidayLock(params?: {
   );
 
   const refreshLockState = useCallback(async () => {
+    const seq = ++requestSeqRef.current;
+
     if (!activeSchoolId || activeDate.length !== 10) {
       setIsHoliday(false);
       setHolidayName('');
@@ -142,6 +151,7 @@ export function useStudentHolidayLock(params?: {
           .eq('eventDate', activeDate),
       ]);
 
+      if (seq !== requestSeqRef.current) return;
       if (schoolRes.error) throw schoolRes.error;
 
       const workDaysMode: WorkDaysMode =
@@ -176,16 +186,36 @@ export function useStudentHolidayLock(params?: {
 
       if (!specialEventRes.error && Array.isArray(specialEventRes.data)) {
         const eventRows = specialEventRes.data as SpecialEventStudentRow[];
-        const activeForStudents = eventRows.find((row) => {
-          if (!row.isActive) return false;
-          const target = normalizeTargetType(row.targetType);
-          return target === 'SISWA' || target === 'ALL';
-        });
+        const activeForStudents =
+          eventRows.find(
+            (row) =>
+              row.isActive && normalizeTargetType(row.targetType) === 'SISWA'
+          ) ??
+          eventRows.find(
+            (row) =>
+              row.isActive && normalizeTargetType(row.targetType) === 'ALL'
+          );
 
         if (activeForStudents) {
           overrideActive = true;
           overrideText =
             String(activeForStudents.reason || '').trim() || defaultEventReason;
+          try {
+            localStorage.setItem(
+              getLocalOverrideKey(activeSchoolId, activeDate),
+              JSON.stringify({ active: true, reason: overrideText })
+            );
+          } catch {
+            // Abaikan error localStorage
+          }
+        } else {
+          try {
+            localStorage.removeItem(
+              getLocalOverrideKey(activeSchoolId, activeDate)
+            );
+          } catch {
+            // Abaikan error localStorage
+          }
         }
       } else if (specialEventRes.error) {
         try {
@@ -207,12 +237,16 @@ export function useStudentHolidayLock(params?: {
         }
       }
 
-      setIsSpecialEventActive(overrideActive);
-      setSpecialEventReason(overrideText);
+      if (seq === requestSeqRef.current) {
+        setIsSpecialEventActive(overrideActive);
+        setSpecialEventReason(overrideText);
+      }
     } catch (err: unknown) {
       console.error('Gagal memeriksa status pengaturan lock hari libur:', err);
     } finally {
-      setIsLoading(false);
+      if (seq === requestSeqRef.current) {
+        setIsLoading(false);
+      }
     }
   }, [activeSchoolId, activeDate, lang, defaultEventReason]);
 
@@ -267,6 +301,7 @@ export function useStudentHolidayLock(params?: {
           .update({
             reason: cleanReason,
             isActive: true,
+            createdBy: user?.id ?? null,
           })
           .eq('id', existingSiswa.id);
         if (updateErr) throw updateErr;
@@ -276,6 +311,7 @@ export function useStudentHolidayLock(params?: {
           .update({
             reason: cleanReason,
             isActive: true,
+            createdBy: user?.id ?? null,
           })
           .eq('id', existingAll.id);
         if (updateErr) throw updateErr;
@@ -332,7 +368,7 @@ export function useStudentHolidayLock(params?: {
     try {
       const { data: existingRows, error: fetchErr } = await supabase
         .from('school_special_events')
-        .select('id, targetType, isActive')
+        .select('id, reason, targetType, isActive')
         .eq('schoolId', activeSchoolId)
         .eq('eventDate', activeDate);
 
@@ -340,11 +376,12 @@ export function useStudentHolidayLock(params?: {
 
       const rows = (existingRows ?? []) as Array<{
         id: string;
+        reason: string | null;
         targetType: string | null;
         isActive: boolean;
       }>;
 
-      const hasSeparateGuruRow = rows.some(
+      const existingGuruRow = rows.find(
         (r) => normalizeTargetType(r.targetType) === 'GURU'
       );
 
@@ -357,7 +394,7 @@ export function useStudentHolidayLock(params?: {
             .eq('id', row.id);
           if (error) throw error;
         } else if (target === 'ALL' && row.isActive) {
-          if (!hasSeparateGuruRow) {
+          if (!existingGuruRow) {
             // Alihkan ke GURU saja agar presensi guru yang dibuka bersamaan tidak ikut tertutup
             const { error } = await supabase
               .from('school_special_events')
@@ -365,11 +402,21 @@ export function useStudentHolidayLock(params?: {
               .eq('id', row.id);
             if (error) throw error;
           } else {
-            const { error } = await supabase
+            // Baris GURU sudah ada di DB: aktifkan baris GURU tersebut lalu tutup baris ALL
+            const { error: guruActErr } = await supabase
+              .from('school_special_events')
+              .update({
+                isActive: true,
+                reason: existingGuruRow.reason || row.reason,
+              })
+              .eq('id', existingGuruRow.id);
+            if (guruActErr) throw guruActErr;
+
+            const { error: allDeactErr } = await supabase
               .from('school_special_events')
               .update({ isActive: false })
               .eq('id', row.id);
-            if (error) throw error;
+            if (allDeactErr) throw allDeactErr;
           }
         }
       }

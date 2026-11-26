@@ -43,7 +43,7 @@ import type { SupportedAttendanceLocale } from '../types/attendance.types';
 const MIN_MINUTES_BETWEEN_IN_AND_OUT = 15; // Jeda minimal (menit) agar double-scan pagi tidak dianggap pulang
 const KIOSK_RESET_DELAY_MS = 4000;        // Waktu reset layar otomatis setelah scan (milidetik)
 const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis (milidetik)
-const CLOCK_TICK_INTERVAL_MS = 5000;      // Interval pembaruan jam layar Kiosk (5 detik agar akurat di pergantian menit)
+const CLOCK_TICK_INTERVAL_MS = 5000;      // Interval pembaruan jam layar Kiosk (5 detik)
 const DEFAULT_KIOSK_SOUND_VOLUME = 0.5;   // Volume awal efek suara Kiosk (0.5 = 50%, rentang 0.0 - 1.0)
 const KIOSK_SOUND_PREF_KEY = 'sekolaherp_kiosk_sound_enabled';
 const KIOSK_SOUND_VOLUME_KEY = 'sekolaherp_kiosk_sound_volume';
@@ -51,7 +51,6 @@ const FALLBACK_STUDENT_START = '07:00';
 const FALLBACK_STUDENT_CHECKOUT_START = '12:00';
 const FALLBACK_STUDENT_END = '14:00';
 const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';
-const DEFAULT_KIOSK_SPECIAL_EVENT = 'Kegiatan Khusus Sekolah';
 const OFFLINE_QUEUE_STORAGE_PREFIX = 'sekolaherp_kiosk_offline_queue_';
 const STUDENT_CACHE_STORAGE_PREFIX = 'sekolaherp_kiosk_student_cache_';
 const SCHOOL_META_STORAGE_PREFIX = 'sekolaherp_kiosk_school_meta_';
@@ -188,7 +187,7 @@ function playKioskFeedbackSound(
   }
 }
 
-function extractReadableError(err: unknown): string {
+function extractReadableError(err: unknown, fallback: string): string {
   if (
     typeof err === 'object' &&
     err !== null &&
@@ -201,7 +200,7 @@ function extractReadableError(err: unknown): string {
   if (err instanceof Error && err.message.trim().length > 0) {
     return err.message.trim();
   }
-  return 'Terjadi kesalahan saat memproses permintaan.';
+  return fallback;
 }
 
 function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
@@ -214,10 +213,6 @@ function addMinutesToTime(startTime: string, toleranceMinutes: number): string {
   ).padStart(2, '0')}`;
 }
 
-/**
- * Mengecek apakah waktu saat ini sudah mencapai atau melewati jam jadwal (HH:mm).
- * Menggunakan perbandingan inklusif (>=) agar tepat pukul 12:00:00 jam pulang langsung terbuka.
- */
 function isAtOrAfterScheduleTime(
   scheduleTime: string,
   now: Date,
@@ -326,6 +321,10 @@ export function StudentKioskPage() {
   const currentLang: SupportedAttendanceLocale =
     t('common.language') === 'Language' ? 'en' : 'id';
   const dateLocale = currentLang === 'en' ? 'en-US' : 'id-ID';
+  const defaultSpecialEventLabel =
+    currentLang === 'en' ? 'Special School Event' : 'Kegiatan Khusus Sekolah';
+  const defaultHolidayLabel =
+    currentLang === 'en' ? 'School Holiday' : 'Hari Libur';
 
   const { user, school } = useAuthStore();
   const isSuperAdmin = user?.role === 'SUPER_ADMIN';
@@ -452,8 +451,8 @@ export function StudentKioskPage() {
 
   const activeSpecialEventNote = useMemo(() => {
     if (!isHoliday || !isSpecialEventActive) return null;
-    return (specialEventReason ?? '').trim() || DEFAULT_KIOSK_SPECIAL_EVENT;
-  }, [isHoliday, isSpecialEventActive, specialEventReason]);
+    return (specialEventReason ?? '').trim() || defaultSpecialEventLabel;
+  }, [isHoliday, isSpecialEventActive, specialEventReason, defaultSpecialEventLabel]);
 
   const [specialEventInput, setSpecialEventInput] = useState<string>('');
 
@@ -690,7 +689,7 @@ export function StudentKioskPage() {
   const loadStats = useCallback(async () => {
     if (!activeSchoolId || !navigator.onLine) return;
     try {
-      const [summary, checkedOutRes] = await Promise.all([
+      const [summary, checkedOutRes, recentRes] = await Promise.all([
         attendanceService.getSummary(activeSchoolId, today),
         supabase
           .from('attendances')
@@ -699,6 +698,17 @@ export function StudentKioskPage() {
           .eq('date', today)
           .eq('type', 'SISWA')
           .not('checkOutTime', 'is', null),
+        supabase
+          .from('attendances')
+          .select(
+            'status, checkInTime, checkOutTime, updatedAt, students(fullName)'
+          )
+          .eq('schoolId', activeSchoolId)
+          .eq('date', today)
+          .eq('type', 'SISWA')
+          .in('status', ['HADIR', 'TERLAMBAT'])
+          .order('updatedAt', { ascending: false })
+          .limit(8),
       ]);
 
       setTodayStats({
@@ -707,10 +717,41 @@ export function StudentKioskPage() {
         checkedOut: checkedOutRes.count ?? 0,
         total: summary.studentTotal,
       });
+
+      if (!recentRes.error && Array.isArray(recentRes.data)) {
+        const mappedRecent = recentRes.data.map((row) => {
+          const r = row as {
+            status: string;
+            checkInTime: string | null;
+            checkOutTime: string | null;
+            students?: { fullName?: string } | Array<{ fullName?: string }> | null;
+          };
+          const stName = Array.isArray(r.students)
+            ? r.students[0]?.fullName
+            : r.students?.fullName;
+          const isOut = Boolean(r.checkOutTime);
+          const rawIso = isOut ? r.checkOutTime : r.checkInTime;
+          const timeLabel = rawIso
+            ? new Date(rawIso).toLocaleTimeString(dateLocale, {
+              timeZone: schoolTimezone,
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+            : '-';
+
+          return {
+            name: stName || '-',
+            status: isOut ? t('studentKiosk.actionOut') : r.status,
+            action: (isOut ? 'PULANG' : 'DATANG') as 'DATANG' | 'PULANG',
+            time: timeLabel,
+          };
+        });
+        setRecentList(mappedRecent);
+      }
     } catch {
       // Abaikan error statistik sementara
     }
-  }, [activeSchoolId, today]);
+  }, [activeSchoolId, today, dateLocale, schoolTimezone, t]);
 
   const syncOfflineQueue = useCallback(async () => {
     if (!activeSchoolId || !navigator.onLine || syncLockRef.current) return;
@@ -915,12 +956,17 @@ export function StudentKioskPage() {
     e.preventDefault();
     try {
       await activateSpecialEvent(
-        specialEventInput.trim() || DEFAULT_KIOSK_SPECIAL_EVENT
+        specialEventInput.trim() || defaultSpecialEventLabel
       );
       setSpecialEventInput('');
       triggerSound('checkin');
     } catch (err: unknown) {
-      const detail = extractReadableError(err);
+      const detail = extractReadableError(
+        err,
+        currentLang === 'en'
+          ? 'An error occurred while processing the request.'
+          : 'Terjadi kesalahan saat memproses permintaan.'
+      );
       triggerSound('error');
       setResultMessage(
         t('studentKiosk.msgSpecialEventError', { detail })
@@ -1061,11 +1107,11 @@ export function StudentKioskPage() {
         return;
       }
 
-      if (isHolidayLocked) {
+      if (isHolidayLocked || isCheckingHoliday) {
         triggerSound('error');
         setResultMessage(
           t('studentKiosk.msgHolidayLocked', {
-            holiday: holidayName || 'Hari Libur',
+            holiday: holidayName || defaultHolidayLabel,
           })
         );
         setKioskState('error');
@@ -1316,7 +1362,9 @@ export function StudentKioskPage() {
     [
       activeSchoolId,
       isHolidayLocked,
+      isCheckingHoliday,
       holidayName,
+      defaultHolidayLabel,
       dateLocale,
       schoolTimezone,
       today,
@@ -1338,11 +1386,11 @@ export function StudentKioskPage() {
     async (code: string) => {
       if (!activeSchoolId || processingLockRef.current) return;
 
-      if (isHolidayLocked) {
+      if (isHolidayLocked || isCheckingHoliday) {
         triggerSound('error');
         setResultMessage(
           t('studentKiosk.msgHolidayLocked', {
-            holiday: holidayName || 'Hari Libur',
+            holiday: holidayName || defaultHolidayLabel,
           })
         );
         setKioskState('error');
@@ -1436,7 +1484,9 @@ export function StudentKioskPage() {
     [
       activeSchoolId,
       isHolidayLocked,
+      isCheckingHoliday,
       holidayName,
+      defaultHolidayLabel,
       studentConfig.enableKiosk,
       triggerSound,
       processStudentScan,
@@ -1628,8 +1678,8 @@ export function StudentKioskPage() {
               type="button"
               onClick={toggleSound}
               className={`inline-flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer ${isAudioActive
-                  ? 'text-emerald-400 hover:text-emerald-300'
-                  : 'text-slate-400 hover:text-slate-200'
+                ? 'text-emerald-400 hover:text-emerald-300'
+                : 'text-slate-400 hover:text-slate-200'
                 }`}
               title={
                 isAudioActive
@@ -1639,8 +1689,8 @@ export function StudentKioskPage() {
             >
               <span
                 className={`p-1 rounded-lg transition ${isAudioActive
-                    ? 'bg-emerald-500/15 text-emerald-400'
-                    : 'bg-white/5 text-slate-400'
+                  ? 'bg-emerald-500/15 text-emerald-400'
+                  : 'bg-white/5 text-slate-400'
                   }`}
               >
                 {isAudioActive ? <Volume2 size={14} /> : <VolumeX size={14} />}
@@ -1762,7 +1812,7 @@ export function StudentKioskPage() {
           paddingBottom: '0.85rem',
         }}
       >
-        {/* Sidebar Desktop (>= 768px) — disembunyikan di HP melalui CSS media query */}
+        {/* Sidebar Desktop (>= 768px) */}
         <div className="kiosk-sidebar flex-col gap-3">
           <div className="kiosk-stat-card" style={{ flexShrink: 0 }}>
             <div className="kiosk-stat-header">
@@ -1970,7 +2020,7 @@ export function StudentKioskPage() {
                           onChange={(e) => setSpecialEventInput(e.target.value)}
                           placeholder={t(
                             'studentKiosk.specialEventPlaceholder',
-                            { defaultName: DEFAULT_KIOSK_SPECIAL_EVENT }
+                            { defaultName: defaultSpecialEventLabel }
                           )}
                           className="form-input w-full text-xs"
                         />
@@ -2031,8 +2081,8 @@ export function StudentKioskPage() {
                             type="button"
                             onClick={() => setScanMode(modeOpt.id)}
                             className={`px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
-                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                                : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
+                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                              : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
                               }`}
                           >
                             {modeOpt.label}
@@ -2239,8 +2289,8 @@ export function StudentKioskPage() {
                     </div>
                     <span
                       className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${item.status === 'TERLAMBAT'
-                          ? 'bg-amber-500/20 text-amber-500'
-                          : 'bg-emerald-500/20 text-emerald-500'
+                        ? 'bg-amber-500/20 text-amber-500'
+                        : 'bg-emerald-500/20 text-emerald-500'
                         }`}
                     >
                       {item.status}

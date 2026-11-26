@@ -1,5 +1,5 @@
 // src/modules/attendance/pages/StudentClassAttendancePage.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     Users,
     CheckCircle2,
@@ -268,6 +268,8 @@ export function StudentClassAttendancePage() {
     const [enableStudentCheckOut, setEnableStudentCheckOut] =
         useState<boolean>(true);
 
+    const loadRowsSeqRef = useRef<number>(0);
+
     const holidayLock = useStudentHolidayLock({
         schoolId: activeSchoolId,
         targetDate: selectedDate,
@@ -295,6 +297,9 @@ export function StudentClassAttendancePage() {
         },
         [t]
     );
+
+    const isActionBlockedByHoliday =
+        holidayLock.isLocked || holidayLock.isLoading;
 
     const isSpecialEventMode = Boolean(
         holidayLock.isHoliday && holidayLock.isSpecialEventActive
@@ -459,6 +464,7 @@ export function StudentClassAttendancePage() {
             return;
         }
 
+        const seq = ++loadRowsSeqRef.current;
         setIsLoadingRows(true);
         setMessage(null);
         setCurrentPage(1);
@@ -482,6 +488,7 @@ export function StudentClassAttendancePage() {
 
             const { data: studentsData, error: studentsErr } = await studentsQuery;
 
+            if (seq !== loadRowsSeqRef.current) return;
             if (studentsErr) throw studentsErr;
 
             const typedStudents = (studentsData ?? []) as RawStudentDbRow[];
@@ -500,6 +507,7 @@ export function StudentClassAttendancePage() {
                     .eq('type', 'SISWA')
                     .in('studentId', studentIds);
 
+                if (seq !== loadRowsSeqRef.current) return;
                 if (attErr) throw attErr;
 
                 const typedAtts = (attData ?? []) as RawStudentAttendanceDbRow[];
@@ -551,8 +559,11 @@ export function StudentClassAttendancePage() {
                 };
             });
 
-            setRows(combinedRows);
+            if (seq === loadRowsSeqRef.current) {
+                setRows(combinedRows);
+            }
         } catch (err: unknown) {
+            if (seq !== loadRowsSeqRef.current) return;
             const { message: errMsg } = getErrorInfo(
                 err,
                 t('studentClassAttendance.errGenericProcess'),
@@ -566,7 +577,9 @@ export function StudentClassAttendancePage() {
                 }),
             });
         } finally {
-            setIsLoadingRows(false);
+            if (seq === loadRowsSeqRef.current) {
+                setIsLoadingRows(false);
+            }
         }
     }, [
         activeSchoolId,
@@ -605,7 +618,7 @@ export function StudentClassAttendancePage() {
         studentId: string,
         newStatus: StudentAttendanceStatus
     ) => {
-        if (holidayLock.isLocked) {
+        if (isActionBlockedByHoliday) {
             setMessage({
                 status: 'error',
                 text: lockBannerMessage,
@@ -634,7 +647,7 @@ export function StudentClassAttendancePage() {
     };
 
     const handleSetStudentNote = (studentId: string, notes: string) => {
-        if (holidayLock.isLocked) return;
+        if (isActionBlockedByHoliday) return;
         setRows((prev) =>
             prev.map((row) =>
                 row.studentId === studentId ? { ...row, notes, isDirty: true } : row
@@ -643,7 +656,7 @@ export function StudentClassAttendancePage() {
     };
 
     const handleMarkAllHadir = () => {
-        if (holidayLock.isLocked) {
+        if (isActionBlockedByHoliday) {
             setMessage({
                 status: 'error',
                 text: lockBannerMessage,
@@ -673,7 +686,7 @@ export function StudentClassAttendancePage() {
     const handleSaveAll = async () => {
         if (!activeSchoolId) return;
 
-        if (holidayLock.isLocked) {
+        if (isActionBlockedByHoliday) {
             setMessage({
                 status: 'error',
                 text: lockBannerMessage,
@@ -838,7 +851,7 @@ export function StudentClassAttendancePage() {
         if (!row.existingRecordId || !enableStudentCheckOut || !activeSchoolId)
             return;
 
-        if (holidayLock.isLocked) {
+        if (isActionBlockedByHoliday) {
             setMessage({
                 status: 'error',
                 text: lockBannerMessage,
@@ -1158,7 +1171,7 @@ export function StudentClassAttendancePage() {
                         type="button"
                         onClick={handleMarkAllHadir}
                         disabled={
-                            holidayLock.isLocked ||
+                            isActionBlockedByHoliday ||
                             isLoadingRows ||
                             rows.length === 0 ||
                             summary.belum === 0
@@ -1175,7 +1188,7 @@ export function StudentClassAttendancePage() {
                         type="button"
                         onClick={() => void handleSaveAll()}
                         disabled={
-                            holidayLock.isLocked || isSaving || summary.dirtyCount === 0
+                            isActionBlockedByHoliday || isSaving || summary.dirtyCount === 0
                         }
                         className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm active:scale-95 disabled:opacity-50 transition-all cursor-pointer"
                     >
@@ -1239,8 +1252,8 @@ export function StudentClassAttendancePage() {
             {message && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${message.status === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {message.status === 'success' ? (
@@ -1468,7 +1481,7 @@ export function StudentClassAttendancePage() {
                                     );
                                     const canCheckOut =
                                         enableStudentCheckOut &&
-                                        !holidayLock.isLocked &&
+                                        !isActionBlockedByHoliday &&
                                         row.existingRecordId !== null &&
                                         (row.status === 'HADIR' || row.status === 'TERLAMBAT') &&
                                         !formattedOut;
@@ -1513,7 +1526,7 @@ export function StudentClassAttendancePage() {
                                                             <button
                                                                 key={opt.value}
                                                                 type="button"
-                                                                disabled={holidayLock.isLocked}
+                                                                disabled={isActionBlockedByHoliday}
                                                                 onClick={() =>
                                                                     handleSetStudentStatus(
                                                                         row.studentId,
@@ -1521,8 +1534,8 @@ export function StudentClassAttendancePage() {
                                                                     )
                                                                 }
                                                                 className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold border transition-all cursor-pointer disabled:opacity-50 ${isSelected
-                                                                        ? opt.activeClass
-                                                                        : 'border-border bg-background hover:bg-muted text-foreground/80'
+                                                                    ? opt.activeClass
+                                                                    : 'border-border bg-background hover:bg-muted text-foreground/80'
                                                                     }`}
                                                             >
                                                                 <IconComp size={12} />
@@ -1573,7 +1586,7 @@ export function StudentClassAttendancePage() {
                                                 <input
                                                     type="text"
                                                     value={row.notes}
-                                                    disabled={holidayLock.isLocked}
+                                                    disabled={isActionBlockedByHoliday}
                                                     onChange={(e) =>
                                                         handleSetStudentNote(row.studentId, e.target.value)
                                                     }

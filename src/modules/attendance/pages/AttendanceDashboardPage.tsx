@@ -257,36 +257,91 @@ export function AttendanceDashboardPage() {
   const [teacherStatusFilter, setTeacherStatusFilter] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [teacherSpecialReason, setTeacherSpecialReason] = useState<string>('');
 
   const loadRequestSeqRef = useRef<number>(0);
   const selfieRequestSeqRef = useRef<number>(0);
 
-  // Status hari libur & mode kegiatan khusus pada tanggal rekap terpilih
+  // Status hari libur & mode kegiatan khusus siswa pada tanggal rekap terpilih
   const holidayLock = useStudentHolidayLock({
     schoolId: activeSchoolId,
     targetDate: selectedDate,
     lang: currentLang,
   });
 
+  // Periksa agenda khusus yang aktif untuk GURU atau ALL pada tanggal terpilih
+  useEffect(() => {
+    if (!activeSchoolId || selectedDate.length !== 10) {
+      setTeacherSpecialReason('');
+      return;
+    }
+
+    let cancelled = false;
+    void supabase
+      .from('school_special_events')
+      .select('reason, targetType, isActive')
+      .eq('schoolId', activeSchoolId)
+      .eq('eventDate', selectedDate)
+      .eq('isActive', true)
+      .then(({ data }) => {
+        if (cancelled) return;
+        const rows = (data ?? []) as Array<{
+          reason: string | null;
+          targetType: string | null;
+        }>;
+        const matched =
+          rows.find((r) => String(r.targetType ?? '').toUpperCase() === 'GURU') ??
+          rows.find((r) => String(r.targetType ?? '').toUpperCase() === 'ALL');
+        setTeacherSpecialReason(matched ? String(matched.reason ?? '').trim() : '');
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSchoolId, selectedDate]);
+
   const defaultSpecialEventNote = t(
     'attendanceDashboard.defaultSpecialEventNote'
   );
-  const isSpecialEventMode = Boolean(
+  const isStudentSpecialEventMode = Boolean(
     holidayLock.isHoliday && holidayLock.isSpecialEventActive
   );
+  const isTeacherSpecialEventMode = Boolean(
+    holidayLock.isHoliday &&
+    (Boolean(teacherSpecialReason) || holidayLock.isSpecialEventActive)
+  );
+  const isAnySpecialEventMode =
+    isStudentSpecialEventMode || isTeacherSpecialEventMode;
+
   const specialEventNote = useMemo(() => {
-    const reason = (holidayLock.specialEventReason ?? '').trim();
-    return reason || defaultSpecialEventNote;
-  }, [holidayLock.specialEventReason, defaultSpecialEventNote]);
+    const studentReason = (holidayLock.specialEventReason ?? '').trim();
+    return studentReason || teacherSpecialReason || defaultSpecialEventNote;
+  }, [
+    holidayLock.specialEventReason,
+    teacherSpecialReason,
+    defaultSpecialEventNote,
+  ]);
 
   const resolveEffectiveNote = useCallback(
-    (rawNotes?: string | null): string | null => {
+    (rawNotes?: string | null, target: 'SISWA' | 'GURU' = 'SISWA'): string | null => {
       const trimmed = (rawNotes ?? '').trim();
       if (trimmed) return trimmed;
-      if (isSpecialEventMode) return specialEventNote;
+      if (target === 'GURU' && isTeacherSpecialEventMode) {
+        return teacherSpecialReason || specialEventNote;
+      }
+      if (target === 'SISWA' && isStudentSpecialEventMode) {
+        return (holidayLock.specialEventReason ?? '').trim() || defaultSpecialEventNote;
+      }
       return null;
     },
-    [isSpecialEventMode, specialEventNote]
+    [
+      isTeacherSpecialEventMode,
+      isStudentSpecialEventMode,
+      teacherSpecialReason,
+      specialEventNote,
+      holidayLock.specialEventReason,
+      defaultSpecialEventNote,
+    ]
   );
 
   const getStatusLabel = useCallback(
@@ -699,7 +754,7 @@ export function AttendanceDashboardPage() {
       checkOutTime: record.checkOutTime,
       checkInDistance: record.checkInDistance,
       checkOutDistance: record.checkOutDistance,
-      notes: resolveEffectiveNote(record.notes),
+      notes: resolveEffectiveNote(record.notes, 'GURU'),
       deviceTelemetry: record.deviceTelemetry ?? null,
       securityFlags: record.securityFlags ?? [],
       isMock: Boolean(record.isCheckInMock),
@@ -791,9 +846,8 @@ export function AttendanceDashboardPage() {
       ).length,
       IZIN: teacherRecords.filter((r) => normalizeStatusKey(r.status) === 'IZIN')
         .length,
-      SAKIT: teacherRecords.filter(
-        (r) => normalizeStatusKey(r.status) === 'SAKIT'
-      ).length,
+      SAKIT: teacherRecords.filter((r) => normalizeStatusKey(r.status) === 'SAKIT')
+        .length,
       ALPA: teacherRecords.filter((r) => normalizeStatusKey(r.status) === 'ALPA')
         .length,
     };
@@ -807,7 +861,7 @@ export function AttendanceDashboardPage() {
       const matchesStatus =
         studentStatusFilter === 'ALL' ||
         normalizedStatus === studentStatusFilter;
-      const effectiveNote = resolveEffectiveNote(r.notes) ?? '';
+      const effectiveNote = resolveEffectiveNote(r.notes, 'SISWA') ?? '';
       const q = searchQuery.trim().toLowerCase();
       const matchesSearch =
         !q ||
@@ -887,7 +941,7 @@ export function AttendanceDashboardPage() {
 
       if (!searchQuery.trim()) return true;
       const q = searchQuery.trim().toLowerCase();
-      const effectiveNote = resolveEffectiveNote(r.notes) ?? '';
+      const effectiveNote = resolveEffectiveNote(r.notes, 'GURU') ?? '';
       return (
         r.teacher?.fullName?.toLowerCase().includes(q) ||
         r.teacher?.nip?.toLowerCase().includes(q) ||
@@ -1191,13 +1245,15 @@ export function AttendanceDashboardPage() {
   );
 
   const renderStudentNotes = (record: StudentAttendanceWithCheckOut) => {
-    const effectiveNote = resolveEffectiveNote(record.notes);
+    const effectiveNote = resolveEffectiveNote(record.notes, 'SISWA');
     if (!effectiveNote) {
       return <span className="text-xs opacity-40">-</span>;
     }
 
+    const expectedStudentSpecial =
+      (holidayLock.specialEventReason ?? '').trim() || defaultSpecialEventNote;
     const isHolidayEventTag =
-      isSpecialEventMode && effectiveNote === specialEventNote;
+      isStudentSpecialEventMode && effectiveNote === expectedStudentSpecial;
 
     if (isHolidayEventTag) {
       return (
@@ -1212,11 +1268,12 @@ export function AttendanceDashboardPage() {
   };
 
   const renderTeacherNotes = (record: TeacherAttendanceWithCheckOut) => {
-    const effectiveNote = resolveEffectiveNote(record.notes);
+    const effectiveNote = resolveEffectiveNote(record.notes, 'GURU');
     const lateMinutes = extractLateMinutesFromTelemetry(record.deviceTelemetry);
     const hasEarlyNote = isEarlyCheckoutNote(effectiveNote);
+    const expectedTeacherSpecial = teacherSpecialReason || specialEventNote;
     const isHolidayEventTag =
-      isSpecialEventMode && effectiveNote === specialEventNote;
+      isTeacherSpecialEventMode && effectiveNote === expectedTeacherSpecial;
 
     if (!effectiveNote && lateMinutes === 0) {
       return <span className="text-xs opacity-40">-</span>;
@@ -1293,7 +1350,7 @@ export function AttendanceDashboardPage() {
                 ? t('attendanceDashboard.gpsFake')
                 : t('attendanceDashboard.gpsValid')
               : '-',
-            resolveEffectiveNote(r.notes) ?? '-',
+            resolveEffectiveNote(r.notes, 'GURU') ?? '-',
           ]
             .map(escapeCsv)
             .join(',')
@@ -1324,7 +1381,7 @@ export function AttendanceDashboardPage() {
             r.recordedBy
               ? t('attendanceDashboard.recordedByAdmin')
               : t('attendanceDashboard.recordedByKiosk'),
-            resolveEffectiveNote(r.notes) ?? '-',
+            resolveEffectiveNote(r.notes, 'SISWA') ?? '-',
           ]
             .map(escapeCsv)
             .join(',')
@@ -1358,8 +1415,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1476,7 +1533,7 @@ export function AttendanceDashboardPage() {
       </div>
 
       {/* Banner Status Hari Libur / Mode Kegiatan Khusus */}
-      {isSpecialEventMode ? (
+      {isAnySpecialEventMode ? (
         <div className="mb-4 p-3.5 rounded-xl border border-emerald-500/40 bg-emerald-500/15 text-emerald-800 dark:text-emerald-200 flex items-center gap-2.5 text-xs">
           <Unlock size={16} className="text-emerald-600 shrink-0" />
           <span>
@@ -1486,7 +1543,7 @@ export function AttendanceDashboardPage() {
             {specialEventNote}{' '}
             {t('attendanceDashboard.specialEventBannerSuffix', {
               holiday:
-                holidayLock.holidayName ??
+                holidayLock.holidayName ||
                 t('attendanceDashboard.defaultHolidayName'),
             })}
           </span>
@@ -1497,7 +1554,7 @@ export function AttendanceDashboardPage() {
             <CalendarOff size={16} className="text-amber-600 shrink-0" />
             <span>
               <strong>{t('attendanceDashboard.holidayBannerPrefix')}</strong>{' '}
-              {holidayLock.holidayName ??
+              {holidayLock.holidayName ||
                 t('attendanceDashboard.defaultHolidayName')}{' '}
               {t('attendanceDashboard.holidayBannerSuffix')}
             </span>
@@ -1783,8 +1840,8 @@ export function AttendanceDashboardPage() {
                     }
                   }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
-                      ? 'text-white shadow-xs'
-                      : 'bg-card/60 border-border opacity-75 hover:opacity-100'
+                    ? 'text-white shadow-xs'
+                    : 'bg-card/60 border-border opacity-75 hover:opacity-100'
                     }`}
                   style={
                     isSelected
@@ -2490,8 +2547,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       {t('attendanceDashboard.modalPurgeScopeCurrent')}
@@ -2500,8 +2557,8 @@ export function AttendanceDashboardPage() {
                       type="button"
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                          ? 'bg-primary text-white border-primary'
-                          : 'bg-muted/40 border-border opacity-80'
+                        ? 'bg-primary text-white border-primary'
+                        : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       {t('attendanceDashboard.modalPurgeScopeAll')}
@@ -2581,8 +2638,8 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative max-h-[90vh] overflow-y-auto ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                  ? 'max-w-2xl'
-                  : 'max-w-md'
+                ? 'max-w-2xl'
+                : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -2628,8 +2685,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                      ? 'grid-cols-1 sm:grid-cols-2'
-                      : 'grid-cols-1'
+                    ? 'grid-cols-1 sm:grid-cols-2'
+                    : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -2809,8 +2866,8 @@ export function AttendanceDashboardPage() {
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                      : 'bg-muted/50 border-border'
+                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                    : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />
