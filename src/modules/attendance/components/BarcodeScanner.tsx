@@ -112,6 +112,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     timestamp: 0,
   });
   const isTransitioningRef = useRef(false);
+  const isMountedRef = useRef(true);
 
   const [isCameraEnabled, setIsCameraEnabled] = useState<boolean>(() => {
     try {
@@ -121,6 +122,9 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
       return true;
     }
   });
+
+  const shouldBeActiveRef = useRef<boolean>(!isPaused && isCameraEnabled);
+  shouldBeActiveRef.current = !isPaused && isCameraEnabled;
 
   const [cameras, setCameras] = useState<CameraDeviceOption[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>(() => {
@@ -173,7 +177,9 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     } catch {
       // Abaikan jika kamera sudah berhenti
     } finally {
-      scannerRef.current = null;
+      if (scannerRef.current === instance) {
+        scannerRef.current = null;
+      }
     }
   }, []);
 
@@ -189,6 +195,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         await stopScannerSafely();
 
         const devices = await Html5Qrcode.getCameras();
+        if (!isMountedRef.current || !shouldBeActiveRef.current) return;
+
         if (!devices || devices.length === 0) {
           throw new Error('NO_CAMERA_FOUND');
         }
@@ -239,7 +247,13 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
             // Frame kosong diabaikan
           }
         );
+
+        // Jika komponen terlanjur di-unmount atau dijeda saat kamera baru menyala, hentikan segera
+        if (!isMountedRef.current || !shouldBeActiveRef.current) {
+          await stopScannerSafely();
+        }
       } catch (err: unknown) {
+        if (!isMountedRef.current) return;
         const errorObj = err as { message?: string; name?: string };
         let msg = t('attendanceScanner.errCameraGeneric');
 
@@ -259,7 +273,9 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         setCameraError(msg);
         onScanErrorRef.current?.(msg);
       } finally {
-        setIsStarting(false);
+        if (isMountedRef.current) {
+          setIsStarting(false);
+        }
         isTransitioningRef.current = false;
       }
     },
@@ -274,15 +290,23 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
   );
 
   useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      void stopScannerSafely();
+    };
+  }, [stopScannerSafely]);
+
+  useEffect(() => {
     if (isPaused || !isCameraEnabled) {
-      stopScannerSafely();
+      void stopScannerSafely();
       return;
     }
 
-    startScanner();
+    void startScanner();
 
     return () => {
-      stopScannerSafely();
+      void stopScannerSafely();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPaused, isCameraEnabled]);
@@ -313,9 +337,9 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
   useEffect(() => {
     const handleVisibilityChange = () => {
       if (document.hidden) {
-        stopScannerSafely();
+        void stopScannerSafely();
       } else if (!isPaused && isCameraEnabled) {
-        startScanner();
+        void startScanner();
       }
     };
 
@@ -332,7 +356,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
     } catch {
       // Abaikan
     }
-    startScanner(newId);
+    void startScanner(newId);
   };
 
   // Tombol cepat 1-ketuk untuk berpindah kamera depan/belakang di HP
@@ -413,8 +437,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
               onClick={() => setIsMirrored((prev) => !prev)}
               title={t('attendanceScanner.titleMirrorCamera')}
               className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${isMirrored
-                  ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
-                  : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
+                ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
+                : 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
                 }`}
             >
               <FlipHorizontal2 className="h-3.5 w-3.5" />
@@ -433,8 +457,8 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
                 : t('attendanceScanner.titleEnableCamera')
             }
             className={`inline-flex items-center gap-1 rounded-lg border px-2.5 py-1.5 text-xs font-medium transition cursor-pointer ${isCameraEnabled
-                ? 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
-                : 'border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
+              ? 'border-slate-700 bg-slate-900/90 text-slate-300 hover:bg-slate-800'
+              : 'border-amber-500/50 bg-amber-500/15 text-amber-300 hover:bg-amber-500/25'
               }`}
           >
             {isCameraEnabled ? (
@@ -521,7 +545,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
               </p>
               <button
                 type="button"
-                onClick={() => startScanner()}
+                onClick={() => void startScanner()}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-500 cursor-pointer"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
@@ -540,7 +564,7 @@ export const BarcodeScanner: React.FC<BarcodeScannerProps> = ({
         <input
           ref={manualInputRef}
           type="text"
-          inputMode="numeric"
+          autoComplete="off"
           value={manualCode}
           onChange={(e) => setManualCode(e.target.value)}
           disabled={isPaused}

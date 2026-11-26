@@ -17,6 +17,7 @@ import {
 import {
     getJavaneseDateInfo,
     getJavaneseMonthRangeLabel,
+    type JavaneseDateInfo,
 } from '../utils/javaneseCalendar';
 
 interface HolidayCalendarViewProps {
@@ -86,6 +87,20 @@ export function HolidayCalendarView({
         [t]
     );
 
+    // Pre-komputasi kalender Jawa & pasaran untuk seluruh hari dalam 1 tahun
+    const javaneseYearMap = useMemo(() => {
+        const cache = new Map<string, JavaneseDateInfo>();
+        for (let m = 0; m < 12; m++) {
+            const daysInMonth = new Date(Date.UTC(year, m + 1, 0)).getUTCDate();
+            const monthPrefix = `${year}-${String(m + 1).padStart(2, '0')}`;
+            for (let d = 1; d <= daysInMonth; d++) {
+                const isoDate = `${monthPrefix}-${String(d).padStart(2, '0')}`;
+                cache.set(isoDate, getJavaneseDateInfo(isoDate));
+            }
+        }
+        return cache;
+    }, [year]);
+
     // State khusus tampilan HP (1 bulan per tampilan + tanggal yang diketuk)
     const [mobileMonth, setMobileMonth] = useState<number>(() => {
         const now = new Date();
@@ -127,7 +142,16 @@ export function HolidayCalendarView({
         return { holidaysByDate: map, holidaysNameMap: nameMap };
     }, [holidays]);
 
-    // Navigasi bulan sebelumnya / berikutnya khusus layar HP
+    // Memilih item hari libur yang berhak diedit pengguna aktif jika terdapat >1 entri pada tanggal yang sama
+    const resolvePrimaryEditableHoliday = (
+        dayHolidays: HolidayRecord[]
+    ): HolidayRecord => {
+        return (
+            dayHolidays.find((h) => isSuperAdmin || h.schoolId !== null) ??
+            dayHolidays[0]
+        );
+    };
+
     const handleMobilePrevMonth = () => {
         setMobileMonth((prev) => {
             const nextM = prev === 0 ? 11 : prev - 1;
@@ -153,7 +177,9 @@ export function HolidayCalendarView({
             workDaysMode
         );
         const dayHolidays = holidaysByDate.get(selectedIsoDate) ?? [];
-        const jawaInfo = getJavaneseDateInfo(selectedIsoDate);
+        const jawaInfo =
+            javaneseYearMap.get(selectedIsoDate) ??
+            getJavaneseDateInfo(selectedIsoDate);
         const dateObj = new Date(`${selectedIsoDate}T00:00:00`);
         const locale = t('attendanceSettings.day_0') === 'Sun' ? 'en-US' : 'id-ID';
         const gregorianLabel = dateObj.toLocaleDateString(locale, {
@@ -163,14 +189,29 @@ export function HolidayCalendarView({
             year: 'numeric',
         });
 
+        const editableHoliday =
+            dayHolidays.length > 0
+                ? dayHolidays.find((h) => isSuperAdmin || h.schoolId !== null) ??
+                null
+                : null;
+
         return {
             isoDate: selectedIsoDate,
             gregorianLabel,
             jawaInfo,
             ...redStatus,
             dayHolidays,
+            editableHoliday,
         };
-    }, [selectedIsoDate, holidaysNameMap, holidaysByDate, workDaysMode, t]);
+    }, [
+        selectedIsoDate,
+        holidaysNameMap,
+        holidaysByDate,
+        workDaysMode,
+        javaneseYearMap,
+        isSuperAdmin,
+        t,
+    ]);
 
     // Data bulan aktif untuk tampilan HP
     const mobileMonthData = useMemo(() => {
@@ -312,7 +353,9 @@ export function HolidayCalendarView({
 
                             const isToday = isoDate === todayIso;
                             const isSelected = isoDate === selectedIsoDate;
-                            const jawaInfo = getJavaneseDateInfo(isoDate);
+                            const jawaInfo =
+                                javaneseYearMap.get(isoDate) ??
+                                getJavaneseDateInfo(isoDate);
 
                             let cellBgClass = 'bg-muted/25 border-transparent';
                             let dateNumberClass = 'text-foreground';
@@ -402,13 +445,16 @@ export function HolidayCalendarView({
                         {/* Tombol Aksi Cepat pada Tanggal Terpilih */}
                         <div className="pt-1 flex flex-wrap items-center justify-end gap-2">
                             {selectedMobileDetails.dayHolidays.length > 0 ? (
-                                (isSuperAdmin ||
-                                    selectedMobileDetails.dayHolidays[0].schoolId !== null) && (
+                                selectedMobileDetails.editableHoliday && (
                                     <button
                                         type="button"
-                                        onClick={() =>
-                                            onClickEditHoliday(selectedMobileDetails.dayHolidays[0])
-                                        }
+                                        onClick={() => {
+                                            if (selectedMobileDetails.editableHoliday) {
+                                                onClickEditHoliday(
+                                                    selectedMobileDetails.editableHoliday
+                                                );
+                                            }
+                                        }}
                                         className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 transition"
                                     >
                                         <Pencil size={12} />
@@ -543,7 +589,9 @@ export function HolidayCalendarView({
                                             );
 
                                         const isToday = isoDate === todayIso;
-                                        const jawaInfo = getJavaneseDateInfo(isoDate);
+                                        const jawaInfo =
+                                            javaneseYearMap.get(isoDate) ??
+                                            getJavaneseDateInfo(isoDate);
 
                                         let cellBgClass =
                                             'hover:bg-muted/60 border-transparent';
@@ -584,7 +632,11 @@ export function HolidayCalendarView({
                                                 title={tooltipText}
                                                 onClick={() => {
                                                     if (hasHoliday) {
-                                                        onClickEditHoliday(dayHolidays[0]);
+                                                        onClickEditHoliday(
+                                                            resolvePrimaryEditableHoliday(
+                                                                dayHolidays
+                                                            )
+                                                        );
                                                     } else {
                                                         onClickAddHolidayOnDate(isoDate);
                                                     }
@@ -628,7 +680,9 @@ export function HolidayCalendarView({
                                         const dayOnly = Number(item.date.slice(8, 10));
                                         const canEdit =
                                             isSuperAdmin || item.schoolId !== null;
-                                        const jawaItem = getJavaneseDateInfo(item.date);
+                                        const jawaItem =
+                                            javaneseYearMap.get(item.date) ??
+                                            getJavaneseDateInfo(item.date);
 
                                         return (
                                             <div

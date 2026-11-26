@@ -1,5 +1,5 @@
 // src/modules/attendance/components/StudentAttendanceSettingsCard.tsx
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
     Clock,
     GraduationCap,
@@ -43,6 +43,31 @@ interface RawSchoolStudentSettingsRow {
     enableStudentKiosk: boolean | null;
     enableStudentClassAttendance: boolean | null;
     enableStudentCheckOut: boolean | null;
+}
+
+function parseTimeToMinutes(hhmm: string): number | null {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(hhmm.trim());
+    if (!match) return null;
+    const hours = Number(match[1]);
+    const minutes = Number(match[2]);
+    if (
+        !Number.isInteger(hours) ||
+        !Number.isInteger(minutes) ||
+        hours < 0 ||
+        hours > 23 ||
+        minutes < 0 ||
+        minutes > 59
+    ) {
+        return null;
+    }
+    return hours * 60 + minutes;
+}
+
+function formatMinutesToTime(totalMinutes: number): string {
+    const clamped = Math.max(0, Math.min(23 * 60 + 59, Math.floor(totalMinutes)));
+    const hh = String(Math.floor(clamped / 60)).padStart(2, '0');
+    const mm = String(clamped % 60).padStart(2, '0');
+    return `${hh}:${mm}`;
 }
 
 function getErrorDetails(
@@ -112,6 +137,17 @@ export function StudentAttendanceSettingsCard({
     const loadSettings = useCallback(async () => {
         if (!schoolId) return;
         setIsLoading(true);
+        setSaveMessage(null);
+
+        // Reset ke nilai default terlebih dahulu agar state sekolah sebelumnya tidak bocor
+        setStudentWorkStartTime(DEFAULT_STUDENT_WORK_START);
+        setStudentLateToleranceMinutes(DEFAULT_STUDENT_LATE_TOLERANCE);
+        setStudentWorkEndTime(DEFAULT_STUDENT_WORK_END);
+        setStudentCheckOutStartTime(DEFAULT_STUDENT_CHECKOUT_START);
+        setEnableStudentKiosk(true);
+        setEnableStudentClassAttendance(true);
+        setEnableStudentCheckOut(true);
+
         try {
             const { data, error } = await supabase
                 .from('schools')
@@ -131,7 +167,9 @@ export function StudentAttendanceSettingsCard({
                     setStudentWorkStartTime(row.studentWorkStartTime);
                 }
                 if (typeof row.studentLateToleranceMinutes === 'number') {
-                    setStudentLateToleranceMinutes(row.studentLateToleranceMinutes);
+                    setStudentLateToleranceMinutes(
+                        Math.max(0, row.studentLateToleranceMinutes)
+                    );
                 }
                 if (row.studentWorkEndTime) {
                     setStudentWorkEndTime(row.studentWorkEndTime);
@@ -168,6 +206,18 @@ export function StudentAttendanceSettingsCard({
         void loadSettings();
     }, [loadSettings]);
 
+    const effectiveLateDeadline = useMemo(() => {
+        const startMins =
+            parseTimeToMinutes(studentWorkStartTime) ??
+            parseTimeToMinutes(DEFAULT_STUDENT_WORK_START) ??
+            420;
+        const safeTolerance = Math.max(
+            0,
+            Math.min(180, Math.floor(Number(studentLateToleranceMinutes) || 0))
+        );
+        return formatMinutesToTime(startMins + safeTolerance);
+    }, [studentWorkStartTime, studentLateToleranceMinutes]);
+
     const handleSave = async () => {
         if (!schoolId) return;
 
@@ -179,21 +229,63 @@ export function StudentAttendanceSettingsCard({
             return;
         }
 
+        const normalizedStart =
+            studentWorkStartTime.trim() || DEFAULT_STUDENT_WORK_START;
+        const normalizedCheckOutStart =
+            studentCheckOutStartTime.trim() || DEFAULT_STUDENT_CHECKOUT_START;
+        const normalizedEnd =
+            studentWorkEndTime.trim() || DEFAULT_STUDENT_WORK_END;
+        const cleanTolerance = Math.max(
+            0,
+            Math.min(180, Math.floor(Number(studentLateToleranceMinutes) || 0))
+        );
+
+        const startMins = parseTimeToMinutes(normalizedStart);
+        const checkOutStartMins = parseTimeToMinutes(normalizedCheckOutStart);
+        const endMins = parseTimeToMinutes(normalizedEnd);
+
+        if (startMins === null || endMins === null || checkOutStartMins === null) {
+            setSaveMessage({
+                status: 'error',
+                text: 'Format jam operasional siswa tidak valid (gunakan format HH:MM).',
+            });
+            return;
+        }
+
+        if (endMins <= startMins) {
+            setSaveMessage({
+                status: 'error',
+                text: 'Jam pulang siswa harus lebih lambat daripada jam masuk siswa.',
+            });
+            return;
+        }
+
+        if (enableStudentCheckOut) {
+            if (checkOutStartMins <= startMins) {
+                setSaveMessage({
+                    status: 'error',
+                    text: 'Jam mulai absen pulang harus lebih lambat daripada jam masuk siswa.',
+                });
+                return;
+            }
+            if (endMins < checkOutStartMins) {
+                setSaveMessage({
+                    status: 'error',
+                    text: 'Jam pulang siswa tidak boleh lebih awal daripada jam mulai absen pulang.',
+                });
+                return;
+            }
+        }
+
         setIsSaving(true);
         setSaveMessage(null);
 
         try {
             const payload = {
-                studentWorkStartTime:
-                    studentWorkStartTime.trim() || DEFAULT_STUDENT_WORK_START,
-                studentLateToleranceMinutes: Math.max(
-                    0,
-                    Number(studentLateToleranceMinutes) || 0
-                ),
-                studentWorkEndTime:
-                    studentWorkEndTime.trim() || DEFAULT_STUDENT_WORK_END,
-                studentCheckOutStartTime:
-                    studentCheckOutStartTime.trim() || DEFAULT_STUDENT_CHECKOUT_START,
+                studentWorkStartTime: normalizedStart,
+                studentLateToleranceMinutes: cleanTolerance,
+                studentWorkEndTime: normalizedEnd,
+                studentCheckOutStartTime: normalizedCheckOutStart,
                 enableStudentKiosk,
                 enableStudentClassAttendance,
                 enableStudentCheckOut,
@@ -213,6 +305,7 @@ export function StudentAttendanceSettingsCard({
                 throw error;
             }
 
+            setStudentLateToleranceMinutes(cleanTolerance);
             setSaveMessage({
                 status: 'success',
                 text: t('attendanceSettings.toastStudentSettingsSaved'),
@@ -268,8 +361,8 @@ export function StudentAttendanceSettingsCard({
             {saveMessage && (
                 <div
                     className={`p-3 rounded-lg border text-xs font-medium flex items-center gap-2 ${saveMessage.status === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {saveMessage.status === 'success' ? (
@@ -282,7 +375,7 @@ export function StudentAttendanceSettingsCard({
             )}
 
             {/* Bagian 1: Pengaturan Jam Operasional Siswa */}
-            <div className="space-y-2.5">
+            <div className="space-y-3">
                 <div className="text-xs font-bold flex items-center gap-1.5 text-foreground">
                     <Clock size={14} className="text-emerald-600" />
                     <span>{t('attendanceSettings.studentScheduleHeading')}</span>
@@ -297,7 +390,7 @@ export function StudentAttendanceSettingsCard({
                             type="time"
                             value={studentWorkStartTime}
                             onChange={(e) => setStudentWorkStartTime(e.target.value)}
-                            className="form-input w-full text-xs"
+                            className="form-input w-full text-xs font-mono"
                         />
                         <span className="text-[10px] text-muted-foreground">
                             {t('attendanceSettings.studentStartTimeHint')}
@@ -315,10 +408,12 @@ export function StudentAttendanceSettingsCard({
                             value={studentLateToleranceMinutes}
                             onChange={(e) =>
                                 setStudentLateToleranceMinutes(
-                                    Math.max(0, Number(e.target.value))
+                                    e.target.value === ''
+                                        ? 0
+                                        : Math.max(0, Math.min(180, Number(e.target.value)))
                                 )
                             }
-                            className="form-input w-full text-xs"
+                            className="form-input w-full text-xs font-mono"
                         />
                         <span className="text-[10px] text-muted-foreground">
                             {t('attendanceSettings.studentToleranceHint')}
@@ -334,7 +429,7 @@ export function StudentAttendanceSettingsCard({
                             value={studentCheckOutStartTime}
                             onChange={(e) => setStudentCheckOutStartTime(e.target.value)}
                             disabled={!enableStudentCheckOut}
-                            className="form-input w-full text-xs disabled:opacity-50"
+                            className="form-input w-full text-xs font-mono disabled:opacity-50"
                         />
                         <span className="text-[10px] text-muted-foreground">
                             {t('attendanceSettings.studentCheckOutStartHint')}
@@ -349,12 +444,37 @@ export function StudentAttendanceSettingsCard({
                             type="time"
                             value={studentWorkEndTime}
                             onChange={(e) => setStudentWorkEndTime(e.target.value)}
-                            className="form-input w-full text-xs"
+                            className="form-input w-full text-xs font-mono"
                         />
                         <span className="text-[10px] text-muted-foreground">
                             {t('attendanceSettings.studentWorkEndHint')}
                         </span>
                     </div>
+                </div>
+
+                {/* Ringkasan Batas Waktu Efektif Kiosk */}
+                <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+                    <span>
+                        Batas tepat waktu masuk siswa:{' '}
+                        <strong className="font-mono text-emerald-700 dark:text-emerald-300">
+                            {effectiveLateDeadline}
+                        </strong>
+                        {studentLateToleranceMinutes > 0 && (
+                            <span className="text-muted-foreground">
+                                {' '}
+                                ({studentWorkStartTime} + {studentLateToleranceMinutes} menit)
+                            </span>
+                        )}
+                        .
+                    </span>
+                    {enableStudentCheckOut && (
+                        <span>
+                            Jendela absen pulang Kiosk:{' '}
+                            <strong className="font-mono text-indigo-700 dark:text-indigo-300">
+                                {studentCheckOutStartTime} – {studentWorkEndTime}
+                            </strong>
+                        </span>
+                    )}
                 </div>
             </div>
 
@@ -370,8 +490,8 @@ export function StudentAttendanceSettingsCard({
                         type="button"
                         onClick={() => setEnableStudentKiosk((prev) => !prev)}
                         className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex items-start justify-between gap-3 cursor-pointer active:scale-[0.98] ${enableStudentKiosk
-                                ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
+                            ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                            : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
                             }`}
                     >
                         <div className="space-y-1">
@@ -385,8 +505,8 @@ export function StudentAttendanceSettingsCard({
                         </div>
                         <span
                             className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 mt-0.5 flex items-center ${enableStudentKiosk
-                                    ? 'bg-emerald-600'
-                                    : 'bg-slate-300 dark:bg-slate-600'
+                                ? 'bg-emerald-600'
+                                : 'bg-slate-300 dark:bg-slate-600'
                                 }`}
                         >
                             <span
@@ -401,8 +521,8 @@ export function StudentAttendanceSettingsCard({
                         type="button"
                         onClick={() => setEnableStudentClassAttendance((prev) => !prev)}
                         className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex items-start justify-between gap-3 cursor-pointer active:scale-[0.98] ${enableStudentClassAttendance
-                                ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
-                                : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
+                            ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
+                            : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
                             }`}
                     >
                         <div className="space-y-1">
@@ -416,14 +536,14 @@ export function StudentAttendanceSettingsCard({
                         </div>
                         <span
                             className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 mt-0.5 flex items-center ${enableStudentClassAttendance
-                                    ? 'bg-blue-600'
-                                    : 'bg-slate-300 dark:bg-slate-600'
+                                ? 'bg-blue-600'
+                                : 'bg-slate-300 dark:bg-slate-600'
                                 }`}
                         >
                             <span
                                 className={`w-4 h-4 rounded-full bg-white shadow transform transition-transform ${enableStudentClassAttendance
-                                        ? 'translate-x-5'
-                                        : 'translate-x-0'
+                                    ? 'translate-x-5'
+                                    : 'translate-x-0'
                                     }`}
                             />
                         </span>
@@ -434,8 +554,8 @@ export function StudentAttendanceSettingsCard({
                         type="button"
                         onClick={() => setEnableStudentCheckOut((prev) => !prev)}
                         className={`p-3.5 rounded-xl border text-left transition-all duration-200 flex items-start justify-between gap-3 cursor-pointer active:scale-[0.98] ${enableStudentCheckOut
-                                ? 'border-indigo-600/70 bg-indigo-500/10 shadow-2xs'
-                                : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
+                            ? 'border-indigo-600/70 bg-indigo-500/10 shadow-2xs'
+                            : 'border-border bg-muted/20 opacity-75 hover:opacity-100'
                             }`}
                     >
                         <div className="space-y-1">
@@ -451,8 +571,8 @@ export function StudentAttendanceSettingsCard({
                         </div>
                         <span
                             className={`w-10 h-5 rounded-full p-0.5 transition-colors shrink-0 mt-0.5 flex items-center ${enableStudentCheckOut
-                                    ? 'bg-indigo-600'
-                                    : 'bg-slate-300 dark:bg-slate-600'
+                                ? 'bg-indigo-600'
+                                : 'bg-slate-300 dark:bg-slate-600'
                                 }`}
                         >
                             <span

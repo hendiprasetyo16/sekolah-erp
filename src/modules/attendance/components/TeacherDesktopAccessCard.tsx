@@ -101,9 +101,6 @@ function isMissingColumnError(error: unknown): boolean {
     );
 }
 
-/**
- * Mengubah nilai mentah (string dipisah koma atau array) menjadi daftar string bersih.
- */
 function parseDutyValues(raw: unknown): string[] {
     if (!raw) return [];
     if (Array.isArray(raw)) {
@@ -123,10 +120,6 @@ function parseDutyValues(raw: unknown): string[] {
     return [];
 }
 
-/**
- * Mengekstrak daftar tugas tambahan / jabatan dari berbagai kemungkinan nama kolom tabel `teachers`
- * serta menyelaraskannya dengan peran sistem (misal KEPALA_SEKOLAH).
- */
 function extractAdditionalDuties(
     row: Record<string, unknown>,
     linkedUserRole?: string | null
@@ -164,10 +157,6 @@ function extractAdditionalDuties(
     return collected;
 }
 
-/**
- * Mengekstrak status kepegawaian (PNS, PPPK, GTY, GTT, Honorer, dll.)
- * dan status keaktifan (Aktif / Non-Aktif) dari baris data guru.
- */
 function extractTeacherStatuses(row: Record<string, unknown>): {
     employmentStatus: string | null;
     activeStatus: string | null;
@@ -221,13 +210,14 @@ function isHighlightedDuty(duty: string): boolean {
 
 /**
  * Kartu Pengaturan Izin Presensi via Komputer / Laptop (Desktop)
- * Mendukung Saklar Global sekolah, Saklar Individual per Guru/PTK,
+ * Mendukung Saklar Global sekolah (termasuk status campuran), Saklar Individual per Guru/PTK,
  * informasi Tugas Tambahan & Status Guru, serta Pagination.
  */
 export function TeacherDesktopAccessCard({
     schoolId,
 }: TeacherDesktopAccessCardProps) {
     const { t } = useTranslation();
+    const isEnglish = t('common.language') === 'Language';
 
     const [allowDesktopGlobal, setAllowDesktopGlobal] = useState<boolean>(false);
     const [teachersList, setTeachersList] = useState<TeacherDesktopAccessItem[]>(
@@ -270,7 +260,8 @@ export function TeacherDesktopAccessCard({
                 supabase
                     .from('users')
                     .select('id, role')
-                    .eq('schoolId', schoolId),
+                    .eq('schoolId', schoolId)
+                    .eq('role', 'KEPALA_SEKOLAH'),
             ]);
 
             if (teachersRes.error) throw teachersRes.error;
@@ -332,7 +323,10 @@ export function TeacherDesktopAccessCard({
             setCurrentPage(1);
 
             const schoolRow = schoolRes.data as RawSchoolDesktopRow | null;
-            if (mapped.length > 0 && mapped.every((teacher) => teacher.allowDesktopAttendance)) {
+            if (
+                mapped.length > 0 &&
+                mapped.every((teacher) => teacher.allowDesktopAttendance)
+            ) {
                 setAllowDesktopGlobal(true);
             } else if (
                 mapped.length > 0 &&
@@ -358,9 +352,22 @@ export function TeacherDesktopAccessCard({
         void loadTeachersDesktopAccess();
     }, [loadTeachersDesktopAccess]);
 
+    const allowedCount = useMemo(
+        () => teachersList.filter((teacher) => teacher.allowDesktopAttendance).length,
+        [teachersList]
+    );
+
+    const isAllAllowed =
+        teachersList.length > 0 && allowedCount === teachersList.length;
+    const isMixedState =
+        teachersList.length > 0 &&
+        allowedCount > 0 &&
+        allowedCount < teachersList.length;
+
     const handleToggleGlobal = async () => {
         if (!schoolId || isUpdatingGlobal) return;
-        const nextAllow = !allowDesktopGlobal;
+        // Jika saat ini campuran atau mati semua, nyalakan semua; jika sudah aktif semua, matikan semua
+        const nextAllow = !isAllAllowed;
         setIsUpdatingGlobal(true);
         setFeedback(null);
 
@@ -488,11 +495,6 @@ export function TeacherDesktopAccessCard({
         }
     };
 
-    const allowedCount = useMemo(
-        () => teachersList.filter((teacher) => teacher.allowDesktopAttendance).length,
-        [teachersList]
-    );
-
     const filteredTeachers = useMemo(() => {
         const keyword = searchQuery.trim().toLowerCase();
         return teachersList.filter((teacher) => {
@@ -538,6 +540,9 @@ export function TeacherDesktopAccessCard({
     );
 
     if (!schoolId) return null;
+
+    const effectiveGlobalActive =
+        isAllAllowed || (teachersList.length === 0 && allowDesktopGlobal);
 
     return (
         <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-4">
@@ -603,11 +608,11 @@ export function TeacherDesktopAccessCard({
                 </div>
             </div>
 
-            {/* Saklar Global Sekolah */}
+            {/* Saklar Global Sekolah (Mendukung Status Campuran / Indeterminate) */}
             <div
                 onClick={() => void handleToggleGlobal()}
                 role="switch"
-                aria-checked={allowDesktopGlobal}
+                aria-checked={isMixedState ? 'mixed' : effectiveGlobalActive}
                 tabIndex={0}
                 onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
@@ -615,21 +620,25 @@ export function TeacherDesktopAccessCard({
                         void handleToggleGlobal();
                     }
                 }}
-                className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-center justify-between gap-4 select-none active:scale-[0.99] ${allowDesktopGlobal
+                className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-center justify-between gap-4 select-none active:scale-[0.99] ${effectiveGlobalActive
                     ? 'border-blue-600/70 bg-blue-500/10 shadow-2xs'
-                    : 'border-border bg-muted/25 hover:bg-muted/40'
+                    : isMixedState
+                        ? 'border-amber-500/60 bg-amber-500/10 shadow-2xs'
+                        : 'border-border bg-muted/25 hover:bg-muted/40'
                     } ${isUpdatingGlobal ? 'opacity-70 pointer-events-none' : ''}`}
             >
                 <div className="flex items-start gap-3">
                     <div
-                        className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${allowDesktopGlobal
+                        className={`p-2.5 rounded-xl shrink-0 mt-0.5 ${effectiveGlobalActive
                             ? 'bg-blue-600 text-white'
-                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                            : isMixedState
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                             }`}
                     >
                         {isUpdatingGlobal ? (
                             <Loader2 size={18} className="animate-spin" />
-                        ) : allowDesktopGlobal ? (
+                        ) : effectiveGlobalActive || isMixedState ? (
                             <Monitor size={18} />
                         ) : (
                             <Smartphone size={18} />
@@ -641,32 +650,48 @@ export function TeacherDesktopAccessCard({
                                 {t('attendanceSettings.globalDesktopTitle')}
                             </span>
                             <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${allowDesktopGlobal
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${effectiveGlobalActive
                                     ? 'bg-blue-600 text-white'
-                                    : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
+                                    : isMixedState
+                                        ? 'bg-amber-500 text-white'
+                                        : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200'
                                     }`}
                             >
-                                {allowDesktopGlobal
+                                {effectiveGlobalActive
                                     ? t('attendanceSettings.globalDesktopBadgeOn')
-                                    : t('attendanceSettings.globalDesktopBadgeOff')}
+                                    : isMixedState
+                                        ? isEnglish
+                                            ? `Partially Active (${allowedCount}/${teachersList.length} Teachers)`
+                                            : `Sebagian Aktif (${allowedCount}/${teachersList.length} Guru)`
+                                        : t('attendanceSettings.globalDesktopBadgeOff')}
                             </span>
                         </div>
                         <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
-                            {allowDesktopGlobal
+                            {effectiveGlobalActive
                                 ? t('attendanceSettings.globalDesktopDescOn')
-                                : t('attendanceSettings.globalDesktopDescOff')}
+                                : isMixedState
+                                    ? isEnglish
+                                        ? 'Desktop attendance is currently configured individually. Click this switch to enable desktop access for all teachers at once.'
+                                        : 'Izin presensi desktop saat ini diatur secara khusus per individu. Klik saklar ini untuk mengaktifkan akses desktop bagi seluruh guru sekaligus.'
+                                    : t('attendanceSettings.globalDesktopDescOff')}
                         </p>
                     </div>
                 </div>
 
                 <span
-                    className={`w-12 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${allowDesktopGlobal
+                    className={`w-12 h-6 rounded-full p-0.5 transition-colors shrink-0 flex items-center ${effectiveGlobalActive
                         ? 'bg-blue-600'
-                        : 'bg-slate-300 dark:bg-slate-600'
+                        : isMixedState
+                            ? 'bg-amber-500'
+                            : 'bg-slate-300 dark:bg-slate-600'
                         }`}
                 >
                     <span
-                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${allowDesktopGlobal ? 'translate-x-6' : 'translate-x-0'
+                        className={`w-5 h-5 rounded-full bg-white shadow-sm transform transition-transform ${effectiveGlobalActive
+                            ? 'translate-x-6'
+                            : isMixedState
+                                ? 'translate-x-3'
+                                : 'translate-x-0'
                             }`}
                     />
                 </span>
@@ -691,7 +716,6 @@ export function TeacherDesktopAccessCard({
             {isListExpanded && (
                 <>
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pt-1">
-                        {/* Flex input wrapper: mencegah ikon search menumpuk dengan teks */}
                         <div className="flex items-center gap-2 flex-1 min-w-0 rounded-xl border border-border bg-background px-3 py-2 focus-within:ring-2 focus-within:ring-blue-500/40">
                             <Search
                                 size={14}
@@ -795,7 +819,6 @@ export function TeacherDesktopAccessCard({
                                                     {rowNumber}.
                                                 </span>
                                                 <div className="min-w-0 space-y-1">
-                                                    {/* Baris Nama + Status Kepegawaian & Keaktifan */}
                                                     <div className="flex flex-wrap items-center gap-1.5">
                                                         <p className="font-semibold text-foreground">
                                                             {teacher.fullName}
@@ -821,7 +844,6 @@ export function TeacherDesktopAccessCard({
                                                             )}
                                                     </div>
 
-                                                    {/* Baris NIP & Lencana Tugas Tambahan / Jabatan */}
                                                     <div className="flex flex-wrap items-center gap-1.5">
                                                         <span className="text-[11px] text-muted-foreground font-mono">
                                                             {teacher.nip

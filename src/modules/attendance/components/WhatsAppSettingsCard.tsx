@@ -31,6 +31,8 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
     const { t } = useTranslation();
 
     const [config, setConfig] = useState<SchoolWaConfig | null>(null);
+    const [storedToken, setStoredToken] = useState<string>('');
+    const [tokenDraft, setTokenDraft] = useState<string>('');
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
@@ -46,10 +48,14 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
         let active = true;
         setLoading(true);
         setFeedback(null);
+        setShowToken(false);
+        setTokenDraft('');
 
         getSchoolWaConfig(schoolId)
             .then((res) => {
-                if (active) setConfig(res);
+                if (!active) return;
+                setConfig(res);
+                setStoredToken(res.apiToken ?? '');
             })
             .catch((err) => {
                 if (active) {
@@ -78,13 +84,29 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
         });
     };
 
+    const resolveEffectiveConfig = (): SchoolWaConfig | null => {
+        if (!config) return null;
+        const effectiveToken =
+            tokenDraft.trim().length > 0 ? tokenDraft.trim() : storedToken;
+        return {
+            ...config,
+            apiToken: effectiveToken,
+        };
+    };
+
     const handleSave = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!config || !schoolId) return;
+        const effectiveConfig = resolveEffectiveConfig();
+        if (!effectiveConfig || !schoolId) return;
+
         setSaving(true);
         setFeedback(null);
         try {
-            await saveSchoolWaConfig(config);
+            await saveSchoolWaConfig(effectiveConfig);
+            setConfig(effectiveConfig);
+            setStoredToken(effectiveConfig.apiToken);
+            setTokenDraft('');
+            setShowToken(false);
             setFeedback({
                 type: 'success',
                 text: t('attendanceSettings.feedbackWaSaved'),
@@ -103,7 +125,8 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
     };
 
     const handleTestSend = async () => {
-        if (!config || !schoolId || !testPhone.trim()) {
+        const effectiveConfig = resolveEffectiveConfig();
+        if (!effectiveConfig || !schoolId || !testPhone.trim()) {
             setFeedback({
                 type: 'error',
                 text: t('attendanceSettings.errEnterTestPhone'),
@@ -113,7 +136,11 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
         setTesting(true);
         setFeedback(null);
         try {
-            await saveSchoolWaConfig(config);
+            await saveSchoolWaConfig(effectiveConfig);
+            setConfig(effectiveConfig);
+            setStoredToken(effectiveConfig.apiToken);
+            setTokenDraft('');
+
             const res = await sendTestWhatsAppMessage(schoolId, testPhone.trim());
             setFeedback({
                 type: res.success ? 'success' : 'error',
@@ -150,6 +177,14 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             </div>
         );
     }
+
+    const displayedTokenValue =
+        tokenDraft.length > 0 ? tokenDraft : showToken ? storedToken : '';
+    const tokenPlaceholder =
+        storedToken.length > 0 && !showToken
+            ? '•••••••••••••••••••• (Token tersimpan — ketik untuk mengganti)'
+            : WA_PROVIDER_PRESETS[config.provider]?.tokenHint ??
+            t('attendanceSettings.waApiTokenPlaceholder');
 
     return (
         <form
@@ -249,14 +284,10 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                     <div className="relative">
                         <input
                             type={showToken ? 'text' : 'password'}
-                            value={config.apiToken}
-                            onChange={(e) =>
-                                setConfig({ ...config, apiToken: e.target.value })
-                            }
-                            placeholder={
-                                WA_PROVIDER_PRESETS[config.provider]?.tokenHint ??
-                                t('attendanceSettings.waApiTokenPlaceholder')
-                            }
+                            autoComplete="new-password"
+                            value={displayedTokenValue}
+                            onChange={(e) => setTokenDraft(e.target.value)}
+                            placeholder={tokenPlaceholder}
                             className="form-input w-full pr-10 text-xs font-mono"
                         />
                         <button
@@ -408,7 +439,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
                     <button
                         type="button"
                         disabled={testing || saving}
-                        onClick={handleTestSend}
+                        onClick={() => void handleTestSend()}
                         className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-[0.98] transition-all duration-200 disabled:opacity-50 cursor-pointer"
                     >
                         {testing ? (

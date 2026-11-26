@@ -1,5 +1,5 @@
 // src/modules/attendance/components/AttendanceSettingsTab.tsx
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
     Clock,
     CalendarDays,
@@ -63,24 +63,35 @@ const DEFAULT_SUB_TAB: AttendanceSettingsSubTab = 'GURU_SCHEDULE';
 const CUSTOM_YEARS_STORAGE_KEY = 'sekolah_erp_holiday_custom_years';
 const INITIAL_BASE_YEARS = [2026, 2027, 2028];
 const DEFAULT_HOLIDAY_VIEW_MODE: 'LIST' | 'CALENDAR' = 'CALENDAR';
+const UPDATE_CHUNK_SIZE = 20;
+const INSERT_CHUNK_SIZE = 100;
 
 // ============================================================================
 // TEMA TOMBOL MODERN TERPUSAT
 // ============================================================================
 const BTN_STYLE = {
     primaryEmerald:
-        'inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm shadow-emerald-600/20 hover:shadow-md hover:shadow-emerald-600/25 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+        'inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 shadow-sm shadow-emerald-600/20 hover:shadow-md hover:shadow-emerald-600/25 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
     primaryBlue:
-        'inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-sm shadow-blue-600/20 hover:shadow-md hover:shadow-blue-600/25 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+        'inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold text-white bg-linear-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 shadow-sm shadow-blue-600/20 hover:shadow-md hover:shadow-blue-600/25 active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
     secondary:
         'inline-flex items-center justify-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs hover:shadow-xs active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
     secondaryCompact:
         'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
     danger:
-        'inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm shadow-red-600/20 hover:shadow-md active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
+        'inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold text-white bg-linear-to-r from-red-600 to-rose-600 hover:from-red-500 hover:to-rose-500 shadow-sm shadow-red-600/20 hover:shadow-md active:scale-[0.98] transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none cursor-pointer',
     dangerOutline:
         'inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold border border-red-500/35 bg-red-500/10 text-red-600 dark:text-red-300 hover:bg-red-500/20 active:scale-[0.98] transition-all duration-200 cursor-pointer',
 } as const;
+
+function chunkList<T>(items: T[], size: number): T[][] {
+    if (items.length === 0) return [];
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+        chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
+}
 
 function calculateEffectiveDeadline(
     startTime: string,
@@ -198,14 +209,46 @@ export function AttendanceSettingsTab() {
         type: 'success' | 'error';
         message: string;
     } | null>(null);
+    const toastTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const showToast = useCallback(
         (type: 'success' | 'error', message: string) => {
+            if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
+            }
             setToast({ type, message });
-            setTimeout(() => setToast(null), 5500);
+            toastTimeoutRef.current = setTimeout(() => {
+                setToast(null);
+                toastTimeoutRef.current = null;
+            }, 5500);
         },
         []
     );
+
+    useEffect(() => {
+        return () => {
+            if (toastTimeoutRef.current) {
+                clearTimeout(toastTimeoutRef.current);
+            }
+        };
+    }, []);
+
+    // Tutup modal dengan tombol Escape saat tidak sedang memproses simpan/hapus
+    useEffect(() => {
+        if (!editingHoliday && !deleteConfirmModal) return;
+
+        const handleKeyDown = (e: KeyboardEvent) => {
+            if (e.key !== 'Escape') return;
+            if (editingHoliday && !isSavingEdit) {
+                setEditingHoliday(null);
+            } else if (deleteConfirmModal && !isDeletingHolidays) {
+                setDeleteConfirmModal(null);
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [editingHoliday, isSavingEdit, deleteConfirmModal, isDeletingHolidays]);
 
     useEffect(() => {
         if (school?.id) {
@@ -271,7 +314,7 @@ export function AttendanceSettingsTab() {
     }, [selectedSchoolId, showToast, t]);
 
     useEffect(() => {
-        loadScheduleSettings();
+        void loadScheduleSettings();
     }, [loadScheduleSettings]);
 
     const effectiveDeadlinePreview = useMemo(
@@ -367,8 +410,8 @@ export function AttendanceSettingsTab() {
 
             setLateToleranceMinutes(cleanTolerance);
             const selfieSummary = `${t('attendanceSettings.selfieCheckInTitle')}: ${requireSelfieCheckIn
-                    ? t('attendanceSettings.selfieActiveShort')
-                    : t('attendanceSettings.selfieInactiveShort')
+                ? t('attendanceSettings.selfieActiveShort')
+                : t('attendanceSettings.selfieInactiveShort')
                 }, ${t('attendanceSettings.selfieCheckOutTitle')}: ${requireSelfieCheckOut
                     ? t('attendanceSettings.selfieActiveShort')
                     : t('attendanceSettings.selfieInactiveShort')
@@ -424,9 +467,17 @@ export function AttendanceSettingsTab() {
             if (error) throw error;
             setHolidays((data ?? []) as HolidayRecord[]);
 
-            const { data: allDates } = await supabase
-                .from('national_holidays')
-                .select('date');
+            // Filter schoolId yang sama agar tahun libur kustom lintas sekolah tidak bocor
+            let yearsQuery = supabase.from('national_holidays').select('date');
+            if (selectedSchoolId) {
+                yearsQuery = yearsQuery.or(
+                    `schoolId.eq.${selectedSchoolId},schoolId.is.null`
+                );
+            } else {
+                yearsQuery = yearsQuery.is('schoolId', null);
+            }
+
+            const { data: allDates } = await yearsQuery;
             if (allDates) {
                 const yearsInDb = Array.from(
                     new Set(
@@ -450,7 +501,7 @@ export function AttendanceSettingsTab() {
     }, [filterYear, selectedSchoolId, showToast, t]);
 
     useEffect(() => {
-        loadHolidays();
+        void loadHolidays();
     }, [loadHolidays]);
 
     const resolvedHolidaySchoolId =
@@ -465,6 +516,13 @@ export function AttendanceSettingsTab() {
         if (!isSuperAdmin && !resolvedHolidaySchoolId) {
             throw new Error(t('attendanceSettings.errSchoolNotFound'));
         }
+
+        // Deduplikasi tanggal dalam satu batch input (baris terakhir menang)
+        const deduplicatedMap = new Map<string, ParsedHolidayRow>();
+        for (const row of validRows) {
+            deduplicatedMap.set(row.date, row);
+        }
+        const uniqueRows = Array.from(deduplicatedMap.values());
 
         let existingQuery = supabase
             .from('national_holidays')
@@ -484,6 +542,7 @@ export function AttendanceSettingsTab() {
             existingMap.set(item.date, item.id);
         }
 
+        const toUpdate: Array<{ id: string; name: string }> = [];
         const toInsert: Array<{
             schoolId: string | null;
             date: string;
@@ -491,14 +550,10 @@ export function AttendanceSettingsTab() {
             createdBy: string | null;
         }> = [];
 
-        for (const row of validRows) {
+        for (const row of uniqueRows) {
             const existingId = existingMap.get(row.date);
             if (existingId) {
-                const { error: updErr } = await supabase
-                    .from('national_holidays')
-                    .update({ name: row.name.trim() })
-                    .eq('id', existingId);
-                if (updErr) throw updErr;
+                toUpdate.push({ id: existingId, name: row.name.trim() });
             } else {
                 toInsert.push({
                     schoolId: resolvedHolidaySchoolId,
@@ -509,10 +564,23 @@ export function AttendanceSettingsTab() {
             }
         }
 
-        if (toInsert.length > 0) {
+        for (const updateBatch of chunkList(toUpdate, UPDATE_CHUNK_SIZE)) {
+            const results = await Promise.all(
+                updateBatch.map((item) =>
+                    supabase
+                        .from('national_holidays')
+                        .update({ name: item.name })
+                        .eq('id', item.id)
+                )
+            );
+            const failed = results.find((res) => res.error);
+            if (failed?.error) throw failed.error;
+        }
+
+        for (const insertBatch of chunkList(toInsert, INSERT_CHUNK_SIZE)) {
             const { error: insErr } = await supabase
                 .from('national_holidays')
-                .insert(toInsert);
+                .insert(insertBatch);
             if (insErr) throw insErr;
         }
     };
@@ -765,12 +833,14 @@ export function AttendanceSettingsTab() {
 
         setIsDeletingHolidays(true);
         try {
-            const { error } = await supabase
-                .from('national_holidays')
-                .delete()
-                .in('id', deleteConfirmModal.targetIds);
+            for (const idChunk of chunkList(deleteConfirmModal.targetIds, 100)) {
+                const { error } = await supabase
+                    .from('national_holidays')
+                    .delete()
+                    .in('id', idChunk);
+                if (error) throw error;
+            }
 
-            if (error) throw error;
             const deletedCount = deleteConfirmModal.targetIds.length;
             setDeleteConfirmModal(null);
             setSelectedHolidayIds([]);
@@ -796,7 +866,6 @@ export function AttendanceSettingsTab() {
 
     if (!canManage) return null;
 
-    // Daftar definisi 5 sub-tab navigasi
     const subTabs: Array<{
         id: AttendanceSettingsSubTab;
         label: string;
@@ -851,8 +920,8 @@ export function AttendanceSettingsTab() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2 ${toast.type === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -902,8 +971,8 @@ export function AttendanceSettingsTab() {
                             type="button"
                             onClick={() => setActiveSubTab(tab.id)}
                             className={`flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-xs font-bold transition-all duration-200 cursor-pointer ${isActive
-                                    ? tab.activeClass
-                                    : 'text-muted-foreground hover:text-foreground hover:bg-card/70'
+                                ? tab.activeClass
+                                : 'text-muted-foreground hover:text-foreground hover:bg-card/70'
                                 }`}
                         >
                             <IconComponent size={15} className="shrink-0" />
@@ -1054,15 +1123,15 @@ export function AttendanceSettingsTab() {
                                     }
                                 }}
                                 className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckIn
-                                        ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                        : 'border-border bg-muted/25 hover:bg-muted/40'
+                                    ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                    : 'border-border bg-muted/25 hover:bg-muted/40'
                                     }`}
                             >
                                 <div className="flex items-start gap-3">
                                     <div
                                         className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckIn
-                                                ? 'bg-emerald-600 text-white'
-                                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                                             }`}
                                     >
                                         {requireSelfieCheckIn ? <Camera size={16} /> : <MapPin size={16} />}
@@ -1102,15 +1171,15 @@ export function AttendanceSettingsTab() {
                                     }
                                 }}
                                 className={`p-4 rounded-xl border cursor-pointer transition-all duration-200 flex items-start justify-between gap-3 select-none active:scale-[0.99] ${requireSelfieCheckOut
-                                        ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
-                                        : 'border-border bg-muted/25 hover:bg-muted/40'
+                                    ? 'border-emerald-600/70 bg-emerald-500/10 shadow-2xs'
+                                    : 'border-border bg-muted/25 hover:bg-muted/40'
                                     }`}
                             >
                                 <div className="flex items-start gap-3">
                                     <div
                                         className={`p-2 rounded-lg shrink-0 mt-0.5 ${requireSelfieCheckOut
-                                                ? 'bg-emerald-600 text-white'
-                                                : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
+                                            ? 'bg-emerald-600 text-white'
+                                            : 'bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-300'
                                             }`}
                                     >
                                         {requireSelfieCheckOut ? <Camera size={16} /> : <MapPin size={16} />}
@@ -1150,8 +1219,8 @@ export function AttendanceSettingsTab() {
                                 type="button"
                                 onClick={() => setWorkDaysMode('FIVE_DAYS')}
                                 className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'FIVE_DAYS'
-                                        ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
-                                        : 'border-border bg-muted/20 hover:bg-muted/40'
+                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                    : 'border-border bg-muted/20 hover:bg-muted/40'
                                     }`}
                             >
                                 <Briefcase
@@ -1180,8 +1249,8 @@ export function AttendanceSettingsTab() {
                                 type="button"
                                 onClick={() => setWorkDaysMode('SIX_DAYS')}
                                 className={`p-4 rounded-xl border text-left transition-all duration-200 active:scale-[0.99] cursor-pointer flex items-start gap-3 ${workDaysMode === 'SIX_DAYS'
-                                        ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
-                                        : 'border-border bg-muted/20 hover:bg-muted/40'
+                                    ? 'border-emerald-600 bg-emerald-500/10 ring-2 ring-emerald-500/20 shadow-2xs'
+                                    : 'border-border bg-muted/20 hover:bg-muted/40'
                                     }`}
                             >
                                 <Briefcase
@@ -1412,10 +1481,10 @@ export function AttendanceSettingsTab() {
                         {syncFeedback && (
                             <div
                                 className={`p-2.5 rounded-lg border text-xs font-medium flex items-center gap-2 ${syncFeedback.status === 'loading'
-                                        ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
-                                        : syncFeedback.status === 'success'
-                                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                                    ? 'bg-blue-500/15 border-blue-500/40 text-blue-800 dark:text-blue-200'
+                                    : syncFeedback.status === 'success'
+                                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                                     }`}
                             >
                                 {syncFeedback.status === 'loading' ? (
@@ -1643,8 +1712,8 @@ export function AttendanceSettingsTab() {
                                         type="button"
                                         onClick={() => setHolidayViewMode('CALENDAR')}
                                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'CALENDAR'
-                                                ? 'bg-card text-foreground shadow-xs'
-                                                : 'text-muted-foreground hover:text-foreground'
+                                            ? 'bg-card text-foreground shadow-xs'
+                                            : 'text-muted-foreground hover:text-foreground'
                                             }`}
                                     >
                                         <Calendar size={13} />
@@ -1654,8 +1723,8 @@ export function AttendanceSettingsTab() {
                                         type="button"
                                         onClick={() => setHolidayViewMode('LIST')}
                                         className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-[11px] font-semibold transition-all duration-200 cursor-pointer ${holidayViewMode === 'LIST'
-                                                ? 'bg-card text-foreground shadow-xs'
-                                                : 'text-muted-foreground hover:text-foreground'
+                                            ? 'bg-card text-foreground shadow-xs'
+                                            : 'text-muted-foreground hover:text-foreground'
                                             }`}
                                     >
                                         <List size={13} />
@@ -1689,7 +1758,7 @@ export function AttendanceSettingsTab() {
 
                                 <button
                                     type="button"
-                                    onClick={loadHolidays}
+                                    onClick={() => void loadHolidays()}
                                     className="p-2 rounded-xl border border-border bg-card hover:bg-muted/80 text-foreground shadow-2xs active:scale-95 transition-all duration-200 shrink-0 cursor-pointer"
                                     title={t('attendanceSettings.titleRefreshHolidays')}
                                 >
@@ -1942,6 +2011,7 @@ export function AttendanceSettingsTab() {
                             <button
                                 type="button"
                                 onClick={() => setEditingHoliday(null)}
+                                disabled={isSavingEdit}
                                 className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground active:scale-95 transition cursor-pointer"
                             >
                                 <X size={16} />
@@ -2035,7 +2105,7 @@ export function AttendanceSettingsTab() {
                             </button>
                             <button
                                 type="button"
-                                onClick={handleConfirmDeleteExecution}
+                                onClick={() => void handleConfirmDeleteExecution()}
                                 disabled={isDeletingHolidays}
                                 className={BTN_STYLE.danger}
                             >
