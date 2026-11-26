@@ -45,6 +45,7 @@ const KIOSK_RESET_DELAY_MS = 4000;        // Waktu reset layar otomatis setelah 
 const STUDENT_PREVIEW_DELAY_MS = 850;     // Durasi tampil profil siswa sebelum simpan otomatis (milidetik)
 const CLOCK_TICK_INTERVAL_MS = 5000;      // Interval pembaruan jam layar Kiosk (5 detik)
 const DEFAULT_KIOSK_SOUND_VOLUME = 0.5;   // Volume awal efek suara Kiosk (0.5 = 50%, rentang 0.0 - 1.0)
+const MAX_CACHED_PHOTO_URL_LENGTH = 300;  // Hindari simpan Base64/data URI panjang ke localStorage
 const KIOSK_SOUND_PREF_KEY = 'sekolaherp_kiosk_sound_enabled';
 const KIOSK_SOUND_VOLUME_KEY = 'sekolaherp_kiosk_sound_volume';
 const FALLBACK_STUDENT_START = '07:00';
@@ -53,6 +54,7 @@ const FALLBACK_STUDENT_END = '14:00';
 const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';
 const OFFLINE_QUEUE_STORAGE_PREFIX = 'sekolaherp_kiosk_offline_queue_';
 const STUDENT_CACHE_STORAGE_PREFIX = 'sekolaherp_kiosk_student_cache_';
+const CHECKED_IN_CACHE_STORAGE_PREFIX = 'sekolaherp_kiosk_checkedin_';
 const SCHOOL_META_STORAGE_PREFIX = 'sekolaherp_kiosk_school_meta_';
 
 type KioskState = 'idle' | 'scanning' | 'found' | 'success' | 'already' | 'error';
@@ -105,6 +107,14 @@ interface OfflineKioskQueueItem {
   status: 'HADIR' | 'TERLAMBAT';
   notes?: string | null;
   recordedBy: string | null;
+}
+
+interface DailyCheckedInRecord {
+  checkInIso: string;
+  timeFormatted: string;
+  checkedOut: boolean;
+  checkOutFormatted?: string;
+  leaveStatus?: string;
 }
 
 // ============================================================================
@@ -238,6 +248,14 @@ function isAtOrAfterScheduleTime(
   }
 }
 
+function sanitizeCacheablePhotoUrl(url?: string | null): string | undefined {
+  if (!url) return undefined;
+  const trimmed = url.trim();
+  if (!trimmed || trimmed.startsWith('data:')) return undefined;
+  if (trimmed.length > MAX_CACHED_PHOTO_URL_LENGTH) return undefined;
+  return trimmed;
+}
+
 function readOfflineQueue(schoolId: string): OfflineKioskQueueItem[] {
   if (!schoolId) return [];
   try {
@@ -284,6 +302,69 @@ function writeStudentDirectoryCache(schoolId: string, students: FoundStudent[]) 
   } catch (err) {
     console.warn('[KioskStudentCache] Gagal menyimpan cache siswa:', err);
   }
+}
+
+function getCheckedInCacheKey(schoolId: string, date: string): string {
+  return `${CHECKED_IN_CACHE_STORAGE_PREFIX}${schoolId}_${date}`;
+}
+
+function readDailyCheckedInMap(
+  schoolId: string,
+  date: string
+): Record<string, DailyCheckedInRecord> {
+  if (!schoolId || !date) return {};
+  try {
+    const raw = localStorage.getItem(getCheckedInCacheKey(schoolId, date));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeDailyCheckedInMap(
+  schoolId: string,
+  date: string,
+  map: Record<string, DailyCheckedInRecord>
+) {
+  if (!schoolId || !date) return;
+  try {
+    localStorage.setItem(
+      getCheckedInCacheKey(schoolId, date),
+      JSON.stringify(map)
+    );
+    // Bersihkan cache hari-hari sebelumnya untuk sekolah ini agar hemat kuota
+    const prefix = `${CHECKED_IN_CACHE_STORAGE_PREFIX}${schoolId}_`;
+    const currentKey = getCheckedInCacheKey(schoolId, date);
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix) && k !== currentKey) {
+        localStorage.removeItem(k);
+      }
+    }
+  } catch {
+    // Abaikan jika penyimpanan lokal penuh
+  }
+}
+
+function upsertDailyCheckedInRecord(
+  schoolId: string,
+  date: string,
+  studentId: string,
+  patch: Partial<DailyCheckedInRecord> & { checkInIso?: string; timeFormatted?: string }
+) {
+  if (!schoolId || !date || !studentId) return;
+  const current = readDailyCheckedInMap(schoolId, date);
+  const existing = current[studentId];
+  current[studentId] = {
+    checkInIso: patch.checkInIso ?? existing?.checkInIso ?? new Date().toISOString(),
+    timeFormatted: patch.timeFormatted ?? existing?.timeFormatted ?? '-',
+    checkedOut: patch.checkedOut ?? existing?.checkedOut ?? false,
+    checkOutFormatted: patch.checkOutFormatted ?? existing?.checkOutFormatted,
+    leaveStatus: patch.leaveStatus ?? existing?.leaveStatus,
+  };
+  writeDailyCheckedInMap(schoolId, date, current);
 }
 
 function readSchoolMetaCache(schoolId: string): SchoolBrandMeta | null {
@@ -670,7 +751,7 @@ export function StudentKioskPage() {
         fullName: s.fullName,
         nisn: s.nisn,
         nis: s.nis ?? undefined,
-        photoUrl: s.photoUrl ?? undefined,
+        photoUrl: sanitizeCacheablePhotoUrl(s.photoUrl),
         className: Array.isArray(s.classes)
           ? s.classes[0]?.name
           : s.classes?.name,
@@ -683,13 +764,13 @@ export function StudentKioskPage() {
   }, [activeSchoolId]);
 
   useEffect(() => {
-    refreshStudentDirectoryCache();
+    void refreshStudentDirectoryCache();
   }, [refreshStudentDirectoryCache]);
 
   const loadStats = useCallback(async () => {
     if (!activeSchoolId || !navigator.onLine) return;
     try {
-      const [summary, checkedOutRes, recentRes] = await Promise.all([
+      const [summary, checkedOutRes, recentRes, todayAttRes] = await Promise.all([
         attendanceService.getSummary(activeSchoolId, today),
         supabase
           .from('attendances')
@@ -709,6 +790,13 @@ export function StudentKioskPage() {
           .in('status', ['HADIR', 'TERLAMBAT'])
           .order('updatedAt', { ascending: false })
           .limit(8),
+        supabase
+          .from('attendances')
+          .select('studentId, status, checkInTime, checkOutTime, time')
+          .eq('schoolId', activeSchoolId)
+          .eq('date', today)
+          .eq('type', 'SISWA')
+          .limit(3000),
       ]);
 
       setTodayStats({
@@ -717,6 +805,46 @@ export function StudentKioskPage() {
         checkedOut: checkedOutRes.count ?? 0,
         total: summary.studentTotal,
       });
+
+      // Sinkronkan cache status presensi harian siswa agar tetap akurat saat offline
+      if (!todayAttRes.error && Array.isArray(todayAttRes.data)) {
+        const nextCheckedInMap: Record<string, DailyCheckedInRecord> = {};
+        for (const rawRow of todayAttRes.data) {
+          const row = rawRow as {
+            studentId?: string | null;
+            status?: string | null;
+            checkInTime?: string | null;
+            checkOutTime?: string | null;
+            time?: string | null;
+          };
+          if (!row.studentId) continue;
+          const st = (row.status ?? '').toUpperCase();
+          if (st === 'ALPA' || st === 'ALPHA') continue;
+
+          const inIso = row.checkInTime || row.time || new Date().toISOString();
+          const inFormatted = new Date(inIso).toLocaleTimeString(dateLocale, {
+            timeZone: schoolTimezone,
+            hour: '2-digit',
+            minute: '2-digit',
+          });
+          const outFormatted = row.checkOutTime
+            ? new Date(row.checkOutTime).toLocaleTimeString(dateLocale, {
+              timeZone: schoolTimezone,
+              hour: '2-digit',
+              minute: '2-digit',
+            })
+            : undefined;
+
+          nextCheckedInMap[String(row.studentId)] = {
+            checkInIso: inIso,
+            timeFormatted: inFormatted,
+            checkedOut: Boolean(row.checkOutTime),
+            checkOutFormatted: outFormatted,
+            leaveStatus: st === 'IZIN' || st === 'SAKIT' ? st : undefined,
+          };
+        }
+        writeDailyCheckedInMap(activeSchoolId, today, nextCheckedInMap);
+      }
 
       if (!recentRes.error && Array.isArray(recentRes.data)) {
         const mappedRecent = recentRes.data.map((row) => {
@@ -931,7 +1059,7 @@ export function StudentKioskPage() {
   }, [activeSchoolId]);
 
   useEffect(() => {
-    loadStats();
+    void loadStats();
   }, [loadStats]);
 
   const resetToIdle = useCallback(() => {
@@ -968,9 +1096,7 @@ export function StudentKioskPage() {
           : 'Terjadi kesalahan saat memproses permintaan.'
       );
       triggerSound('error');
-      setResultMessage(
-        t('studentKiosk.msgSpecialEventError', { detail })
-      );
+      setResultMessage(t('studentKiosk.msgSpecialEventError', { detail }));
       setKioskState('error');
       scheduleAutoReset(6000);
     }
@@ -981,15 +1107,57 @@ export function StudentKioskPage() {
       const existingTodayItems = readOfflineQueue(activeSchoolId).filter(
         (q) => q.studentId === student.id && q.date === today
       );
+      const onlineCacheRecord = readDailyCheckedInMap(activeSchoolId, today)[
+        student.id
+      ];
 
-      if (existingTodayItems.length > 0) {
-        const lastQueued = existingTodayItems[existingTodayItems.length - 1];
-        const diffMins = Math.floor(
-          (now.getTime() - new Date(lastQueued.timestampIso).getTime()) / 60000
+      // Cek apakah siswa sudah tercatat IZIN/SAKIT secara online hari ini
+      if (onlineCacheRecord?.leaveStatus) {
+        triggerSound('already');
+        setResultMessage(
+          t('studentKiosk.msgRecordedLeave', {
+            name: student.fullName,
+            status: onlineCacheRecord.leaveStatus,
+          })
         );
+        setKioskState('already');
+        scheduleAutoReset();
+        return;
+      }
+
+      // Cek apakah siswa sudah check-out secara online hari ini
+      if (onlineCacheRecord?.checkedOut) {
+        triggerSound('already');
+        setResultMessage(
+          t('studentKiosk.msgAlreadyBoth', {
+            name: student.fullName,
+            time: onlineCacheRecord.checkOutFormatted || timeStr,
+          })
+        );
+        setKioskState('already');
+        scheduleAutoReset();
+        return;
+      }
+
+      const hasCheckedInToday =
+        Boolean(onlineCacheRecord) || existingTodayItems.length > 0;
+      const lastInIso =
+        existingTodayItems.length > 0
+          ? existingTodayItems[existingTodayItems.length - 1].timestampIso
+          : onlineCacheRecord?.checkInIso;
+      const lastInTimeFormatted =
+        existingTodayItems.length > 0
+          ? existingTodayItems[existingTodayItems.length - 1].timeFormatted
+          : onlineCacheRecord?.timeFormatted || timeStr;
+
+      if (hasCheckedInToday) {
+        const diffMins = lastInIso
+          ? Math.floor((now.getTime() - new Date(lastInIso).getTime()) / 60000)
+          : 999;
 
         if (
           scanMode === 'CHECK_IN' ||
+          !studentConfig.enableCheckOut ||
           existingTodayItems.length >= 2 ||
           diffMins < MIN_MINUTES_BETWEEN_IN_AND_OUT
         ) {
@@ -997,13 +1165,21 @@ export function StudentKioskPage() {
           setResultMessage(
             t('studentKiosk.msgOfflineAlready', {
               name: student.fullName,
-              time: lastQueued.timeFormatted,
+              time: lastInTimeFormatted,
             })
           );
           setKioskState('already');
           scheduleAutoReset();
           return;
         }
+      } else if (scanMode === 'CHECK_OUT') {
+        triggerSound('error');
+        setResultMessage(
+          t('studentKiosk.msgNotCheckedInYet', { name: student.fullName })
+        );
+        setKioskState('error');
+        scheduleAutoReset();
+        return;
       }
 
       const checkOutOpenAtScan =
@@ -1016,8 +1192,7 @@ export function StudentKioskPage() {
 
       const isCheckOutAction =
         scanMode === 'CHECK_OUT' ||
-        (scanMode === 'AUTO' &&
-          (existingTodayItems.length === 1 || checkOutOpenAtScan));
+        (scanMode === 'AUTO' && (hasCheckedInToday || checkOutOpenAtScan));
 
       const lateNow = isAfterDeadline(
         studentConfig.workStartTime,
@@ -1037,7 +1212,7 @@ export function StudentKioskPage() {
         date: today,
         timestampIso: now.toISOString(),
         timeFormatted: timeStr,
-        scanMode: isCheckOutAction ? 'CHECK_OUT' : scanMode,
+        scanMode: isCheckOutAction ? 'CHECK_OUT' : 'CHECK_IN',
         status,
         notes: activeSpecialEventNote,
         recordedBy: user?.id ?? null,
@@ -1046,6 +1221,19 @@ export function StudentKioskPage() {
       const updatedQueue = [...readOfflineQueue(activeSchoolId), newItem];
       writeOfflineQueue(activeSchoolId, updatedQueue);
       setOfflineQueue(updatedQueue);
+
+      if (isCheckOutAction) {
+        upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+          checkedOut: true,
+          checkOutFormatted: timeStr,
+        });
+      } else {
+        upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+          checkInIso: now.toISOString(),
+          timeFormatted: timeStr,
+          checkedOut: false,
+        });
+      }
 
       const displayStatus = isCheckOutAction
         ? t('studentKiosk.actionOut')
@@ -1181,6 +1369,12 @@ export function StudentKioskPage() {
 
           if (insertErr) throw insertErr;
 
+          upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+            checkInIso: nowIso,
+            timeFormatted: timeStr,
+            checkedOut: false,
+          });
+
           triggerSound('checkin');
           setLastSavedOffline(false);
           setLastActionType('CHECK_IN');
@@ -1224,6 +1418,10 @@ export function StudentKioskPage() {
         // SKENARIO 2: SISWA SUDAH PUNYA CATATAN HARI INI
         // ==================================================================
         if (['IZIN', 'SAKIT'].includes(existingAtt.status)) {
+          upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+            checkedOut: false,
+            leaveStatus: existingAtt.status,
+          });
           triggerSound('already');
           setResultMessage(
             t('studentKiosk.msgRecordedLeave', {
@@ -1245,6 +1443,11 @@ export function StudentKioskPage() {
               minute: '2-digit',
             }
           );
+          upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+            checkInIso: existingAtt.checkInTime || existingAtt.time || nowIso,
+            checkedOut: true,
+            checkOutFormatted: outTime,
+          });
           triggerSound('already');
           setResultMessage(
             t('studentKiosk.msgAlreadyBoth', {
@@ -1257,6 +1460,21 @@ export function StudentKioskPage() {
           return;
         }
 
+        const recordedInIso = existingAtt.checkInTime || existingAtt.time || nowIso;
+        const inTimeLabel = new Date(recordedInIso).toLocaleTimeString(
+          dateLocale,
+          {
+            timeZone: schoolTimezone,
+            hour: '2-digit',
+            minute: '2-digit',
+          }
+        );
+        upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+          checkInIso: recordedInIso,
+          timeFormatted: inTimeLabel,
+          checkedOut: false,
+        });
+
         if (!studentConfig.enableCheckOut || scanMode === 'CHECK_IN') {
           triggerSound('already');
           setResultMessage(
@@ -1267,12 +1485,9 @@ export function StudentKioskPage() {
           return;
         }
 
-        const recordedInIso = existingAtt.checkInTime || existingAtt.time;
-        const minutesSinceCheckIn = recordedInIso
-          ? Math.floor(
-            (now.getTime() - new Date(recordedInIso).getTime()) / 60000
-          )
-          : 999;
+        const minutesSinceCheckIn = Math.floor(
+          (now.getTime() - new Date(recordedInIso).getTime()) / 60000
+        );
 
         const isPastCheckOutOpen = isAtOrAfterScheduleTime(
           studentConfig.checkOutStartTime,
@@ -1285,13 +1500,6 @@ export function StudentKioskPage() {
           (!isPastCheckOutOpen ||
             minutesSinceCheckIn < MIN_MINUTES_BETWEEN_IN_AND_OUT)
         ) {
-          const inTimeLabel = recordedInIso
-            ? new Date(recordedInIso).toLocaleTimeString(dateLocale, {
-              timeZone: schoolTimezone,
-              hour: '2-digit',
-              minute: '2-digit',
-            })
-            : studentConfig.workStartTime;
           triggerSound('already');
           setResultMessage(
             t('studentKiosk.msgWaitCheckOutWindow', {
@@ -1316,6 +1524,13 @@ export function StudentKioskPage() {
           .eq('id', existingAtt.id);
 
         if (updateErr) throw updateErr;
+
+        upsertDailyCheckedInRecord(activeSchoolId, today, student.id, {
+          checkInIso: recordedInIso,
+          timeFormatted: inTimeLabel,
+          checkedOut: true,
+          checkOutFormatted: timeStr,
+        });
 
         triggerSound('checkout');
         setLastSavedOffline(false);
@@ -1470,7 +1685,7 @@ export function StudentKioskPage() {
 
         if (processTimerRef.current) clearTimeout(processTimerRef.current);
         processTimerRef.current = setTimeout(
-          () => processStudentScan(mappedStudent as FoundStudent),
+          () => void processStudentScan(mappedStudent as FoundStudent),
           STUDENT_PREVIEW_DELAY_MS
         );
       } catch (err) {
@@ -1678,8 +1893,8 @@ export function StudentKioskPage() {
               type="button"
               onClick={toggleSound}
               className={`inline-flex items-center gap-1.5 text-xs font-semibold transition cursor-pointer ${isAudioActive
-                ? 'text-emerald-400 hover:text-emerald-300'
-                : 'text-slate-400 hover:text-slate-200'
+                  ? 'text-emerald-400 hover:text-emerald-300'
+                  : 'text-slate-400 hover:text-slate-200'
                 }`}
               title={
                 isAudioActive
@@ -1689,8 +1904,8 @@ export function StudentKioskPage() {
             >
               <span
                 className={`p-1 rounded-lg transition ${isAudioActive
-                  ? 'bg-emerald-500/15 text-emerald-400'
-                  : 'bg-white/5 text-slate-400'
+                    ? 'bg-emerald-500/15 text-emerald-400'
+                    : 'bg-white/5 text-slate-400'
                   }`}
               >
                 {isAudioActive ? <Volume2 size={14} /> : <VolumeX size={14} />}
@@ -2081,8 +2296,8 @@ export function StudentKioskPage() {
                             type="button"
                             onClick={() => setScanMode(modeOpt.id)}
                             className={`px-3 py-1.5 rounded-xl text-[11px] sm:text-xs font-bold border transition cursor-pointer ${scanMode === modeOpt.id
-                              ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
-                              : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
+                                ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                                : 'bg-card/70 text-foreground border-border opacity-75 hover:opacity-100'
                               }`}
                           >
                             {modeOpt.label}
@@ -2289,8 +2504,8 @@ export function StudentKioskPage() {
                     </div>
                     <span
                       className={`px-2 py-0.5 rounded-md text-[10px] font-bold shrink-0 ${item.status === 'TERLAMBAT'
-                        ? 'bg-amber-500/20 text-amber-500'
-                        : 'bg-emerald-500/20 text-emerald-500'
+                          ? 'bg-amber-500/20 text-amber-500'
+                          : 'bg-emerald-500/20 text-emerald-500'
                         }`}
                     >
                       {item.status}

@@ -32,6 +32,8 @@ import {
   Sparkles,
   CalendarOff,
   Unlock,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { supabase } from '@/services/supabase.client';
 import { attendanceService } from '../services/attendance.service';
@@ -56,6 +58,10 @@ const STORAGE_BUCKET_NAME = 'attendance-selfies'; // Bucket penyimpanan foto sel
 const ATTACHMENT_BUCKET_NAME = 'attendance-attachments'; // Bucket penyimpanan surat izin/dinas
 const STORAGE_DELETE_BATCH_SIZE = 100; // Jumlah maksimal file yang dihapus per gelombang
 const IN_QUERY_CHUNK_SIZE = 100; // Batas aman ukuran array .in('id', ids) pada PostgREST URL
+const FETCH_PAGE_SIZE = 500; // Ukuran halaman penarikan otomatis dari service
+const MAX_FETCH_PAGES = 40; // Batas pengaman halaman maksimum (hingga 20.000 baris/hari)
+const PURGE_BATCH_SIZE = 500; // Ukuran batch sinkronisasi hapus Storage & DB per iterasi
+const TABLE_PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 type ActiveTab = 'overview' | 'students' | 'teachers';
 type SortDirection = 'asc' | 'desc';
@@ -209,6 +215,178 @@ function extractLateMinutesFromTelemetry(
   return 0;
 }
 
+async function fetchAllStudentAttendances(
+  schoolId: string,
+  date: string
+): Promise<StudentAttendanceWithCheckOut[]> {
+  const collected: StudentAttendanceWithCheckOut[] = [];
+  const seenIds = new Set<string>();
+
+  for (let page = 1; page <= MAX_FETCH_PAGES; page++) {
+    const res = await attendanceService.getStudentAttendances({
+      schoolId,
+      date,
+      page,
+      limit: FETCH_PAGE_SIZE,
+    } as Parameters<typeof attendanceService.getStudentAttendances>[0]);
+
+    const batch = (res?.data ?? []) as StudentAttendanceWithCheckOut[];
+    let addedCount = 0;
+
+    for (const row of batch) {
+      if (!seenIds.has(row.id)) {
+        seenIds.add(row.id);
+        collected.push(row);
+        addedCount++;
+      }
+    }
+
+    if (batch.length < FETCH_PAGE_SIZE || addedCount === 0) {
+      break;
+    }
+  }
+
+  return collected;
+}
+
+async function fetchAllTeacherAttendances(
+  schoolId: string,
+  date: string
+): Promise<TeacherAttendanceWithCheckOut[]> {
+  const collected: TeacherAttendanceWithCheckOut[] = [];
+  const seenIds = new Set<string>();
+
+  for (let page = 1; page <= MAX_FETCH_PAGES; page++) {
+    const res = await attendanceService.getTeacherAttendances({
+      schoolId,
+      date,
+      page,
+      limit: FETCH_PAGE_SIZE,
+    } as Parameters<typeof attendanceService.getTeacherAttendances>[0]);
+
+    const batch = (res?.data ?? []) as TeacherAttendanceWithCheckOut[];
+    let addedCount = 0;
+
+    for (const row of batch) {
+      if (!seenIds.has(row.id)) {
+        seenIds.add(row.id);
+        collected.push(row);
+        addedCount++;
+      }
+    }
+
+    if (batch.length < FETCH_PAGE_SIZE || addedCount === 0) {
+      break;
+    }
+  }
+
+  return collected;
+}
+
+async function enrichStudentAttendanceRecords(
+  schoolId: string,
+  records: StudentAttendanceWithCheckOut[]
+): Promise<StudentAttendanceWithCheckOut[]> {
+  if (records.length === 0) return records;
+
+  const studentAttIds = records.map((s) => s.id);
+  const studentChunks = chunkArray(studentAttIds, IN_QUERY_CHUNK_SIZE);
+  const studentChunkResults = await Promise.all(
+    studentChunks.map((chunkIds) =>
+      supabase
+        .from('attendances')
+        .select('id, checkInTime, checkOutTime')
+        .eq('schoolId', schoolId)
+        .in('id', chunkIds)
+    )
+  );
+
+  const studentExtraMap = new Map<string, StudentAttendanceExtraCols>();
+  for (const res of studentChunkResults) {
+    if (!res.error && res.data) {
+      for (const row of res.data as StudentAttendanceExtraCols[]) {
+        studentExtraMap.set(row.id, row);
+      }
+    }
+  }
+
+  if (studentExtraMap.size === 0) return records;
+
+  return records.map((item) => {
+    const extra = studentExtraMap.get(item.id);
+    return extra
+      ? {
+        ...item,
+        checkInTime: extra.checkInTime ?? item.time ?? null,
+        checkOutTime: extra.checkOutTime ?? null,
+      }
+      : item;
+  });
+}
+
+async function enrichTeacherAttendanceRecords(
+  schoolId: string,
+  records: TeacherAttendanceWithCheckOut[]
+): Promise<TeacherAttendanceWithCheckOut[]> {
+  if (records.length === 0) return records;
+
+  const ids = records.map((teacherItem) => teacherItem.id);
+  const teacherChunks = chunkArray(ids, IN_QUERY_CHUNK_SIZE);
+  const extraMap = new Map<string, AttendanceExtraCols>();
+
+  await Promise.all(
+    teacherChunks.map(async (chunkIds) => {
+      const primaryRes = await supabase
+        .from('attendances')
+        .select(
+          'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl, deviceTelemetry, securityFlags'
+        )
+        .eq('schoolId', schoolId)
+        .in('id', chunkIds);
+
+      if (!primaryRes.error && primaryRes.data) {
+        for (const row of primaryRes.data as AttendanceExtraCols[]) {
+          extraMap.set(row.id, row);
+        }
+        return;
+      }
+
+      const fallbackRes = await supabase
+        .from('attendances')
+        .select(
+          'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
+        )
+        .eq('schoolId', schoolId)
+        .in('id', chunkIds);
+
+      if (!fallbackRes.error && fallbackRes.data) {
+        for (const row of fallbackRes.data as AttendanceExtraCols[]) {
+          extraMap.set(row.id, row);
+        }
+      }
+    })
+  );
+
+  if (extraMap.size === 0) return records;
+
+  return records.map((item) => {
+    const extra = extraMap.get(item.id);
+    if (!extra) return item;
+    return {
+      ...item,
+      checkOutLat: extra.checkOutLat ?? null,
+      checkOutLng: extra.checkOutLng ?? null,
+      checkOutDistance: extra.checkOutDistance ?? null,
+      checkOutSelfieUrl: extra.checkOutSelfieUrl ?? null,
+      attachmentUrl: extra.attachmentUrl ?? null,
+      deviceTelemetry: extra.deviceTelemetry ?? item.deviceTelemetry ?? null,
+      securityFlags: Array.isArray(extra.securityFlags)
+        ? extra.securityFlags
+        : item.securityFlags ?? [],
+    };
+  });
+}
+
 export function AttendanceDashboardPage() {
   const { t } = useTranslation();
   const currentLang: SupportedAttendanceLocale =
@@ -256,8 +434,15 @@ export function AttendanceDashboardPage() {
   const [studentStatusFilter, setStudentStatusFilter] = useState<string>('ALL');
   const [teacherStatusFilter, setTeacherStatusFilter] = useState<string>('ALL');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isExportingCsv, setIsExportingCsv] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [teacherSpecialReason, setTeacherSpecialReason] = useState<string>('');
+
+  // State Paginasi Tabel Siswa & Guru
+  const [studentPage, setStudentPage] = useState<number>(1);
+  const [studentPageSize, setStudentPageSize] = useState<number>(50);
+  const [teacherPage, setTeacherPage] = useState<number>(1);
+  const [teacherPageSize, setTeacherPageSize] = useState<number>(50);
 
   const loadRequestSeqRef = useRef<number>(0);
   const selfieRequestSeqRef = useRef<number>(0);
@@ -452,6 +637,7 @@ export function AttendanceDashboardPage() {
   const [oldRecordsCount, setOldRecordsCount] = useState<number | null>(null);
   const [isCheckingOldRecords, setIsCheckingOldRecords] = useState<boolean>(false);
   const [isPurgingOldRecords, setIsPurgingOldRecords] = useState<boolean>(false);
+  const [purgeDeletedSoFar, setPurgeDeletedSoFar] = useState<number>(0);
 
   const cutoffDate = useMemo(
     () => getRetentionCutoffDate(ARCHIVE_RETENTION_YEARS),
@@ -532,7 +718,31 @@ export function AttendanceDashboardPage() {
     homeroomClassSet,
   ]);
 
-  // 3. Muat Ringkasan & Data Absensi Siswa + Guru
+  // Reset halaman tabel saat kriteria filter / tanggal / pengurutan berubah
+  useEffect(() => {
+    setStudentPage(1);
+  }, [
+    activeSchoolId,
+    selectedDate,
+    selectedClassId,
+    studentStatusFilter,
+    searchQuery,
+    studentSort,
+    studentPageSize,
+  ]);
+
+  useEffect(() => {
+    setTeacherPage(1);
+  }, [
+    activeSchoolId,
+    selectedDate,
+    teacherStatusFilter,
+    searchQuery,
+    teacherSort,
+    teacherPageSize,
+  ]);
+
+  // 3. Muat Ringkasan & Data Absensi Siswa + Guru (Berpaginasi Tanpa Batas 500/200)
   const loadData = useCallback(async () => {
     if (!activeSchoolId) return;
     if (!isPrivilegedRole && teacherScope.isLoading) return;
@@ -542,16 +752,8 @@ export function AttendanceDashboardPage() {
     try {
       const [sumRes, studentsRes, teachersRes] = await Promise.allSettled([
         attendanceService.getSummary(activeSchoolId, selectedDate),
-        attendanceService.getStudentAttendances({
-          schoolId: activeSchoolId,
-          date: selectedDate,
-          limit: 500,
-        }),
-        attendanceService.getTeacherAttendances({
-          schoolId: activeSchoolId,
-          date: selectedDate,
-          limit: 200,
-        }),
+        fetchAllStudentAttendances(activeSchoolId, selectedDate),
+        fetchAllTeacherAttendances(activeSchoolId, selectedDate),
       ]);
 
       if (currentReqSeq !== loadRequestSeqRef.current) return;
@@ -565,10 +767,8 @@ export function AttendanceDashboardPage() {
         );
       }
 
-      let enrichedStudents: StudentAttendanceWithCheckOut[] =
-        studentsRes.status === 'fulfilled'
-          ? (studentsRes.value.data as StudentAttendanceWithCheckOut[])
-          : [];
+      let rawStudents: StudentAttendanceWithCheckOut[] =
+        studentsRes.status === 'fulfilled' ? studentsRes.value : [];
 
       if (studentsRes.status === 'rejected') {
         showToast(
@@ -581,17 +781,15 @@ export function AttendanceDashboardPage() {
       }
 
       if (isHomeroomRestricted) {
-        enrichedStudents = enrichedStudents.filter(
+        rawStudents = rawStudents.filter(
           (item) =>
             item.student?.classId &&
             homeroomClassSet.has(String(item.student.classId))
         );
       }
 
-      let enrichedTeachers: TeacherAttendanceWithCheckOut[] =
-        teachersRes.status === 'fulfilled'
-          ? (teachersRes.value.data as TeacherAttendanceWithCheckOut[])
-          : [];
+      let rawTeachers: TeacherAttendanceWithCheckOut[] =
+        teachersRes.status === 'fulfilled' ? teachersRes.value : [];
 
       if (teachersRes.status === 'rejected') {
         console.error(
@@ -600,114 +798,20 @@ export function AttendanceDashboardPage() {
         );
       }
 
-      if (enrichedStudents.length > 0) {
-        const studentAttIds = enrichedStudents.map((s) => s.id);
-        const studentChunks = chunkArray(studentAttIds, IN_QUERY_CHUNK_SIZE);
-        const studentChunkResults = await Promise.all(
-          studentChunks.map((chunkIds) =>
-            supabase
-              .from('attendances')
-              .select('id, checkInTime, checkOutTime')
-              .eq('schoolId', activeSchoolId)
-              .in('id', chunkIds)
-          )
-        );
-
-        if (currentReqSeq !== loadRequestSeqRef.current) return;
-
-        const studentExtraMap = new Map<string, StudentAttendanceExtraCols>();
-        for (const res of studentChunkResults) {
-          if (!res.error && res.data) {
-            for (const row of res.data as StudentAttendanceExtraCols[]) {
-              studentExtraMap.set(row.id, row);
-            }
-          }
-        }
-
-        if (studentExtraMap.size > 0) {
-          enrichedStudents = enrichedStudents.map((item) => {
-            const extra = studentExtraMap.get(item.id);
-            return extra
-              ? {
-                ...item,
-                checkInTime: extra.checkInTime ?? item.time ?? null,
-                checkOutTime: extra.checkOutTime ?? null,
-              }
-              : item;
-          });
-        }
-      }
-
-      if (enrichedTeachers.length > 0) {
-        const ids = enrichedTeachers.map((teacherItem) => teacherItem.id);
-        const teacherChunks = chunkArray(ids, IN_QUERY_CHUNK_SIZE);
-        const extraMap = new Map<string, AttendanceExtraCols>();
-
-        await Promise.all(
-          teacherChunks.map(async (chunkIds) => {
-            const primaryRes = await supabase
-              .from('attendances')
-              .select(
-                'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl, deviceTelemetry, securityFlags'
-              )
-              .eq('schoolId', activeSchoolId)
-              .in('id', chunkIds);
-
-            if (!primaryRes.error && primaryRes.data) {
-              for (const row of primaryRes.data as AttendanceExtraCols[]) {
-                extraMap.set(row.id, row);
-              }
-              return;
-            }
-
-            const fallbackRes = await supabase
-              .from('attendances')
-              .select(
-                'id, checkOutLat, checkOutLng, checkOutDistance, checkOutSelfieUrl, attachmentUrl'
-              )
-              .eq('schoolId', activeSchoolId)
-              .in('id', chunkIds);
-
-            if (!fallbackRes.error && fallbackRes.data) {
-              for (const row of fallbackRes.data as AttendanceExtraCols[]) {
-                extraMap.set(row.id, row);
-              }
-            }
-          })
-        );
-
-        if (currentReqSeq !== loadRequestSeqRef.current) return;
-
-        if (extraMap.size > 0) {
-          enrichedTeachers = enrichedTeachers.map((item) => {
-            const extra = extraMap.get(item.id);
-            if (!extra) return item;
-            return {
-              ...item,
-              checkOutLat: extra.checkOutLat ?? null,
-              checkOutLng: extra.checkOutLng ?? null,
-              checkOutDistance: extra.checkOutDistance ?? null,
-              checkOutSelfieUrl: extra.checkOutSelfieUrl ?? null,
-              attachmentUrl: extra.attachmentUrl ?? null,
-              deviceTelemetry:
-                extra.deviceTelemetry ?? item.deviceTelemetry ?? null,
-              securityFlags: Array.isArray(extra.securityFlags)
-                ? extra.securityFlags
-                : item.securityFlags ?? [],
-            };
-          });
-        }
-      }
-
       if (!teacherScope.canViewAllTeacherAttendance) {
-        enrichedTeachers = teacherScope.teacherId
-          ? enrichedTeachers.filter(
+        rawTeachers = teacherScope.teacherId
+          ? rawTeachers.filter(
             (item) =>
               String(item.teacherId) === teacherScope.teacherId ||
               String(item.teacher?.id) === teacherScope.teacherId
           )
           : [];
       }
+
+      const [enrichedStudents, enrichedTeachers] = await Promise.all([
+        enrichStudentAttendanceRecords(activeSchoolId, rawStudents),
+        enrichTeacherAttendanceRecords(activeSchoolId, rawTeachers),
+      ]);
 
       if (currentReqSeq === loadRequestSeqRef.current) {
         setStudentRecords(enrichedStudents);
@@ -853,153 +957,188 @@ export function AttendanceDashboardPage() {
     };
   }, [teacherRecords]);
 
-  const filteredStudents = useMemo(() => {
-    const filtered = studentRecords.filter((r) => {
-      const normalizedStatus = normalizeStatusKey(r.status);
-      const matchesClass =
-        selectedClassId === 'ALL' || r.student?.classId === selectedClassId;
-      const matchesStatus =
-        studentStatusFilter === 'ALL' ||
-        normalizedStatus === studentStatusFilter;
-      const effectiveNote = resolveEffectiveNote(r.notes, 'SISWA') ?? '';
-      const q = searchQuery.trim().toLowerCase();
-      const matchesSearch =
-        !q ||
-        r.student?.fullName?.toLowerCase().includes(q) ||
-        r.student?.nisn?.toLowerCase().includes(q) ||
-        r.student?.nis?.toLowerCase().includes(q) ||
-        effectiveNote.toLowerCase().includes(q);
-      return matchesClass && matchesStatus && matchesSearch;
-    });
+  const filterAndSortStudents = useCallback(
+    (source: StudentAttendanceWithCheckOut[]) => {
+      const filtered = source.filter((r) => {
+        const normalizedStatus = normalizeStatusKey(r.status);
+        const matchesClass =
+          selectedClassId === 'ALL' || r.student?.classId === selectedClassId;
+        const matchesStatus =
+          studentStatusFilter === 'ALL' ||
+          normalizedStatus === studentStatusFilter;
+        const effectiveNote = resolveEffectiveNote(r.notes, 'SISWA') ?? '';
+        const q = searchQuery.trim().toLowerCase();
+        const matchesSearch =
+          !q ||
+          r.student?.fullName?.toLowerCase().includes(q) ||
+          r.student?.nisn?.toLowerCase().includes(q) ||
+          r.student?.nis?.toLowerCase().includes(q) ||
+          effectiveNote.toLowerCase().includes(q);
+        return matchesClass && matchesStatus && matchesSearch;
+      });
 
-    if (!studentSort) return filtered;
+      if (!studentSort) return filtered;
 
-    const dir = studentSort.direction === 'asc' ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      switch (studentSort.key) {
-        case 'fullName':
-          return (
-            (a.student?.fullName ?? '').localeCompare(
-              b.student?.fullName ?? '',
-              sortLocale
-            ) * dir
-          );
-        case 'className':
-          return (
-            (a.student?.classes?.name ?? '').localeCompare(
-              b.student?.classes?.name ?? '',
-              sortLocale,
-              { numeric: true }
-            ) * dir
-          );
-        case 'nisn':
-          return (
-            (a.student?.nisn ?? '').localeCompare(
-              b.student?.nisn ?? '',
-              sortLocale,
-              { numeric: true }
-            ) * dir
-          );
-        case 'status':
-          return (
-            getStatusLabel(a.status).localeCompare(
-              getStatusLabel(b.status),
-              sortLocale
-            ) * dir
-          );
-        case 'time': {
-          const inA = a.checkInTime || a.time || '';
-          const inB = b.checkInTime || b.time || '';
-          return inA.localeCompare(inB) * dir;
+      const dir = studentSort.direction === 'asc' ? 1 : -1;
+      return [...filtered].sort((a, b) => {
+        switch (studentSort.key) {
+          case 'fullName':
+            return (
+              (a.student?.fullName ?? '').localeCompare(
+                b.student?.fullName ?? '',
+                sortLocale
+              ) * dir
+            );
+          case 'className':
+            return (
+              (a.student?.classes?.name ?? '').localeCompare(
+                b.student?.classes?.name ?? '',
+                sortLocale,
+                { numeric: true }
+              ) * dir
+            );
+          case 'nisn':
+            return (
+              (a.student?.nisn ?? '').localeCompare(
+                b.student?.nisn ?? '',
+                sortLocale,
+                { numeric: true }
+              ) * dir
+            );
+          case 'status':
+            return (
+              getStatusLabel(a.status).localeCompare(
+                getStatusLabel(b.status),
+                sortLocale
+              ) * dir
+            );
+          case 'time': {
+            const inA = a.checkInTime || a.time || '';
+            const inB = b.checkInTime || b.time || '';
+            return inA.localeCompare(inB) * dir;
+          }
+          case 'checkOutTime':
+            return (
+              (a.checkOutTime ?? '').localeCompare(b.checkOutTime ?? '') * dir
+            );
+          default:
+            return 0;
         }
-        case 'checkOutTime':
-          return (
-            (a.checkOutTime ?? '').localeCompare(b.checkOutTime ?? '') * dir
-          );
-        default:
-          return 0;
-      }
-    });
-  }, [
-    studentRecords,
-    selectedClassId,
-    studentStatusFilter,
-    searchQuery,
-    studentSort,
-    resolveEffectiveNote,
-    sortLocale,
-    getStatusLabel,
-  ]);
+      });
+    },
+    [
+      selectedClassId,
+      studentStatusFilter,
+      searchQuery,
+      studentSort,
+      resolveEffectiveNote,
+      sortLocale,
+      getStatusLabel,
+    ]
+  );
 
-  const filteredTeachers = useMemo(() => {
-    const filtered = teacherRecords.filter((r) => {
-      const normalizedStatus = normalizeStatusKey(r.status);
-      const matchesStatus =
-        teacherStatusFilter === 'ALL' ||
-        normalizedStatus === teacherStatusFilter;
-      if (!matchesStatus) return false;
+  const filterAndSortTeachers = useCallback(
+    (source: TeacherAttendanceWithCheckOut[]) => {
+      const filtered = source.filter((r) => {
+        const normalizedStatus = normalizeStatusKey(r.status);
+        const matchesStatus =
+          teacherStatusFilter === 'ALL' ||
+          normalizedStatus === teacherStatusFilter;
+        if (!matchesStatus) return false;
 
-      if (!searchQuery.trim()) return true;
-      const q = searchQuery.trim().toLowerCase();
-      const effectiveNote = resolveEffectiveNote(r.notes, 'GURU') ?? '';
-      return (
-        r.teacher?.fullName?.toLowerCase().includes(q) ||
-        r.teacher?.nip?.toLowerCase().includes(q) ||
-        r.teacher?.nuptk?.toLowerCase().includes(q) ||
-        effectiveNote.toLowerCase().includes(q)
-      );
-    });
+        if (!searchQuery.trim()) return true;
+        const q = searchQuery.trim().toLowerCase();
+        const effectiveNote = resolveEffectiveNote(r.notes, 'GURU') ?? '';
+        return (
+          r.teacher?.fullName?.toLowerCase().includes(q) ||
+          r.teacher?.nip?.toLowerCase().includes(q) ||
+          r.teacher?.nuptk?.toLowerCase().includes(q) ||
+          effectiveNote.toLowerCase().includes(q)
+        );
+      });
 
-    if (!teacherSort) return filtered;
+      if (!teacherSort) return filtered;
 
-    const dir = teacherSort.direction === 'asc' ? 1 : -1;
-    return [...filtered].sort((a, b) => {
-      switch (teacherSort.key) {
-        case 'fullName':
-          return (
-            (a.teacher?.fullName ?? '').localeCompare(
-              b.teacher?.fullName ?? '',
-              sortLocale
-            ) * dir
-          );
-        case 'nip': {
-          const idA = a.teacher?.nip || a.teacher?.nuptk || '';
-          const idB = b.teacher?.nip || b.teacher?.nuptk || '';
-          return idA.localeCompare(idB, sortLocale, { numeric: true }) * dir;
+      const dir = teacherSort.direction === 'asc' ? 1 : -1;
+      return [...filtered].sort((a, b) => {
+        switch (teacherSort.key) {
+          case 'fullName':
+            return (
+              (a.teacher?.fullName ?? '').localeCompare(
+                b.teacher?.fullName ?? '',
+                sortLocale
+              ) * dir
+            );
+          case 'nip': {
+            const idA = a.teacher?.nip || a.teacher?.nuptk || '';
+            const idB = b.teacher?.nip || b.teacher?.nuptk || '';
+            return idA.localeCompare(idB, sortLocale, { numeric: true }) * dir;
+          }
+          case 'status':
+            return (
+              getStatusLabel(a.status).localeCompare(
+                getStatusLabel(b.status),
+                sortLocale
+              ) * dir
+            );
+          case 'checkInTime':
+            return (
+              (a.checkInTime ?? '').localeCompare(b.checkInTime ?? '') * dir
+            );
+          case 'checkOutTime':
+            return (
+              (a.checkOutTime ?? '').localeCompare(b.checkOutTime ?? '') * dir
+            );
+          case 'checkInDistance': {
+            const distA = a.checkInDistance ?? Number.MAX_SAFE_INTEGER;
+            const distB = b.checkInDistance ?? Number.MAX_SAFE_INTEGER;
+            return (distA - distB) * dir;
+          }
+          default:
+            return 0;
         }
-        case 'status':
-          return (
-            getStatusLabel(a.status).localeCompare(
-              getStatusLabel(b.status),
-              sortLocale
-            ) * dir
-          );
-        case 'checkInTime':
-          return (
-            (a.checkInTime ?? '').localeCompare(b.checkInTime ?? '') * dir
-          );
-        case 'checkOutTime':
-          return (
-            (a.checkOutTime ?? '').localeCompare(b.checkOutTime ?? '') * dir
-          );
-        case 'checkInDistance': {
-          const distA = a.checkInDistance ?? Number.MAX_SAFE_INTEGER;
-          const distB = b.checkInDistance ?? Number.MAX_SAFE_INTEGER;
-          return (distA - distB) * dir;
-        }
-        default:
-          return 0;
-      }
-    });
-  }, [
-    teacherRecords,
-    teacherStatusFilter,
-    searchQuery,
-    teacherSort,
-    resolveEffectiveNote,
-    sortLocale,
-    getStatusLabel,
-  ]);
+      });
+    },
+    [
+      teacherStatusFilter,
+      searchQuery,
+      teacherSort,
+      resolveEffectiveNote,
+      sortLocale,
+      getStatusLabel,
+    ]
+  );
+
+  const filteredStudents = useMemo(
+    () => filterAndSortStudents(studentRecords),
+    [filterAndSortStudents, studentRecords]
+  );
+
+  const filteredTeachers = useMemo(
+    () => filterAndSortTeachers(teacherRecords),
+    [filterAndSortTeachers, teacherRecords]
+  );
+
+  // Potongan Data Halaman Aktif untuk Tabel Siswa & Guru
+  const studentTotalPages = Math.max(
+    1,
+    Math.ceil(filteredStudents.length / studentPageSize)
+  );
+  const safeStudentPage = Math.min(studentPage, studentTotalPages);
+  const paginatedStudents = useMemo(() => {
+    const start = (safeStudentPage - 1) * studentPageSize;
+    return filteredStudents.slice(start, start + studentPageSize);
+  }, [filteredStudents, safeStudentPage, studentPageSize]);
+
+  const teacherTotalPages = Math.max(
+    1,
+    Math.ceil(filteredTeachers.length / teacherPageSize)
+  );
+  const safeTeacherPage = Math.min(teacherPage, teacherTotalPages);
+  const paginatedTeachers = useMemo(() => {
+    const start = (safeTeacherPage - 1) * teacherPageSize;
+    return filteredTeachers.slice(start, start + teacherPageSize);
+  }, [filteredTeachers, safeTeacherPage, teacherPageSize]);
 
   // 4. Hapus 1 Baris Data Absensi beserta SELURUH Foto Selfie & Lampiran Surat
   const handleConfirmDeleteSingle = async () => {
@@ -1101,7 +1240,7 @@ export function AttendanceDashboardPage() {
     }
   }, [purgeModalOpen, purgeScope, isSuperAdmin, checkOldAttendanceRecords]);
 
-  // Ekspor Backup CSV Arsip Lama (> 2 Tahun)
+  // Ekspor Backup CSV Arsip Lama (> 2 Tahun) secara Berpaginasi
   const handleBackupOldRecordsCsv = async () => {
     if (!isSuperAdmin) return;
     if (purgeScope === 'CURRENT_SCHOOL' && !activeSchoolId) {
@@ -1110,32 +1249,46 @@ export function AttendanceDashboardPage() {
     }
 
     try {
-      let query = supabase
-        .from('attendances')
-        .select('*')
-        .lt('date', cutoffDate)
-        .order('date', { ascending: true })
-        .limit(10000);
+      const allRows: Array<Record<string, unknown>> = [];
+      const batchSize = 1000;
+      const maxPages = 100;
 
-      if (purgeScope === 'CURRENT_SCHOOL') {
-        query = query.eq('schoolId', activeSchoolId);
+      for (let page = 0; page < maxPages; page++) {
+        const from = page * batchSize;
+        const to = from + batchSize - 1;
+
+        let query = supabase
+          .from('attendances')
+          .select('*')
+          .lt('date', cutoffDate)
+          .order('date', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to);
+
+        if (purgeScope === 'CURRENT_SCHOOL') {
+          query = query.eq('schoolId', activeSchoolId);
+        }
+
+        const { data, error } = await query;
+        if (error) throw error;
+
+        const batch = (data ?? []) as Array<Record<string, unknown>>;
+        allRows.push(...batch);
+
+        if (batch.length < batchSize) break;
       }
 
-      const { data, error } = await query;
-      if (error) throw error;
-
-      const rows = (data ?? []) as Array<Record<string, unknown>>;
-      if (rows.length === 0) {
+      if (allRows.length === 0) {
         showToast('error', t('attendanceDashboard.errNoOldRecordsToBackup'));
         return;
       }
 
-      const headers = Object.keys(rows[0]);
+      const headers = Object.keys(allRows[0]);
       const escapeCsv = (v: unknown) =>
         `"${String(v ?? '').replace(/"/g, '""')}"`;
       const csvLines = [
         headers.map(escapeCsv).join(','),
-        ...rows.map((r) => headers.map((h) => escapeCsv(r[h])).join(',')),
+        ...allRows.map((r) => headers.map((h) => escapeCsv(r[h])).join(',')),
       ];
 
       const blob = new Blob(['\uFEFF' + csvLines.join('\n')], {
@@ -1152,7 +1305,7 @@ export function AttendanceDashboardPage() {
 
       showToast(
         'success',
-        t('attendanceDashboard.toastBackupSuccess', { count: rows.length })
+        t('attendanceDashboard.toastBackupSuccess', { count: allRows.length })
       );
     } catch (err: unknown) {
       showToast(
@@ -1162,7 +1315,8 @@ export function AttendanceDashboardPage() {
     }
   };
 
-  // Eksekusi Hapus Permanen Arsip > 2 Tahun
+  // Eksekusi Hapus Permanen Arsip > 2 Tahun secara Bertahap per Batch ID
+  // (Sinkron antara pembersihan Storage & DELETE database agar bebas orphan files)
   const handlePurgeOldRecords = async () => {
     if (!isSuperAdmin) return;
     if (purgeScope === 'CURRENT_SCHOOL' && !activeSchoolId) {
@@ -1171,48 +1325,71 @@ export function AttendanceDashboardPage() {
     }
 
     setIsPurgingOldRecords(true);
+    setPurgeDeletedSoFar(0);
+    let totalDeleted = 0;
+
     try {
-      let fetchFilesQuery = supabase
-        .from('attendances')
-        .select('checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
-        .lt('date', cutoffDate)
-        .limit(10000);
+      const maxIterations = 200; // Hingga 100.000 arsip per sesi
+      for (let iter = 0; iter < maxIterations; iter++) {
+        let batchSelectQuery = supabase
+          .from('attendances')
+          .select('id, checkInSelfieUrl, checkOutSelfieUrl, attachmentUrl')
+          .lt('date', cutoffDate)
+          .order('date', { ascending: true })
+          .limit(PURGE_BATCH_SIZE);
 
-      if (purgeScope === 'CURRENT_SCHOOL') {
-        fetchFilesQuery = fetchFilesQuery.eq('schoolId', activeSchoolId);
+        if (purgeScope === 'CURRENT_SCHOOL') {
+          batchSelectQuery = batchSelectQuery.eq('schoolId', activeSchoolId);
+        }
+
+        const { data: batchRows, error: fetchError } = await batchSelectQuery;
+        if (fetchError) throw fetchError;
+
+        const typedRows = (batchRows ?? []) as Array<
+          AttendanceFileRow & { id: string }
+        >;
+        if (typedRows.length === 0) break;
+
+        const selfiePathsToRemove = typedRows.flatMap((row) => [
+          row.checkInSelfieUrl,
+          row.checkOutSelfieUrl,
+        ]);
+        const attachmentPathsToRemove = typedRows.map(
+          (row) => row.attachmentUrl
+        );
+
+        await Promise.all([
+          removeFilesFromStorage(selfiePathsToRemove, STORAGE_BUCKET_NAME),
+          removeFilesFromStorage(attachmentPathsToRemove, ATTACHMENT_BUCKET_NAME),
+        ]);
+
+        const batchIds = typedRows.map((row) => row.id);
+        const idChunks = chunkArray(batchIds, IN_QUERY_CHUNK_SIZE);
+
+        for (const chunkIds of idChunks) {
+          let deleteChunkQuery = supabase
+            .from('attendances')
+            .delete()
+            .in('id', chunkIds);
+
+          if (purgeScope === 'CURRENT_SCHOOL') {
+            deleteChunkQuery = deleteChunkQuery.eq('schoolId', activeSchoolId);
+          }
+
+          const { error: deleteError } = await deleteChunkQuery;
+          if (deleteError) throw deleteError;
+        }
+
+        totalDeleted += typedRows.length;
+        setPurgeDeletedSoFar(totalDeleted);
+
+        if (typedRows.length < PURGE_BATCH_SIZE) break;
       }
-
-      const { data: oldFiles } = await fetchFilesQuery;
-      const typedOldFiles = (oldFiles ?? []) as AttendanceFileRow[];
-      const selfiePathsToRemove = typedOldFiles.flatMap((row) => [
-        row.checkInSelfieUrl,
-        row.checkOutSelfieUrl,
-      ]);
-      const attachmentPathsToRemove = typedOldFiles.map(
-        (row) => row.attachmentUrl
-      );
-
-      await Promise.all([
-        removeFilesFromStorage(selfiePathsToRemove, STORAGE_BUCKET_NAME),
-        removeFilesFromStorage(attachmentPathsToRemove, ATTACHMENT_BUCKET_NAME),
-      ]);
-
-      let deleteQuery = supabase
-        .from('attendances')
-        .delete()
-        .lt('date', cutoffDate);
-
-      if (purgeScope === 'CURRENT_SCHOOL') {
-        deleteQuery = deleteQuery.eq('schoolId', activeSchoolId);
-      }
-
-      const { error } = await deleteQuery;
-      if (error) throw error;
 
       showToast(
         'success',
         t('attendanceDashboard.toastPurgeSuccess', {
-          count: oldRecordsCount ?? 0,
+          count: totalDeleted,
           date: cutoffDate,
         })
       );
@@ -1225,6 +1402,7 @@ export function AttendanceDashboardPage() {
       );
     } finally {
       setIsPurgingOldRecords(false);
+      setPurgeDeletedSoFar(0);
     }
   };
 
@@ -1310,99 +1488,151 @@ export function AttendanceDashboardPage() {
     );
   };
 
-  // Ekspor Laporan CSV (Dwibahasa + Kalender Jawa + Keterangan Kegiatan Khusus)
-  const handleExportCsv = () => {
-    const escapeCsv = (val: unknown) => {
-      const str = String(val ?? '-').replace(/"/g, '""');
-      return `"${str}"`;
-    };
+  // Ekspor Laporan CSV (Auto-Paged Fetch Lengkap + Dwibahasa + Kalender Jawa)
+  const handleExportCsv = async () => {
+    if (!activeSchoolId || isExportingCsv) return;
 
-    const lines: string[] = [];
+    setIsExportingCsv(true);
+    try {
+      const escapeCsv = (val: unknown) => {
+        const str = String(val ?? '-').replace(/"/g, '""');
+        return `"${str}"`;
+      };
 
-    if (activeTab === 'teachers') {
-      lines.push(
-        t('attendanceDashboard.csvTeacherHeaders')
-          .split(',')
-          .map(escapeCsv)
-          .join(',')
-      );
+      const lines: string[] = [];
 
-      filteredTeachers.forEach((r, idx) => {
-        const jvInfo = getJavaneseDateInfo(r.date, currentLang);
-        const lateMins = extractLateMinutesFromTelemetry(recordLateTelemetry(r));
+      if (activeTab === 'teachers') {
+        let rawTeachers = await fetchAllTeacherAttendances(
+          activeSchoolId,
+          selectedDate
+        );
+
+        if (!teacherScope.canViewAllTeacherAttendance) {
+          rawTeachers = teacherScope.teacherId
+            ? rawTeachers.filter(
+              (item) =>
+                String(item.teacherId) === teacherScope.teacherId ||
+                String(item.teacher?.id) === teacherScope.teacherId
+            )
+            : [];
+        }
+
+        const enrichedTeachers = await enrichTeacherAttendanceRecords(
+          activeSchoolId,
+          rawTeachers
+        );
+        const exportRows = filterAndSortTeachers(enrichedTeachers);
+
         lines.push(
-          [
-            idx + 1,
-            r.date,
-            jvInfo.hariPasaran,
-            `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja`,
-            r.teacher?.fullName ?? '-',
-            r.teacher?.nip ?? '-',
-            r.teacher?.nuptk ?? '-',
-            getStatusLabel(r.status),
-            lateMins > 0 ? lateMins : 0,
-            formatTime(r.checkInTime),
-            formatTime(r.checkOutTime),
-            r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
-            r.checkOutDistance != null ? Math.round(r.checkOutDistance) : '-',
-            r.checkInTime
-              ? r.isCheckInMock
-                ? t('attendanceDashboard.gpsFake')
-                : t('attendanceDashboard.gpsValid')
-              : '-',
-            resolveEffectiveNote(r.notes, 'GURU') ?? '-',
-          ]
+          t('attendanceDashboard.csvTeacherHeaders')
+            .split(',')
             .map(escapeCsv)
             .join(',')
         );
-      });
-    } else {
-      lines.push(
-        t('attendanceDashboard.csvStudentHeaders')
-          .split(',')
-          .map(escapeCsv)
-          .join(',')
-      );
 
-      filteredStudents.forEach((r, idx) => {
-        const jvInfo = getJavaneseDateInfo(r.date, currentLang);
+        exportRows.forEach((r, idx) => {
+          const jvInfo = getJavaneseDateInfo(r.date, currentLang);
+          const lateMins = extractLateMinutesFromTelemetry(r.deviceTelemetry);
+          lines.push(
+            [
+              idx + 1,
+              r.date,
+              jvInfo.hariPasaran,
+              `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja`,
+              r.teacher?.fullName ?? '-',
+              r.teacher?.nip ?? '-',
+              r.teacher?.nuptk ?? '-',
+              getStatusLabel(r.status),
+              lateMins > 0 ? lateMins : 0,
+              formatTime(r.checkInTime),
+              formatTime(r.checkOutTime),
+              r.checkInDistance != null ? Math.round(r.checkInDistance) : '-',
+              r.checkOutDistance != null ? Math.round(r.checkOutDistance) : '-',
+              r.checkInTime
+                ? r.isCheckInMock
+                  ? t('attendanceDashboard.gpsFake')
+                  : t('attendanceDashboard.gpsValid')
+                : '-',
+              resolveEffectiveNote(r.notes, 'GURU') ?? '-',
+            ]
+              .map(escapeCsv)
+              .join(',')
+          );
+        });
+      } else {
+        let rawStudents = await fetchAllStudentAttendances(
+          activeSchoolId,
+          selectedDate
+        );
+
+        if (isHomeroomRestricted) {
+          rawStudents = rawStudents.filter(
+            (item) =>
+              item.student?.classId &&
+              homeroomClassSet.has(String(item.student.classId))
+          );
+        }
+
+        const enrichedStudents = await enrichStudentAttendanceRecords(
+          activeSchoolId,
+          rawStudents
+        );
+        const exportRows = filterAndSortStudents(enrichedStudents);
+
         lines.push(
-          [
-            idx + 1,
-            r.date,
-            jvInfo.hariPasaran,
-            `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja`,
-            r.student?.fullName ?? '-',
-            r.student?.nisn ?? '-',
-            r.student?.classes?.name ?? '-',
-            getStatusLabel(r.status),
-            formatTime(r.checkInTime || r.time),
-            formatTime(r.checkOutTime),
-            r.recordedBy
-              ? t('attendanceDashboard.recordedByAdmin')
-              : t('attendanceDashboard.recordedByKiosk'),
-            resolveEffectiveNote(r.notes, 'SISWA') ?? '-',
-          ]
+          t('attendanceDashboard.csvStudentHeaders')
+            .split(',')
             .map(escapeCsv)
             .join(',')
         );
-      });
+
+        exportRows.forEach((r, idx) => {
+          const jvInfo = getJavaneseDateInfo(r.date, currentLang);
+          lines.push(
+            [
+              idx + 1,
+              r.date,
+              jvInfo.hariPasaran,
+              `${jvInfo.javaneseDay} ${jvInfo.javaneseMonth} ${jvInfo.javaneseYear} Ja`,
+              r.student?.fullName ?? '-',
+              r.student?.nisn ?? '-',
+              r.student?.classes?.name ?? '-',
+              getStatusLabel(r.status),
+              formatTime(r.checkInTime || r.time),
+              formatTime(r.checkOutTime),
+              r.recordedBy
+                ? t('attendanceDashboard.recordedByAdmin')
+                : t('attendanceDashboard.recordedByKiosk'),
+              resolveEffectiveNote(r.notes, 'SISWA') ?? '-',
+            ]
+              .map(escapeCsv)
+              .join(',')
+          );
+        });
+      }
+
+      const csvContent = '\uFEFF' + lines.join('\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const prefix =
+        activeTab === 'teachers'
+          ? t('attendanceDashboard.csvTeacherFilePrefix')
+          : t('attendanceDashboard.csvStudentFilePrefix');
+      link.href = url;
+      link.setAttribute('download', `${prefix}_${selectedDate}.csv`);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+    } catch (err: unknown) {
+      showToast(
+        'error',
+        getErrorMessage(err, t('attendanceDashboard.errBackupCsv'))
+      );
+    } finally {
+      setIsExportingCsv(false);
     }
-
-    const csvContent = '\uFEFF' + lines.join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    const prefix =
-      activeTab === 'teachers'
-        ? t('attendanceDashboard.csvTeacherFilePrefix')
-        : t('attendanceDashboard.csvStudentFilePrefix');
-    link.href = url;
-    link.setAttribute('download', `${prefix}_${selectedDate}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
   };
 
   return (
@@ -1415,8 +1645,8 @@ export function AttendanceDashboardPage() {
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -14 }}
             className={`mb-4 p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-lg ${toast.type === 'success'
-              ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
-              : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
+                ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-200'
+                : 'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-200'
               }`}
           >
             {toast.type === 'success' ? (
@@ -1513,9 +1743,10 @@ export function AttendanceDashboardPage() {
           <button
             type="button"
             className="btn-secondary"
-            onClick={handleExportCsv}
+            onClick={() => void handleExportCsv()}
             disabled={
               isLoading ||
+              isExportingCsv ||
               (activeTab === 'teachers'
                 ? filteredTeachers.length === 0
                 : filteredStudents.length === 0)
@@ -1526,7 +1757,11 @@ export function AttendanceDashboardPage() {
                 : t('attendanceDashboard.titleExportStudentsCsv')
             }
           >
-            <Download size={16} />
+            {isExportingCsv ? (
+              <RefreshCw size={16} className="spin" />
+            ) : (
+              <Download size={16} />
+            )}
             {t('attendanceDashboard.btnExportCsv')}
           </button>
         </div>
@@ -1840,8 +2075,8 @@ export function AttendanceDashboardPage() {
                     }
                   }}
                   className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition border cursor-pointer ${isSelected
-                    ? 'text-white shadow-xs'
-                    : 'bg-card/60 border-border opacity-75 hover:opacity-100'
+                      ? 'text-white shadow-xs'
+                      : 'bg-card/60 border-border opacity-75 hover:opacity-100'
                     }`}
                   style={
                     isSelected
@@ -1981,159 +2216,224 @@ export function AttendanceDashboardPage() {
                 <p>{t('attendanceDashboard.emptyStudents')}</p>
               </div>
             ) : (
-              <div className="table-wrapper">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th className="w-12 text-center">
-                        {t('attendanceDashboard.colNo')}
-                      </th>
-                      <th
-                        onClick={() => handleSortStudent('fullName')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colStudentName')}
-                        {renderSortIcon(
-                          studentSort?.key === 'fullName',
-                          studentSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortStudent('className')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colClass')}
-                        {renderSortIcon(
-                          studentSort?.key === 'className',
-                          studentSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortStudent('nisn')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colNisn')}
-                        {renderSortIcon(
-                          studentSort?.key === 'nisn',
-                          studentSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortStudent('status')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colStatus')}
-                        {renderSortIcon(
-                          studentSort?.key === 'status',
-                          studentSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortStudent('time')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colCheckIn')}
-                        {renderSortIcon(
-                          studentSort?.key === 'time',
-                          studentSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortStudent('checkOutTime')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colCheckOut')}
-                        {renderSortIcon(
-                          studentSort?.key === 'checkOutTime',
-                          studentSort?.direction
-                        )}
-                      </th>
-                      <th>{t('attendanceDashboard.colRecordedBy')}</th>
-                      <th>{t('attendanceDashboard.colNotes')}</th>
-                      {canDeleteRecord && (
-                        <th className="text-center">
-                          {t('attendanceDashboard.colActions')}
+              <>
+                <div className="table-wrapper">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th className="w-12 text-center">
+                          {t('attendanceDashboard.colNo')}
                         </th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredStudents.map((record, index) => {
-                      const stKey = normalizeStatusKey(record.status);
-                      return (
-                        <tr key={record.id}>
-                          <td className="td-mono text-xs text-center opacity-70">
-                            {index + 1}
-                          </td>
-                          <td className="td-name">
-                            {record.student?.fullName ?? '-'}
-                          </td>
-                          <td>{record.student?.classes?.name ?? '-'}</td>
-                          <td className="td-mono">
-                            {record.student?.nisn ?? '-'}
-                          </td>
-                          <td>
-                            <span
-                              className="status-badge"
-                              style={{
-                                background:
-                                  (STATUS_COLORS[stKey] ?? '#6B7280') + '20',
-                                color: STATUS_COLORS[stKey] ?? '#6B7280',
-                              }}
-                            >
-                              {getStatusLabel(stKey)}
-                            </span>
-                          </td>
-                          <td className="td-mono">
-                            {formatTime(record.checkInTime || record.time)}
-                          </td>
-                          <td className="td-mono">
-                            {record.checkOutTime ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
-                                {formatTime(record.checkOutTime)}
-                              </span>
-                            ) : (
-                              <span className="opacity-40">-</span>
-                            )}
-                          </td>
-                          <td>
-                            {record.recordedBy
-                              ? t('attendanceDashboard.recordedByAdmin')
-                              : t('attendanceDashboard.recordedByKiosk')}
-                          </td>
-                          <td>{renderStudentNotes(record)}</td>
-                          {canDeleteRecord && (
-                            <td className="text-center">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDeleteTarget({
-                                    id: record.id,
-                                    name:
-                                      record.student?.fullName ??
-                                      t(
-                                        'attendanceDashboard.studentFallbackName'
-                                      ),
-                                    date: record.date,
-                                    selfiePaths: [],
-                                    attachmentPaths: [],
-                                  })
-                                }
-                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                title={t(
-                                  'attendanceDashboard.titleDeleteSingleStudent'
-                                )}
-                              >
-                                <Trash2 size={15} />
-                              </button>
-                            </td>
+                        <th
+                          onClick={() => handleSortStudent('fullName')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colStudentName')}
+                          {renderSortIcon(
+                            studentSort?.key === 'fullName',
+                            studentSort?.direction
                           )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                        </th>
+                        <th
+                          onClick={() => handleSortStudent('className')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colClass')}
+                          {renderSortIcon(
+                            studentSort?.key === 'className',
+                            studentSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortStudent('nisn')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colNisn')}
+                          {renderSortIcon(
+                            studentSort?.key === 'nisn',
+                            studentSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortStudent('status')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colStatus')}
+                          {renderSortIcon(
+                            studentSort?.key === 'status',
+                            studentSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortStudent('time')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colCheckIn')}
+                          {renderSortIcon(
+                            studentSort?.key === 'time',
+                            studentSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortStudent('checkOutTime')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colCheckOut')}
+                          {renderSortIcon(
+                            studentSort?.key === 'checkOutTime',
+                            studentSort?.direction
+                          )}
+                        </th>
+                        <th>{t('attendanceDashboard.colRecordedBy')}</th>
+                        <th>{t('attendanceDashboard.colNotes')}</th>
+                        {canDeleteRecord && (
+                          <th className="text-center">
+                            {t('attendanceDashboard.colActions')}
+                          </th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedStudents.map((record, index) => {
+                        const stKey = normalizeStatusKey(record.status);
+                        const rowNumber =
+                          (safeStudentPage - 1) * studentPageSize + index + 1;
+                        return (
+                          <tr key={record.id}>
+                            <td className="td-mono text-xs text-center opacity-70">
+                              {rowNumber}
+                            </td>
+                            <td className="td-name">
+                              {record.student?.fullName ?? '-'}
+                            </td>
+                            <td>{record.student?.classes?.name ?? '-'}</td>
+                            <td className="td-mono">
+                              {record.student?.nisn ?? '-'}
+                            </td>
+                            <td>
+                              <span
+                                className="status-badge"
+                                style={{
+                                  background:
+                                    (STATUS_COLORS[stKey] ?? '#6B7280') + '20',
+                                  color: STATUS_COLORS[stKey] ?? '#6B7280',
+                                }}
+                              >
+                                {getStatusLabel(stKey)}
+                              </span>
+                            </td>
+                            <td className="td-mono">
+                              {formatTime(record.checkInTime || record.time)}
+                            </td>
+                            <td className="td-mono">
+                              {record.checkOutTime ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-semibold bg-cyan-500/15 text-cyan-600 dark:text-cyan-300">
+                                  {formatTime(record.checkOutTime)}
+                                </span>
+                              ) : (
+                                <span className="opacity-40">-</span>
+                              )}
+                            </td>
+                            <td>
+                              {record.recordedBy
+                                ? t('attendanceDashboard.recordedByAdmin')
+                                : t('attendanceDashboard.recordedByKiosk')}
+                            </td>
+                            <td>{renderStudentNotes(record)}</td>
+                            {canDeleteRecord && (
+                              <td className="text-center">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDeleteTarget({
+                                      id: record.id,
+                                      name:
+                                        record.student?.fullName ??
+                                        t(
+                                          'attendanceDashboard.studentFallbackName'
+                                        ),
+                                      date: record.date,
+                                      selfiePaths: [],
+                                      attachmentPaths: [],
+                                    })
+                                  }
+                                  className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
+                                  title={t(
+                                    'attendanceDashboard.titleDeleteSingleStudent'
+                                  )}
+                                >
+                                  <Trash2 size={15} />
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Bar Tabel Siswa */}
+                <div className="mt-4 pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="opacity-75">
+                    {currentLang === 'en'
+                      ? `Showing ${(safeStudentPage - 1) * studentPageSize + 1}–${Math.min(
+                        safeStudentPage * studentPageSize,
+                        filteredStudents.length
+                      )} of ${filteredStudents.length} records`
+                      : `Menampilkan ${(safeStudentPage - 1) * studentPageSize + 1}–${Math.min(
+                        safeStudentPage * studentPageSize,
+                        filteredStudents.length
+                      )} dari ${filteredStudents.length} data`}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="form-input py-1 px-2 text-xs"
+                      value={studentPageSize}
+                      onChange={(e) =>
+                        setStudentPageSize(Number(e.target.value))
+                      }
+                    >
+                      {TABLE_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {currentLang === 'en'
+                            ? `${size} / page`
+                            : `${size} / halaman`}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={safeStudentPage <= 1}
+                      onClick={() =>
+                        setStudentPage((prev) => Math.max(1, prev - 1))
+                      }
+                      className="btn-secondary py-1 px-2.5 text-xs disabled:opacity-40"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+
+                    <span className="font-semibold px-1.5">
+                      {safeStudentPage} / {studentTotalPages}
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={safeStudentPage >= studentTotalPages}
+                      onClick={() =>
+                        setStudentPage((prev) =>
+                          Math.min(studentTotalPages, prev + 1)
+                        )
+                      }
+                      className="btn-secondary py-1 px-2.5 text-xs disabled:opacity-40"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -2152,278 +2452,343 @@ export function AttendanceDashboardPage() {
                 <p>{t('attendanceDashboard.emptyTeachers')}</p>
               </div>
             ) : (
-              <div className="table-wrapper">
-                <table className="data-table">
-                  <thead>
-                    <tr>
-                      <th className="w-12 text-center">
-                        {t('attendanceDashboard.colNo')}
-                      </th>
-                      <th
-                        onClick={() => handleSortTeacher('fullName')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colTeacherName')}
-                        {renderSortIcon(
-                          teacherSort?.key === 'fullName',
-                          teacherSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortTeacher('nip')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colNipNuptk')}
-                        {renderSortIcon(
-                          teacherSort?.key === 'nip',
-                          teacherSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortTeacher('status')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colStatus')}
-                        {renderSortIcon(
-                          teacherSort?.key === 'status',
-                          teacherSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortTeacher('checkInTime')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colTeacherCheckIn')}
-                        {renderSortIcon(
-                          teacherSort?.key === 'checkInTime',
-                          teacherSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortTeacher('checkOutTime')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colTeacherCheckOut')}
-                        {renderSortIcon(
-                          teacherSort?.key === 'checkOutTime',
-                          teacherSort?.direction
-                        )}
-                      </th>
-                      <th
-                        onClick={() => handleSortTeacher('checkInDistance')}
-                        className="cursor-pointer select-none hover:text-primary transition"
-                      >
-                        {t('attendanceDashboard.colLocationDistance')}
-                        {renderSortIcon(
-                          teacherSort?.key === 'checkInDistance',
-                          teacherSort?.direction
-                        )}
-                      </th>
-                      <th>{t('attendanceDashboard.colGpsValid')}</th>
-                      <th>{t('attendanceDashboard.colSelfiePhoto')}</th>
-                      <th>{t('attendanceDashboard.colNotesAndLog')}</th>
-                      {canDeleteRecord && (
-                        <th className="text-center">
-                          {t('attendanceDashboard.colActions')}
+              <>
+                <div className="table-wrapper">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th className="w-12 text-center">
+                          {t('attendanceDashboard.colNo')}
                         </th>
-                      )}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredTeachers.map((record, index) => {
-                      const hasInPhoto = Boolean(record.checkInSelfieUrl);
-                      const hasOutPhoto = Boolean(record.checkOutSelfieUrl);
-                      const hasAnyPhoto = hasInPhoto || hasOutPhoto;
-                      const stKey = normalizeStatusKey(record.status);
+                        <th
+                          onClick={() => handleSortTeacher('fullName')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colTeacherName')}
+                          {renderSortIcon(
+                            teacherSort?.key === 'fullName',
+                            teacherSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortTeacher('nip')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colNipNuptk')}
+                          {renderSortIcon(
+                            teacherSort?.key === 'nip',
+                            teacherSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortTeacher('status')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colStatus')}
+                          {renderSortIcon(
+                            teacherSort?.key === 'status',
+                            teacherSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortTeacher('checkInTime')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colTeacherCheckIn')}
+                          {renderSortIcon(
+                            teacherSort?.key === 'checkInTime',
+                            teacherSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortTeacher('checkOutTime')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colTeacherCheckOut')}
+                          {renderSortIcon(
+                            teacherSort?.key === 'checkOutTime',
+                            teacherSort?.direction
+                          )}
+                        </th>
+                        <th
+                          onClick={() => handleSortTeacher('checkInDistance')}
+                          className="cursor-pointer select-none hover:text-primary transition"
+                        >
+                          {t('attendanceDashboard.colLocationDistance')}
+                          {renderSortIcon(
+                            teacherSort?.key === 'checkInDistance',
+                            teacherSort?.direction
+                          )}
+                        </th>
+                        <th>{t('attendanceDashboard.colGpsValid')}</th>
+                        <th>{t('attendanceDashboard.colSelfiePhoto')}</th>
+                        <th>{t('attendanceDashboard.colNotesAndLog')}</th>
+                        {canDeleteRecord && (
+                          <th className="text-center">
+                            {t('attendanceDashboard.colActions')}
+                          </th>
+                        )}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {paginatedTeachers.map((record, index) => {
+                        const hasInPhoto = Boolean(record.checkInSelfieUrl);
+                        const hasOutPhoto = Boolean(record.checkOutSelfieUrl);
+                        const hasAnyPhoto = hasInPhoto || hasOutPhoto;
+                        const stKey = normalizeStatusKey(record.status);
+                        const rowNumber =
+                          (safeTeacherPage - 1) * teacherPageSize + index + 1;
 
-                      return (
-                        <tr key={record.id}>
-                          <td className="td-mono text-xs text-center opacity-70">
-                            {index + 1}
-                          </td>
-                          <td className="td-name">
-                            <div>{record.teacher?.fullName ?? '-'}</div>
-                            {record.teacher?.position && (
-                              <div className="text-xs opacity-60">
-                                {record.teacher.position}
-                              </div>
-                            )}
-                          </td>
-                          <td className="td-mono text-xs">
-                            {record.teacher?.nip ||
-                              record.teacher?.nuptk ||
-                              '-'}
-                          </td>
-                          <td>
-                            <span
-                              className="status-badge"
-                              style={{
-                                background:
-                                  (STATUS_COLORS[stKey] ?? '#6B7280') + '20',
-                                color: STATUS_COLORS[stKey] ?? '#6B7280',
-                              }}
-                            >
-                              {getStatusLabel(stKey)}
-                            </span>
-                          </td>
-                          <td className="td-mono">
-                            {formatTime(record.checkInTime)}
-                          </td>
-                          <td className="td-mono">
-                            {formatTime(record.checkOutTime)}
-                          </td>
-                          <td className="td-mono text-xs">
-                            <div className="flex flex-col gap-1">
-                              {record.checkInLat != null &&
-                                record.checkInLng != null ? (
-                                <a
-                                  href={`https://maps.google.com/?q=${record.checkInLat},${record.checkInLng}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="gps-link"
-                                  title={t(
-                                    'attendanceDashboard.titleGpsCheckIn'
-                                  )}
-                                >
-                                  <MapPin size={12} />
-                                  {record.checkInDistance != null
-                                    ? `${Math.round(record.checkInDistance)}m`
-                                    : t('attendanceDashboard.gpsCheckInLabel')}
-                                </a>
-                              ) : (
-                                '-'
+                        return (
+                          <tr key={record.id}>
+                            <td className="td-mono text-xs text-center opacity-70">
+                              {rowNumber}
+                            </td>
+                            <td className="td-name">
+                              <div>{record.teacher?.fullName ?? '-'}</div>
+                              {record.teacher?.position && (
+                                <div className="text-xs opacity-60">
+                                  {record.teacher.position}
+                                </div>
                               )}
-                              {record.checkOutLat != null &&
-                                record.checkOutLng != null && (
+                            </td>
+                            <td className="td-mono text-xs">
+                              {record.teacher?.nip ||
+                                record.teacher?.nuptk ||
+                                '-'}
+                            </td>
+                            <td>
+                              <span
+                                className="status-badge"
+                                style={{
+                                  background:
+                                    (STATUS_COLORS[stKey] ?? '#6B7280') + '20',
+                                  color: STATUS_COLORS[stKey] ?? '#6B7280',
+                                }}
+                              >
+                                {getStatusLabel(stKey)}
+                              </span>
+                            </td>
+                            <td className="td-mono">
+                              {formatTime(record.checkInTime)}
+                            </td>
+                            <td className="td-mono">
+                              {formatTime(record.checkOutTime)}
+                            </td>
+                            <td className="td-mono text-xs">
+                              <div className="flex flex-col gap-1">
+                                {record.checkInLat != null &&
+                                  record.checkInLng != null ? (
                                   <a
-                                    href={`https://maps.google.com/?q=${record.checkOutLat},${record.checkOutLng}`}
+                                    href={`https://maps.google.com/?q=${record.checkInLat},${record.checkInLng}`}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="gps-link text-amber-600 dark:text-amber-400"
+                                    className="gps-link"
                                     title={t(
-                                      'attendanceDashboard.titleGpsCheckOut'
+                                      'attendanceDashboard.titleGpsCheckIn'
                                     )}
                                   >
                                     <MapPin size={12} />
-                                    {record.checkOutDistance != null
-                                      ? t(
-                                        'attendanceDashboard.gpsCheckOutWithDist',
-                                        {
-                                          meters: Math.round(
-                                            record.checkOutDistance
-                                          ),
-                                        }
-                                      )
-                                      : t(
-                                        'attendanceDashboard.gpsCheckOutLabel'
-                                      )}
+                                    {record.checkInDistance != null
+                                      ? `${Math.round(record.checkInDistance)}m`
+                                      : t('attendanceDashboard.gpsCheckInLabel')}
                                   </a>
+                                ) : (
+                                  '-'
                                 )}
-                            </div>
-                          </td>
-                          <td>
-                            {record.checkInTime ? (
-                              record.isCheckInMock ? (
-                                <span className="gps-invalid">
-                                  <XCircle size={14} />{' '}
-                                  {t('attendanceDashboard.gpsFake')}
-                                </span>
-                              ) : (
-                                <span className="gps-valid">
-                                  <Shield size={14} />{' '}
-                                  {t('attendanceDashboard.gpsValid')}
-                                </span>
-                              )
-                            ) : (
-                              '-'
-                            )}
-                          </td>
-
-                          {/* 1 Kolom Foto Selfie */}
-                          <td>
-                            {hasAnyPhoto ? (
-                              <div className="flex flex-col gap-1.5 items-start min-w-28">
-                                {hasInPhoto && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handlePreviewSelfie(record)
-                                    }
-                                    className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-primary/15 text-primary hover:bg-primary/25 transition"
-                                    title={t(
-                                      'attendanceDashboard.titlePhotoCheckIn'
-                                    )}
-                                  >
-                                    <Camera size={12} />
-                                    <span>
-                                      {t('attendanceDashboard.btnPhotoCheckIn')}
-                                    </span>
-                                  </button>
-                                )}
-                                {hasOutPhoto && (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      void handlePreviewSelfie(record)
-                                    }
-                                    className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 transition"
-                                    title={t(
-                                      'attendanceDashboard.titlePhotoCheckOut'
-                                    )}
-                                  >
-                                    <Camera size={12} />
-                                    <span>
-                                      {t(
-                                        'attendanceDashboard.btnPhotoCheckOut'
+                                {record.checkOutLat != null &&
+                                  record.checkOutLng != null && (
+                                    <a
+                                      href={`https://maps.google.com/?q=${record.checkOutLat},${record.checkOutLng}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="gps-link text-amber-600 dark:text-amber-400"
+                                      title={t(
+                                        'attendanceDashboard.titleGpsCheckOut'
                                       )}
-                                    </span>
-                                  </button>
-                                )}
+                                    >
+                                      <MapPin size={12} />
+                                      {record.checkOutDistance != null
+                                        ? t(
+                                          'attendanceDashboard.gpsCheckOutWithDist',
+                                          {
+                                            meters: Math.round(
+                                              record.checkOutDistance
+                                            ),
+                                          }
+                                        )
+                                        : t(
+                                          'attendanceDashboard.gpsCheckOutLabel'
+                                        )}
+                                    </a>
+                                  )}
                               </div>
-                            ) : (
-                              <span className="text-xs opacity-40">-</span>
-                            )}
-                          </td>
-
-                          <td>{renderTeacherNotes(record)}</td>
-
-                          {canDeleteRecord && (
-                            <td className="text-center">
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setDeleteTarget({
-                                    id: record.id,
-                                    name:
-                                      record.teacher?.fullName ??
-                                      t(
-                                        'attendanceDashboard.teacherFallbackName'
-                                      ),
-                                    date: record.date,
-                                    selfiePaths: [
-                                      record.checkInSelfieUrl,
-                                      record.checkOutSelfieUrl,
-                                    ].filter((p): p is string => Boolean(p)),
-                                    attachmentPaths: [
-                                      record.attachmentUrl,
-                                    ].filter((p): p is string => Boolean(p)),
-                                  })
-                                }
-                                className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
-                                title={t(
-                                  'attendanceDashboard.titleDeleteSingleTeacher'
-                                )}
-                              >
-                                <Trash2 size={15} />
-                              </button>
                             </td>
-                          )}
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
+                            <td>
+                              {record.checkInTime ? (
+                                record.isCheckInMock ? (
+                                  <span className="gps-invalid">
+                                    <XCircle size={14} />{' '}
+                                    {t('attendanceDashboard.gpsFake')}
+                                  </span>
+                                ) : (
+                                  <span className="gps-valid">
+                                    <Shield size={14} />{' '}
+                                    {t('attendanceDashboard.gpsValid')}
+                                  </span>
+                                )
+                              ) : (
+                                '-'
+                              )}
+                            </td>
+
+                            {/* 1 Kolom Foto Selfie */}
+                            <td>
+                              {hasAnyPhoto ? (
+                                <div className="flex flex-col gap-1.5 items-start min-w-28">
+                                  {hasInPhoto && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void handlePreviewSelfie(record)
+                                      }
+                                      className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-primary/15 text-primary hover:bg-primary/25 transition"
+                                      title={t(
+                                        'attendanceDashboard.titlePhotoCheckIn'
+                                      )}
+                                    >
+                                      <Camera size={12} />
+                                      <span>
+                                        {t('attendanceDashboard.btnPhotoCheckIn')}
+                                      </span>
+                                    </button>
+                                  )}
+                                  {hasOutPhoto && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        void handlePreviewSelfie(record)
+                                      }
+                                      className="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-amber-500/15 text-amber-700 dark:text-amber-300 hover:bg-amber-500/25 transition"
+                                      title={t(
+                                        'attendanceDashboard.titlePhotoCheckOut'
+                                      )}
+                                    >
+                                      <Camera size={12} />
+                                      <span>
+                                        {t(
+                                          'attendanceDashboard.btnPhotoCheckOut'
+                                        )}
+                                      </span>
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="text-xs opacity-40">-</span>
+                              )}
+                            </td>
+
+                            <td>{renderTeacherNotes(record)}</td>
+
+                            {canDeleteRecord && (
+                              <td className="text-center">
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setDeleteTarget({
+                                      id: record.id,
+                                      name:
+                                        record.teacher?.fullName ??
+                                        t(
+                                          'attendanceDashboard.teacherFallbackName'
+                                        ),
+                                      date: record.date,
+                                      selfiePaths: [
+                                        record.checkInSelfieUrl,
+                                        record.checkOutSelfieUrl,
+                                      ].filter((p): p is string => Boolean(p)),
+                                      attachmentPaths: [
+                                        record.attachmentUrl,
+                                      ].filter((p): p is string => Boolean(p)),
+                                    })
+                                  }
+                                  className="p-1.5 rounded-lg text-red-500 hover:bg-red-500/15 transition"
+                                  title={t(
+                                    'attendanceDashboard.titleDeleteSingleTeacher'
+                                  )}
+                                >
+                                  <Trash2 size={15} />
+                                </button>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination Bar Tabel Guru */}
+                <div className="mt-4 pt-3 border-t border-border flex flex-wrap items-center justify-between gap-3 text-xs">
+                  <div className="opacity-75">
+                    {currentLang === 'en'
+                      ? `Showing ${(safeTeacherPage - 1) * teacherPageSize + 1}–${Math.min(
+                        safeTeacherPage * teacherPageSize,
+                        filteredTeachers.length
+                      )} of ${filteredTeachers.length} records`
+                      : `Menampilkan ${(safeTeacherPage - 1) * teacherPageSize + 1}–${Math.min(
+                        safeTeacherPage * teacherPageSize,
+                        filteredTeachers.length
+                      )} dari ${filteredTeachers.length} data`}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="form-input py-1 px-2 text-xs"
+                      value={teacherPageSize}
+                      onChange={(e) =>
+                        setTeacherPageSize(Number(e.target.value))
+                      }
+                    >
+                      {TABLE_PAGE_SIZE_OPTIONS.map((size) => (
+                        <option key={size} value={size}>
+                          {currentLang === 'en'
+                            ? `${size} / page`
+                            : `${size} / halaman`}
+                        </option>
+                      ))}
+                    </select>
+
+                    <button
+                      type="button"
+                      disabled={safeTeacherPage <= 1}
+                      onClick={() =>
+                        setTeacherPage((prev) => Math.max(1, prev - 1))
+                      }
+                      className="btn-secondary py-1 px-2.5 text-xs disabled:opacity-40"
+                    >
+                      <ChevronLeft size={14} />
+                    </button>
+
+                    <span className="font-semibold px-1.5">
+                      {safeTeacherPage} / {teacherTotalPages}
+                    </span>
+
+                    <button
+                      type="button"
+                      disabled={safeTeacherPage >= teacherTotalPages}
+                      onClick={() =>
+                        setTeacherPage((prev) =>
+                          Math.min(teacherTotalPages, prev + 1)
+                        )
+                      }
+                      className="btn-secondary py-1 px-2.5 text-xs disabled:opacity-40"
+                    >
+                      <ChevronRight size={14} />
+                    </button>
+                  </div>
+                </div>
+              </>
             )}
           </div>
         )}
@@ -2545,20 +2910,22 @@ export function AttendanceDashboardPage() {
                   <div className="grid grid-cols-2 gap-2">
                     <button
                       type="button"
+                      disabled={isPurgingOldRecords}
                       onClick={() => setPurgeScope('CURRENT_SCHOOL')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'CURRENT_SCHOOL'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       {t('attendanceDashboard.modalPurgeScopeCurrent')}
                     </button>
                     <button
                       type="button"
+                      disabled={isPurgingOldRecords}
                       onClick={() => setPurgeScope('ALL_SCHOOLS')}
                       className={`py-2 px-3 rounded-xl font-semibold border transition ${purgeScope === 'ALL_SCHOOLS'
-                        ? 'bg-primary text-white border-primary'
-                        : 'bg-muted/40 border-border opacity-80'
+                          ? 'bg-primary text-white border-primary'
+                          : 'bg-muted/40 border-border opacity-80'
                         }`}
                     >
                       {t('attendanceDashboard.modalPurgeScopeAll')}
@@ -2581,6 +2948,17 @@ export function AttendanceDashboardPage() {
                     </span>
                   )}
                 </div>
+
+                {isPurgingOldRecords && (
+                  <div className="p-2.5 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-300 flex items-center gap-2">
+                    <RefreshCw size={14} className="spin shrink-0" />
+                    <span>
+                      {currentLang === 'en'
+                        ? `Purging batch (${purgeDeletedSoFar} / ${oldRecordsCount ?? 0} records)...`
+                        : `Menghapus bertahap (${purgeDeletedSoFar} / ${oldRecordsCount ?? 0} data)...`}
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="flex flex-col sm:flex-row justify-between gap-2 pt-2 border-t border-border">
@@ -2638,8 +3016,8 @@ export function AttendanceDashboardPage() {
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.92, opacity: 0 }}
               className={`data-card w-full p-5 relative max-h-[90vh] overflow-y-auto ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                ? 'max-w-2xl'
-                : 'max-w-md'
+                  ? 'max-w-2xl'
+                  : 'max-w-md'
                 }`}
               onClick={(e) => e.stopPropagation()}
             >
@@ -2685,8 +3063,8 @@ export function AttendanceDashboardPage() {
               ) : (
                 <div
                   className={`grid gap-3.5 ${selfieModal.hasCheckInPhoto && selfieModal.hasCheckOutPhoto
-                    ? 'grid-cols-1 sm:grid-cols-2'
-                    : 'grid-cols-1'
+                      ? 'grid-cols-1 sm:grid-cols-2'
+                      : 'grid-cols-1'
                     }`}
                 >
                   {/* KARTU FOTO DATANG (CHECK-IN) */}
@@ -2866,8 +3244,8 @@ export function AttendanceDashboardPage() {
               {selfieModal.notes && (
                 <div
                   className={`mt-3 p-3 rounded-xl border text-xs flex items-start gap-2 ${isEarlyCheckoutNote(selfieModal.notes)
-                    ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
-                    : 'bg-muted/50 border-border'
+                      ? 'bg-amber-500/15 border-amber-500/35 text-amber-800 dark:text-amber-200 font-medium'
+                      : 'bg-muted/50 border-border'
                     }`}
                 >
                   <FileText size={14} className="mt-0.5 shrink-0" />
@@ -2880,10 +3258,4 @@ export function AttendanceDashboardPage() {
       </AnimatePresence>
     </div>
   );
-}
-
-function recordLateTelemetry(
-  record: TeacherAttendanceWithCheckOut
-): Record<string, unknown> | null {
-  return record.deviceTelemetry ?? null;
 }

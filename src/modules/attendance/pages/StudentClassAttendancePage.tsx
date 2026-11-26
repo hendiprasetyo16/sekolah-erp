@@ -37,6 +37,9 @@ import type { SupportedAttendanceLocale } from '../types/attendance.types';
 const DEFAULT_STUDENT_PAGE_SIZE = 10;
 const STUDENT_PAGE_SIZE_OPTIONS = [10, 20, 50, 0] as const; // 0 = Semua
 const DEFAULT_CLASS_FILTER_FOR_ADMIN = 'ALL';
+const IN_QUERY_CHUNK_SIZE = 100; // Batas aman ukuran array .in('studentId', ids) pada PostgREST URL
+const BULK_INSERT_CHUNK_SIZE = 100; // Ukuran batch bulk insert presensi baru
+const CONCURRENT_UPDATE_CHUNK_SIZE = 25; // Jumlah update paralel per gelombang
 
 type StudentAttendanceStatus =
     | 'HADIR'
@@ -84,6 +87,13 @@ interface RawStudentAttendanceDbRow {
 interface MessageBanner {
     status: 'success' | 'error';
     text: string;
+}
+
+interface UpdateAttendanceQueueItem {
+    recordId: string;
+    status: StudentAttendanceStatus;
+    checkInTime: string | null;
+    notes: string | null;
 }
 
 const STATUS_OPTIONS: {
@@ -139,6 +149,14 @@ const STATUS_OPTIONS: {
             icon: XCircle,
         },
     ];
+
+function chunkArray<T>(items: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < items.length; i += size) {
+        chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
+}
 
 function buildIsoTimestampForDate(dateStr: string): string {
     const now = new Date();
@@ -475,7 +493,8 @@ export function StudentClassAttendancePage() {
                 .select('id, fullName, nisn, nis, classId, gender, classes(name)')
                 .eq('schoolId', activeSchoolId)
                 .eq('status', 'AKTIF')
-                .order('fullName', { ascending: true });
+                .order('fullName', { ascending: true })
+                .limit(3000);
 
             if (selectedClassId !== 'ALL') {
                 studentsQuery = studentsQuery.eq('classId', selectedClassId);
@@ -497,23 +516,30 @@ export function StudentClassAttendancePage() {
             const attendanceMap = new Map<string, RawStudentAttendanceDbRow>();
 
             if (studentIds.length > 0) {
-                const { data: attData, error: attErr } = await supabase
-                    .from('attendances')
-                    .select(
-                        'id, studentId, status, checkInTime, checkOutTime, time, notes'
+                const studentIdChunks = chunkArray(studentIds, IN_QUERY_CHUNK_SIZE);
+                const attChunkResults = await Promise.all(
+                    studentIdChunks.map((chunkIds) =>
+                        supabase
+                            .from('attendances')
+                            .select(
+                                'id, studentId, status, checkInTime, checkOutTime, time, notes'
+                            )
+                            .eq('schoolId', activeSchoolId)
+                            .eq('date', selectedDate)
+                            .eq('type', 'SISWA')
+                            .in('studentId', chunkIds)
                     )
-                    .eq('schoolId', activeSchoolId)
-                    .eq('date', selectedDate)
-                    .eq('type', 'SISWA')
-                    .in('studentId', studentIds);
+                );
 
                 if (seq !== loadRowsSeqRef.current) return;
-                if (attErr) throw attErr;
 
-                const typedAtts = (attData ?? []) as RawStudentAttendanceDbRow[];
-                for (const att of typedAtts) {
-                    if (att.studentId) {
-                        attendanceMap.set(String(att.studentId), att);
+                for (const res of attChunkResults) {
+                    if (res.error) throw res.error;
+                    const typedAtts = (res.data ?? []) as RawStudentAttendanceDbRow[];
+                    for (const att of typedAtts) {
+                        if (att.studentId) {
+                            attendanceMap.set(String(att.studentId), att);
+                        }
                     }
                 }
             }
@@ -710,27 +736,35 @@ export function StudentClassAttendancePage() {
             const nowIso = buildIsoTimestampForDate(selectedDate);
             const targetStudentIds = rowsToSave.map((r) => r.studentId);
 
-            // Cek data terkini di DB untuk mencegah bentrok unique constraint bila siswa baru scan di Kiosk
-            const { data: latestExistingRows, error: checkExistingErr } =
-                await supabase
-                    .from('attendances')
-                    .select('id, studentId')
-                    .eq('schoolId', activeSchoolId)
-                    .eq('date', selectedDate)
-                    .eq('type', 'SISWA')
-                    .in('studentId', targetStudentIds);
-
-            if (checkExistingErr) throw checkExistingErr;
+            // Cek data terkini di DB per batch 100 ID untuk mencegah bentrok unique constraint
+            const targetChunks = chunkArray(targetStudentIds, IN_QUERY_CHUNK_SIZE);
+            const existingChunkResults = await Promise.all(
+                targetChunks.map((chunkIds) =>
+                    supabase
+                        .from('attendances')
+                        .select('id, studentId')
+                        .eq('schoolId', activeSchoolId)
+                        .eq('date', selectedDate)
+                        .eq('type', 'SISWA')
+                        .in('studentId', chunkIds)
+                )
+            );
 
             const latestIdByStudent = new Map<string, string>();
-            for (const r of (latestExistingRows ?? []) as Array<{
-                id: string;
-                studentId: string | null;
-            }>) {
-                if (r.studentId) {
-                    latestIdByStudent.set(String(r.studentId), String(r.id));
+            for (const res of existingChunkResults) {
+                if (res.error) throw res.error;
+                for (const r of (res.data ?? []) as Array<{
+                    id: string;
+                    studentId: string | null;
+                }>) {
+                    if (r.studentId) {
+                        latestIdByStudent.set(String(r.studentId), String(r.id));
+                    }
                 }
             }
+
+            const toUpdate: UpdateAttendanceQueueItem[] = [];
+            const toInsert: Array<Record<string, string | null>> = [];
 
             for (const item of rowsToSave) {
                 if (!item.status) continue;
@@ -745,41 +779,20 @@ export function StudentClassAttendancePage() {
                     (isSpecialEventMode ? specialEventNote : null);
 
                 const resolvedRecordId =
-                    item.existingRecordId || latestIdByStudent.get(item.studentId) || null;
+                    item.existingRecordId ||
+                    latestIdByStudent.get(item.studentId) ||
+                    null;
 
                 // Kolom "time" adalah GENERATED ALWAYS di PostgreSQL sehingga tidak ikut dikirim
                 if (resolvedRecordId) {
-                    const updatePayload: Record<string, string | null> = {
+                    toUpdate.push({
+                        recordId: resolvedRecordId,
                         status: item.status,
                         checkInTime: effectiveCheckIn,
                         notes: effectiveNote,
-                        recordedBy: user?.id ?? null,
-                    };
-
-                    const { error: updErr } = await supabase
-                        .from('attendances')
-                        .update(updatePayload)
-                        .eq('id', resolvedRecordId)
-                        .eq('schoolId', activeSchoolId);
-
-                    if (updErr) {
-                        if (isMissingColumnError(updErr)) {
-                            const { error: fallbackErr } = await supabase
-                                .from('attendances')
-                                .update({
-                                    status: item.status,
-                                    checkInTime: effectiveCheckIn,
-                                    notes: effectiveNote,
-                                })
-                                .eq('id', resolvedRecordId)
-                                .eq('schoolId', activeSchoolId);
-                            if (fallbackErr) throw fallbackErr;
-                        } else {
-                            throw updErr;
-                        }
-                    }
+                    });
                 } else {
-                    const insertPayload: Record<string, string | null> = {
+                    toInsert.push({
                         schoolId: activeSchoolId,
                         studentId: item.studentId,
                         type: 'SISWA',
@@ -788,29 +801,74 @@ export function StudentClassAttendancePage() {
                         checkInTime: effectiveCheckIn,
                         notes: effectiveNote,
                         recordedBy: user?.id ?? null,
-                    };
+                    });
+                }
+            }
 
-                    const { error: insErr } = await supabase
-                        .from('attendances')
-                        .insert(insertPayload);
+            // 1. Eksekusi UPDATE dalam gelombang paralel yang terkendali
+            for (const updateBatch of chunkArray(
+                toUpdate,
+                CONCURRENT_UPDATE_CHUNK_SIZE
+            )) {
+                await Promise.all(
+                    updateBatch.map(async (upd) => {
+                        const { error: updErr } = await supabase
+                            .from('attendances')
+                            .update({
+                                status: upd.status,
+                                checkInTime: upd.checkInTime,
+                                notes: upd.notes,
+                                recordedBy: user?.id ?? null,
+                            })
+                            .eq('id', upd.recordId)
+                            .eq('schoolId', activeSchoolId);
 
-                    if (insErr) {
-                        if (isMissingColumnError(insErr)) {
-                            const { error: fallbackInsErr } = await supabase
-                                .from('attendances')
-                                .insert({
-                                    schoolId: activeSchoolId,
-                                    studentId: item.studentId,
-                                    type: 'SISWA',
-                                    date: selectedDate,
-                                    status: item.status,
-                                    checkInTime: effectiveCheckIn,
-                                    notes: effectiveNote,
-                                });
-                            if (fallbackInsErr) throw fallbackInsErr;
-                        } else {
-                            throw insErr;
+                        if (updErr) {
+                            if (isMissingColumnError(updErr)) {
+                                const { error: fallbackErr } = await supabase
+                                    .from('attendances')
+                                    .update({
+                                        status: upd.status,
+                                        checkInTime: upd.checkInTime,
+                                        notes: upd.notes,
+                                    })
+                                    .eq('id', upd.recordId)
+                                    .eq('schoolId', activeSchoolId);
+                                if (fallbackErr) throw fallbackErr;
+                            } else {
+                                throw updErr;
+                            }
                         }
+                    })
+                );
+            }
+
+            // 2. Eksekusi BULK INSERT per batch 100 baris
+            for (const insertBatch of chunkArray(
+                toInsert,
+                BULK_INSERT_CHUNK_SIZE
+            )) {
+                const { error: insErr } = await supabase
+                    .from('attendances')
+                    .insert(insertBatch);
+
+                if (insErr) {
+                    if (isMissingColumnError(insErr)) {
+                        const fallbackBatch = insertBatch.map((row) => ({
+                            schoolId: row.schoolId,
+                            studentId: row.studentId,
+                            type: row.type,
+                            date: row.date,
+                            status: row.status,
+                            checkInTime: row.checkInTime,
+                            notes: row.notes,
+                        }));
+                        const { error: fallbackInsErr } = await supabase
+                            .from('attendances')
+                            .insert(fallbackBatch);
+                        if (fallbackInsErr) throw fallbackInsErr;
+                    } else {
+                        throw insErr;
                     }
                 }
             }
