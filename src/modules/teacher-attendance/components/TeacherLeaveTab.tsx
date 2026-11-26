@@ -1,5 +1,15 @@
 // src/modules/teacher-attendance/components/TeacherLeaveTab.tsx
-import { useRef } from 'react';
+/**
+ * ============================================================================
+ * MENU 4: FORMULIR IZIN / DINAS LUAR / SAKIT (TeacherLeaveTab)
+ * ============================================================================
+ * Menampilkan:
+ * 1. Pengunci otomatis apabila hari ini adalah hari libur.
+ * 2. Pilihan kategori (Dinas Luar, Izin, Sakit), rentang tanggal + hitung hari,
+ *    nomor surat tugas (wajib khusus Dinas Luar), alasan, serta unggah bukti.
+ * ============================================================================
+ */
+import { useRef, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
     FileCheck2,
@@ -10,6 +20,7 @@ import {
     Loader2,
     Send,
     X,
+    CalendarRange,
 } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
 import {
@@ -66,8 +77,22 @@ export function TeacherLeaveTab({
     onSubmit,
     showToast,
 }: TeacherLeaveTabProps) {
-    const { t } = useTranslation();
+    const { t, locale } = useTranslation();
+    const isEnglish = String(locale).startsWith('en');
     const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+    // Hitung jumlah hari kalender secara presisi menggunakan Date.UTC (bebas pergeseran DST)
+    const leaveDurationDays = useMemo(() => {
+        if (!leaveStartDate || !leaveEndDate) return 1;
+        const [sy, sm, sd] = leaveStartDate.split('-').map(Number);
+        const [ey, em, ed] = leaveEndDate.split('-').map(Number);
+        if (!sy || !sm || !sd || !ey || !em || !ed) return 1;
+
+        const startUtc = Date.UTC(sy, sm - 1, sd);
+        const endUtc = Date.UTC(ey, em - 1, ed);
+        const diff = Math.round((endUtc - startUtc) / 86_400_000) + 1;
+        return Math.max(1, diff);
+    }, [leaveStartDate, leaveEndDate]);
 
     const handleClearFile = () => {
         setLeaveFile(null);
@@ -76,12 +101,19 @@ export function TeacherLeaveTab({
         }
     };
 
+    const removeAttachmentLabel = isEnglish
+        ? 'Remove attachment'
+        : 'Hapus lampiran';
+
     return (
         <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             className="data-card space-y-4"
         >
+            {/* ==================================================================
+                BAGIAN 1: HEADER FORMULIR IZIN / DINAS LUAR
+            ================================================================== */}
             <div className="border-b border-border pb-3 flex items-center justify-between">
                 <div>
                     <h2 className="text-base font-bold flex items-center gap-2">
@@ -102,6 +134,9 @@ export function TeacherLeaveTab({
                 </button>
             </div>
 
+            {/* ==================================================================
+                BAGIAN 2: KONDISI HARI LIBUR ATAU FORMULIR PENGAJUAN AKTIF
+            ================================================================== */}
             {isLeaveFormLocked ? (
                 <div className="p-4 rounded-2xl bg-amber-500/15 border border-amber-500/35 text-amber-800 dark:text-amber-200 text-xs space-y-1.5 leading-relaxed">
                     <div className="flex items-center gap-2 font-bold text-sm">
@@ -118,6 +153,7 @@ export function TeacherLeaveTab({
                 </div>
             ) : (
                 <form onSubmit={onSubmit} className="space-y-4">
+                    {/* Pilihan Kategori: Dinas Luar / Izin / Sakit */}
                     <div>
                         <label className="block text-xs font-semibold mb-1.5">
                             {t('teacherAttendance.leaveTypeLabel')}
@@ -144,8 +180,8 @@ export function TeacherLeaveTab({
                                     type="button"
                                     onClick={() => setLeaveCategory(item.value)}
                                     className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                                            ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                                            : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                                         }`}
                                 >
                                     {item.label}
@@ -154,39 +190,52 @@ export function TeacherLeaveTab({
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-3">
-                        <div>
-                            <label className="block text-xs font-semibold mb-1">
-                                {t('teacherAttendance.leaveStartDateLabel')}
-                            </label>
-                            <input
-                                type="date"
-                                required
-                                value={leaveStartDate}
-                                onChange={(e) => {
-                                    setLeaveStartDate(e.target.value);
-                                    if (leaveEndDate < e.target.value) {
-                                        setLeaveEndDate(e.target.value);
-                                    }
-                                }}
-                                className="form-input w-full text-xs"
-                            />
+                    {/* Input Tanggal Mulai & Tanggal Selesai + Indikator Durasi Hari */}
+                    <div className="space-y-2">
+                        <div className="grid grid-cols-2 gap-3">
+                            <div>
+                                <label className="block text-xs font-semibold mb-1">
+                                    {t('teacherAttendance.leaveStartDateLabel')}
+                                </label>
+                                <input
+                                    type="date"
+                                    required
+                                    value={leaveStartDate}
+                                    onChange={(e) => {
+                                        setLeaveStartDate(e.target.value);
+                                        if (leaveEndDate < e.target.value) {
+                                            setLeaveEndDate(e.target.value);
+                                        }
+                                    }}
+                                    className="form-input w-full text-xs"
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold mb-1">
+                                    {t('teacherAttendance.leaveEndDateLabel')}
+                                </label>
+                                <input
+                                    type="date"
+                                    required
+                                    min={leaveStartDate}
+                                    value={leaveEndDate}
+                                    onChange={(e) => setLeaveEndDate(e.target.value)}
+                                    className="form-input w-full text-xs"
+                                />
+                            </div>
                         </div>
-                        <div>
-                            <label className="block text-xs font-semibold mb-1">
-                                {t('teacherAttendance.leaveEndDateLabel')}
-                            </label>
-                            <input
-                                type="date"
-                                required
-                                min={leaveStartDate}
-                                value={leaveEndDate}
-                                onChange={(e) => setLeaveEndDate(e.target.value)}
-                                className="form-input w-full text-xs"
-                            />
+
+                        <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-muted/60 text-[11px] font-medium opacity-80">
+                            <CalendarRange size={13} className="text-emerald-500" />
+                            <span>
+                                {isEnglish
+                                    ? `Duration: ${leaveDurationDays} day(s)`
+                                    : `Durasi pengajuan: ${leaveDurationDays} hari`}
+                            </span>
                         </div>
                     </div>
 
+                    {/* Nomor Surat Tugas / Dokumen Pendukung */}
                     <div>
                         <label className="block text-xs font-semibold mb-1">
                             {leaveCategory === 'DINAS_LUAR'
@@ -207,6 +256,7 @@ export function TeacherLeaveTab({
                         />
                     </div>
 
+                    {/* Keterangan / Alasan Lengkap */}
                     <div>
                         <div className="flex justify-between text-xs mb-1">
                             <label className="font-semibold">
@@ -235,6 +285,7 @@ export function TeacherLeaveTab({
                         />
                     </div>
 
+                    {/* Unggah Lampiran Bukti (Foto / PDF maks 2 MB) */}
                     <div>
                         <label className="block text-xs font-semibold mb-1.5">
                             {t('teacherAttendance.leaveFileLabel')}
@@ -242,8 +293,8 @@ export function TeacherLeaveTab({
                         <div className="relative">
                             <label
                                 className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                                        ? 'border-emerald-500/70 bg-emerald-500/10 pr-10'
-                                        : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                                    ? 'border-emerald-500/70 bg-emerald-500/10 pr-10'
+                                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
                                     }`}
                             >
                                 {leaveFile ? (
@@ -287,8 +338,8 @@ export function TeacherLeaveTab({
                                 <button
                                     type="button"
                                     onClick={handleClearFile}
-                                    aria-label="Hapus lampiran"
-                                    title="Hapus lampiran"
+                                    aria-label={removeAttachmentLabel}
+                                    title={removeAttachmentLabel}
                                     className="absolute top-2.5 right-2.5 p-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-600 dark:text-rose-300 transition"
                                 >
                                     <X size={15} />
@@ -297,13 +348,14 @@ export function TeacherLeaveTab({
                         </div>
                     </div>
 
+                    {/* Tombol Kirim Pengajuan */}
                     <div className="pt-1">
                         <button
                             type="submit"
                             disabled={isSubmittingLeave || !teacher}
                             className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                                ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                                : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                                 }`}
                         >
                             {isSubmittingLeave ? (

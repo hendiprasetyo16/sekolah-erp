@@ -176,10 +176,10 @@ export function useTeacherAttendanceData({
     ? simSchoolId || school?.id || ''
     : school?.id || '';
 
-  // Jam Real-time (1 detik)
+  // Jam Real-time (15 detik)
   const [now, setNow] = useState<Date>(() => new Date());
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 1000);
+    const timer = setInterval(() => setNow(new Date()), 15_000);
     return () => clearInterval(timer);
   }, []);
 
@@ -721,7 +721,9 @@ export function useTeacherAttendanceData({
   const hasCheckedOut = Boolean(todayRecord?.checkOutTime);
   const isOnLeaveToday = Boolean(
     todayRecord &&
-      ['IZIN', 'SAKIT'].includes((todayRecord.status ?? '').toUpperCase())
+      ['IZIN', 'SAKIT', 'CUTI', 'DINAS_LUAR'].includes(
+        (todayRecord.status ?? '').toUpperCase()
+      )
   );
 
   const todayCheckOutTimingInfo = useMemo(() => {
@@ -818,14 +820,17 @@ export function useTeacherAttendanceData({
         uploadedAttachmentPath = storagePath;
 
         const datesToInsert: string[] = [];
-        const cursor = new Date(`${leaveStartDate}T00:00:00`);
-        const last = new Date(`${leaveEndDate}T00:00:00`);
-        while (cursor <= last) {
-          const y = cursor.getFullYear();
-          const m = String(cursor.getMonth() + 1).padStart(2, '0');
-          const d = String(cursor.getDate()).padStart(2, '0');
+        const [sy, sm, sd] = leaveStartDate.split('-').map(Number);
+        const [ey, em, ed] = leaveEndDate.split('-').map(Number);
+        let cursorMs = Date.UTC(sy, sm - 1, sd);
+        const lastMs = Date.UTC(ey, em - 1, ed);
+        while (cursorMs <= lastMs) {
+          const dtObj = new Date(cursorMs);
+          const y = dtObj.getUTCFullYear();
+          const m = String(dtObj.getUTCMonth() + 1).padStart(2, '0');
+          const d = String(dtObj.getUTCDate()).padStart(2, '0');
           datesToInsert.push(`${y}-${m}-${d}`);
-          cursor.setDate(cursor.getDate() + 1);
+          cursorMs += 86_400_000;
         }
 
         const { data: existingRows } = await supabase
@@ -967,7 +972,12 @@ export function useTeacherAttendanceData({
         hadir += 1;
       } else if (normalizedStatus === 'TERLAMBAT') {
         terlambat += 1;
-      } else if (normalizedStatus === 'IZIN' || normalizedStatus === 'SAKIT') {
+      } else if (
+        normalizedStatus === 'IZIN' ||
+        normalizedStatus === 'SAKIT' ||
+        normalizedStatus === 'DINAS_LUAR' ||
+        normalizedStatus === 'CUTI'
+      ) {
         izinSakit += 1;
       } else if (normalizedStatus === 'ALPA' || normalizedStatus === 'ALPHA') {
         alpa += 1;

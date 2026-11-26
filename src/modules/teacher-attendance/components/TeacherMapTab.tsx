@@ -1,4 +1,16 @@
 // src/modules/teacher-attendance/components/TeacherMapTab.tsx
+/**
+ * ============================================================================
+ * MENU 3: PETA PRESENSI GPS & SELFIE (TeacherMapTab)
+ * ============================================================================
+ * Menampilkan:
+ * 1. Header fase aktif (Check-In / Check-Out / Selesai / Sedang Izin) & tombol GPS.
+ * 2. Bilah status jarak & radius sekolah secara real-time.
+ * 3. Kanvas Peta Leaflet (titik sekolah, lingkaran radius, titik posisi guru),
+ *    3 metrik utama (Jarak, Radius, Jam & Batas Waktu), serta Quote Harian.
+ * 4. Tombol aksi utama untuk melakukan presensi atau peringatan di luar radius.
+ * ============================================================================
+ */
 import { useState, useEffect, useCallback, type RefObject } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -26,6 +38,9 @@ import type {
     TeacherProfile,
 } from '../types/teacherAttendance.types';
 
+/* ============================================================================
+ * SUB-KOMPONEN INTERNAL: PENUNJUK JAM:MENIT REAL-TIME PADA KARTU METRIK PETA
+ * ============================================================================ */
 function LiveMinuteBadge({ schoolTimezone }: { schoolTimezone: string }) {
     const getFormattedMinute = useCallback(() => {
         try {
@@ -49,7 +64,7 @@ function LiveMinuteBadge({ schoolTimezone }: { schoolTimezone: string }) {
         setTimeText(getFormattedMinute());
         const timer = window.setInterval(() => {
             setTimeText(getFormattedMinute());
-        }, 5000);
+        }, 1000);
         return () => window.clearInterval(timer);
     }, [getFormattedMinute]);
 
@@ -142,6 +157,9 @@ export function TeacherMapTab({
             animate={{ opacity: 1, scale: 1 }}
             className="space-y-3"
         >
+            {/* ==================================================================
+                BAGIAN 1: HEADER PETA & TOMBOL REFRESH LOKASI GPS
+            ================================================================== */}
             <div className="rounded-2xl bg-linear-to-r from-[#1D3554] to-[#525B44] p-4 text-white flex items-center justify-between shadow-lg">
                 <div className="flex items-center gap-3">
                     <button
@@ -196,7 +214,9 @@ export function TeacherMapTab({
                 </button>
             </div>
 
-            {/* INDIKATOR RADIUS GPS REAL-TIME SEBELUM SELFIE */}
+            {/* ==================================================================
+                BAGIAN 2: BILAH INDIKATOR RADIUS GPS REAL-TIME
+            ================================================================== */}
             <div
                 className={`rounded-2xl p-3 border flex items-center justify-between gap-2.5 text-xs shadow-sm ${isLocating || distanceMeters === null
                         ? 'bg-blue-500/10 border-blue-500/30 text-blue-700 dark:text-blue-200'
@@ -249,17 +269,32 @@ export function TeacherMapTab({
                     )}
             </div>
 
+            {/* ==================================================================
+                BAGIAN 3: KANVAS PETA LEAFLET, METRIK JARAK & QUOTE HARIAN
+            ================================================================== */}
             <div className="relative rounded-3xl overflow-hidden border border-slate-200 dark:border-white/15 shadow-xl bg-slate-900">
                 <div ref={mapContainerRef} className="w-full h-56 sm:h-72 z-10" />
 
+                {/* Banner Peringatan jika GPS Gagal / Terblokir */}
                 {gpsError && (
-                    <div className="absolute inset-x-3 top-3 z-20 p-3 rounded-xl bg-red-950/90 border border-red-500/50 text-xs text-red-200 flex items-center gap-2">
-                        <AlertTriangle size={16} className="shrink-0 text-red-400" />
-                        <span>{gpsError}</span>
+                    <div className="absolute inset-x-3 top-3 z-20 p-3 rounded-xl bg-red-950/90 border border-red-500/50 text-xs text-red-200 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                            <AlertTriangle size={16} className="shrink-0 text-red-400" />
+                            <span>{gpsError}</span>
+                        </div>
+                        <button
+                            type="button"
+                            onClick={onRefreshGps}
+                            disabled={isLocating}
+                            className="px-2.5 py-1 rounded-lg bg-red-500/30 hover:bg-red-500/50 text-white text-[11px] font-semibold shrink-0 transition"
+                        >
+                            {t('teacherAttendance.btnRetake')}
+                        </button>
                     </div>
                 )}
 
                 <div className="p-3.5 sm:p-4 bg-white/95 text-slate-800 backdrop-blur-md">
+                    {/* 3 Kolom Metrik: Jarak Saat Ini, Radius Sekolah, Jam & Tenggat */}
                     <div className="grid grid-cols-3 gap-2 text-center pb-3 border-b border-slate-200">
                         <div>
                             <div className="w-8 h-8 mx-auto mb-1 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center">
@@ -302,6 +337,7 @@ export function TeacherMapTab({
                         </div>
                     </div>
 
+                    {/* Kartu Kutipan Motivasi Harian */}
                     <div className="mt-3 rounded-2xl bg-linear-to-r from-[#1D4E7A] to-[#2B8A78] p-3 text-center text-white relative">
                         <div className="flex items-center justify-center gap-2 mb-1">
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white/15 text-[10px] font-semibold">
@@ -341,6 +377,9 @@ export function TeacherMapTab({
                 </div>
             </div>
 
+            {/* ==================================================================
+                BAGIAN 4: TOMBOL EKSEKUSI PRESENSI / BANNER STATUS TERKUNCI
+            ================================================================== */}
             {!teacher ? (
                 <div className="p-3.5 rounded-2xl bg-amber-500/15 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-200 text-center">
                     {t('teacherAttendance.errTeacherUnlinked')}

@@ -1,4 +1,15 @@
 // src/modules/teacher-attendance/components/TeacherReportTab.tsx
+/**
+ * ============================================================================
+ * MENU 2: LAPORAN & KALENDER PRESENSI (TeacherReportTab)
+ * ============================================================================
+ * Menampilkan:
+ * 1. Header pilihan cakupan rekap: Bulanan (Monthly) atau Tahunan (Yearly).
+ * 2. Kartu persentase kedisiplinan & 4 kartu ringkasan (Hadir, Terlambat, Izin/Sakit, Alpa).
+ * 3. Kalender interaktif lengkap dengan Pasaran Jawa, penanda tanggal merah/libur,
+ *    titik status presensi harian, pemilih tahun (saat mode Tahunan), serta detail tanggal terpilih.
+ * ============================================================================
+ */
 import { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import {
@@ -86,7 +97,8 @@ export function TeacherReportTab({
     formatShortTime,
     formatStatusLabel,
 }: TeacherReportTabProps) {
-    const { t } = useTranslation();
+    const { t, locale } = useTranslation();
+    const isEnglish = String(locale).startsWith('en');
 
     const activeMonthIndex = useMemo(() => {
         if (typeof calendarMonth === 'number') return calendarMonth;
@@ -101,15 +113,29 @@ export function TeacherReportTab({
     }, [calendarMonth, calendarDaysGrid]);
 
     const shortMonthLabels = useMemo(() => {
-        const formatter = new Intl.DateTimeFormat('id-ID', { month: 'short' });
+        const dateLocale = isEnglish ? 'en-US' : 'id-ID';
+        const formatter = new Intl.DateTimeFormat(dateLocale, { month: 'short' });
         return Array.from({ length: 12 }, (_, idx) =>
             formatter.format(new Date(2026, idx, 1)).replace('.', '')
         );
-    }, []);
+    }, [isEnglish]);
 
+    // Pindah cepat ke bulan tertentu saat mode Tahunan aktif
     const handleQuickSelectMonth = (monthIdx: number) => {
         setCalendarMonth(monthIdx);
         const monthPrefix = `${calendarYear}-${String(monthIdx + 1).padStart(2, '0')}`;
+        if (todayStr.startsWith(monthPrefix)) {
+            setSelectedCalendarDate(todayStr);
+        } else {
+            setSelectedCalendarDate(`${monthPrefix}-01`);
+        }
+    };
+
+    // Pindah cepat antar-tahun saat mode Tahunan aktif
+    const handleChangeYear = (delta: number) => {
+        const nextYear = calendarYear + delta;
+        setCalendarYear(nextYear);
+        const monthPrefix = `${nextYear}-${String(activeMonthIndex + 1).padStart(2, '0')}`;
         if (todayStr.startsWith(monthPrefix)) {
             setSelectedCalendarDate(todayStr);
         } else {
@@ -123,6 +149,9 @@ export function TeacherReportTab({
             animate={{ opacity: 1, y: 0 }}
             className="space-y-4"
         >
+            {/* ==================================================================
+                BAGIAN 1: HEADER LAPORAN & TOMBOL PILIHAN BULANAN / TAHUNAN
+            ================================================================== */}
             <div className="rounded-3xl bg-linear-to-r from-[#16365C] to-[#275A96] p-5 text-white shadow-lg flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <button
@@ -153,8 +182,8 @@ export function TeacherReportTab({
                         type="button"
                         onClick={() => setReportScope('monthly')}
                         className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                                ? 'bg-white text-slate-900'
-                                : 'text-white'
+                            ? 'bg-white text-slate-900'
+                            : 'text-white'
                             }`}
                     >
                         {t('teacherAttendance.scopeMonthly')}
@@ -163,8 +192,8 @@ export function TeacherReportTab({
                         type="button"
                         onClick={() => setReportScope('yearly')}
                         className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                                ? 'bg-white text-slate-900'
-                                : 'text-white'
+                            ? 'bg-white text-slate-900'
+                            : 'text-white'
                             }`}
                     >
                         {t('teacherAttendance.scopeYearly')}
@@ -172,6 +201,9 @@ export function TeacherReportTab({
                 </div>
             </div>
 
+            {/* ==================================================================
+                BAGIAN 2: KARTU PERSENTASE & RINGKASAN 4 KATEGORI KEHADIRAN
+            ================================================================== */}
             <div className="rounded-2xl bg-linear-to-r from-[#1E3B5C] via-[#3A5357] to-[#8C7A3E] p-5 text-white shadow-md flex items-center justify-between">
                 <div>
                     <p className="text-xs text-white/80">
@@ -226,6 +258,9 @@ export function TeacherReportTab({
                 </div>
             </div>
 
+            {/* ==================================================================
+                BAGIAN 3: KALENDER PRESENSI + PASARAN JAWA + DETAIL TANGGAL
+            ================================================================== */}
             <div className="data-card p-4 space-y-3.5">
                 <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
@@ -275,37 +310,62 @@ export function TeacherReportTab({
                     </div>
                 </div>
 
-                {/* NAVIGASI CEPAT 12-BULAN SAAT MODE TAHUNAN AKTIF */}
+                {/* Navigasi Cepat Tahun & 12-Bulan saat Mode Tahunan Aktif */}
                 {reportScope === 'yearly' && (
-                    <div className="grid grid-cols-6 sm:grid-cols-12 gap-1 p-1.5 rounded-2xl bg-muted/45 border border-border">
-                        {shortMonthLabels.map((label, idx) => {
-                            const isActive = idx === activeMonthIndex;
-                            return (
-                                <button
-                                    key={label}
-                                    type="button"
-                                    onClick={() => handleQuickSelectMonth(idx)}
-                                    className={`py-1.5 px-1 rounded-xl text-[11px] font-semibold transition ${isActive
+                    <div className="space-y-2 p-2 rounded-2xl bg-muted/45 border border-border">
+                        <div className="flex items-center justify-between px-1">
+                            <button
+                                type="button"
+                                onClick={() => handleChangeYear(-1)}
+                                className="p-1 rounded-lg hover:bg-muted transition"
+                                aria-label={isEnglish ? 'Previous year' : 'Tahun sebelumnya'}
+                            >
+                                <ChevronLeft size={15} />
+                            </button>
+                            <span className="text-xs font-extrabold tracking-wide">
+                                {calendarYear}
+                            </span>
+                            <button
+                                type="button"
+                                onClick={() => handleChangeYear(1)}
+                                className="p-1 rounded-lg hover:bg-muted transition"
+                                aria-label={isEnglish ? 'Next year' : 'Tahun berikutnya'}
+                            >
+                                <ChevronRight size={15} />
+                            </button>
+                        </div>
+
+                        <div className="grid grid-cols-6 sm:grid-cols-12 gap-1">
+                            {shortMonthLabels.map((label, idx) => {
+                                const isActive = idx === activeMonthIndex;
+                                return (
+                                    <button
+                                        key={label}
+                                        type="button"
+                                        onClick={() => handleQuickSelectMonth(idx)}
+                                        className={`py-1.5 px-1 rounded-xl text-[11px] font-semibold transition ${isActive
                                             ? 'bg-primary text-primary-foreground font-bold shadow-xs'
                                             : 'text-foreground/75 hover:bg-muted hover:text-foreground'
-                                        }`}
-                                >
-                                    {label}
-                                </button>
-                            );
-                        })}
+                                            }`}
+                                    >
+                                        {label}
+                                    </button>
+                                );
+                            })}
+                        </div>
                     </div>
                 )}
 
+                {/* Nama Hari (Minggu - Sabtu) */}
                 <div className="grid grid-cols-7 gap-1 text-center">
                     {shortDayNames.map((hari, idx) => (
                         <div
                             key={hari}
                             className={`text-[11px] font-bold py-1 ${idx === 0
+                                ? 'text-red-500'
+                                : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                                     ? 'text-red-500'
-                                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
-                                        ? 'text-red-500'
-                                        : 'opacity-65'
+                                    : 'opacity-65'
                                 }`}
                         >
                             {hari}
@@ -313,6 +373,7 @@ export function TeacherReportTab({
                     ))}
                 </div>
 
+                {/* Kotak Tanggal Kalender + Pasaran + Indikator Titik Status */}
                 <div className="grid grid-cols-7 gap-1.5">
                     {calendarDaysGrid.map((cell, idx) => {
                         if (!cell.dateStr || !cell.dayNum) {
@@ -321,14 +382,17 @@ export function TeacherReportTab({
 
                         const isToday = cell.dateStr === todayStr;
                         const isSelected = cell.dateStr === selectedCalendarDate;
-                        const status = cell.record?.status;
+                        const status = (cell.record?.status ?? '').toUpperCase();
 
                         const statusDotColor =
                             status === 'HADIR'
                                 ? 'bg-emerald-500'
                                 : status === 'TERLAMBAT'
                                     ? 'bg-amber-500'
-                                    : status === 'IZIN' || status === 'SAKIT'
+                                    : status === 'IZIN' ||
+                                        status === 'SAKIT' ||
+                                        status === 'DINAS_LUAR' ||
+                                        status === 'CUTI'
                                         ? 'bg-blue-500'
                                         : status === 'ALPA' || status === 'ALPHA'
                                             ? 'bg-red-500'
@@ -340,10 +404,10 @@ export function TeacherReportTab({
                                 type="button"
                                 onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                                 className={`h-12 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                                        : isToday
-                                            ? 'border-amber-400 font-bold'
-                                            : 'border-transparent'
+                                    ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                                    : isToday
+                                        ? 'border-amber-400 font-bold'
+                                        : 'border-transparent'
                                     } ${cell.isRedDate
                                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                                         : 'bg-muted/35 hover:bg-muted/70'
@@ -367,11 +431,12 @@ export function TeacherReportTab({
                     })}
                 </div>
 
+                {/* Panel Detail Tanggal Terpilih */}
                 {selectedDateInfo && (
                     <div
                         className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                                ? 'bg-red-500/10 border-red-500/30'
-                                : 'bg-muted/40 border-border'
+                            ? 'bg-red-500/10 border-red-500/30'
+                            : 'bg-muted/40 border-border'
                             }`}
                     >
                         <div className="flex items-center justify-between gap-2">

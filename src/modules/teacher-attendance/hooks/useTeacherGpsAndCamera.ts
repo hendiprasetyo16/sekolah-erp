@@ -1,4 +1,3 @@
-// src/modules/teacher-attendance/hooks/useTeacherGpsAndCamera.ts
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import L from 'leaflet';
 import { supabase } from '@/services/supabase.client';
@@ -37,43 +36,6 @@ import {
   getTimeStampTagInTimezone,
   sanitizeStorageSegment,
 } from '../utils/teacherAttendance.helpers';
-
-async function flipImageBlobHorizontally(
-  blob: Blob,
-  quality = 0.85
-): Promise<Blob> {
-  const objectUrl = URL.createObjectURL(blob);
-  try {
-    const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-      const image = new Image();
-      image.onload = () => resolve(image);
-      image.onerror = () =>
-        reject(new Error('Gagal memproses orientasi foto selfie.'));
-      image.src = objectUrl;
-    });
-
-    const canvas = document.createElement('canvas');
-    canvas.width = img.naturalWidth || img.width;
-    canvas.height = img.naturalHeight || img.height;
-
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return blob;
-
-    ctx.save();
-    ctx.translate(canvas.width, 0);
-    ctx.scale(-1, 1);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-    ctx.restore();
-
-    const flippedBlob = await new Promise<Blob | null>((resolve) => {
-      canvas.toBlob((result) => resolve(result), 'image/jpeg', quality);
-    });
-
-    return flippedBlob ?? blob;
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
-}
 
 interface UseTeacherGpsAndCameraParams {
   activeView: SubView;
@@ -629,11 +591,10 @@ export function useTeacherGpsAndCamera({
         }
 
         streamRef.current = stream;
-        setTimeout(() => {
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-          }
-        }, 100);
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play().catch(() => null);
+        }
       } catch {
         showToast('error', t('teacherAttendance.errCameraAccess'));
         setCameraModal({ open: false, mode });
@@ -677,15 +638,15 @@ export function useTeacherGpsAndCamera({
 
   const handleTakeSnapshot = useCallback(async () => {
     const video = videoRef.current;
-    if (!video) return;
+    if (!video || video.readyState < 2 || video.videoWidth === 0) return;
 
     try {
-      const compressedBlob = await compressSelfieToJpeg(video, {
+      const mirroredBlob = await compressSelfieToJpeg(video, {
         maxWidth: 720,
         maxBytes: 450 * 1024,
         initialQuality: 0.82,
+        mirrorHorizontal: true,
       });
-      const mirroredBlob = await flipImageBlobHorizontally(compressedBlob, 0.85);
 
       clearCapturedSelfie();
       setCapturedBlob(mirroredBlob);

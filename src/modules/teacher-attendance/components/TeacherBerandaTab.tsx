@@ -1,4 +1,16 @@
 // src/modules/teacher-attendance/components/TeacherBerandaTab.tsx
+/**
+ * ============================================================================
+ * MENU 1: BERANDA PRESENSI GURU (TeacherBerandaTab)
+ * ============================================================================
+ * Menampilkan:
+ * 1. Header sambutan, tanggal Masehi + Pasaran Jawa, tombol sidebar, refresh,
+ *    serta status/kunci hari libur (bisa diklik Admin untuk membuka kegiatan khusus).
+ * 2. Kartu Profil Guru (foto, NIP/identitas, jabatan, tugas tambahan, unit sekolah),
+ *    persentase kehadiran bulan berjalan, dan jam digital real-time (HP & Desktop).
+ * 3. Dua kartu utama aksi cepat: Presensi DATANG (Check-In) & PULANG (Check-Out).
+ * ============================================================================
+ */
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -22,61 +34,101 @@ import type {
     SubView,
     TeacherProfile,
 } from '../types/teacherAttendance.types';
-import { AutoScrollingText } from './AutoScrollingText';
 
-interface TeacherBerandaTabProps {
-    teacher: TeacherProfile | null;
-    fallbackUserName?: string | null;
-    resolvedTeacherPhotoUrl: string | null;
-    teacherIdentityLabel: string;
-    isTeacherAccountLinked: boolean;
-    accountStatusHint: {
-        title: string;
-        description: string;
-    };
-    schoolGeo: SchoolGeoAndSchedule | null;
-    schoolTimezone: string;
-    todayRecord: AttendanceRecord | null;
-    isLoadingData: boolean;
-    onRefreshData: () => void;
-    onToggleSidebar: () => void;
-    onNavigateView: (view: SubView) => void;
-    formattedDateWithPasaran: string;
-    javaneseDateBadge: string;
-    monthYearLabel: string;
-    reportStats: {
-        percentage: number;
-        hadir: number;
-        terlambat: number;
-    };
-    isHolidayLoading: boolean;
-    isHoliday: boolean;
-    isHolidayLocked: boolean;
-    holidayReason: string;
-    isAdminOrSuperAdmin: boolean;
-    onOpenHolidayModal: () => void;
-    showToast: (type: 'success' | 'error', message: string) => void;
-    isCheckInLocked: boolean;
-    canCheckOut: boolean;
-    hasCheckedIn: boolean;
-    hasCheckedOut: boolean;
-    isOnLeaveToday: boolean;
-    effectiveWorkStartTime: string;
-    effectiveToleranceMinutes: number;
-    effectiveWorkEndTime: string;
-    effectiveDeadlineStr: string;
-    currentLateMinutes: number;
-    todayCheckOutTimingInfo: {
-        status: CheckOutTimingStatus;
-        isEarly: boolean;
-        isOvertime: boolean;
-        diffMinutes: number;
-    };
-    formatShortTime: (iso?: string | null) => string;
-    formatDurationMinutes: (totalMinutes: number) => string;
-    formatStatusLabel: (status?: string | null) => string;
+const PROFILE_HINT_AUTO_CLOSE_MS = 4500;
+
+/* ============================================================================
+ * SUB-KOMPONEN INTERNAL 1: TEKS BERJALAN OTOMATIS (AutoScrollingText)
+ * ============================================================================
+ * Menggulirkan teks status pada kartu Datang/Pulang secara halus hanya jika
+ * panjang teks melebihi lebar kotak pada layar kecil.
+ * ============================================================================ */
+interface AutoScrollingTextProps {
+    text: string;
+    className?: string;
 }
 
+function AutoScrollingText({ text, className = '' }: AutoScrollingTextProps) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
+    const measureRef = useRef<HTMLSpanElement | null>(null);
+    const [isOverflowing, setIsOverflowing] = useState(false);
+    const [durationSec, setDurationSec] = useState(8);
+
+    useEffect(() => {
+        const checkOverflow = () => {
+            const container = containerRef.current;
+            const measure = measureRef.current;
+            if (!container || !measure) return;
+
+            const overflow = measure.offsetWidth > container.clientWidth + 2;
+            setIsOverflowing(overflow);
+            if (overflow) {
+                setDurationSec(Math.max(6, Math.round((measure.offsetWidth + 32) / 35)));
+            }
+        };
+
+        checkOverflow();
+
+        const observer =
+            typeof ResizeObserver !== 'undefined'
+                ? new ResizeObserver(checkOverflow)
+                : null;
+        if (observer && containerRef.current) {
+            observer.observe(containerRef.current);
+        }
+        window.addEventListener('resize', checkOverflow);
+
+        return () => {
+            observer?.disconnect();
+            window.removeEventListener('resize', checkOverflow);
+        };
+    }, [text]);
+
+    return (
+        <div
+            ref={containerRef}
+            style={
+                isOverflowing
+                    ? {
+                        maskImage:
+                            'linear-gradient(to right, transparent, black 6%, black 94%, transparent)',
+                        WebkitMaskImage:
+                            'linear-gradient(to right, transparent, black 6%, black 94%, transparent)',
+                    }
+                    : undefined
+            }
+            className={`relative overflow-hidden whitespace-nowrap ${className}`}
+            title={text}
+        >
+            {/* Elemen bayangan untuk mengukur lebar asli teks */}
+            <span
+                ref={measureRef}
+                aria-hidden="true"
+                className="invisible absolute pointer-events-none whitespace-nowrap"
+            >
+                {text}
+            </span>
+
+            {isOverflowing ? (
+                <div
+                    className="inline-flex w-max animate-attendance-marquee hover:[animation-play-state:paused]"
+                    style={{ animationDuration: `${durationSec}s` }}
+                >
+                    <span className="pr-8">{text}</span>
+                    <span className="pr-8" aria-hidden="true">
+                        {text}
+                    </span>
+                </div>
+            ) : (
+                <span>{text}</span>
+            )}
+        </div>
+    );
+}
+
+/* ============================================================================
+ * SUB-KOMPONEN INTERNAL 2: JAM DIGITAL REAL-TIME SESUAI ZONA WAKTU SEKOLAH
+ * ============================================================================ */
 function useSchoolClockParts(schoolTimezone: string) {
     const getParts = useCallback(() => {
         try {
@@ -150,6 +202,7 @@ function DigitalClockCard({
                 }
             />
 
+            {/* Baris Jam */}
             <div
                 className={`flex items-center justify-center ${isMobile ? 'gap-1.5' : 'gap-2'
                     } w-full`}
@@ -170,6 +223,7 @@ function DigitalClockCard({
 
             <div className="w-full h-px bg-amber-300/60 my-1" />
 
+            {/* Baris Menit */}
             <div
                 className={`flex items-center justify-center ${isMobile ? 'gap-1.5' : 'gap-2'
                     } w-full`}
@@ -190,6 +244,7 @@ function DigitalClockCard({
 
             <div className="w-full h-px bg-amber-300/60 my-1" />
 
+            {/* Baris Detik */}
             <div
                 className={`flex items-center justify-center ${isMobile ? 'gap-1.5' : 'gap-2'
                     } w-full`}
@@ -211,7 +266,61 @@ function DigitalClockCard({
     );
 }
 
-const PROFILE_HINT_AUTO_CLOSE_MS = 4500;
+/* ============================================================================
+ * KOMPONEN UTAMA: TAB BERANDA GURU
+ * ============================================================================ */
+interface TeacherBerandaTabProps {
+    teacher: TeacherProfile | null;
+    fallbackUserName?: string | null;
+    resolvedTeacherPhotoUrl: string | null;
+    teacherIdentityLabel: string;
+    isTeacherAccountLinked: boolean;
+    accountStatusHint: {
+        title: string;
+        description: string;
+    };
+    schoolGeo: SchoolGeoAndSchedule | null;
+    schoolTimezone: string;
+    todayRecord: AttendanceRecord | null;
+    isLoadingData: boolean;
+    onRefreshData: () => void;
+    onToggleSidebar: () => void;
+    onNavigateView: (view: SubView) => void;
+    formattedDateWithPasaran: string;
+    javaneseDateBadge: string;
+    monthYearLabel: string;
+    reportStats: {
+        percentage: number;
+        hadir: number;
+        terlambat: number;
+    };
+    isHolidayLoading: boolean;
+    isHoliday: boolean;
+    isHolidayLocked: boolean;
+    holidayReason: string;
+    isAdminOrSuperAdmin: boolean;
+    onOpenHolidayModal: () => void;
+    showToast: (type: 'success' | 'error', message: string) => void;
+    isCheckInLocked: boolean;
+    canCheckOut: boolean;
+    hasCheckedIn: boolean;
+    hasCheckedOut: boolean;
+    isOnLeaveToday: boolean;
+    effectiveWorkStartTime: string;
+    effectiveToleranceMinutes: number;
+    effectiveWorkEndTime: string;
+    effectiveDeadlineStr: string;
+    currentLateMinutes: number;
+    todayCheckOutTimingInfo: {
+        status: CheckOutTimingStatus;
+        isEarly: boolean;
+        isOvertime: boolean;
+        diffMinutes: number;
+    };
+    formatShortTime: (iso?: string | null) => string;
+    formatDurationMinutes: (totalMinutes: number) => string;
+    formatStatusLabel: (status?: string | null) => string;
+}
 
 export function TeacherBerandaTab({
     teacher,
@@ -259,11 +368,13 @@ export function TeacherBerandaTab({
     const [isProfileHintOpen, setIsProfileHintOpen] = useState<boolean>(false);
     const profileHintRef = useRef<HTMLDivElement | null>(null);
 
+    // Reset error foto & tooltip akun saat profil guru berubah
     useEffect(() => {
         setPhotoLoadError(false);
         setIsProfileHintOpen(false);
     }, [teacher?.id, resolvedTeacherPhotoUrl]);
 
+    // Tutup otomatis balon info status akun jika klik di luar atau melewati batas waktu
     useEffect(() => {
         if (!isProfileHintOpen) return;
 
@@ -292,6 +403,7 @@ export function TeacherBerandaTab({
         };
     }, [isProfileHintOpen]);
 
+    // Nama tampilan & inisial fallback avatar
     const { displayName, avatarAlt, avatarInitial } = useMemo(() => {
         const resolvedName =
             teacher?.fullName?.trim() || fallbackUserName?.trim() || '';
@@ -302,6 +414,7 @@ export function TeacherBerandaTab({
         };
     }, [teacher?.fullName, fallbackUserName, t]);
 
+    // Gabungan jabatan utama & tugas tambahan guru tanpa duplikasi
     const { basePositionLabel, additionalDutyText } = useMemo(() => {
         const baseLabel =
             teacher?.position?.trim() ||
@@ -340,6 +453,7 @@ export function TeacherBerandaTab({
         setPhotoLoadError(true);
     }, []);
 
+    // Aksi klik tombol lencana hari libur di pojok kanan atas
     const handleHolidayButtonClick = useCallback(() => {
         if (isAdminOrSuperAdmin) {
             onOpenHolidayModal();
@@ -377,6 +491,7 @@ export function TeacherBerandaTab({
         onNavigateView('peta');
     }, [canCheckOut, onNavigateView]);
 
+    // Label status & indikator warna pada kartu DATANG
     const checkInDisplay = useMemo(() => {
         const isHolidayBlocked =
             isHolidayLocked && !hasCheckedIn && !isOnLeaveToday;
@@ -445,6 +560,7 @@ export function TeacherBerandaTab({
         t,
     ]);
 
+    // Label status & indikator warna pada kartu PULANG
     const checkOutDisplay = useMemo(() => {
         const isHolidayBlocked = isHolidayLocked && !hasCheckedOut;
 
@@ -512,10 +628,14 @@ export function TeacherBerandaTab({
             animate={{ opacity: 1, y: 0 }}
             className="space-y-4"
         >
+            {/* ==================================================================
+                BAGIAN 1: BANNER UTAMA (HEADER + KARTU PROFIL + JAM DIGITAL)
+            ================================================================== */}
             <div className="relative rounded-[28px] overflow-hidden shadow-xl bg-linear-to-br from-[#1C3D6E] via-[#26508E] to-[#3468AE] p-5 text-white">
                 <div className="pointer-events-none absolute -right-10 -top-10 w-44 h-44 rounded-full bg-white/5" />
                 <div className="pointer-events-none absolute right-12 top-24 w-28 h-28 rounded-full bg-amber-300/10" />
 
+                {/* Baris Atas: Tombol Sidebar, Judul Tanggal, Tombol Refresh & Libur */}
                 <div className="relative flex items-start sm:items-center justify-between gap-2.5 mb-4">
                     <div className="flex items-start sm:items-center gap-3 min-w-0 flex-1">
                         <button
@@ -596,10 +716,11 @@ export function TeacherBerandaTab({
                     </div>
                 </div>
 
-                {/* KARTU PROFIL & JAM */}
+                {/* Kartu Profil Guru & Jam Digital */}
                 <div className="relative rounded-3xl bg-linear-to-br from-[#F9FAFB] via-[#F7F5F0] to-[#EFECE3] text-slate-800 p-4 shadow-lg border border-white/80">
                     <div className="grid grid-cols-12 gap-3 items-stretch">
                         <div className="col-span-12 sm:col-span-8 flex flex-col justify-between gap-3">
+                            {/* Foto Avatar + Identitas Guru */}
                             <div className="flex items-start gap-3">
                                 <div ref={profileHintRef} className="relative shrink-0 mt-0.5">
                                     <button
@@ -634,6 +755,7 @@ export function TeacherBerandaTab({
                                         </span>
                                     </button>
 
+                                    {/* Popover Status Keterkaitan Akun */}
                                     <AnimatePresence>
                                         {isProfileHintOpen && (
                                             <motion.div
@@ -709,6 +831,7 @@ export function TeacherBerandaTab({
                                 </div>
                             </div>
 
+                            {/* Kotak Persentase Kehadiran Bulanan + Jam Mobile */}
                             <div className="grid grid-cols-12 sm:grid-cols-1 gap-2.5 items-stretch">
                                 <div className="col-span-7 sm:col-span-1 rounded-2xl bg-white/85 backdrop-blur-xs border border-slate-200/80 p-3 shadow-xs flex flex-col justify-between">
                                     <div className="flex items-center justify-between gap-2">
@@ -754,7 +877,6 @@ export function TeacherBerandaTab({
                                     </div>
                                 </div>
 
-                                {/* JAM DIGITAL KHUSUS LAYAR HP (< 640px) */}
                                 <DigitalClockCard
                                     variant="mobile"
                                     schoolTimezone={schoolTimezone}
@@ -765,7 +887,6 @@ export function TeacherBerandaTab({
                             </div>
                         </div>
 
-                        {/* JAM DIGITAL KHUSUS LAYAR KOMPUTER (>= 640px) */}
                         <DigitalClockCard
                             variant="desktop"
                             schoolTimezone={schoolTimezone}
@@ -777,8 +898,11 @@ export function TeacherBerandaTab({
                 </div>
             </div>
 
-            {/* Dua Kartu Utama: DATANG & PULANG */}
+            {/* ==================================================================
+                BAGIAN 2: DUA KARTU AKSI CEPAT (DATANG / CHECK-IN & PULANG / CHECK-OUT)
+            ================================================================== */}
             <div className="grid grid-cols-2 gap-3.5">
+                {/* Kartu Presensi Datang */}
                 <button
                     type="button"
                     disabled={isCheckInLocked}
@@ -845,6 +969,7 @@ export function TeacherBerandaTab({
                     </div>
                 </button>
 
+                {/* Kartu Presensi Pulang */}
                 <button
                     type="button"
                     disabled={!canCheckOut}

@@ -118,8 +118,11 @@ export interface SecurityAuditState {
 }
 
 export interface SubmitGpsRpcResult {
+  success?: boolean;
+  mode?: 'CHECK_IN' | 'CHECK_OUT';
   status?: string;
   serverTime?: string;
+  distance?: number;
   distanceMeters?: number;
   [key: string]: unknown;
 }

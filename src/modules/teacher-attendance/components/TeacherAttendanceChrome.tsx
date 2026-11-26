@@ -1,7 +1,23 @@
-// src/modules/teacher-attendance/components/TeacherAttendanceModals.tsx
+// src/modules/teacher-attendance/components/TeacherAttendanceChrome.tsx
+/**
+ * ============================================================================
+ * KERANGKA NAVIGASI & MODAL GLOBAL PRESENSI GURU (TeacherAttendanceChrome)
+ * ============================================================================
+ * Berisi 2 komponen utama lintas-tab:
+ * 1. TeacherBottomNav: Bar navigasi melayang di bagian bawah layar dengan 4 tab
+ *    (Beranda, Laporan, Izin/Dinas, Data Log) + 1 tombol tengah Sidik Jari (Peta GPS).
+ * 2. TeacherAttendanceModals: 3 dialog pop-up terpusat (Pengaturan Libur Khusus,
+ *    Konfirmasi Pulang Lebih Awal dengan alasan wajib, dan Kamera Selfie).
+ * ============================================================================
+ */
 import { useEffect, type RefObject } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+    Home,
+    FileBarChart2,
+    Fingerprint,
+    FileCheck2,
+    History,
     Lock,
     Unlock,
     X,
@@ -14,7 +30,149 @@ import {
 } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
 import { MIN_EARLY_CHECKOUT_REASON_LENGTH } from '../constants/teacherAttendance.constants';
+import type { SubView } from '../types/teacherAttendance.types';
 
+/* ============================================================================
+ * BAGIAN 1: FLOATING BOTTOM NAVIGATION BAR (4 MENU + TOMBOL SIDIK JARI TENGAH)
+ * ============================================================================ */
+interface TeacherBottomNavProps {
+    sidebarCollapsed: boolean;
+    activeView: SubView;
+    onSelectView: (view: SubView) => void;
+    isFingerprintGlowing: boolean;
+    onTriggerFingerprintGlow: () => void;
+    onFingerprintAction: () => void;
+    fingerprintButtonStyle: string;
+    fingerprintAuraColor: string;
+    isOnMapView: boolean;
+    isHolidayLocked: boolean;
+    holidayReason: string;
+    isCheckOutPhase: boolean;
+}
+
+export function TeacherBottomNav({
+    sidebarCollapsed,
+    activeView,
+    onSelectView,
+    isFingerprintGlowing,
+    onTriggerFingerprintGlow,
+    onFingerprintAction,
+    fingerprintButtonStyle,
+    fingerprintAuraColor,
+    isOnMapView,
+    isHolidayLocked,
+    holidayReason,
+    isCheckOutPhase,
+}: TeacherBottomNavProps) {
+    const { t } = useTranslation();
+
+    // Label aksesibilitas dinamis untuk tombol sidik jari sesuai status presensi
+    const fingerprintAriaLabel = !isOnMapView
+        ? t('teacherAttendance.titleOpenAttendanceMap')
+        : isHolidayLocked
+            ? t('teacherAttendance.toastHolidayError', {
+                reason: holidayReason,
+            })
+            : isCheckOutPhase
+                ? t('teacherAttendance.titleFingerprintCheckOut')
+                : t('teacherAttendance.titleFingerprintCheckIn');
+
+    return (
+        <div
+            className={`fixed bottom-4 inset-x-0 z-40 px-4 pointer-events-none transition-all duration-200 ${sidebarCollapsed ? 'lg:pl-16' : 'lg:pl-60'
+                }`}
+        >
+            <div className="max-w-md mx-auto pointer-events-auto rounded-3xl bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl border border-slate-200/90 dark:border-white/15 shadow-2xl px-2 py-2 grid grid-cols-5 items-center">
+                {/* Tab 1: Beranda */}
+                <button
+                    type="button"
+                    aria-current={activeView === 'beranda' ? 'page' : undefined}
+                    onClick={() => onSelectView('beranda')}
+                    className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
+                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                >
+                    <Home size={17} />
+                    <span>{t('teacherAttendance.navHome')}</span>
+                </button>
+
+                {/* Tab 2: Laporan */}
+                <button
+                    type="button"
+                    aria-current={activeView === 'laporan' ? 'page' : undefined}
+                    onClick={() => onSelectView('laporan')}
+                    className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
+                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                >
+                    <FileBarChart2 size={17} />
+                    <span>{t('teacherAttendance.navReport')}</span>
+                </button>
+
+                {/* Tombol Tengah: Sidik Jari (Buka Peta GPS / Eksekusi Presensi) */}
+                <div className="flex flex-col items-center justify-center relative">
+                    {isFingerprintGlowing && (
+                        <span
+                            className={`pointer-events-none absolute -top-7 w-16 h-16 rounded-full animate-ping opacity-75 ${fingerprintAuraColor}`}
+                        />
+                    )}
+
+                    <motion.button
+                        type="button"
+                        whileTap={{ scale: 0.88 }}
+                        onPointerDown={onTriggerFingerprintGlow}
+                        onClick={onFingerprintAction}
+                        className={`-mt-7 w-15 h-15 rounded-full flex items-center justify-center border-4 border-white dark:border-slate-900 transition-all duration-200 select-none ${fingerprintButtonStyle}`}
+                        title={fingerprintAriaLabel}
+                        aria-label={fingerprintAriaLabel}
+                    >
+                        <Fingerprint
+                            size={28}
+                            className={`transition-transform duration-150 ${isFingerprintGlowing
+                                ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                                : ''
+                                }`}
+                        />
+                    </motion.button>
+                </div>
+
+                {/* Tab 3: Izin / Dinas */}
+                <button
+                    type="button"
+                    aria-current={activeView === 'izin' ? 'page' : undefined}
+                    onClick={() => onSelectView('izin')}
+                    className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
+                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                >
+                    <FileCheck2 size={17} />
+                    <span>{t('teacherAttendance.navLeave')}</span>
+                </button>
+
+                {/* Tab 4: Data Log */}
+                <button
+                    type="button"
+                    aria-current={activeView === 'log' ? 'page' : undefined}
+                    onClick={() => onSelectView('log')}
+                    className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
+                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                        }`}
+                >
+                    <History size={17} />
+                    <span>{t('teacherAttendance.navLog')}</span>
+                </button>
+            </div>
+        </div>
+    );
+}
+
+/* ============================================================================
+ * BAGIAN 2: KUMPULAN MODAL DIALOG PRESENSI GURU
+ * ============================================================================ */
 interface TeacherAttendanceModalsProps {
     isAdminOrSuperAdmin: boolean;
     isHolidayModalOpen: boolean;
@@ -98,6 +256,7 @@ export function TeacherAttendanceModals({
         checkoutConfirmModal.open ||
         cameraModal.open;
 
+    // Dukungan tombol ESC untuk menutup modal yang sedang terbuka
     useEffect(() => {
         if (!isAnyModalOpen) return;
 
@@ -131,9 +290,9 @@ export function TeacherAttendanceModals({
 
     return (
         <>
-            {/* ====================================================================
-          MODAL RINGKAS PENGATURAN HARI LIBUR / KHUSUS GURU (ADMIN / SUPER ADMIN)
-      ==================================================================== */}
+            {/* ------------------------------------------------------------------
+                MODAL 1: PENGATURAN HARI LIBUR / KEGIATAN KHUSUS GURU (ADMIN)
+            ------------------------------------------------------------------ */}
             <AnimatePresence>
                 {isHolidayModalOpen && isAdminOrSuperAdmin && (
                     <motion.div
@@ -156,8 +315,8 @@ export function TeacherAttendanceModals({
                                 <div className="flex items-center gap-2.5">
                                     <div
                                         className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${isHolidayLocked
-                                                ? 'bg-rose-500/15 text-rose-500'
-                                                : 'bg-emerald-500/15 text-emerald-500'
+                                            ? 'bg-rose-500/15 text-rose-500'
+                                            : 'bg-emerald-500/15 text-emerald-500'
                                             }`}
                                     >
                                         {isHolidayLocked ? (
@@ -242,9 +401,9 @@ export function TeacherAttendanceModals({
                 )}
             </AnimatePresence>
 
-            {/* ====================================================================
-          MODAL PERINGATAN PULANG LEBIH AWAL (ALASAN WAJIB DIISI)
-      ==================================================================== */}
+            {/* ------------------------------------------------------------------
+                MODAL 2: KONFIRMASI PULANG LEBIH AWAL (WAJIB ISI ALASAN)
+            ------------------------------------------------------------------ */}
             <AnimatePresence>
                 {checkoutConfirmModal.open && (
                     <motion.div
@@ -284,6 +443,7 @@ export function TeacherAttendanceModals({
                                 </button>
                             </div>
 
+                            {/* Rincian perbandingan jam saat ini vs jadwal pulang */}
                             <div className="p-3.5 rounded-2xl border text-xs space-y-2 bg-amber-500/10 border-amber-500/35">
                                 <div className="flex items-center justify-between">
                                     <span className="opacity-75">
@@ -311,6 +471,7 @@ export function TeacherAttendanceModals({
                                 </div>
                             </div>
 
+                            {/* Input alasan pulang awal */}
                             <div className="space-y-1.5">
                                 <div className="flex items-center justify-between text-[11px]">
                                     <label className="font-bold">
@@ -373,9 +534,9 @@ export function TeacherAttendanceModals({
                 )}
             </AnimatePresence>
 
-            {/* ====================================================================
-          MODAL KAMERA SELFIE (CHECK-IN & CHECK-OUT)
-      ==================================================================== */}
+            {/* ------------------------------------------------------------------
+                MODAL 3: KAMERA SELFIE CHECK-IN & CHECK-OUT
+            ------------------------------------------------------------------ */}
             <AnimatePresence>
                 {cameraModal.open && (
                     <motion.div
@@ -383,8 +544,14 @@ export function TeacherAttendanceModals({
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
                         className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+                        onClick={() =>
+                            !isSubmittingAttendance && onCloseCameraModal()
+                        }
                     >
-                        <div className="data-card max-w-sm w-full p-4 space-y-3">
+                        <div
+                            className="data-card max-w-sm w-full p-4 space-y-3"
+                            onClick={(e) => e.stopPropagation()}
+                        >
                             <div className="flex items-center justify-between">
                                 <div>
                                     <h3 className="font-bold text-sm">
@@ -408,6 +575,7 @@ export function TeacherAttendanceModals({
                                 </button>
                             </div>
 
+                            {/* Pratinjau Kamera Langsung / Hasil Jepretan */}
                             <div className="rounded-2xl overflow-hidden bg-black aspect-square max-h-[52dvh] mx-auto w-full relative">
                                 {capturedPreview ? (
                                     <img
@@ -438,8 +606,8 @@ export function TeacherAttendanceModals({
                                     type="button"
                                     onClick={onTakeSnapshot}
                                     className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                                            ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                                            : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                                         }`}
                                 >
                                     <Camera size={18} className="shrink-0" />
@@ -462,10 +630,10 @@ export function TeacherAttendanceModals({
                                         onClick={() =>
                                             onSubmitAttendance(cameraModal.mode, capturedBlob)
                                         }
-                                        disabled={isSubmittingAttendance}
+                                        disabled={isSubmittingAttendance || !capturedBlob}
                                         className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                                                ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                                                : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                                            ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                                            : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                                             }`}
                                     >
                                         {isSubmittingAttendance ? (

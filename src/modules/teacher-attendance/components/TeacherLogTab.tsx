@@ -1,4 +1,15 @@
 // src/modules/teacher-attendance/components/TeacherLogTab.tsx
+/**
+ * ============================================================================
+ * MENU 5: DATA LOG RIWAYAT PRESENSI HARIAN (TeacherLogTab)
+ * ============================================================================
+ * Menampilkan:
+ * 1. Chip filter cepat berdasarkan kategori status (Semua, Hadir, Terlambat,
+ *    Izin/Sakit/Dinas/Cuti, Alpa) beserta jumlah masing-masing.
+ * 2. Daftar riwayat harian lengkap dengan Pasaran Jawa, jam datang/pulang,
+ *    jarak check-in, lencana keterlambatan, lencana pulang awal, dan catatan.
+ * ============================================================================
+ */
 import { useState, useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { History, Menu } from 'lucide-react';
@@ -37,6 +48,7 @@ export function TeacherLogTab({
     const { t } = useTranslation();
     const [activeFilter, setActiveFilter] = useState<LogStatusFilter>('ALL');
 
+    // Hitung jumlah per kategori & saring daftar log sesuai chip filter yang dipilih
     const { counts, filteredRecords } = useMemo(() => {
         const summary = {
             ALL: historyRecords.length,
@@ -59,7 +71,8 @@ export function TeacherLogTab({
             } else if (
                 status === 'IZIN' ||
                 status === 'SAKIT' ||
-                status === 'DINAS_LUAR'
+                status === 'DINAS_LUAR' ||
+                status === 'CUTI'
             ) {
                 bucket = 'IZIN_SAKIT';
             } else if (status === 'ALPA' || status === 'ALPHA') {
@@ -95,6 +108,9 @@ export function TeacherLogTab({
             animate={{ opacity: 1, y: 0 }}
             className="data-card space-y-3"
         >
+            {/* ==================================================================
+                BAGIAN 1: HEADER DATA LOG PRESENSI
+            ================================================================== */}
             <div className="flex items-center justify-between border-b border-border pb-3">
                 <div>
                     <h2 className="text-base font-bold flex items-center gap-2">
@@ -115,6 +131,9 @@ export function TeacherLogTab({
                 </button>
             </div>
 
+            {/* ==================================================================
+                BAGIAN 2: CHIP FILTER STATUS KEHADIRAN
+            ================================================================== */}
             {historyRecords.length > 0 && (
                 <div className="flex items-center gap-1.5 overflow-x-auto pb-1 no-scrollbar">
                     {filterChips.map((chip) => {
@@ -125,8 +144,8 @@ export function TeacherLogTab({
                                 type="button"
                                 onClick={() => setActiveFilter(chip.key)}
                                 className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap border transition ${isSelected
-                                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
-                                        : 'bg-muted/50 text-foreground/75 border-border hover:bg-muted'
+                                    ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                                    : 'bg-muted/50 text-foreground/75 border-border hover:bg-muted'
                                     }`}
                             >
                                 {chip.label} ({counts[chip.key]})
@@ -136,6 +155,9 @@ export function TeacherLogTab({
                 </div>
             )}
 
+            {/* ==================================================================
+                BAGIAN 3: DAFTAR RIWAYAT LOG PRESENSI HARIAN
+            ================================================================== */}
             {historyRecords.length === 0 ? (
                 <p className="text-xs opacity-60 text-center py-8">
                     {t('teacherAttendance.logEmpty')}
@@ -212,12 +234,12 @@ export function TeacherLogTab({
                                 </div>
                                 <span
                                     className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                                            : item.status === 'TERLAMBAT'
-                                                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                                                : item.status === 'ALPA' || item.status === 'ALPHA'
-                                                    ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                                                    : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                                        : item.status === 'TERLAMBAT'
+                                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                                            : item.status === 'ALPA' || item.status === 'ALPHA'
+                                                ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                                                : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                                         }`}
                                 >
                                     {formatStatusLabel(item.status)}

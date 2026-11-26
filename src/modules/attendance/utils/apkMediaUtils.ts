@@ -37,6 +37,7 @@ export async function compressSelfieToJpeg(
     maxWidth?: number;
     maxBytes?: number;
     initialQuality?: number;
+    mirrorHorizontal?: boolean;
   }
 ): Promise<Blob> {
   const maxWidth = options?.maxWidth ?? 720;
@@ -80,7 +81,15 @@ export async function compressSelfieToJpeg(
     canvas.width = Math.round(srcWidth * scale);
     canvas.height = Math.round(srcHeight * scale);
 
-    ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
+    if (options?.mirrorHorizontal) {
+      ctx.save();
+      ctx.translate(canvas.width, 0);
+      ctx.scale(-1, 1);
+      ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
+      ctx.restore();
+    } else {
+      ctx.drawImage(drawable, 0, 0, canvas.width, canvas.height);
+    }
 
     let resultBlob = await canvasToJpegBlob(canvas, quality);
 
@@ -122,7 +131,13 @@ export function collectAttendanceTelemetry(gpsAccuracy?: number | null): Attenda
   const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
   const isCapacitorNative =
     typeof window !== 'undefined' &&
-    Boolean((window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.());
+    Boolean(
+      (
+        window as unknown as {
+          Capacitor?: { isNativePlatform?: () => boolean };
+        }
+      ).Capacitor?.isNativePlatform?.()
+    );
 
   const isMobileUa = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(ua);
   const isDesktop = !isCapacitorNative && !isMobileUa;

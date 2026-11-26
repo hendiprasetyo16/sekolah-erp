@@ -34,8 +34,10 @@ import { TeacherMapTab } from '../components/TeacherMapTab';
 import { TeacherLeaveTab } from '../components/TeacherLeaveTab';
 import { TeacherReportTab } from '../components/TeacherReportTab';
 import { TeacherLogTab } from '../components/TeacherLogTab';
-import { TeacherBottomNav } from '../components/TeacherBottomNav';
-import { TeacherAttendanceModals } from '../components/TeacherAttendanceModals';
+import {
+    TeacherBottomNav,
+    TeacherAttendanceModals,
+} from '../components/TeacherAttendanceChrome';
 
 const TOAST_AUTO_DISMISS_MS = 5000;
 
@@ -208,6 +210,7 @@ export function TeacherAttendancePage() {
 
     const {
         requestGpsPosition,
+        handleTakeSnapshot,
         submitGpsAttendance,
     } = gpsAndCamera;
 
@@ -252,6 +255,10 @@ export function TeacherAttendancePage() {
     const handleConfirmDisableSpecialEvent = useCallback(() => {
         void handleDisableSpecialEvent();
     }, [handleDisableSpecialEvent]);
+
+    const handleTakeSelfieSnapshot = useCallback(() => {
+        void handleTakeSnapshot();
+    }, [handleTakeSnapshot]);
 
     const handleSubmitGpsAttendance = useCallback(
         (...args: Parameters<typeof submitGpsAttendance>) => {
@@ -697,7 +704,7 @@ export function TeacherAttendancePage() {
                 cameraError={gpsAndCamera.cameraError}
                 isSubmittingAttendance={gpsAndCamera.isSubmittingAttendance}
                 onCloseCameraModal={gpsAndCamera.closeCameraModal}
-                onTakeSnapshot={() => void gpsAndCamera.handleTakeSnapshot()}
+                onTakeSnapshot={handleTakeSelfieSnapshot}
                 onRetakeSelfie={gpsAndCamera.clearCapturedSelfie}
                 onSubmitAttendance={handleSubmitGpsAttendance}
             />
