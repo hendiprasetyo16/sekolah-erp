@@ -490,11 +490,18 @@ export function TeacherAttendancePage() {
                             ))}
                         </select>
                         <select
-                            className="form-input text-xs py-1.5 flex-1 min-w-44"
+                            className="form-input text-xs py-1.5 flex-1 min-w-44 disabled:opacity-60"
+                            disabled={attendanceData.isLoadingSimTeachers}
                             value={attendanceData.simTeacherId}
                             onChange={(e) => attendanceData.setSimTeacherId(e.target.value)}
                         >
-                            {attendanceData.simTeachers.length === 0 ? (
+                            {attendanceData.isLoadingSimTeachers ? (
+                                <option value="">
+                                    {attendanceData.currentLang === 'en'
+                                        ? 'Loading teachers...'
+                                        : 'Memuat daftar guru...'}
+                                </option>
+                            ) : attendanceData.simTeachers.length === 0 ? (
                                 <option value="">{t('teacherAttendance.simNoTeachers')}</option>
                             ) : (
                                 attendanceData.simTeachers.map((item) => (
