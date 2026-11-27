@@ -59,7 +59,10 @@ const AutoScrollingText = memo(function AutoScrollingText({
     const [durationSec, setDurationSec] = useState(8);
 
     useEffect(() => {
+        let isMounted = true;
+
         const checkOverflow = () => {
+            if (!isMounted) return;
             const container = containerRef.current;
             const measure = measureRef.current;
             if (!container || !measure) return;
@@ -72,15 +75,22 @@ const AutoScrollingText = memo(function AutoScrollingText({
         };
 
         checkOverflow();
+        document.fonts?.ready?.then(checkOverflow).catch(() => { });
 
         if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
             const observer = new ResizeObserver(checkOverflow);
             observer.observe(containerRef.current);
-            return () => observer.disconnect();
+            return () => {
+                isMounted = false;
+                observer.disconnect();
+            };
         }
 
         window.addEventListener('resize', checkOverflow);
-        return () => window.removeEventListener('resize', checkOverflow);
+        return () => {
+            isMounted = false;
+            window.removeEventListener('resize', checkOverflow);
+        };
     }, [text]);
 
     return (
@@ -379,13 +389,13 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
     const [isProfileHintOpen, setIsProfileHintOpen] = useState<boolean>(false);
     const profileHintRef = useRef<HTMLDivElement | null>(null);
 
-    // Reset error foto & tooltip akun saat profil guru berubah
+    // Reset error foto & popover akun saat profil guru berubah
     useEffect(() => {
         setPhotoLoadError(false);
         setIsProfileHintOpen(false);
     }, [teacher?.id, resolvedTeacherPhotoUrl]);
 
-    // Tutup otomatis balon info status akun jika klik di luar atau melewati batas waktu
+    // Tutup otomatis balon info status akun jika klik di luar, tekan ESC, atau melewati batas waktu
     useEffect(() => {
         if (!isProfileHintOpen) return;
 
@@ -398,7 +408,13 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
             }
         };
 
-        const autoCloseTimer = setTimeout(() => {
+        const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key === 'Escape') {
+                setIsProfileHintOpen(false);
+            }
+        };
+
+        const autoCloseTimer = window.setTimeout(() => {
             setIsProfileHintOpen(false);
         }, PROFILE_HINT_AUTO_CLOSE_MS);
 
@@ -406,11 +422,13 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
         document.addEventListener('touchstart', handlePointerDownOutside, {
             passive: true,
         });
+        window.addEventListener('keydown', handleKeyDown);
 
         return () => {
-            clearTimeout(autoCloseTimer);
+            window.clearTimeout(autoCloseTimer);
             document.removeEventListener('mousedown', handlePointerDownOutside);
             document.removeEventListener('touchstart', handlePointerDownOutside);
+            window.removeEventListener('keydown', handleKeyDown);
         };
     }, [isProfileHintOpen]);
 
@@ -418,10 +436,13 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
     const { displayName, avatarAlt, avatarInitial } = useMemo(() => {
         const resolvedName =
             teacher?.fullName?.trim() || fallbackUserName?.trim() || '';
+        const fallbackRoleLabel = t('teacherAttendance.defaultTeacherPosition');
         return {
             displayName: resolvedName || t('teacherAttendance.profileUnlinked'),
-            avatarAlt: resolvedName || 'Guru',
-            avatarInitial: (resolvedName || 'G').charAt(0).toUpperCase(),
+            avatarAlt: resolvedName || fallbackRoleLabel,
+            avatarInitial: (resolvedName || fallbackRoleLabel)
+                .charAt(0)
+                .toUpperCase(),
         };
     }, [teacher?.fullName, fallbackUserName, t]);
 
@@ -536,6 +557,9 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
         if (isHolidayBlocked) {
             dotClassName = 'bg-rose-400';
             statusText = t('teacherAttendance.holidayShortLabel');
+        } else if (isOnLeaveToday) {
+            dotClassName = 'bg-blue-300';
+            statusText = t('teacherAttendance.badgeLeaveOrSick');
         } else if (hasCheckedIn) {
             const isLateRecord = todayRecord?.status === 'TERLAMBAT';
             dotClassName = isLateRecord ? 'bg-amber-400' : 'bg-emerald-400';
@@ -573,12 +597,17 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
 
     // Label status & indikator warna pada kartu PULANG
     const checkOutDisplay = useMemo(() => {
-        const isHolidayBlocked = isHolidayLocked && !hasCheckedOut;
+        const isHolidayBlocked =
+            isHolidayLocked && !hasCheckedOut && !isOnLeaveToday;
 
         let primaryText: string;
         if (isHolidayBlocked) {
             primaryText = t('teacherAttendance.lockedHolidayShort', {
                 reason: holidayReason,
+            });
+        } else if (isOnLeaveToday) {
+            primaryText = t('teacherAttendance.lockedStatusShort', {
+                status: formatStatusLabel(todayRecord?.status),
             });
         } else if (!hasCheckedIn) {
             primaryText = t('teacherAttendance.lockedCheckInFirst');
@@ -594,6 +623,9 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
         if (isHolidayBlocked) {
             dotClassName = 'bg-rose-300';
             statusText = t('teacherAttendance.holidayShortLabel');
+        } else if (isOnLeaveToday) {
+            dotClassName = 'bg-blue-200';
+            statusText = t('teacherAttendance.badgeLeaveOrSick');
         } else if (!hasCheckedIn) {
             statusText = t('teacherAttendance.activeAfterCheckIn');
         } else if (hasCheckedOut) {
@@ -621,11 +653,14 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
     }, [
         isHolidayLocked,
         hasCheckedOut,
+        isOnLeaveToday,
+        todayRecord?.status,
         hasCheckedIn,
         canCheckOut,
         holidayReason,
         todayCheckOutTimingInfo.isEarly,
         todayCheckOutTimingInfo.isOvertime,
+        formatStatusLabel,
         t,
     ]);
 
@@ -654,7 +689,7 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
                             onClick={onToggleSidebar}
                             className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
                             title={t('teacherAttendance.titleToggleSidebar')}
-                            aria-label="Toggle Sidebar"
+                            aria-label={t('teacherAttendance.titleToggleSidebar')}
                         >
                             <Menu size={18} />
                         </button>
@@ -677,6 +712,7 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
                             onClick={onRefreshData}
                             className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0 sm:order-2"
                             title={t('teacherAttendance.titleRefreshData')}
+                            aria-label={t('teacherAttendance.titleRefreshData')}
                         >
                             <RefreshCw
                                 size={17}
@@ -872,7 +908,8 @@ export const TeacherBerandaTab = memo(function TeacherBerandaTab({
                                             </span>
                                             <span className="text-[10px] text-slate-500">
                                                 {t('teacherAttendance.presentDaysCount', {
-                                                    count: reportStats.hadir + reportStats.terlambat,
+                                                    count:
+                                                        reportStats.hadir + reportStats.terlambat,
                                                 })}
                                             </span>
                                         </div>
