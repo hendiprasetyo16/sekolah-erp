@@ -24,6 +24,7 @@ import {
   FALLBACK_REQUIRE_SELFIE_CHECKOUT,
   FALLBACK_WORK_END_TIME,
   FALLBACK_WORK_START_TIME,
+  MAX_LEAVE_FILE_BYTES,
   MIN_REASON_LENGTH,
 } from '../constants/teacherAttendance.constants';
 import type {
@@ -50,6 +51,9 @@ import {
   mapTeacherDbRowToProfile,
   sanitizeStorageSegment,
 } from '../utils/teacherAttendance.helpers';
+
+const ATTENDANCE_HISTORY_PAGE_SIZE = 1000;
+const ATTENDANCE_HISTORY_MAX_PAGES = 20;
 
 interface UseTeacherAttendanceDataParams {
   setActiveView: (view: SubView) => void;
@@ -114,8 +118,11 @@ export function useTeacherAttendanceData({
 
   const formatDurationMinutes = useCallback(
     (totalMinutes: number): string => {
-      const hours = Math.floor(totalMinutes / 60);
-      const mins = totalMinutes % 60;
+      const safeTotal = Number.isFinite(totalMinutes)
+        ? Math.max(0, Math.round(totalMinutes))
+        : 0;
+      const hours = Math.floor(safeTotal / 60);
+      const mins = safeTotal % 60;
       if (hours > 0) {
         return mins > 0
           ? t('teacherAttendance.durHoursAndMins', { hours, mins })
@@ -173,8 +180,8 @@ export function useTeacherAttendanceData({
     useState<boolean>(false);
 
   const activeSchoolId = isSuperAdmin
-    ? simSchoolId || school?.id || ''
-    : school?.id || '';
+    ? simSchoolId || school?.id || user?.schoolId || ''
+    : school?.id || user?.schoolId || '';
 
   // Data Guru, Pengaturan Sekolah, & Riwayat Presensi
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
@@ -243,7 +250,9 @@ export function useTeacherAttendanceData({
   const formatShortTime = useCallback(
     (iso?: string | null) => {
       if (!iso) return '00:00';
-      return new Date(iso).toLocaleTimeString(dateLocale, {
+      const parsed = new Date(iso);
+      if (Number.isNaN(parsed.getTime())) return '00:00';
+      return parsed.toLocaleTimeString(dateLocale, {
         timeZone: schoolTimezone,
         hour: '2-digit',
         minute: '2-digit',
@@ -335,7 +344,8 @@ export function useTeacherAttendanceData({
         .from('national_holidays')
         .select('date, name, schoolId')
         .gte('date', `${minYear}-01-01`)
-        .lte('date', `${maxYear}-12-31`);
+        .lte('date', `${maxYear}-12-31`)
+        .order('date', { ascending: true });
 
       if (activeSchoolId) {
         query = query.or(`schoolId.eq.${activeSchoolId},schoolId.is.null`);
@@ -402,6 +412,13 @@ export function useTeacherAttendanceData({
     void loadActiveQuotes();
   }, [loadActiveQuotes]);
 
+  // Sinkronkan sekolah simulasi ketika sekolah di header berubah
+  useEffect(() => {
+    if (isSuperAdmin && school?.id) {
+      setSimSchoolId(school.id);
+    }
+  }, [isSuperAdmin, school?.id]);
+
   // Mode Simulasi Super Admin: Muat Sekolah
   useEffect(() => {
     if (!isSuperAdmin) return;
@@ -415,8 +432,11 @@ export function useTeacherAttendanceData({
       if (isCancelled) return;
       const list = (data ?? []) as Array<{ id: string; name: string }>;
       setSimSchools(list);
-      if (school?.id) setSimSchoolId(school.id);
-      else if (list.length > 0) setSimSchoolId(list[0].id);
+      if (school?.id) {
+        setSimSchoolId(school.id);
+      } else if (list.length > 0) {
+        setSimSchoolId((prev) => prev || list[0].id);
+      }
     };
 
     void loadSimSchools();
@@ -463,7 +483,13 @@ export function useTeacherAttendanceData({
     };
   }, [isSuperAdmin, activeSchoolId]);
 
-  // Muat Data Sekolah, Profil Guru, & Riwayat Presensi
+  // Reset state presensi sementara saat pergantian sekolah atau guru simulasi
+  useEffect(() => {
+    setTodayRecord(null);
+    setHistoryRecords([]);
+  }, [activeSchoolId, simTeacherId]);
+
+  // Muat Data Sekolah, Profil Guru, & Riwayat Presensi (Berpaginasi Penuh)
   const loadTeacherAndAttendance = useCallback(async () => {
     if (!activeSchoolId || !user?.id) return;
     if (isSuperAdmin && isLoadingSimTeachers) return;
@@ -577,22 +603,46 @@ export function useTeacherAttendanceData({
         Number(currentSchoolDate.slice(0, 4)) || new Date().getFullYear();
       const targetYear = Math.min(currentSchoolYear, calendarYear);
 
-      const { data: attList } = await supabase
-        .from('attendances')
-        .select('*')
-        .eq('schoolId', activeSchoolId)
-        .eq('teacherId', activeTeacher.id)
-        .eq('type', 'GURU')
-        .gte('date', `${targetYear}-01-01`)
-        .order('date', { ascending: false });
+      const collectedRecords: AttendanceRecord[] = [];
+      const seenIds = new Set<string>();
 
-      if (currentSeq !== loadSeqRef.current) return;
+      for (let page = 0; page < ATTENDANCE_HISTORY_MAX_PAGES; page++) {
+        const from = page * ATTENDANCE_HISTORY_PAGE_SIZE;
+        const to = from + ATTENDANCE_HISTORY_PAGE_SIZE - 1;
 
-      const records = (attList ?? []) as AttendanceRecord[];
-      setHistoryRecords(records);
+        const { data: attBatch, error: attErr } = await supabase
+          .from('attendances')
+          .select('*')
+          .eq('schoolId', activeSchoolId)
+          .eq('teacherId', activeTeacher.id)
+          .eq('type', 'GURU')
+          .gte('date', `${targetYear}-01-01`)
+          .order('date', { ascending: false })
+          .order('id', { ascending: false })
+          .range(from, to);
+
+        if (attErr) throw attErr;
+        if (currentSeq !== loadSeqRef.current) return;
+
+        const typedBatch = (attBatch ?? []) as AttendanceRecord[];
+        let added = 0;
+        for (const rec of typedBatch) {
+          if (!seenIds.has(rec.id)) {
+            seenIds.add(rec.id);
+            collectedRecords.push(rec);
+            added++;
+          }
+        }
+
+        if (typedBatch.length < ATTENDANCE_HISTORY_PAGE_SIZE || added === 0) {
+          break;
+        }
+      }
+
+      setHistoryRecords(collectedRecords);
 
       const foundToday =
-        records.find((r) => r.date === currentSchoolDate) ?? null;
+        collectedRecords.find((r) => r.date === currentSchoolDate) ?? null;
       setTodayRecord(foundToday);
     } catch (err: unknown) {
       console.error(
@@ -807,6 +857,16 @@ export function useTeacherAttendanceData({
         return;
       }
 
+      if (leaveFile.size > MAX_LEAVE_FILE_BYTES) {
+        showToast(
+          'error',
+          currentLang === 'en'
+            ? 'Attachment file size exceeds the 2 MB limit.'
+            : 'Ukuran file lampiran melebihi batas maksimal 2 MB.'
+        );
+        return;
+      }
+
       if (leaveReason.trim().length < MIN_REASON_LENGTH) {
         showToast(
           'error',
@@ -820,7 +880,7 @@ export function useTeacherAttendanceData({
         return;
       }
 
-      const datesToInsert: string[] = [];
+      const rawDateRange: string[] = [];
       const [sy, sm, sd] = leaveStartDate.split('-').map(Number);
       const [ey, em, ed] = leaveEndDate.split('-').map(Number);
       const isDatePartsValid =
@@ -847,14 +907,39 @@ export function useTeacherAttendanceData({
           const y = dtObj.getUTCFullYear();
           const m = String(dtObj.getUTCMonth() + 1).padStart(2, '0');
           const d = String(dtObj.getUTCDate()).padStart(2, '0');
-          datesToInsert.push(`${y}-${m}-${d}`);
+          rawDateRange.push(`${y}-${m}-${d}`);
           cursorMs += 86_400_000;
         }
       }
 
-      if (datesToInsert.length === 0) {
+      if (rawDateRange.length === 0) {
         showToast('error', t('teacherAttendance.errLeaveEndBeforeStart'));
         return;
+      }
+
+      // Saring tanggal merah / hari libur jika ALLOW_LEAVE_ON_HOLIDAY tidak aktif
+      let datesToInsert = rawDateRange;
+      if (!ALLOW_LEAVE_ON_HOLIDAY) {
+        const workingDates = rawDateRange.filter(
+          (dt) =>
+            !checkRedDateStatus(dt, dbHolidaysMap, effectiveWorkDaysMode)
+              .isRedDate
+        );
+        if (workingDates.length === 0) {
+          const firstRed = checkRedDateStatus(
+            rawDateRange[0],
+            dbHolidaysMap,
+            effectiveWorkDaysMode
+          );
+          showToast(
+            'error',
+            t('teacherAttendance.toastHolidayError', {
+              reason: firstRed.holidayName || holidayReason,
+            })
+          );
+          return;
+        }
+        datesToInsert = workingDates;
       }
 
       setIsSubmittingLeave(true);
@@ -884,18 +969,38 @@ export function useTeacherAttendanceData({
 
         uploadedAttachmentPath = storagePath;
 
-        const { data: existingRows } = await supabase
+        const { data: existingRows, error: existingFetchErr } = await supabase
           .from('attendances')
-          .select('id, date')
+          .select('id, date, status, checkInTime')
           .eq('schoolId', activeSchoolId)
           .eq('teacherId', teacher.id)
           .eq('type', 'GURU')
           .in('date', datesToInsert);
 
+        if (existingFetchErr) {
+          throw new Error(existingFetchErr.message);
+        }
+
+        const typedExisting = (existingRows ?? []) as Array<{
+          id: string;
+          date: string;
+          status: string;
+          checkInTime: string | null;
+        }>;
+
+        const alreadyCheckedInDate = typedExisting.find((row) =>
+          Boolean(row.checkInTime)
+        );
+        if (alreadyCheckedInDate) {
+          throw new Error(
+            currentLang === 'en'
+              ? `Attendance on ${alreadyCheckedInDate.date} is already recorded via GPS check-in.`
+              : `Presensi tanggal ${alreadyCheckedInDate.date} sudah tercatat hadir melalui GPS check-in.`
+          );
+        }
+
         const existingByDate = new Map<string, string>(
-          ((existingRows ?? []) as Array<{ id: string; date: string }>).map(
-            (row) => [row.date, row.id]
-          )
+          typedExisting.map((row) => [row.date, row.id])
         );
 
         const dbStatus = leaveCategory === 'SAKIT' ? 'SAKIT' : 'IZIN';
@@ -913,41 +1018,63 @@ export function useTeacherAttendanceData({
           : '';
         const formattedNote = `[${categoryLabel}]${refSegment} ${leaveReason.trim()}`;
 
+        const rowsToInsert: Array<{
+          schoolId: string;
+          teacherId: string;
+          type: 'GURU';
+          date: string;
+          status: 'SAKIT' | 'IZIN';
+          notes: string;
+          leaveType: LeaveCategory;
+          endDate: string;
+          attachmentUrl: string;
+        }> = [];
+        const idsToUpdate: string[] = [];
+
         for (const dt of datesToInsert) {
           const existingId = existingByDate.get(dt);
           if (existingId) {
-            const { error: updateErr } = await supabase
-              .from('attendances')
-              .update({
-                status: dbStatus,
-                notes: formattedNote,
-                leaveType: leaveCategory,
-                attachmentUrl: storagePath,
-              })
-              .eq('id', existingId)
-              .eq('schoolId', activeSchoolId);
-
-            if (updateErr) {
-              throw new Error(updateErr.message);
-            }
+            idsToUpdate.push(existingId);
           } else {
-            const { error: insertErr } = await supabase
-              .from('attendances')
-              .insert({
-                schoolId: activeSchoolId,
-                teacherId: teacher.id,
-                type: 'GURU',
-                date: dt,
-                status: dbStatus,
-                notes: formattedNote,
-                leaveType: leaveCategory,
-                endDate: leaveEndDate,
-                attachmentUrl: storagePath,
-              });
+            rowsToInsert.push({
+              schoolId: activeSchoolId,
+              teacherId: teacher.id,
+              type: 'GURU',
+              date: dt,
+              status: dbStatus,
+              notes: formattedNote,
+              leaveType: leaveCategory,
+              endDate: leaveEndDate,
+              attachmentUrl: storagePath,
+            });
+          }
+        }
 
-            if (insertErr) {
-              throw new Error(insertErr.message);
-            }
+        if (rowsToInsert.length > 0) {
+          const { error: insertErr } = await supabase
+            .from('attendances')
+            .insert(rowsToInsert);
+
+          if (insertErr) {
+            throw new Error(insertErr.message);
+          }
+        }
+
+        if (idsToUpdate.length > 0) {
+          const { error: updateErr } = await supabase
+            .from('attendances')
+            .update({
+              status: dbStatus,
+              notes: formattedNote,
+              leaveType: leaveCategory,
+              endDate: leaveEndDate,
+              attachmentUrl: storagePath,
+            })
+            .in('id', idsToUpdate)
+            .eq('schoolId', activeSchoolId);
+
+          if (updateErr) {
+            throw new Error(updateErr.message);
           }
         }
 
@@ -987,9 +1114,12 @@ export function useTeacherAttendanceData({
       t,
       holidayReason,
       leaveFile,
+      currentLang,
       leaveReason,
       leaveEndDate,
       leaveStartDate,
+      dbHolidaysMap,
+      effectiveWorkDaysMode,
       schoolGeo?.name,
       schoolTimezone,
       leaveCategory,
@@ -1186,6 +1316,7 @@ export function useTeacherAttendanceData({
 
   const isLeaveFormReady =
     Boolean(teacher) &&
+    !isLeaveFormLocked &&
     Boolean(leaveStartDate) &&
     Boolean(leaveEndDate) &&
     leaveEndDate >= leaveStartDate &&

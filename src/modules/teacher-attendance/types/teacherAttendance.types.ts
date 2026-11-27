@@ -98,10 +98,13 @@ export interface AttendanceRecord {
   type?: string;
   date: string;
   status: string;
+  approvalStatus?: 'PENDING' | 'APPROVED' | 'REJECTED' | string;
   checkInTime?: string | null;
   checkOutTime?: string | null;
   checkInDistance?: number | null;
   checkOutDistance?: number | null;
+  checkInSelfieUrl?: string | null;
+  checkOutSelfieUrl?: string | null;
   notes?: string | null;
   leaveType?: string | null;
   endDate?: string | null;

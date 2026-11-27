@@ -32,6 +32,7 @@ import {
   buildTeacherFolderName,
   calculateDistanceMeters,
   calculateLateMinutes,
+  calculateLateMinutesFromServerTime,
   evaluateCheckOutTiming,
   extractErrorMessage,
   getTimeStampTagInTimezone,
@@ -381,6 +382,29 @@ export function useTeacherGpsAndCamera({
     setEarlyReasonError(null);
   }, []);
 
+  // Tutup modal kamera / konfirmasi pulang awal dengan tombol Escape
+  useEffect(() => {
+    if (!cameraModal.open && !checkoutConfirmModal.open) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (cameraModal.open && !isSubmittingAttendance) {
+        closeCameraModal();
+      } else if (checkoutConfirmModal.open) {
+        closeCheckoutConfirmModal();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    cameraModal.open,
+    checkoutConfirmModal.open,
+    isSubmittingAttendance,
+    closeCameraModal,
+    closeCheckoutConfirmModal,
+  ]);
+
   // Simpan Check-In / Check-Out via Server RPC Anti-Curang (+ Telemetri Lengkap)
   const submitGpsAttendance = useCallback(
     async (mode: 'CHECK_IN' | 'CHECK_OUT', selfieBlob: Blob | null) => {
@@ -492,20 +516,15 @@ export function useTeacherGpsAndCamera({
 
         if (mode === 'CHECK_IN') {
           const serverStatus = rpcResult?.status;
+          const computedLate = calculateLateMinutesFromServerTime(
+            rpcResult?.serverTime,
+            effectiveWorkStartTime,
+            effectiveToleranceMinutes,
+            schoolTimezone,
+            lateMinutesAtSubmit
+          );
           const effectiveLateMinutes =
-            serverStatus === 'TERLAMBAT'
-              ? Math.max(
-                  1,
-                  rpcResult?.serverTime
-                    ? calculateLateMinutes(
-                        new Date(rpcResult.serverTime),
-                        effectiveWorkStartTime,
-                        effectiveToleranceMinutes,
-                        schoolTimezone
-                      )
-                    : lateMinutesAtSubmit
-                )
-              : 0;
+            serverStatus === 'TERLAMBAT' ? Math.max(1, computedLate) : 0;
 
           showToast(
             'success',

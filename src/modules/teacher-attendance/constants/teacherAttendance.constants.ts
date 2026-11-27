@@ -1,5 +1,4 @@
 // src/modules/teacher-attendance/constants/teacherAttendance.constants.ts
-// src/modules/teacher-attendance/constants/teacherAttendance.constants.ts
 export const MAX_LEAVE_FILE_BYTES = 2 * 1024 * 1024; // 2 MB
 export const DEFAULT_RADIUS_METERS = 100;
 export const DEFAULT_SCHOOL_TIMEZONE = 'Asia/Jakarta';

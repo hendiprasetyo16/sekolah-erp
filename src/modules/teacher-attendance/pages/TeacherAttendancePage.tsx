@@ -399,8 +399,8 @@ export function TeacherAttendancePage() {
                     >
                         <div
                             className={`max-w-lg mx-auto pointer-events-auto p-3.5 rounded-2xl border text-xs font-medium flex items-center justify-between gap-2.5 shadow-2xl ${toast.type === 'success'
-                                ? 'bg-emerald-600 text-white border-emerald-400'
-                                : 'bg-red-600 text-white border-red-400'
+                                    ? 'bg-emerald-600 text-white border-emerald-400'
+                                    : 'bg-red-600 text-white border-red-400'
                                 }`}
                         >
                             <div className="flex items-center gap-2.5">
@@ -414,7 +414,8 @@ export function TeacherAttendancePage() {
                             <button
                                 type="button"
                                 onClick={dismissToast}
-                                className="p-1 rounded-lg hover:bg-white/20 shrink-0"
+                                aria-label="Tutup notifikasi"
+                                className="p-1 rounded-lg hover:bg-white/20 shrink-0 cursor-pointer"
                             >
                                 <X size={14} />
                             </button>
@@ -428,7 +429,7 @@ export function TeacherAttendancePage() {
                 <button
                     type="button"
                     onClick={() => setIsTopHeaderVisible((prev) => !prev)}
-                    className="group inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-slate-200/75 dark:bg-white/10 hover:bg-slate-300/90 dark:hover:bg-white/20 text-[10px] font-medium text-slate-600 dark:text-slate-300 transition shadow-2xs"
+                    className="group inline-flex items-center gap-1.5 px-3 py-0.5 rounded-full bg-slate-200/75 dark:bg-white/10 hover:bg-slate-300/90 dark:hover:bg-white/20 text-[10px] font-medium text-slate-600 dark:text-slate-300 transition shadow-2xs cursor-pointer"
                     title={
                         isTopHeaderVisible
                             ? t('teacherAttendance.titleHideTopHeader')
@@ -462,7 +463,7 @@ export function TeacherAttendancePage() {
                             <button
                                 type="button"
                                 onClick={handleNavigateMasterAttendance}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-emerald-600 text-white hover:bg-emerald-700 transition cursor-pointer"
                             >
                                 <Settings2 size={12} />
                                 {t('teacherAttendance.btnHoursAndHolidays')}
@@ -470,7 +471,7 @@ export function TeacherAttendancePage() {
                             <button
                                 type="button"
                                 onClick={handleNavigateManageQuotes}
-                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-purple-600 text-white hover:bg-purple-700 transition"
+                                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xl text-[11px] font-semibold bg-purple-600 text-white hover:bg-purple-700 transition cursor-pointer"
                             >
                                 <Sparkles size={12} />
                                 {t('teacherAttendance.btnQuotes')}

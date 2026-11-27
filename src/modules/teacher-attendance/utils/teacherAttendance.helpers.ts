@@ -158,6 +158,7 @@ export function getClockPartsInTimezone(
   date: Date,
   timezone: string
 ): { hours: string; minutes: string; seconds: string } {
+  const safeDate = Number.isNaN(date.getTime()) ? new Date() : date;
   try {
     const parts = new Intl.DateTimeFormat('en-GB', {
       timeZone: timezone,
@@ -165,7 +166,7 @@ export function getClockPartsInTimezone(
       minute: '2-digit',
       second: '2-digit',
       hour12: false,
-    }).formatToParts(date);
+    }).formatToParts(safeDate);
 
     const hours = parts.find((p) => p.type === 'hour')?.value ?? '00';
     const minutes = parts.find((p) => p.type === 'minute')?.value ?? '00';
@@ -178,9 +179,9 @@ export function getClockPartsInTimezone(
     };
   } catch {
     return {
-      hours: String(date.getHours()).padStart(2, '0'),
-      minutes: String(date.getMinutes()).padStart(2, '0'),
-      seconds: String(date.getSeconds()).padStart(2, '0'),
+      hours: String(safeDate.getHours()).padStart(2, '0'),
+      minutes: String(safeDate.getMinutes()).padStart(2, '0'),
+      seconds: String(safeDate.getSeconds()).padStart(2, '0'),
     };
   }
 }
@@ -198,7 +199,9 @@ function parseTimeToMinutes(timeStr: string, fallbackMinutes: number): number {
   if (!match) return fallbackMinutes;
   const h = Number(match[1]);
   const m = Number(match[2]);
-  if (Number.isNaN(h) || Number.isNaN(m)) return fallbackMinutes;
+  if (Number.isNaN(h) || Number.isNaN(m) || h > 23 || m > 59) {
+    return fallbackMinutes;
+  }
   return h * 60 + m;
 }
 
@@ -235,6 +238,46 @@ export function calculateLateMinutes(
 
   if (actualTotal <= deadlineTotal) return 0;
   return actualTotal - deadlineTotal;
+}
+
+export function calculateLateMinutesFromServerTime(
+  serverTime: string | undefined,
+  workStartTime: string,
+  toleranceMinutes: number,
+  timezone: string,
+  fallbackMinutes: number
+): number {
+  if (!serverTime || !serverTime.trim()) return fallbackMinutes;
+
+  const trimmed = serverTime.trim();
+  const clockMatch = /^(\d{1,2}):(\d{2})(?::\d{2})?$/.exec(trimmed);
+  if (clockMatch) {
+    const h = Number(clockMatch[1]);
+    const m = Number(clockMatch[2]);
+    if (Number.isFinite(h) && Number.isFinite(m) && h <= 23 && m <= 59) {
+      const fallbackStartMinutes = parseTimeToMinutes(
+        FALLBACK_WORK_START_TIME,
+        7 * 60 + 30
+      );
+      const startTotal = parseTimeToMinutes(workStartTime, fallbackStartMinutes);
+      const deadlineTotal =
+        startTotal + Math.max(0, Math.round(toleranceMinutes));
+      const actualTotal = h * 60 + m;
+      return actualTotal <= deadlineTotal ? 0 : actualTotal - deadlineTotal;
+    }
+  }
+
+  const parsedDate = new Date(trimmed);
+  if (Number.isNaN(parsedDate.getTime())) {
+    return fallbackMinutes;
+  }
+
+  return calculateLateMinutes(
+    parsedDate,
+    workStartTime,
+    toleranceMinutes,
+    timezone
+  );
 }
 
 export function evaluateCheckOutTiming(
