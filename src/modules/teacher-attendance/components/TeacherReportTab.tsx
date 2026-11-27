@@ -193,6 +193,7 @@ export const TeacherReportTab = memo(function TeacherReportTab({
                         onClick={onToggleSidebar}
                         className="p-2 rounded-xl bg-white/15 hover:bg-white/25 transition"
                         title={t('teacherAttendance.titleToggleSidebar')}
+                        aria-label={t('teacherAttendance.titleToggleSidebar')}
                     >
                         <Menu size={17} />
                     </button>
@@ -323,6 +324,7 @@ export const TeacherReportTab = memo(function TeacherReportTab({
                         <button
                             type="button"
                             onClick={onPrevMonth}
+                            aria-label={t('common.previous')}
                             className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 transition"
                         >
                             <ChevronLeft size={16} />
@@ -330,6 +332,7 @@ export const TeacherReportTab = memo(function TeacherReportTab({
                         <button
                             type="button"
                             onClick={onNextMonth}
+                            aria-label={t('common.next')}
                             className="p-1.5 rounded-lg bg-muted hover:bg-muted/80 transition"
                         >
                             <ChevronRight size={16} />
@@ -345,7 +348,7 @@ export const TeacherReportTab = memo(function TeacherReportTab({
                                 type="button"
                                 onClick={() => handleChangeYear(-1)}
                                 className="p-1 rounded-lg hover:bg-muted transition"
-                                aria-label={isEnglish ? 'Previous year' : 'Tahun sebelumnya'}
+                                aria-label={t('teacherAttendance.titlePrevYear')}
                             >
                                 <ChevronLeft size={15} />
                             </button>
@@ -356,7 +359,7 @@ export const TeacherReportTab = memo(function TeacherReportTab({
                                 type="button"
                                 onClick={() => handleChangeYear(1)}
                                 className="p-1 rounded-lg hover:bg-muted transition"
-                                aria-label={isEnglish ? 'Next year' : 'Tahun berikutnya'}
+                                aria-label={t('teacherAttendance.titleNextYear')}
                             >
                                 <ChevronRight size={15} />
                             </button>

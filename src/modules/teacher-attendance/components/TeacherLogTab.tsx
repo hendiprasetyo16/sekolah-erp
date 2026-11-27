@@ -93,7 +93,7 @@ export const TeacherLogTab = memo(function TeacherLogTab({
 
     const filterChips = useMemo<{ key: LogStatusFilter; label: string }[]>(
         () => [
-            { key: 'ALL', label: currentLang === 'en' ? 'All' : 'Semua' },
+            { key: 'ALL', label: t('teacherAttendance.filterAll') },
             { key: 'HADIR', label: formatStatusLabel('HADIR') },
             { key: 'TERLAMBAT', label: formatStatusLabel('TERLAMBAT') },
             {
@@ -102,7 +102,7 @@ export const TeacherLogTab = memo(function TeacherLogTab({
             },
             { key: 'ALPA', label: formatStatusLabel('ALPA') },
         ],
-        [currentLang, formatStatusLabel]
+        [t, formatStatusLabel]
     );
 
     return (
@@ -129,6 +129,7 @@ export const TeacherLogTab = memo(function TeacherLogTab({
                     onClick={onToggleSidebar}
                     className="p-2 rounded-xl bg-muted hover:bg-muted/80 transition"
                     title={t('teacherAttendance.titleToggleSidebar')}
+                    aria-label={t('teacherAttendance.titleToggleSidebar')}
                 >
                     <Menu size={16} />
                 </button>
@@ -168,20 +169,18 @@ export const TeacherLogTab = memo(function TeacherLogTab({
             ) : filteredRecords.length === 0 ? (
                 <div className="text-center py-8 space-y-2">
                     <p className="text-xs opacity-65">
-                        {currentLang === 'en'
-                            ? 'No attendance records match this filter.'
-                            : 'Tidak ada riwayat presensi pada kategori ini.'}
+                        {t('teacherAttendance.logEmptyFiltered')}
                     </p>
                     <button
                         type="button"
                         onClick={() => setActiveFilter('ALL')}
                         className="px-3 py-1 rounded-lg text-[11px] font-semibold bg-muted hover:bg-muted/80 transition"
                     >
-                        {currentLang === 'en' ? 'Show All' : 'Tampilkan Semua'}
+                        {t('teacherAttendance.btnShowAll')}
                     </button>
                 </div>
             ) : (
-                <div className="space-y-2.5 max-h-105 overflow-y-auto pr-1">
+                <div className="space-y-2.5 max-h-[60dvh] overflow-y-auto pr-1">
                     {filteredRecords.map((item) => {
                         const normalizedStatus = (item.status ?? '').toUpperCase();
                         const isEarlyLog = isEarlyDepartureNote(item.notes);

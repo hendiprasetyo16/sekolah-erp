@@ -10,7 +10,7 @@
  *    Konfirmasi Pulang Lebih Awal dengan alasan wajib, dan Kamera Selfie).
  * ============================================================================
  */
-import { useEffect, type RefObject } from 'react';
+import { useEffect, memo, type RefObject } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Home,
@@ -50,7 +50,7 @@ interface TeacherBottomNavProps {
     isCheckOutPhase: boolean;
 }
 
-export function TeacherBottomNav({
+export const TeacherBottomNav = memo(function TeacherBottomNav({
     sidebarCollapsed,
     activeView,
     onSelectView,
@@ -89,8 +89,8 @@ export function TeacherBottomNav({
                     aria-current={activeView === 'beranda' ? 'page' : undefined}
                     onClick={() => onSelectView('beranda')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'beranda'
-                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                            ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
                         }`}
                 >
                     <Home size={17} />
@@ -103,8 +103,8 @@ export function TeacherBottomNav({
                     aria-current={activeView === 'laporan' ? 'page' : undefined}
                     onClick={() => onSelectView('laporan')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'laporan'
-                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                            ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
                         }`}
                 >
                     <FileBarChart2 size={17} />
@@ -131,8 +131,8 @@ export function TeacherBottomNav({
                         <Fingerprint
                             size={28}
                             className={`transition-transform duration-150 ${isFingerprintGlowing
-                                ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
-                                : ''
+                                    ? 'scale-110 drop-shadow-[0_0_8px_rgba(255,255,255,0.9)]'
+                                    : ''
                                 }`}
                         />
                     </motion.button>
@@ -144,8 +144,8 @@ export function TeacherBottomNav({
                     aria-current={activeView === 'izin' ? 'page' : undefined}
                     onClick={() => onSelectView('izin')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'izin'
-                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                            ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
                         }`}
                 >
                     <FileCheck2 size={17} />
@@ -158,8 +158,8 @@ export function TeacherBottomNav({
                     aria-current={activeView === 'log' ? 'page' : undefined}
                     onClick={() => onSelectView('log')}
                     className={`flex flex-col items-center justify-center gap-1 py-1.5 rounded-2xl text-[10px] font-semibold transition ${activeView === 'log'
-                        ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
-                        : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
+                            ? 'bg-linear-to-b from-amber-300 to-amber-500 text-slate-950 shadow-xs'
+                            : 'text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white'
                         }`}
                 >
                     <History size={17} />
@@ -168,7 +168,7 @@ export function TeacherBottomNav({
             </div>
         </div>
     );
-}
+});
 
 /* ============================================================================
  * BAGIAN 2: KUMPULAN MODAL DIALOG PRESENSI GURU
@@ -218,7 +218,7 @@ interface TeacherAttendanceModalsProps {
     ) => void;
 }
 
-export function TeacherAttendanceModals({
+export const TeacherAttendanceModals = memo(function TeacherAttendanceModals({
     isAdminOrSuperAdmin,
     isHolidayModalOpen,
     setIsHolidayModalOpen,
@@ -305,6 +305,9 @@ export function TeacherAttendanceModals({
                         }
                     >
                         <motion.div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="holiday-modal-title"
                             initial={{ scale: 0.94, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
                             exit={{ scale: 0.94, opacity: 0 }}
@@ -315,8 +318,8 @@ export function TeacherAttendanceModals({
                                 <div className="flex items-center gap-2.5">
                                     <div
                                         className={`w-10 h-10 rounded-2xl flex items-center justify-center shrink-0 ${isHolidayLocked
-                                            ? 'bg-rose-500/15 text-rose-500'
-                                            : 'bg-emerald-500/15 text-emerald-500'
+                                                ? 'bg-rose-500/15 text-rose-500'
+                                                : 'bg-emerald-500/15 text-emerald-500'
                                             }`}
                                     >
                                         {isHolidayLocked ? (
@@ -326,10 +329,15 @@ export function TeacherAttendanceModals({
                                         )}
                                     </div>
                                     <div>
-                                        <h3 className="font-bold text-sm leading-snug">
+                                        <h3
+                                            id="holiday-modal-title"
+                                            className="font-bold text-sm leading-snug"
+                                        >
                                             {isHolidayLocked
                                                 ? t('teacherAttendance.badgeHoliday')
-                                                : t('teacherAttendance.modalSpecialEventActiveTitle')}
+                                                : t(
+                                                    'teacherAttendance.modalSpecialEventActiveTitle'
+                                                )}
                                         </h3>
                                         <p className="text-[11px] opacity-70">{holidayReason}</p>
                                     </div>
@@ -338,6 +346,7 @@ export function TeacherAttendanceModals({
                                     type="button"
                                     disabled={isTogglingHolidayLock}
                                     onClick={() => setIsHolidayModalOpen(false)}
+                                    aria-label={t('common.close')}
                                     className="p-1 rounded-lg hover:bg-muted shrink-0"
                                 >
                                     <X size={18} />
@@ -414,6 +423,9 @@ export function TeacherAttendanceModals({
                         onClick={onCloseCheckoutConfirmModal}
                     >
                         <motion.div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="early-checkout-modal-title"
                             initial={{ scale: 0.94, opacity: 0 }}
                             animate={{ scale: 1, opacity: 1 }}
                             exit={{ scale: 0.94, opacity: 0 }}
@@ -426,7 +438,10 @@ export function TeacherAttendanceModals({
                                         <AlertTriangle size={22} />
                                     </div>
                                     <div>
-                                        <h3 className="font-bold text-sm leading-snug">
+                                        <h3
+                                            id="early-checkout-modal-title"
+                                            className="font-bold text-sm leading-snug"
+                                        >
                                             {t('teacherAttendance.modalEarlyTitle')}
                                         </h3>
                                         <p className="text-[11px] opacity-70">
@@ -437,6 +452,7 @@ export function TeacherAttendanceModals({
                                 <button
                                     type="button"
                                     onClick={onCloseCheckoutConfirmModal}
+                                    aria-label={t('common.close')}
                                     className="p-1 rounded-lg hover:bg-muted shrink-0"
                                 >
                                     <X size={18} />
@@ -494,6 +510,7 @@ export function TeacherAttendanceModals({
                                 <textarea
                                     rows={2}
                                     required
+                                    minLength={MIN_EARLY_CHECKOUT_REASON_LENGTH}
                                     value={earlyCheckoutReason}
                                     onChange={(e) => {
                                         setEarlyCheckoutReason(e.target.value);
@@ -549,12 +566,18 @@ export function TeacherAttendanceModals({
                         }
                     >
                         <div
+                            role="dialog"
+                            aria-modal="true"
+                            aria-labelledby="camera-selfie-modal-title"
                             className="data-card max-w-sm w-full p-4 space-y-3"
                             onClick={(e) => e.stopPropagation()}
                         >
                             <div className="flex items-center justify-between">
                                 <div>
-                                    <h3 className="font-bold text-sm">
+                                    <h3
+                                        id="camera-selfie-modal-title"
+                                        className="font-bold text-sm"
+                                    >
                                         {cameraModal.mode === 'CHECK_OUT'
                                             ? t('teacherAttendance.modalSelfieOutTitle')
                                             : t('teacherAttendance.modalSelfieInTitle')}
@@ -569,6 +592,7 @@ export function TeacherAttendanceModals({
                                     type="button"
                                     onClick={onCloseCameraModal}
                                     disabled={isSubmittingAttendance}
+                                    aria-label={t('common.close')}
                                     className="p-1 rounded-lg hover:bg-muted disabled:opacity-40"
                                 >
                                     <X size={18} />
@@ -606,8 +630,8 @@ export function TeacherAttendanceModals({
                                     type="button"
                                     onClick={onTakeSnapshot}
                                     className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 shadow-lg transition-all duration-200 active:scale-[0.98] ${cameraModal.mode === 'CHECK_OUT'
-                                        ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                                        : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                                            ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                                            : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                                         }`}
                                 >
                                     <Camera size={18} className="shrink-0" />
@@ -632,8 +656,8 @@ export function TeacherAttendanceModals({
                                         }
                                         disabled={isSubmittingAttendance || !capturedBlob}
                                         className={`col-span-7 py-3 px-4 rounded-2xl font-bold text-xs text-white flex items-center justify-center gap-2 shadow-lg transition-all duration-200 active:scale-[0.97] disabled:opacity-50 disabled:cursor-not-allowed ${cameraModal.mode === 'CHECK_OUT'
-                                            ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
-                                            : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                                                ? 'bg-linear-to-r from-rose-500 via-red-600 to-rose-700 hover:from-rose-600 hover:to-red-800 shadow-red-600/25 ring-2 ring-red-400/40'
+                                                : 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-emerald-600/25 ring-2 ring-emerald-400/40'
                                             }`}
                                     >
                                         {isSubmittingAttendance ? (
@@ -644,7 +668,9 @@ export function TeacherAttendanceModals({
                                         ) : (
                                             <>
                                                 <Send size={15} className="shrink-0" />
-                                                <span>{t('teacherAttendance.btnSubmitAttendance')}</span>
+                                                <span>
+                                                    {t('teacherAttendance.btnSubmitAttendance')}
+                                                </span>
                                             </>
                                         )}
                                     </button>
@@ -656,4 +682,4 @@ export function TeacherAttendanceModals({
             </AnimatePresence>
         </>
     );
-}
+});

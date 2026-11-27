@@ -77,8 +77,7 @@ export const TeacherLeaveTab = memo(function TeacherLeaveTab({
     onSubmit,
     showToast,
 }: TeacherLeaveTabProps) {
-    const { t, locale } = useTranslation();
-    const isEnglish = String(locale).startsWith('en');
+    const { t } = useTranslation();
     const fileInputRef = useRef<HTMLInputElement | null>(null);
 
     // Hitung jumlah hari kalender secara presisi menggunakan Date.UTC (bebas pergeseran DST)
@@ -104,20 +103,29 @@ export const TeacherLeaveTab = memo(function TeacherLeaveTab({
     const handleFileChange = useCallback(
         (e: React.ChangeEvent<HTMLInputElement>) => {
             const file = e.target.files?.[0] ?? null;
-            if (file && file.size > MAX_LEAVE_FILE_BYTES) {
+            if (!file) return;
+
+            const isAllowedType =
+                file.type.startsWith('image/') || file.type === 'application/pdf';
+            if (!isAllowedType) {
+                e.target.value = '';
+                showToast('error', t('teacherAttendance.errInvalidFileType'));
+                return;
+            }
+
+            if (file.size > MAX_LEAVE_FILE_BYTES) {
                 e.target.value = '';
                 showToast('error', t('teacherAttendance.errFileMax2Mb'));
                 return;
             }
+
             setLeaveFile(file);
             e.target.value = '';
         },
         [setLeaveFile, showToast, t]
     );
 
-    const removeAttachmentLabel = isEnglish
-        ? 'Remove attachment'
-        : 'Hapus lampiran';
+    const removeAttachmentLabel = t('teacherAttendance.btnRemoveAttachment');
 
     return (
         <motion.div
@@ -143,6 +151,7 @@ export const TeacherLeaveTab = memo(function TeacherLeaveTab({
                     onClick={onToggleSidebar}
                     className="p-2 rounded-xl bg-muted hover:bg-muted/80 transition"
                     title={t('teacherAttendance.titleToggleSidebar')}
+                    aria-label={t('teacherAttendance.titleToggleSidebar')}
                 >
                     <Menu size={16} />
                 </button>
@@ -251,9 +260,9 @@ export const TeacherLeaveTab = memo(function TeacherLeaveTab({
                         <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-muted/60 text-[11px] font-medium opacity-80">
                             <CalendarRange size={13} className="text-emerald-500" />
                             <span>
-                                {isEnglish
-                                    ? `Duration: ${leaveDurationDays} day(s)`
-                                    : `Durasi pengajuan: ${leaveDurationDays} hari`}
+                                {t('teacherAttendance.leaveDurationDays', {
+                                    days: leaveDurationDays,
+                                })}
                             </span>
                         </div>
                     </div>
@@ -302,6 +311,7 @@ export const TeacherLeaveTab = memo(function TeacherLeaveTab({
                         <textarea
                             rows={3}
                             required
+                            minLength={MIN_REASON_LENGTH}
                             disabled={isSubmittingLeave}
                             value={leaveReason}
                             onChange={(e) => setLeaveReason(e.target.value)}

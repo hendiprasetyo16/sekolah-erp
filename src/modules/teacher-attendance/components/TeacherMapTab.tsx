@@ -11,7 +11,7 @@
  * 4. Tombol aksi utama untuk melakukan presensi atau peringatan di luar radius.
  * ============================================================================
  */
-import { useState, useEffect, useCallback, type RefObject } from 'react';
+import { useState, useEffect, useCallback, memo, type RefObject } from 'react';
 import { motion } from 'framer-motion';
 import {
     Menu,
@@ -41,7 +41,11 @@ import type {
 /* ============================================================================
  * SUB-KOMPONEN INTERNAL: PENUNJUK JAM:MENIT REAL-TIME PADA KARTU METRIK PETA
  * ============================================================================ */
-function LiveMinuteBadge({ schoolTimezone }: { schoolTimezone: string }) {
+const LiveMinuteBadge = memo(function LiveMinuteBadge({
+    schoolTimezone,
+}: {
+    schoolTimezone: string;
+}) {
     const getFormattedMinute = useCallback(() => {
         try {
             return new Intl.DateTimeFormat('en-GB', {
@@ -73,7 +77,7 @@ function LiveMinuteBadge({ schoolTimezone }: { schoolTimezone: string }) {
             {timeText}
         </div>
     );
-}
+});
 
 interface TeacherMapTabProps {
     teacher: TeacherProfile | null;
@@ -115,7 +119,7 @@ interface TeacherMapTabProps {
     formatStatusLabel: (status?: string | null) => string;
 }
 
-export function TeacherMapTab({
+export const TeacherMapTab = memo(function TeacherMapTab({
     teacher,
     schoolGeo,
     schoolTimezone,
@@ -167,6 +171,7 @@ export function TeacherMapTab({
                         onClick={onToggleSidebar}
                         className="p-2 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
                         title={t('teacherAttendance.titleToggleSidebar')}
+                        aria-label={t('teacherAttendance.titleToggleSidebar')}
                     >
                         <Menu size={17} />
                     </button>
@@ -209,6 +214,7 @@ export function TeacherMapTab({
                     disabled={isLocating}
                     className="p-2.5 rounded-xl bg-white/15 hover:bg-white/25 transition shrink-0"
                     title={t('teacherAttendance.titleRefreshGps')}
+                    aria-label={t('teacherAttendance.titleRefreshGps')}
                 >
                     <LocateFixed size={19} className={isLocating ? 'animate-spin' : ''} />
                 </button>
@@ -350,6 +356,7 @@ export function TeacherMapTab({
                                     onClick={onNextQuote}
                                     className="p-1 rounded-full bg-white/15 hover:bg-white/25 transition"
                                     title={t('teacherAttendance.titleNextQuote')}
+                                    aria-label={t('teacherAttendance.titleNextQuote')}
                                 >
                                     <RefreshCw size={10} />
                                 </button>
@@ -466,4 +473,4 @@ export function TeacherMapTab({
             )}
         </motion.div>
     );
-}
+});

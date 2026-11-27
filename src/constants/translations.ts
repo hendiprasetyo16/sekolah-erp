@@ -1750,6 +1750,15 @@ export const translations = {
       btnRetake: 'Ulangi',
       btnSaving: 'Menyimpan...',
       btnSubmitAttendance: 'Kirim Presensi',
+      // Di dalam translations.id.teacherAttendance (setelah btnSubmitAttendance):
+      leaveDurationDays: 'Durasi pengajuan: {days} hari',
+      btnRemoveAttachment: 'Hapus lampiran',
+      errInvalidFileType: 'Format berkas harus berupa gambar (JPG/PNG) atau PDF.',
+      filterAll: 'Semua',
+      logEmptyFiltered: 'Tidak ada riwayat presensi pada kategori ini.',
+      btnShowAll: 'Tampilkan Semua',
+      titlePrevYear: 'Tahun sebelumnya',
+      titleNextYear: 'Tahun berikutnya',
     },
     enums: {
       role: {
@@ -3692,6 +3701,15 @@ export const translations = {
       btnRetake: 'Retake',
       btnSaving: 'Saving...',
       btnSubmitAttendance: 'Submit Attendance',
+      // Di dalam translations.en.teacherAttendance (setelah btnSubmitAttendance):
+      leaveDurationDays: 'Duration: {days} day(s)',
+      btnRemoveAttachment: 'Remove attachment',
+      errInvalidFileType: 'File format must be an image (JPG/PNG) or PDF.',
+      filterAll: 'All',
+      logEmptyFiltered: 'No attendance records match this filter.',
+      btnShowAll: 'Show All',
+      titlePrevYear: 'Previous year',
+      titleNextYear: 'Next year',
     },
     enums: {
       role: {
