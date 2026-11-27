@@ -31,6 +31,7 @@ import { attendanceService } from '../services/attendance.service';
 import type { DailyQuoteRow } from '../types/attendance.types';
 
 const GLOBAL_SCHOOL_VALUE = '__GLOBAL__';
+const ALL_SCHOOLS_FILTER = '__ALL_SCHOOLS__';
 const MIN_QUOTE_LENGTH = 10;
 const PAGE_SIZE_OPTIONS = [10, 25, 50] as const;
 
@@ -57,6 +58,7 @@ function isMissingTableError(err: unknown): boolean {
 interface QuoteCardItemProps {
     item: DailyQuoteRow;
     rowNumber: number;
+    schoolName?: string;
     isSuperAdmin: boolean;
     isBeingEdited: boolean;
     badgeGlobalLabel: string;
@@ -75,6 +77,7 @@ interface QuoteCardItemProps {
 const QuoteCardItem = memo(function QuoteCardItem({
     item,
     rowNumber,
+    schoolName,
     isSuperAdmin,
     isBeingEdited,
     badgeGlobalLabel,
@@ -95,10 +98,10 @@ const QuoteCardItem = memo(function QuoteCardItem({
     return (
         <div
             className={`rounded-2xl border p-4 transition-colors ${isBeingEdited
-                    ? 'border-emerald-500 ring-1 ring-emerald-500/40 bg-emerald-500/5'
-                    : item.isActive
-                        ? 'border-border bg-card'
-                        : 'border-border/60 bg-muted/30 opacity-75'
+                ? 'border-emerald-500 ring-1 ring-emerald-500/40 bg-emerald-500/5'
+                : item.isActive
+                    ? 'border-border bg-card'
+                    : 'border-border/60 bg-muted/30 opacity-75'
                 }`}
         >
             <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
@@ -114,14 +117,14 @@ const QuoteCardItem = memo(function QuoteCardItem({
                             </span>
                         ) : (
                             <span className="px-2 py-0.5 rounded-md text-[10px] font-semibold bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/25">
-                                {badgeSchoolLabel}
+                                {schoolName ? `${badgeSchoolLabel}: ${schoolName}` : badgeSchoolLabel}
                             </span>
                         )}
 
                         <span
                             className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${item.isActive
-                                    ? 'bg-emerald-500/15 text-emerald-600'
-                                    : 'bg-red-500/15 text-red-500'
+                                ? 'bg-emerald-500/15 text-emerald-600'
+                                : 'bg-red-500/15 text-red-500'
                                 }`}
                         >
                             {item.isActive ? badgeActiveLabel : badgeInactiveLabel}
@@ -190,9 +193,14 @@ export function DailyQuotesManagePage() {
 
     const defaultSchoolId = school?.id || user?.schoolId || '';
 
-    // Target sekolah pada form (khusus SUPER_ADMIN dapat memilih GLOBAL atau sekolah tertentu)
+    // Target sekolah pada form kiri (dipisahkan dari filter list kanan agar tidak berkedip saat edit)
     const [targetSchoolScope, setTargetSchoolScope] = useState<string>(
         defaultSchoolId || GLOBAL_SCHOOL_VALUE
+    );
+
+    // Filter daftar sekolah pada panel kanan (khusus SUPER_ADMIN)
+    const [listSchoolFilter, setListSchoolFilter] = useState<string>(
+        defaultSchoolId || ALL_SCHOOLS_FILTER
     );
 
     // Filter cakupan list, pencarian (deferred), & paginasi
@@ -259,12 +267,15 @@ export function DailyQuotesManagePage() {
 
     // Sinkronkan pilihan sekolah saat sekolah aktif di header berubah
     useEffect(() => {
-        if (!editingId) {
-            if (school?.id) {
+        if (school?.id) {
+            if (!editingId) {
                 setTargetSchoolScope(school.id);
-            } else if (!isSuperAdmin && user?.schoolId) {
-                setTargetSchoolScope(user.schoolId);
             }
+            if (isSuperAdmin) {
+                setListSchoolFilter(school.id);
+            }
+        } else if (!isSuperAdmin && user?.schoolId && !editingId) {
+            setTargetSchoolScope(user.schoolId);
         }
     }, [school?.id, user?.schoolId, isSuperAdmin, editingId]);
 
@@ -279,15 +290,9 @@ export function DailyQuotesManagePage() {
             .catch(console.error);
     }, [isSuperAdmin]);
 
-    const activeSchoolFilterId = isSuperAdmin
-        ? targetSchoolScope !== GLOBAL_SCHOOL_VALUE
-            ? targetSchoolScope
-            : defaultSchoolId
-        : defaultSchoolId;
-
     const loadQuotes = useCallback(async () => {
         if (!canManageQuotes) return;
-        if (!isSuperAdmin && !activeSchoolFilterId) return;
+        if (!isSuperAdmin && !defaultSchoolId) return;
 
         const seq = ++requestSeqRef.current;
         setIsLoading(true);
@@ -297,12 +302,14 @@ export function DailyQuotesManagePage() {
                 .select('id, schoolId, quote, author, isActive, createdAt')
                 .order('createdAt', { ascending: false });
 
-            if (activeSchoolFilterId) {
+            if (!isSuperAdmin) {
                 query = query.or(
-                    `schoolId.eq.${activeSchoolFilterId},schoolId.is.null`
+                    `schoolId.eq.${defaultSchoolId},schoolId.is.null`
                 );
-            } else if (isSuperAdmin) {
-                query = query.is('schoolId', null);
+            } else if (listSchoolFilter !== ALL_SCHOOLS_FILTER) {
+                query = query.or(
+                    `schoolId.eq.${listSchoolFilter},schoolId.is.null`
+                );
             }
 
             const { data, error } = await query;
@@ -326,7 +333,8 @@ export function DailyQuotesManagePage() {
     }, [
         canManageQuotes,
         isSuperAdmin,
-        activeSchoolFilterId,
+        defaultSchoolId,
+        listSchoolFilter,
         showToast,
         t,
     ]);
@@ -338,7 +346,7 @@ export function DailyQuotesManagePage() {
     // Reset halaman ke 1 saat filter atau pencarian berubah
     useEffect(() => {
         setCurrentPage(1);
-    }, [scopeFilter, deferredSearchQuery, pageSize, activeSchoolFilterId]);
+    }, [scopeFilter, deferredSearchQuery, pageSize, listSchoolFilter]);
 
     const resetForm = useCallback(() => {
         setEditingId(null);
@@ -347,8 +355,14 @@ export function DailyQuotesManagePage() {
         setIsActive(true);
         if (!isSuperAdmin) {
             setTargetSchoolScope(defaultSchoolId);
+        } else {
+            setTargetSchoolScope(
+                listSchoolFilter !== ALL_SCHOOLS_FILTER
+                    ? listSchoolFilter
+                    : defaultSchoolId || GLOBAL_SCHOOL_VALUE
+            );
         }
-    }, [isSuperAdmin, defaultSchoolId]);
+    }, [isSuperAdmin, defaultSchoolId, listSchoolFilter]);
 
     const handleStartEdit = useCallback(
         (item: DailyQuoteRow) => {
@@ -422,8 +436,18 @@ export function DailyQuotesManagePage() {
                 showToast('success', t('dailyQuotes.toastCreateSuccess'));
             }
 
+            if (
+                isSuperAdmin &&
+                resolvedSchoolId &&
+                listSchoolFilter !== ALL_SCHOOLS_FILTER &&
+                listSchoolFilter !== resolvedSchoolId
+            ) {
+                setListSchoolFilter(resolvedSchoolId);
+            } else {
+                await loadQuotes();
+            }
+
             resetForm();
-            await loadQuotes();
         } catch (err: unknown) {
             showToast(
                 'error',
@@ -527,6 +551,14 @@ export function DailyQuotesManagePage() {
         return Array.from(map.values());
     }, [school?.id, school?.name, simSchools]);
 
+    const schoolNameById = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const s of schoolOptions) {
+            map.set(s.id, s.name);
+        }
+        return map;
+    }, [schoolOptions]);
+
     const filteredQuotes = useMemo(() => {
         const q = deferredSearchQuery.trim().toLowerCase();
         return quotes.filter((item) => {
@@ -577,8 +609,8 @@ export function DailyQuotesManagePage() {
             {toast && (
                 <div
                     className={`p-3.5 rounded-xl border text-xs font-medium flex items-center gap-2.5 shadow-sm ${toast.type === 'success'
-                            ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
-                            : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
+                        ? 'bg-emerald-500/15 border-emerald-500/40 text-emerald-800 dark:text-emerald-200'
+                        : 'bg-red-500/15 border-red-500/40 text-red-800 dark:text-red-200'
                         }`}
                 >
                     {toast.type === 'success' ? (
@@ -727,7 +759,25 @@ export function DailyQuotesManagePage() {
                                 {t('dailyQuotes.listTitle', { count: filteredQuotes.length })}
                             </h2>
 
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                                {isSuperAdmin && schoolOptions.length > 0 && (
+                                    <select
+                                        aria-label={t('dailyQuotes.labelTargetSchool')}
+                                        value={listSchoolFilter}
+                                        onChange={(e) => setListSchoolFilter(e.target.value)}
+                                        className="form-input text-[11px] font-semibold py-1 px-2.5 max-w-52"
+                                    >
+                                        <option value={ALL_SCHOOLS_FILTER}>
+                                            {t('dailyQuotes.optionGlobalSchool')}
+                                        </option>
+                                        {schoolOptions.map((s) => (
+                                            <option key={s.id} value={s.id}>
+                                                {t('dailyQuotes.optionSpecificSchool', { name: s.name })}
+                                            </option>
+                                        ))}
+                                    </select>
+                                )}
+
                                 {(
                                     [
                                         { key: 'ALL', label: t('common.all') },
@@ -740,8 +790,8 @@ export function DailyQuotesManagePage() {
                                         type="button"
                                         onClick={() => setScopeFilter(item.key)}
                                         className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold border transition-colors cursor-pointer ${scopeFilter === item.key
-                                                ? 'bg-emerald-600 text-white border-emerald-600'
-                                                : 'bg-background border-border opacity-75 hover:opacity-100'
+                                            ? 'bg-emerald-600 text-white border-emerald-600'
+                                            : 'bg-background border-border opacity-75 hover:opacity-100'
                                             }`}
                                     >
                                         {item.label}
@@ -797,6 +847,11 @@ export function DailyQuotesManagePage() {
                                         key={item.id}
                                         item={item}
                                         rowNumber={startIndex + idx + 1}
+                                        schoolName={
+                                            isSuperAdmin && item.schoolId
+                                                ? schoolNameById.get(item.schoolId)
+                                                : undefined
+                                        }
                                         isSuperAdmin={isSuperAdmin}
                                         isBeingEdited={editingId === item.id}
                                         badgeGlobalLabel={t('dailyQuotes.badgeGlobal')}

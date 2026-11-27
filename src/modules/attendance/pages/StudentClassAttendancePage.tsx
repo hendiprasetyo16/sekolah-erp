@@ -225,6 +225,16 @@ function isMissingColumnError(err: unknown): boolean {
     );
 }
 
+function isDuplicateKeyError(err: unknown): boolean {
+    const { code, message } = getErrorInfo(err, '', '');
+    const lower = message.toLowerCase();
+    return (
+        code === '23505' ||
+        lower.includes('duplicate key') ||
+        lower.includes('unique constraint')
+    );
+}
+
 export function StudentClassAttendancePage() {
     const { t } = useTranslation();
     const currentLang: SupportedAttendanceLocale =
@@ -350,15 +360,23 @@ export function StudentClassAttendancePage() {
     ]);
 
     useEffect(() => {
-        if (!deleteTarget) return;
+        if (!deleteTarget && !showSpecialEventModal) return;
         const handleKeyDown = (e: KeyboardEvent) => {
-            if (e.key === 'Escape' && !isDeletingRecord) {
+            if (e.key !== 'Escape') return;
+            if (deleteTarget && !isDeletingRecord) {
                 setDeleteTarget(null);
+            } else if (showSpecialEventModal && !holidayLock.isToggling) {
+                setShowSpecialEventModal(false);
             }
         };
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [deleteTarget, isDeletingRecord]);
+    }, [
+        deleteTarget,
+        isDeletingRecord,
+        showSpecialEventModal,
+        holidayLock.isToggling,
+    ]);
 
     useEffect(() => {
         if (isSuperAdmin && school?.id) {
@@ -732,6 +750,36 @@ export function StudentClassAttendancePage() {
         setIsSaving(true);
         setMessage(null);
 
+        const executeUpdateRecord = async (upd: UpdateAttendanceQueueItem) => {
+            const { error: updErr } = await supabase
+                .from('attendances')
+                .update({
+                    status: upd.status,
+                    checkInTime: upd.checkInTime,
+                    notes: upd.notes,
+                    recordedBy: user?.id ?? null,
+                })
+                .eq('id', upd.recordId)
+                .eq('schoolId', activeSchoolId);
+
+            if (updErr) {
+                if (isMissingColumnError(updErr)) {
+                    const { error: fallbackErr } = await supabase
+                        .from('attendances')
+                        .update({
+                            status: upd.status,
+                            checkInTime: upd.checkInTime,
+                            notes: upd.notes,
+                        })
+                        .eq('id', upd.recordId)
+                        .eq('schoolId', activeSchoolId);
+                    if (fallbackErr) throw fallbackErr;
+                } else {
+                    throw updErr;
+                }
+            }
+        };
+
         try {
             const nowIso = buildIsoTimestampForDate(selectedDate);
             const targetStudentIds = rowsToSave.map((r) => r.studentId);
@@ -811,39 +859,11 @@ export function StudentClassAttendancePage() {
                 CONCURRENT_UPDATE_CHUNK_SIZE
             )) {
                 await Promise.all(
-                    updateBatch.map(async (upd) => {
-                        const { error: updErr } = await supabase
-                            .from('attendances')
-                            .update({
-                                status: upd.status,
-                                checkInTime: upd.checkInTime,
-                                notes: upd.notes,
-                                recordedBy: user?.id ?? null,
-                            })
-                            .eq('id', upd.recordId)
-                            .eq('schoolId', activeSchoolId);
-
-                        if (updErr) {
-                            if (isMissingColumnError(updErr)) {
-                                const { error: fallbackErr } = await supabase
-                                    .from('attendances')
-                                    .update({
-                                        status: upd.status,
-                                        checkInTime: upd.checkInTime,
-                                        notes: upd.notes,
-                                    })
-                                    .eq('id', upd.recordId)
-                                    .eq('schoolId', activeSchoolId);
-                                if (fallbackErr) throw fallbackErr;
-                            } else {
-                                throw updErr;
-                            }
-                        }
-                    })
+                    updateBatch.map((upd) => executeUpdateRecord(upd))
                 );
             }
 
-            // 2. Eksekusi BULK INSERT per batch 100 baris
+            // 2. Eksekusi BULK INSERT per batch 100 baris (+ pemulihan race condition 23505)
             for (const insertBatch of chunkArray(
                 toInsert,
                 BULK_INSERT_CHUNK_SIZE
@@ -867,6 +887,64 @@ export function StudentClassAttendancePage() {
                             .from('attendances')
                             .insert(fallbackBatch);
                         if (fallbackInsErr) throw fallbackInsErr;
+                    } else if (isDuplicateKeyError(insErr)) {
+                        const batchIds = insertBatch
+                            .map((r) => r.studentId)
+                            .filter((id): id is string => Boolean(id));
+                        const { data: racedRows, error: racedFetchErr } = await supabase
+                            .from('attendances')
+                            .select('id, studentId')
+                            .eq('schoolId', activeSchoolId)
+                            .eq('date', selectedDate)
+                            .eq('type', 'SISWA')
+                            .in('studentId', batchIds);
+
+                        if (racedFetchErr) throw racedFetchErr;
+
+                        const racedMap = new Map<string, string>();
+                        for (const r of (racedRows ?? []) as Array<{
+                            id: string;
+                            studentId: string | null;
+                        }>) {
+                            if (r.studentId) {
+                                racedMap.set(String(r.studentId), String(r.id));
+                            }
+                        }
+
+                        const reconcileUpdates: UpdateAttendanceQueueItem[] = [];
+                        const remainingInserts: Array<Record<string, string | null>> = [];
+
+                        for (const row of insertBatch) {
+                            const existingId = row.studentId
+                                ? racedMap.get(row.studentId)
+                                : undefined;
+                            if (existingId && row.status) {
+                                reconcileUpdates.push({
+                                    recordId: existingId,
+                                    status: row.status as StudentAttendanceStatus,
+                                    checkInTime: row.checkInTime,
+                                    notes: row.notes,
+                                });
+                            } else {
+                                remainingInserts.push(row);
+                            }
+                        }
+
+                        for (const updBatch of chunkArray(
+                            reconcileUpdates,
+                            CONCURRENT_UPDATE_CHUNK_SIZE
+                        )) {
+                            await Promise.all(
+                                updBatch.map((upd) => executeUpdateRecord(upd))
+                            );
+                        }
+
+                        if (remainingInserts.length > 0) {
+                            const { error: retryInsErr } = await supabase
+                                .from('attendances')
+                                .insert(remainingInserts);
+                            if (retryInsErr) throw retryInsErr;
+                        }
                     } else {
                         throw insErr;
                     }
@@ -1864,8 +1942,16 @@ export function StudentClassAttendancePage() {
 
             {/* Modal Input Alasan Kegiatan Khusus */}
             {showSpecialEventModal && (
-                <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
-                    <div className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl space-y-4">
+                <div
+                    className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
+                    onClick={() =>
+                        !holidayLock.isToggling && setShowSpecialEventModal(false)
+                    }
+                >
+                    <div
+                        className="w-full max-w-md rounded-2xl border border-border bg-card p-5 shadow-xl space-y-4"
+                        onClick={(e) => e.stopPropagation()}
+                    >
                         <h3 className="text-base font-bold flex items-center gap-2">
                             <Sparkles size={18} className="text-amber-500" />
                             {t('studentClassAttendance.modalSpecialTitle')}
@@ -1893,8 +1979,9 @@ export function StudentClassAttendancePage() {
                         <div className="flex items-center justify-end gap-2 pt-2">
                             <button
                                 type="button"
+                                disabled={holidayLock.isToggling}
                                 onClick={() => setShowSpecialEventModal(false)}
-                                className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-border hover:bg-muted cursor-pointer"
+                                className="px-3.5 py-2 rounded-xl text-xs font-semibold border border-border hover:bg-muted cursor-pointer disabled:opacity-40"
                             >
                                 {t('studentClassAttendance.btnCancel')}
                             </button>

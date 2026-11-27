@@ -224,11 +224,20 @@ export function useHolidayLock({
           schoolId: string | null;
           name: string;
         }>;
-        const schoolSpecific = rows.find((r) => r.schoolId === activeSchoolId);
-        const globalHoliday = rows.find((r) => r.schoolId === null);
-        const matched = schoolSpecific ?? globalHoliday;
-        if (matched) {
-          resolvedHolidaysMap[activeDate] = matched.name;
+        const schoolNames = rows
+          .filter((r) => r.schoolId === activeSchoolId)
+          .map((r) => String(r.name ?? '').trim())
+          .filter(Boolean);
+        const globalNames = rows
+          .filter((r) => r.schoolId === null)
+          .map((r) => String(r.name ?? '').trim())
+          .filter(Boolean);
+        const combinedHolidayName = Array.from(
+          new Set([...schoolNames, ...globalNames])
+        ).join(' / ');
+
+        if (combinedHolidayName) {
+          resolvedHolidaysMap[activeDate] = combinedHolidayName;
         }
       }
 
@@ -432,6 +441,9 @@ export function useHolidayLock({
         resolvedId = upsertedRow?.id ? String(upsertedRow.id) : null;
       }
 
+      // Batalkan request refresh yang mungkin berjalan sebelum mutasi selesai
+      requestSeqRef.current += 1;
+
       try {
         const payload: CachedSpecialEventPayload = {
           active: true,
@@ -530,6 +542,9 @@ export function useHolidayLock({
           }
         }
       }
+
+      // Batalkan request refresh yang mungkin berjalan sebelum mutasi selesai
+      requestSeqRef.current += 1;
 
       try {
         localStorage.removeItem(
