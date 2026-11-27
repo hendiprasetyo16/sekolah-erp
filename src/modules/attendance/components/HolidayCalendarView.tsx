@@ -153,19 +153,15 @@ export function HolidayCalendarView({
     };
 
     const handleMobilePrevMonth = () => {
-        setMobileMonth((prev) => {
-            const nextM = prev === 0 ? 11 : prev - 1;
-            setSelectedIsoDate(`${year}-${String(nextM + 1).padStart(2, '0')}-01`);
-            return nextM;
-        });
+        const nextM = mobileMonth === 0 ? 11 : mobileMonth - 1;
+        setMobileMonth(nextM);
+        setSelectedIsoDate(`${year}-${String(nextM + 1).padStart(2, '0')}-01`);
     };
 
     const handleMobileNextMonth = () => {
-        setMobileMonth((prev) => {
-            const nextM = prev === 11 ? 0 : prev + 1;
-            setSelectedIsoDate(`${year}-${String(nextM + 1).padStart(2, '0')}-01`);
-            return nextM;
-        });
+        const nextM = mobileMonth === 11 ? 0 : mobileMonth + 1;
+        setMobileMonth(nextM);
+        setSelectedIsoDate(`${year}-${String(nextM + 1).padStart(2, '0')}-01`);
     };
 
     // Detail tanggal yang sedang diketuk di HP (hari kerja biasa maupun tanggal merah)
@@ -241,7 +237,7 @@ export function HolidayCalendarView({
     return (
         <div>
             {/* ====================================================================
-                1. TAMPILAN KHUSUS HP (< 768px): 1 BULAN + NEXT/PREV + INFO KLIK
+1. TAMPILAN KHUSUS HP (< 768px): 1 BULAN + NEXT/PREV + INFO KLIK
             ==================================================================== */}
             <div className="md:hidden space-y-3">
                 <div className="rounded-2xl border border-border bg-card p-3.5 shadow-xs space-y-3">
@@ -479,7 +475,7 @@ export function HolidayCalendarView({
             </div>
 
             {/* ====================================================================
-                2. TAMPILAN KHUSUS KOMPUTER (>= 768px): KALENDER 12 BULAN
+2. TAMPILAN KHUSUS KOMPUTER (>= 768px): KALENDER 12 BULAN
             ==================================================================== */}
             <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {monthNames.map((monthName, monthIndex) => {

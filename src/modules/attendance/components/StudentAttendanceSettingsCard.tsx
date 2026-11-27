@@ -103,9 +103,9 @@ function isMissingColumnError(err: unknown): boolean {
 }
 
 /**
- * Kartu Pengaturan Presensi Siswa
- * Mengatur Jam Masuk, Toleransi Terlambat, Jam Mulai Pulang, Jam Pulang,
- * serta Metode Presensi (Kiosk QR/NISN vs Manual Wali Kelas) & Toggle Absen Pulang.
+- Kartu Pengaturan Presensi Siswa
+- Mengatur Jam Masuk, Toleransi Terlambat, Jam Mulai Pulang, Jam Pulang,
+- serta Metode Presensi (Kiosk QR/NISN vs Manual Wali Kelas) & Toggle Absen Pulang.
  */
 export function StudentAttendanceSettingsCard({
     schoolId,
@@ -260,11 +260,27 @@ export function StudentAttendanceSettingsCard({
             return;
         }
 
+        const lateDeadlineMins = startMins + cleanTolerance;
+        if (lateDeadlineMins >= endMins) {
+            setSaveMessage({
+                status: 'error',
+                text: 'Batas toleransi keterlambatan melewati jam pulang siswa.',
+            });
+            return;
+        }
+
         if (enableStudentCheckOut) {
             if (checkOutStartMins <= startMins) {
                 setSaveMessage({
                     status: 'error',
                     text: 'Jam mulai absen pulang harus lebih lambat daripada jam masuk siswa.',
+                });
+                return;
+            }
+            if (lateDeadlineMins > checkOutStartMins) {
+                setSaveMessage({
+                    status: 'error',
+                    text: 'Batas toleransi keterlambatan tidak boleh melewati jam mulai absen pulang.',
                 });
                 return;
             }

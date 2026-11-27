@@ -209,9 +209,9 @@ function isHighlightedDuty(duty: string): boolean {
 }
 
 /**
- * Kartu Pengaturan Izin Presensi via Komputer / Laptop (Desktop)
- * Mendukung Saklar Global sekolah (termasuk status campuran), Saklar Individual per Guru/PTK,
- * informasi Tugas Tambahan & Status Guru, serta Pagination.
+- Kartu Pengaturan Izin Presensi via Komputer / Laptop (Desktop)
+- Mendukung Saklar Global sekolah (termasuk status campuran), Saklar Individual per Guru/PTK,
+- informasi Tugas Tambahan & Status Guru, serta Pagination.
  */
 export function TeacherDesktopAccessCard({
     schoolId,
@@ -244,6 +244,8 @@ export function TeacherDesktopAccessCard({
         if (!schoolId) return;
         setIsLoadingTeachers(true);
         setFeedback(null);
+        setSearchQuery('');
+        setFilterMode('ALL');
 
         try {
             const [teachersRes, schoolRes, usersRes] = await Promise.all([
@@ -363,11 +365,12 @@ export function TeacherDesktopAccessCard({
         teachersList.length > 0 &&
         allowedCount > 0 &&
         allowedCount < teachersList.length;
+    const effectiveGlobalActive =
+        isAllAllowed || (teachersList.length === 0 && allowDesktopGlobal);
 
     const handleToggleGlobal = async () => {
         if (!schoolId || isUpdatingGlobal) return;
-        // Jika saat ini campuran atau mati semua, nyalakan semua; jika sudah aktif semua, matikan semua
-        const nextAllow = !isAllAllowed;
+        const nextAllow = !effectiveGlobalActive;
         setIsUpdatingGlobal(true);
         setFeedback(null);
 
@@ -430,7 +433,7 @@ export function TeacherDesktopAccessCard({
     const handleToggleSingleTeacher = async (
         teacher: TeacherDesktopAccessItem
     ) => {
-        if (updatingTeacherIds[teacher.id]) return;
+        if (!schoolId || updatingTeacherIds[teacher.id]) return;
         const nextAllow = !teacher.allowDesktopAttendance;
 
         setUpdatingTeacherIds((prev) => ({ ...prev, [teacher.id]: true }));
@@ -449,7 +452,8 @@ export function TeacherDesktopAccessCard({
                 const { error: updErr } = await supabase
                     .from('teachers')
                     .update({ allowDesktopAttendance: nextAllow })
-                    .eq('id', teacher.id);
+                    .eq('id', teacher.id)
+                    .eq('schoolId', schoolId);
                 if (updErr) throw updErr;
             }
 
@@ -540,9 +544,6 @@ export function TeacherDesktopAccessCard({
     );
 
     if (!schoolId) return null;
-
-    const effectiveGlobalActive =
-        isAllAllowed || (teachersList.length === 0 && allowDesktopGlobal);
 
     return (
         <div className="rounded-xl border border-border bg-card p-5 shadow-sm space-y-4">

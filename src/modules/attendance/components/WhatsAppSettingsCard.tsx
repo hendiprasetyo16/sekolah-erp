@@ -126,7 +126,15 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
 
     const handleTestSend = async () => {
         const effectiveConfig = resolveEffectiveConfig();
-        if (!effectiveConfig || !schoolId || !testPhone.trim()) {
+        if (!effectiveConfig || !schoolId) return;
+        if (!effectiveConfig.apiToken.trim()) {
+            setFeedback({
+                type: 'error',
+                text: 'API Token / Key WhatsApp Gateway wajib diisi terlebih dahulu sebelum mengirim pesan uji coba.',
+            });
+            return;
+        }
+        if (!testPhone.trim()) {
             setFeedback({
                 type: 'error',
                 text: t('attendanceSettings.errEnterTestPhone'),
@@ -140,6 +148,7 @@ export const WhatsAppSettingsCard: React.FC<WhatsAppSettingsCardProps> = ({
             setConfig(effectiveConfig);
             setStoredToken(effectiveConfig.apiToken);
             setTokenDraft('');
+            setShowToken(false);
 
             const res = await sendTestWhatsAppMessage(schoolId, testPhone.trim());
             setFeedback({
