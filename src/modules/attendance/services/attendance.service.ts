@@ -29,6 +29,10 @@ import { dispatchStudentAttendanceWhatsApp } from './whatsappService';
 const SIGNED_URL_EXPIRES_SECONDS = 3600;
 const SELFIE_BUCKET = 'attendance-selfies';
 const ATTACHMENT_BUCKET = 'attendance-attachments';
+const IN_QUERY_CHUNK_SIZE = 100;
+const UPDATE_CONCURRENCY_CHUNK = 20;
+const SUMMARY_PAGE_SIZE = 1000;
+const SUMMARY_MAX_PAGES = 50;
 
 interface RawSchoolRow {
   id: string;
@@ -212,6 +216,26 @@ const ATTENDANCE_FALLBACK_COLUMNS = `
   notes, recordedBy, checkInTime, time, checkOutTime, createdAt, updatedAt
 `;
 
+function chunkArray<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+function isUniqueViolationError(error: unknown): boolean {
+  if (typeof error === 'object' && error !== null && 'code' in error) {
+    return String((error as { code?: unknown }).code) === '23505';
+  }
+  return false;
+}
+
+function normalizeStatusValue(status: string | null | undefined): string {
+  const upper = (status ?? '').toUpperCase();
+  return upper === 'ALPHA' ? 'ALPA' : upper;
+}
+
 function formatTimeInTimezone(date: Date, timeZone: string): string {
   try {
     return new Intl.DateTimeFormat('en-GB', {
@@ -317,33 +341,33 @@ export const attendanceService = {
       .eq('schoolId', params.schoolId)
       .eq('userId', params.userId)
       .eq('isActive', true)
-      .maybeSingle();
+      .limit(1);
 
     if (errUser) throw errUser;
-    if (byUser) return byUser;
+    if (byUser && byUser.length > 0) return byUser[0];
 
-    if (params.email) {
+    if (params.email && params.email.trim()) {
       const { data: byEmail } = await supabase
         .from('teachers')
         .select(selectFields)
         .eq('schoolId', params.schoolId)
         .ilike('email', params.email.trim())
         .eq('isActive', true)
-        .maybeSingle();
+        .limit(1);
 
-      if (byEmail) return byEmail;
+      if (byEmail && byEmail.length > 0) return byEmail[0];
     }
 
-    if (params.fullName) {
+    if (params.fullName && params.fullName.trim()) {
       const { data: byName } = await supabase
         .from('teachers')
         .select(selectFields)
         .eq('schoolId', params.schoolId)
         .ilike('fullName', params.fullName.trim())
         .eq('isActive', true)
-        .maybeSingle();
+        .limit(1);
 
-      if (byName) return byName;
+      if (byName && byName.length > 0) return byName[0];
     }
 
     return null;
@@ -408,12 +432,20 @@ export const attendanceService = {
   async getSignedSelfieUrl(
     path: string | null | undefined
   ): Promise<string | null> {
-    if (!path) return null;
-    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    const cleanPath = path?.trim();
+    if (!cleanPath) return null;
+    if (
+      cleanPath.startsWith('http://') ||
+      cleanPath.startsWith('https://') ||
+      cleanPath.startsWith('blob:') ||
+      cleanPath.startsWith('data:')
+    ) {
+      return cleanPath;
+    }
 
     const { data, error } = await supabase.storage
       .from(SELFIE_BUCKET)
-      .createSignedUrl(path, SIGNED_URL_EXPIRES_SECONDS);
+      .createSignedUrl(cleanPath, SIGNED_URL_EXPIRES_SECONDS);
 
     if (error || !data?.signedUrl) return null;
     return data.signedUrl;
@@ -445,12 +477,20 @@ export const attendanceService = {
   async getSignedAttachmentUrl(
     path: string | null | undefined
   ): Promise<string | null> {
-    if (!path) return null;
-    if (path.startsWith('http://') || path.startsWith('https://')) return path;
+    const cleanPath = path?.trim();
+    if (!cleanPath) return null;
+    if (
+      cleanPath.startsWith('http://') ||
+      cleanPath.startsWith('https://') ||
+      cleanPath.startsWith('blob:') ||
+      cleanPath.startsWith('data:')
+    ) {
+      return cleanPath;
+    }
 
     const { data, error } = await supabase.storage
       .from(ATTACHMENT_BUCKET)
-      .createSignedUrl(path, SIGNED_URL_EXPIRES_SECONDS);
+      .createSignedUrl(cleanPath, SIGNED_URL_EXPIRES_SECONDS);
 
     if (error || !data?.signedUrl) return null;
     return data.signedUrl;
@@ -494,7 +534,9 @@ export const attendanceService = {
     const pathsToDelete = [
       params.selfiePath,
       ...(params.selfiePaths ?? []),
-    ].filter((p): p is string => Boolean(p && !p.startsWith('http')));
+    ]
+      .map((p) => p?.trim())
+      .filter((p): p is string => Boolean(p && !p.startsWith('http')));
 
     if (pathsToDelete.length > 0) {
       await supabase.storage
@@ -531,15 +573,18 @@ export const attendanceService = {
     const activeDate =
       payload.date || getSchoolDateString(now, schoolCfg.settings.timezone);
 
-    const { data: existing } = await supabase
+    const { data: existingRows, error: checkErr } = await supabase
       .from('attendances')
       .select('id, status, checkInTime, time')
       .eq('schoolId', payload.schoolId)
       .eq('studentId', payload.studentId)
       .eq('date', activeDate)
       .eq('type', 'SISWA')
-      .maybeSingle();
+      .limit(1);
 
+    if (checkErr) throw checkErr;
+
+    const existing = existingRows?.[0] ?? null;
     if (existing) {
       return {
         success: false,
@@ -574,7 +619,15 @@ export const attendanceService = {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      if (isUniqueViolationError(error)) {
+        return {
+          success: false,
+          message: 'Siswa sudah tercatat presensi masuk hari ini.',
+        };
+      }
+      throw error;
+    }
 
     const timeFormatted = formatTimeInTimezone(
       now,
@@ -607,17 +660,27 @@ export const attendanceService = {
     const activeDate =
       payload.date || getSchoolDateString(now, schoolCfg.settings.timezone);
 
-    const { data: existing, error: findErr } = await supabase
+    const { data: existingRows, error: findErr } = await supabase
       .from('attendances')
-      .select('id, checkInTime, checkOutTime')
+      .select('id, status, checkInTime, time, checkOutTime')
       .eq('schoolId', payload.schoolId)
       .eq('studentId', payload.studentId)
       .eq('date', activeDate)
       .eq('type', 'SISWA')
-      .maybeSingle();
+      .limit(1);
 
     if (findErr) throw findErr;
-    if (!existing || !existing.checkInTime) {
+
+    const existing = existingRows?.[0] ?? null;
+    const hasCheckedIn = Boolean(
+      existing &&
+        (existing.checkInTime ||
+          existing.time ||
+          existing.status === 'HADIR' ||
+          existing.status === 'TERLAMBAT')
+    );
+
+    if (!existing || !hasCheckedIn) {
       return {
         success: false,
         message: 'Siswa belum melakukan presensi masuk hari ini.',
@@ -721,24 +784,40 @@ export const attendanceService = {
   }): Promise<{ success: boolean; count: number }> {
     if (payload.records.length === 0) return { success: true, count: 0 };
 
-    const studentIds = payload.records.map((r) => r.studentId);
+    // Deduplikasi berdasarkan studentId (entri terakhir menang)
+    const dedupedMap = new Map<
+      string,
+      { studentId: string; status: AttendanceStatus; notes?: string }
+    >();
+    for (const rec of payload.records) {
+      if (rec.studentId) {
+        dedupedMap.set(rec.studentId, rec);
+      }
+    }
+    const uniqueRecords = Array.from(dedupedMap.values());
+    if (uniqueRecords.length === 0) return { success: true, count: 0 };
 
-    const { data: existingRows, error: fetchErr } = await supabase
-      .from('attendances')
-      .select('id, studentId, checkInTime')
-      .eq('schoolId', payload.schoolId)
-      .eq('date', payload.date)
-      .eq('type', 'SISWA')
-      .in('studentId', studentIds);
-
-    if (fetchErr) throw fetchErr;
-
+    const studentIds = uniqueRecords.map((r) => r.studentId);
     const existingMap = new Map<
       string,
       { id: string; checkInTime: string | null }
     >();
-    for (const row of existingRows ?? []) {
-      if (row.studentId) existingMap.set(row.studentId, row);
+
+    const idChunks = chunkArray(studentIds, IN_QUERY_CHUNK_SIZE);
+    for (const chunkIds of idChunks) {
+      const { data: existingRows, error: fetchErr } = await supabase
+        .from('attendances')
+        .select('id, studentId, checkInTime')
+        .eq('schoolId', payload.schoolId)
+        .eq('date', payload.date)
+        .eq('type', 'SISWA')
+        .in('studentId', chunkIds);
+
+      if (fetchErr) throw fetchErr;
+
+      for (const row of existingRows ?? []) {
+        if (row.studentId) existingMap.set(row.studentId, row);
+      }
     }
 
     const toInsert: BulkStudentAttendanceInsert[] = [];
@@ -750,7 +829,7 @@ export const attendanceService = {
     }> = [];
     const nowIso = new Date().toISOString();
 
-    for (const rec of payload.records) {
+    for (const rec of uniqueRecords) {
       const existing = existingMap.get(rec.studentId);
       const isPresentStatus =
         rec.status === 'HADIR' || rec.status === 'TERLAMBAT';
@@ -777,31 +856,37 @@ export const attendanceService = {
     }
 
     if (toInsert.length > 0) {
-      const { error: insertErr } = await supabase
-        .from('attendances')
-        .insert(toInsert);
-      if (insertErr) throw insertErr;
+      const insertChunks = chunkArray(toInsert, IN_QUERY_CHUNK_SIZE);
+      for (const batch of insertChunks) {
+        const { error: insertErr } = await supabase
+          .from('attendances')
+          .insert(batch);
+        if (insertErr) throw insertErr;
+      }
     }
 
     if (toUpdate.length > 0) {
-      await Promise.all(
-        toUpdate.map(async (item) => {
-          const { error: updErr } = await supabase
-            .from('attendances')
-            .update({
-              status: item.status,
-              notes: item.notes,
-              checkInTime: item.checkInTime,
-              recordedBy: payload.recordedBy,
-            })
-            .eq('id', item.id)
-            .eq('schoolId', payload.schoolId);
-          if (updErr) throw updErr;
-        })
-      );
+      const updateChunks = chunkArray(toUpdate, UPDATE_CONCURRENCY_CHUNK);
+      for (const batch of updateChunks) {
+        await Promise.all(
+          batch.map(async (item) => {
+            const { error: updErr } = await supabase
+              .from('attendances')
+              .update({
+                status: item.status,
+                notes: item.notes,
+                checkInTime: item.checkInTime,
+                recordedBy: payload.recordedBy,
+              })
+              .eq('id', item.id)
+              .eq('schoolId', payload.schoolId);
+            if (updErr) throw updErr;
+          })
+        );
+      }
     }
 
-    return { success: true, count: payload.records.length };
+    return { success: true, count: uniqueRecords.length };
   },
 
   async getStudentAttendances(params: {
@@ -826,8 +911,10 @@ export const attendanceService = {
       page = 1,
       limit = 100,
     } = params;
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
+    const safePage = Math.max(1, Math.floor(page));
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const from = (safePage - 1) * safeLimit;
+    const to = from + safeLimit - 1;
 
     const studentRelation = classId ? 'students!inner' : 'students';
 
@@ -1052,15 +1139,18 @@ export const attendanceService = {
     attachmentUrl?: string | null;
     recordedBy: string;
   }) {
-    const { data: existing } = await supabase
+    const { data: existingRows, error: checkErr } = await supabase
       .from('attendances')
       .select('id, status, approvalStatus')
       .eq('schoolId', payload.schoolId)
       .eq('teacherId', payload.teacherId)
       .eq('date', payload.date)
       .eq('type', 'GURU')
-      .maybeSingle();
+      .limit(1);
 
+    if (checkErr) throw checkErr;
+
+    const existing = existingRows?.[0] ?? null;
     if (existing) {
       return {
         success: false,
@@ -1085,7 +1175,16 @@ export const attendanceService = {
       .select()
       .single();
 
-    if (error) throw error;
+    if (error) {
+      if (isUniqueViolationError(error)) {
+        return {
+          success: false,
+          message: `Presensi tanggal ${payload.date} sudah tercatat sebelumnya.`,
+        };
+      }
+      throw error;
+    }
+
     return {
       success: true,
       message: `Pengajuan ${payload.status} berhasil dicatat.`,
@@ -1149,8 +1248,10 @@ export const attendanceService = {
       page = 1,
       limit = 100,
     } = params;
-    const from = (page - 1) * limit;
-    const to = from + limit - 1;
+    const safePage = Math.max(1, Math.floor(page));
+    const safeLimit = Math.max(1, Math.floor(limit));
+    const from = (safePage - 1) * safeLimit;
+    const to = from + safeLimit - 1;
 
     const buildQuery = (columns: string) => {
       let q = supabase
@@ -1264,10 +1365,11 @@ export const attendanceService = {
       .eq('teacherId', teacherId)
       .eq('date', date)
       .eq('type', 'GURU')
-      .maybeSingle();
+      .order('createdAt', { ascending: false })
+      .limit(1);
 
     if (error) throw error;
-    return data;
+    return data?.[0] ?? null;
   },
 
   // ==========================================================================
@@ -1275,12 +1377,30 @@ export const attendanceService = {
   // ==========================================================================
 
   async getSummary(schoolId: string, date: string): Promise<AttendanceSummary> {
-    const [attRes, totalStudentsRes, totalTeachersRes] = await Promise.all([
-      supabase
-        .from('attendances')
-        .select('type, status, approvalStatus')
-        .eq('schoolId', schoolId)
-        .eq('date', date),
+    const fetchAllSummaryRows = async (): Promise<SummaryAttendanceRow[]> => {
+      const collected: SummaryAttendanceRow[] = [];
+      for (let page = 0; page < SUMMARY_MAX_PAGES; page++) {
+        const from = page * SUMMARY_PAGE_SIZE;
+        const to = from + SUMMARY_PAGE_SIZE - 1;
+
+        const { data, error } = await supabase
+          .from('attendances')
+          .select('type, status, approvalStatus')
+          .eq('schoolId', schoolId)
+          .eq('date', date)
+          .order('id', { ascending: true })
+          .range(from, to);
+
+        if (error) throw error;
+        const batch = (data ?? []) as SummaryAttendanceRow[];
+        collected.push(...batch);
+        if (batch.length < SUMMARY_PAGE_SIZE) break;
+      }
+      return collected;
+    };
+
+    const [rows, totalStudentsRes, totalTeachersRes] = await Promise.all([
+      fetchAllSummaryRows(),
       supabase
         .from('students')
         .select('id', { count: 'exact', head: true })
@@ -1293,14 +1413,14 @@ export const attendanceService = {
         .eq('isActive', true),
     ]);
 
-    if (attRes.error) throw attRes.error;
+    if (totalStudentsRes.error) throw totalStudentsRes.error;
+    if (totalTeachersRes.error) throw totalTeachersRes.error;
 
-    const rows = (attRes.data ?? []) as SummaryAttendanceRow[];
     const students = rows.filter((r) => r.type === 'SISWA');
     const teachers = rows.filter((r) => r.type === 'GURU');
 
     const countStatus = (arr: SummaryAttendanceRow[], status: string) =>
-      arr.filter((r) => r.status === status).length;
+      arr.filter((r) => normalizeStatusValue(r.status) === status).length;
 
     const studentTotal = totalStudentsRes.count ?? students.length;
     const studentPresent = countStatus(students, 'HADIR');
@@ -1317,7 +1437,7 @@ export const attendanceService = {
     const teacherSick = countStatus(teachers, 'SAKIT');
     const teacherPermission = countStatus(teachers, 'IZIN');
     const teacherLeaveOrDuty = teachers.filter((r) =>
-      ['CUTI', 'DINAS', 'DINAS_LUAR'].includes(r.status)
+      ['CUTI', 'DINAS', 'DINAS_LUAR'].includes(normalizeStatusValue(r.status))
     ).length;
     const teacherAbsent = countStatus(teachers, 'ALPA');
     const teacherRecorded = teachers.length;
@@ -1361,7 +1481,9 @@ export const attendanceService = {
   async getActiveDailyQuotes(schoolId: string): Promise<DailyQuoteRow[]> {
     const { data, error } = await supabase
       .from('daily_quotes')
-      .select('id, schoolId, quote, author, isActive, createdBy, createdAt, updatedAt')
+      .select(
+        'id, schoolId, quote, author, isActive, createdBy, createdAt, updatedAt'
+      )
       .or(`schoolId.is.null,schoolId.eq.${schoolId}`)
       .eq('isActive', true)
       .order('createdAt', { ascending: false });
@@ -1380,10 +1502,10 @@ export const attendanceService = {
       .eq('schoolId', schoolId)
       .or(`nisn.eq.${cleanCode},nis.eq.${cleanCode}`)
       .eq('status', 'AKTIF')
-      .maybeSingle();
+      .limit(1);
 
     if (error) throw error;
-    return data;
+    return data?.[0] ?? null;
   },
 
   // ==========================================================================
@@ -1418,39 +1540,64 @@ export const attendanceService = {
   ): Promise<number> {
     if (rows.length === 0) return 0;
 
-    const { data: existingRows, error: fetchErr } = await supabase
-      .from('national_holidays')
-      .select('id, date, name')
-      .eq('schoolId', schoolId);
+    // Deduplikasi baris input internal terlebih dahulu
+    const uniqueInputMap = new Map<
+      string,
+      { date: string; name: string; type?: HolidayCategoryType }
+    >();
+    for (const row of rows) {
+      const trimmedName = row.name.trim();
+      if (!row.date || !trimmedName) continue;
+      const key = `${row.date}|${trimmedName.toLowerCase()}`;
+      if (!uniqueInputMap.has(key)) {
+        uniqueInputMap.set(key, { ...row, name: trimmedName });
+      }
+    }
+    const dedupedRows = Array.from(uniqueInputMap.values());
+    if (dedupedRows.length === 0) return 0;
 
-    if (fetchErr) throw fetchErr;
+    const targetDates = Array.from(new Set(dedupedRows.map((r) => r.date)));
+    const existingKeys = new Set<string>();
 
-    const existingKeys = new Set(
-      (existingRows ?? []).map(
-        (r: { date: string; name: string }) =>
-          `${r.date}|${r.name.trim().toLowerCase()}`
-      )
-    );
+    const dateChunks = chunkArray(targetDates, IN_QUERY_CHUNK_SIZE);
+    for (const dateBatch of dateChunks) {
+      const { data: existingRows, error: fetchErr } = await supabase
+        .from('national_holidays')
+        .select('id, date, name')
+        .eq('schoolId', schoolId)
+        .in('date', dateBatch);
 
-    const toInsert = rows
-      .filter(
-        (r) => !existingKeys.has(`${r.date}|${r.name.trim().toLowerCase()}`)
-      )
+      if (fetchErr) throw fetchErr;
+
+      for (const r of (existingRows ?? []) as Array<{
+        date: string;
+        name: string;
+      }>) {
+        existingKeys.add(`${r.date}|${r.name.trim().toLowerCase()}`);
+      }
+    }
+
+    const toInsert = dedupedRows
+      .filter((r) => !existingKeys.has(`${r.date}|${r.name.toLowerCase()}`))
       .map((r) => ({
         schoolId,
         date: r.date,
-        name: r.name.trim(),
+        name: r.name,
         type: r.type ?? 'SEKOLAH',
         createdBy: createdBy ?? null,
       }));
 
     if (toInsert.length === 0) return 0;
 
-    const { error: insertErr } = await supabase
-      .from('national_holidays')
-      .insert(toInsert);
+    const insertChunks = chunkArray(toInsert, IN_QUERY_CHUNK_SIZE);
+    for (const batch of insertChunks) {
+      const { error: insertErr } = await supabase
+        .from('national_holidays')
+        .insert(batch);
 
-    if (insertErr) throw insertErr;
+      if (insertErr) throw insertErr;
+    }
+
     return toInsert.length;
   },
 
@@ -1558,10 +1705,10 @@ export const attendanceService = {
       .from('school_wa_configs')
       .select('*')
       .eq('schoolId', schoolId)
-      .maybeSingle();
+      .limit(1);
 
     if (error) throw error;
-    return (data as SchoolWaConfig) ?? null;
+    return (data?.[0] as SchoolWaConfig) ?? null;
   },
 
   async upsertSchoolWaConfig(
@@ -1625,12 +1772,13 @@ export const attendanceService = {
     schoolId: string;
     limit?: number;
   }): Promise<WaNotificationLog[]> {
+    const safeLimit = Math.max(1, Math.floor(params.limit ?? 50));
     const { data, error } = await supabase
       .from('wa_notification_logs')
       .select('*')
       .eq('schoolId', params.schoolId)
       .order('createdAt', { ascending: false })
-      .limit(params.limit ?? 50);
+      .limit(safeLimit);
 
     if (error) throw error;
     return (data ?? []) as WaNotificationLog[];
