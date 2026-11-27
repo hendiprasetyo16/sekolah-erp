@@ -1,3 +1,4 @@
+// src/modules/teacher-attendance/hooks/useTeacherGpsAndCamera.ts
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import L from 'leaflet';
 import { supabase } from '@/services/supabase.client';
@@ -113,6 +114,7 @@ export function useTeacherGpsAndCamera({
   } | null>(null);
   const [gpsError, setGpsError] = useState<string | null>(null);
   const [isLocating, setIsLocating] = useState<boolean>(false);
+  const gpsRequestIdRef = useRef<number>(0);
   const mapContainerRef = useRef<HTMLDivElement | null>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
   const userMarkerRef = useRef<L.CircleMarker | null>(null);
@@ -132,13 +134,16 @@ export function useTeacherGpsAndCamera({
   const [earlyCheckoutReason, setEarlyCheckoutReason] = useState<string>('');
   const [earlyReasonError, setEarlyReasonError] = useState<string | null>(null);
 
-  // State Kamera Selfie Modal & Penjaga Anti-Duplikat Upload
+  // State Kamera Selfie Modal & Penjaga Anti-Duplikat Upload / Sesi
   const [cameraModal, setCameraModal] = useState<{
     open: boolean;
     mode: 'CHECK_IN' | 'CHECK_OUT';
   }>({ open: false, mode: 'CHECK_IN' });
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const cameraSessionIdRef = useRef<number>(0);
+  const isCapturingRef = useRef<boolean>(false);
+  const [isCapturingSnapshot, setIsCapturingSnapshot] = useState<boolean>(false);
   const [capturedBlob, setCapturedBlob] = useState<Blob | null>(null);
   const [capturedPreview, setCapturedPreview] = useState<string | null>(null);
   const [uploadedSelfiePath, setUploadedSelfiePath] = useState<string | null>(
@@ -165,6 +170,8 @@ export function useTeacherGpsAndCamera({
 
   useEffect(() => {
     return () => {
+      gpsRequestIdRef.current += 1;
+      cameraSessionIdRef.current += 1;
       stopMediaStreamTracks(streamRef.current);
       streamRef.current = null;
     };
@@ -172,6 +179,7 @@ export function useTeacherGpsAndCamera({
 
   // Pelacakan GPS Live dengan Anti-Emulator & Telemetri Perangkat
   const requestGpsPosition = useCallback(async () => {
+    const reqId = ++gpsRequestIdRef.current;
     setIsLocating(true);
     setGpsError(null);
 
@@ -182,11 +190,13 @@ export function useTeacherGpsAndCamera({
       );
 
       if (!envAudit.allowed) {
-        setIsLocating(false);
-        setUserCoords(null);
-        setGpsError(
-          envAudit.blockReason ?? t('teacherAttendance.errDeviceNotAllowed')
-        );
+        if (reqId === gpsRequestIdRef.current) {
+          setIsLocating(false);
+          setUserCoords(null);
+          setGpsError(
+            envAudit.blockReason ?? t('teacherAttendance.errDeviceNotAllowed')
+          );
+        }
         return;
       }
 
@@ -195,6 +205,8 @@ export function useTeacherGpsAndCamera({
         window.location.hostname === '127.0.0.1';
 
       const verifiedGps = await acquireVerifiedGpsPosition(isDev);
+      if (reqId !== gpsRequestIdRef.current) return;
+
       const apkTelemetry = collectAttendanceTelemetry(verifiedGps.accuracy);
 
       setUserCoords({
@@ -223,12 +235,16 @@ export function useTeacherGpsAndCamera({
         },
       });
     } catch (err: unknown) {
-      setUserCoords(null);
-      setGpsError(
-        extractErrorMessage(err, t('teacherAttendance.errGpsVerifyFailed'))
-      );
+      if (reqId === gpsRequestIdRef.current) {
+        setUserCoords(null);
+        setGpsError(
+          extractErrorMessage(err, t('teacherAttendance.errGpsVerifyFailed'))
+        );
+      }
     } finally {
-      setIsLocating(false);
+      if (reqId === gpsRequestIdRef.current) {
+        setIsLocating(false);
+      }
     }
   }, [
     isSuperAdmin,
@@ -250,6 +266,7 @@ export function useTeacherGpsAndCamera({
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
+      userMarkerRef.current = null;
     }
 
     const map = L.map(mapContainerRef.current, {
@@ -280,12 +297,17 @@ export function useTeacherGpsAndCamera({
       .addTo(map);
 
     mapInstanceRef.current = map;
+    const resizeTimer = window.setTimeout(() => {
+      map.invalidateSize();
+    }, 250);
 
     return () => {
+      window.clearTimeout(resizeTimer);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      userMarkerRef.current = null;
     };
   }, [activeView, schoolGeo]);
 
@@ -344,9 +366,12 @@ export function useTeacherGpsAndCamera({
   }, []);
 
   const closeCameraModal = useCallback(() => {
+    cameraSessionIdRef.current += 1;
     stopMediaStreamTracks(streamRef.current);
     streamRef.current = null;
     clearCapturedSelfie();
+    isCapturingRef.current = false;
+    setIsCapturingSnapshot(false);
     setCameraModal((prev) => ({ ...prev, open: false }));
   }, [clearCapturedSelfie]);
 
@@ -564,9 +589,12 @@ export function useTeacherGpsAndCamera({
         return;
       }
 
+      const sessionId = ++cameraSessionIdRef.current;
       stopMediaStreamTracks(streamRef.current);
       streamRef.current = null;
       clearCapturedSelfie();
+      isCapturingRef.current = false;
+      setIsCapturingSnapshot(false);
       setCameraModal({ open: true, mode });
 
       try {
@@ -578,6 +606,11 @@ export function useTeacherGpsAndCamera({
           },
           audio: false,
         });
+
+        if (sessionId !== cameraSessionIdRef.current) {
+          stopMediaStreamTracks(stream);
+          return;
+        }
 
         const camCheck = validateCameraStream(stream, isSuperAdmin);
         if (!camCheck.valid) {
@@ -596,8 +629,10 @@ export function useTeacherGpsAndCamera({
           void videoRef.current.play().catch(() => null);
         }
       } catch {
-        showToast('error', t('teacherAttendance.errCameraAccess'));
-        setCameraModal({ open: false, mode });
+        if (sessionId === cameraSessionIdRef.current) {
+          showToast('error', t('teacherAttendance.errCameraAccess'));
+          setCameraModal({ open: false, mode });
+        }
       }
     },
     [
@@ -638,8 +673,18 @@ export function useTeacherGpsAndCamera({
 
   const handleTakeSnapshot = useCallback(async () => {
     const video = videoRef.current;
-    if (!video || video.readyState < 2 || video.videoWidth === 0) return;
+    if (
+      isCapturingRef.current ||
+      !video ||
+      video.readyState < 2 ||
+      video.videoWidth === 0
+    ) {
+      return;
+    }
 
+    const sessionId = cameraSessionIdRef.current;
+    isCapturingRef.current = true;
+    setIsCapturingSnapshot(true);
     try {
       const mirroredBlob = await compressSelfieToJpeg(video, {
         maxWidth: 720,
@@ -648,13 +693,22 @@ export function useTeacherGpsAndCamera({
         mirrorHorizontal: true,
       });
 
+      if (sessionId !== cameraSessionIdRef.current) return;
+
       clearCapturedSelfie();
       setCapturedBlob(mirroredBlob);
       setCapturedPreview(URL.createObjectURL(mirroredBlob));
     } catch (err: unknown) {
-      setCameraError(
-        extractErrorMessage(err, t('teacherAttendance.errSnapshotFailed'))
-      );
+      if (sessionId === cameraSessionIdRef.current) {
+        setCameraError(
+          extractErrorMessage(err, t('teacherAttendance.errSnapshotFailed'))
+        );
+      }
+    } finally {
+      if (sessionId === cameraSessionIdRef.current) {
+        isCapturingRef.current = false;
+        setIsCapturingSnapshot(false);
+      }
     }
   }, [clearCapturedSelfie, t]);
 
@@ -843,6 +897,7 @@ export function useTeacherGpsAndCamera({
     handleConfirmProceedCheckout,
     cameraModal,
     videoRef,
+    isCapturingSnapshot,
     capturedBlob,
     capturedPreview,
     cameraError,

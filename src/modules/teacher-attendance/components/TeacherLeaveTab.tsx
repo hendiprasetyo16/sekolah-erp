@@ -9,7 +9,7 @@
  *    nomor surat tugas (wajib khusus Dinas Luar), alasan, serta unggah bukti.
  * ============================================================================
  */
-import { useRef, useMemo } from 'react';
+import { useRef, useMemo, useCallback, memo } from 'react';
 import { motion } from 'framer-motion';
 import {
     FileCheck2,
@@ -55,7 +55,7 @@ interface TeacherLeaveTabProps {
     showToast: (type: 'success' | 'error', message: string) => void;
 }
 
-export function TeacherLeaveTab({
+export const TeacherLeaveTab = memo(function TeacherLeaveTab({
     teacher,
     onToggleSidebar,
     isLeaveFormLocked,
@@ -94,12 +94,26 @@ export function TeacherLeaveTab({
         return Math.max(1, diff);
     }, [leaveStartDate, leaveEndDate]);
 
-    const handleClearFile = () => {
+    const handleClearFile = useCallback(() => {
         setLeaveFile(null);
         if (fileInputRef.current) {
             fileInputRef.current.value = '';
         }
-    };
+    }, [setLeaveFile]);
+
+    const handleFileChange = useCallback(
+        (e: React.ChangeEvent<HTMLInputElement>) => {
+            const file = e.target.files?.[0] ?? null;
+            if (file && file.size > MAX_LEAVE_FILE_BYTES) {
+                e.target.value = '';
+                showToast('error', t('teacherAttendance.errFileMax2Mb'));
+                return;
+            }
+            setLeaveFile(file);
+            e.target.value = '';
+        },
+        [setLeaveFile, showToast, t]
+    );
 
     const removeAttachmentLabel = isEnglish
         ? 'Remove attachment'
@@ -178,10 +192,11 @@ export function TeacherLeaveTab({
                                 <button
                                     key={item.value}
                                     type="button"
+                                    disabled={isSubmittingLeave}
                                     onClick={() => setLeaveCategory(item.value)}
-                                    className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition ${leaveCategory === item.value
-                                        ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
-                                        : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
+                                    className={`py-2.5 px-3 rounded-xl text-xs font-bold border transition disabled:opacity-60 ${leaveCategory === item.value
+                                            ? 'bg-emerald-600 border-emerald-500 text-white shadow-xs'
+                                            : 'bg-muted/50 border-border opacity-80 hover:opacity-100'
                                         }`}
                                 >
                                     {item.label}
@@ -200,11 +215,14 @@ export function TeacherLeaveTab({
                                 <input
                                     type="date"
                                     required
+                                    disabled={isSubmittingLeave}
                                     value={leaveStartDate}
                                     onChange={(e) => {
-                                        setLeaveStartDate(e.target.value);
-                                        if (leaveEndDate < e.target.value) {
-                                            setLeaveEndDate(e.target.value);
+                                        const val = e.target.value;
+                                        if (!val) return;
+                                        setLeaveStartDate(val);
+                                        if (leaveEndDate && leaveEndDate < val) {
+                                            setLeaveEndDate(val);
                                         }
                                     }}
                                     className="form-input w-full text-xs"
@@ -217,9 +235,14 @@ export function TeacherLeaveTab({
                                 <input
                                     type="date"
                                     required
+                                    disabled={isSubmittingLeave}
                                     min={leaveStartDate}
                                     value={leaveEndDate}
-                                    onChange={(e) => setLeaveEndDate(e.target.value)}
+                                    onChange={(e) => {
+                                        if (e.target.value) {
+                                            setLeaveEndDate(e.target.value);
+                                        }
+                                    }}
                                     className="form-input w-full text-xs"
                                 />
                             </div>
@@ -244,6 +267,7 @@ export function TeacherLeaveTab({
                         </label>
                         <input
                             type="text"
+                            disabled={isSubmittingLeave}
                             required={leaveCategory === 'DINAS_LUAR'}
                             value={leaveRefNumber}
                             onChange={(e) => setLeaveRefNumber(e.target.value)}
@@ -278,6 +302,7 @@ export function TeacherLeaveTab({
                         <textarea
                             rows={3}
                             required
+                            disabled={isSubmittingLeave}
                             value={leaveReason}
                             onChange={(e) => setLeaveReason(e.target.value)}
                             placeholder={t('teacherAttendance.leaveReasonPlaceholder')}
@@ -292,9 +317,12 @@ export function TeacherLeaveTab({
                         </label>
                         <div className="relative">
                             <label
-                                className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed cursor-pointer transition ${leaveFile
-                                    ? 'border-emerald-500/70 bg-emerald-500/10 pr-10'
-                                    : 'border-border hover:border-emerald-500/60 bg-muted/30'
+                                className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 border-dashed transition ${isSubmittingLeave
+                                        ? 'opacity-60 cursor-not-allowed'
+                                        : 'cursor-pointer'
+                                    } ${leaveFile
+                                        ? 'border-emerald-500/70 bg-emerald-500/10 pr-10'
+                                        : 'border-border hover:border-emerald-500/60 bg-muted/30'
                                     }`}
                             >
                                 {leaveFile ? (
@@ -320,21 +348,13 @@ export function TeacherLeaveTab({
                                     ref={fileInputRef}
                                     type="file"
                                     accept="image/*,.pdf"
+                                    disabled={isSubmittingLeave}
                                     className="hidden"
-                                    onChange={(e) => {
-                                        const file = e.target.files?.[0] ?? null;
-                                        if (file && file.size > MAX_LEAVE_FILE_BYTES) {
-                                            e.target.value = '';
-                                            showToast('error', t('teacherAttendance.errFileMax2Mb'));
-                                            return;
-                                        }
-                                        setLeaveFile(file);
-                                        e.target.value = '';
-                                    }}
+                                    onChange={handleFileChange}
                                 />
                             </label>
 
-                            {leaveFile && (
+                            {leaveFile && !isSubmittingLeave && (
                                 <button
                                     type="button"
                                     onClick={handleClearFile}
@@ -354,8 +374,8 @@ export function TeacherLeaveTab({
                             type="submit"
                             disabled={isSubmittingLeave || !teacher}
                             className={`w-full py-3.5 px-5 rounded-2xl font-bold text-sm text-white flex items-center justify-center gap-2.5 transition-all duration-200 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed ${isLeaveFormReady
-                                ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
-                                : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
+                                    ? 'bg-linear-to-r from-emerald-500 via-emerald-600 to-teal-600 hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-600/25 ring-2 ring-emerald-400/40'
+                                    : 'bg-linear-to-r from-slate-600 to-slate-700 hover:from-slate-700 hover:to-slate-800 shadow-md'
                                 }`}
                         >
                             {isSubmittingLeave ? (
@@ -375,4 +395,4 @@ export function TeacherLeaveTab({
             )}
         </motion.div>
     );
-}
+});

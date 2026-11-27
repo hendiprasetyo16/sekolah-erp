@@ -10,7 +10,7 @@
  *    titik status presensi harian, pemilih tahun (saat mode Tahunan), serta detail tanggal terpilih.
  * ============================================================================
  */
-import { useMemo } from 'react';
+import { useMemo, useCallback, memo } from 'react';
 import { motion } from 'framer-motion';
 import {
     Menu,
@@ -73,7 +73,7 @@ interface TeacherReportTabProps {
     formatStatusLabel: (status?: string | null) => string;
 }
 
-export function TeacherReportTab({
+export const TeacherReportTab = memo(function TeacherReportTab({
     onToggleSidebar,
     reportScope,
     setReportScope,
@@ -109,39 +109,73 @@ export function TeacherReportTab({
                 return monthPart - 1;
             }
         }
-        return new Date().getMonth();
-    }, [calendarMonth, calendarDaysGrid]);
+        const zonedToday = getSchoolDateString(new Date(), schoolTimezone);
+        const fallbackMonth = Number(zonedToday.split('-')[1]) - 1;
+        return Number.isFinite(fallbackMonth) &&
+            fallbackMonth >= 0 &&
+            fallbackMonth <= 11
+            ? fallbackMonth
+            : new Date().getMonth();
+    }, [calendarMonth, calendarDaysGrid, schoolTimezone]);
 
     const shortMonthLabels = useMemo(() => {
         const dateLocale = isEnglish ? 'en-US' : 'id-ID';
-        const formatter = new Intl.DateTimeFormat(dateLocale, { month: 'short' });
+        const formatter = new Intl.DateTimeFormat(dateLocale, {
+            month: 'short',
+            timeZone: 'UTC',
+        });
         return Array.from({ length: 12 }, (_, idx) =>
-            formatter.format(new Date(2026, idx, 1)).replace('.', '')
+            formatter.format(new Date(Date.UTC(2026, idx, 1))).replace('.', '')
         );
     }, [isEnglish]);
 
-    // Pindah cepat ke bulan tertentu saat mode Tahunan aktif
-    const handleQuickSelectMonth = (monthIdx: number) => {
-        setCalendarMonth(monthIdx);
-        const monthPrefix = `${calendarYear}-${String(monthIdx + 1).padStart(2, '0')}`;
-        if (todayStr.startsWith(monthPrefix)) {
-            setSelectedCalendarDate(todayStr);
-        } else {
-            setSelectedCalendarDate(`${monthPrefix}-01`);
+    // Pindah cepat ke hari ini sesuai zona waktu sekolah
+    const handleGoToday = useCallback(() => {
+        const zonedToday = getSchoolDateString(new Date(), schoolTimezone);
+        const [yStr, mStr] = zonedToday.split('-');
+        const parsedYear = Number(yStr);
+        const parsedMonth = Number(mStr) - 1;
+        if (Number.isFinite(parsedYear) && Number.isFinite(parsedMonth)) {
+            setCalendarYear(parsedYear);
+            setCalendarMonth(parsedMonth);
         }
-    };
+        setSelectedCalendarDate(zonedToday);
+    }, [schoolTimezone, setCalendarYear, setCalendarMonth, setSelectedCalendarDate]);
+
+    // Pindah cepat ke bulan tertentu saat mode Tahunan aktif
+    const handleQuickSelectMonth = useCallback(
+        (monthIdx: number) => {
+            setCalendarMonth(monthIdx);
+            const monthPrefix = `${calendarYear}-${String(monthIdx + 1).padStart(2, '0')}`;
+            if (todayStr.startsWith(monthPrefix)) {
+                setSelectedCalendarDate(todayStr);
+            } else {
+                setSelectedCalendarDate(`${monthPrefix}-01`);
+            }
+        },
+        [calendarYear, todayStr, setCalendarMonth, setSelectedCalendarDate]
+    );
 
     // Pindah cepat antar-tahun saat mode Tahunan aktif
-    const handleChangeYear = (delta: number) => {
-        const nextYear = calendarYear + delta;
-        setCalendarYear(nextYear);
-        const monthPrefix = `${nextYear}-${String(activeMonthIndex + 1).padStart(2, '0')}`;
-        if (todayStr.startsWith(monthPrefix)) {
-            setSelectedCalendarDate(todayStr);
-        } else {
-            setSelectedCalendarDate(`${monthPrefix}-01`);
-        }
-    };
+    const handleChangeYear = useCallback(
+        (delta: number) => {
+            const nextYear = calendarYear + delta;
+            setCalendarYear(nextYear);
+            const monthPrefix = `${nextYear}-${String(activeMonthIndex + 1).padStart(2, '0')}`;
+            if (todayStr.startsWith(monthPrefix)) {
+                setSelectedCalendarDate(todayStr);
+            } else {
+                setSelectedCalendarDate(`${monthPrefix}-01`);
+            }
+        },
+        [
+            calendarYear,
+            activeMonthIndex,
+            todayStr,
+            setCalendarYear,
+            setSelectedCalendarDate,
+        ]
+    );
 
     return (
         <motion.div
@@ -182,8 +216,8 @@ export function TeacherReportTab({
                         type="button"
                         onClick={() => setReportScope('monthly')}
                         className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'monthly'
-                            ? 'bg-white text-slate-900'
-                            : 'text-white'
+                                ? 'bg-white text-slate-900'
+                                : 'text-white'
                             }`}
                     >
                         {t('teacherAttendance.scopeMonthly')}
@@ -192,8 +226,8 @@ export function TeacherReportTab({
                         type="button"
                         onClick={() => setReportScope('yearly')}
                         className={`px-3 py-1.5 rounded-lg transition ${reportScope === 'yearly'
-                            ? 'bg-white text-slate-900'
-                            : 'text-white'
+                                ? 'bg-white text-slate-900'
+                                : 'text-white'
                             }`}
                     >
                         {t('teacherAttendance.scopeYearly')}
@@ -281,14 +315,7 @@ export function TeacherReportTab({
                     <div className="flex items-center gap-1.5">
                         <button
                             type="button"
-                            onClick={() => {
-                                const d = new Date();
-                                setCalendarYear(d.getFullYear());
-                                setCalendarMonth(d.getMonth());
-                                setSelectedCalendarDate(
-                                    getSchoolDateString(d, schoolTimezone)
-                                );
-                            }}
+                            onClick={handleGoToday}
                             className="px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-muted hover:bg-muted/80 transition"
                         >
                             {t('teacherAttendance.btnToday')}
@@ -344,8 +371,8 @@ export function TeacherReportTab({
                                         type="button"
                                         onClick={() => handleQuickSelectMonth(idx)}
                                         className={`py-1.5 px-1 rounded-xl text-[11px] font-semibold transition ${isActive
-                                            ? 'bg-primary text-primary-foreground font-bold shadow-xs'
-                                            : 'text-foreground/75 hover:bg-muted hover:text-foreground'
+                                                ? 'bg-primary text-primary-foreground font-bold shadow-xs'
+                                                : 'text-foreground/75 hover:bg-muted hover:text-foreground'
                                             }`}
                                     >
                                         {label}
@@ -362,10 +389,10 @@ export function TeacherReportTab({
                         <div
                             key={hari}
                             className={`text-[11px] font-bold py-1 ${idx === 0
-                                ? 'text-red-500'
-                                : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
                                     ? 'text-red-500'
-                                    : 'opacity-65'
+                                    : idx === 6 && effectiveWorkDaysMode === 'FIVE_DAYS'
+                                        ? 'text-red-500'
+                                        : 'opacity-65'
                                 }`}
                         >
                             {hari}
@@ -404,10 +431,10 @@ export function TeacherReportTab({
                                 type="button"
                                 onClick={() => setSelectedCalendarDate(cell.dateStr!)}
                                 className={`h-12 rounded-xl flex flex-col items-center justify-center relative transition border ${isSelected
-                                    ? 'border-primary ring-2 ring-primary/30 font-extrabold'
-                                    : isToday
-                                        ? 'border-amber-400 font-bold'
-                                        : 'border-transparent'
+                                        ? 'border-primary ring-2 ring-primary/30 font-extrabold'
+                                        : isToday
+                                            ? 'border-amber-400 font-bold'
+                                            : 'border-transparent'
                                     } ${cell.isRedDate
                                         ? 'bg-red-500/10 text-red-600 dark:text-red-400 hover:bg-red-500/20'
                                         : 'bg-muted/35 hover:bg-muted/70'
@@ -435,8 +462,8 @@ export function TeacherReportTab({
                 {selectedDateInfo && (
                     <div
                         className={`p-3 rounded-2xl border text-xs space-y-1 ${selectedDateInfo.isRedDate
-                            ? 'bg-red-500/10 border-red-500/30'
-                            : 'bg-muted/40 border-border'
+                                ? 'bg-red-500/10 border-red-500/30'
+                                : 'bg-muted/40 border-border'
                             }`}
                     >
                         <div className="flex items-center justify-between gap-2">
@@ -495,4 +522,4 @@ export function TeacherReportTab({
             </div>
         </motion.div>
     );
-}
+});

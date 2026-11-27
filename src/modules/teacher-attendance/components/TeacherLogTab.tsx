@@ -10,7 +10,7 @@
  *    jarak check-in, lencana keterlambatan, lencana pulang awal, dan catatan.
  * ============================================================================
  */
-import { useState, useMemo } from 'react';
+import { useState, useMemo, memo } from 'react';
 import { motion } from 'framer-motion';
 import { History, Menu } from 'lucide-react';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -35,7 +35,7 @@ interface TeacherLogTabProps {
     formatStatusLabel: (status?: string | null) => string;
 }
 
-export function TeacherLogTab({
+export const TeacherLogTab = memo(function TeacherLogTab({
     historyRecords,
     currentLang,
     effectiveWorkStartTime,
@@ -91,16 +91,19 @@ export function TeacherLogTab({
         return { counts: summary, filteredRecords: matched };
     }, [historyRecords, activeFilter]);
 
-    const filterChips: { key: LogStatusFilter; label: string }[] = [
-        { key: 'ALL', label: currentLang === 'en' ? 'All' : 'Semua' },
-        { key: 'HADIR', label: formatStatusLabel('HADIR') },
-        { key: 'TERLAMBAT', label: formatStatusLabel('TERLAMBAT') },
-        {
-            key: 'IZIN_SAKIT',
-            label: `${formatStatusLabel('IZIN')}/${formatStatusLabel('SAKIT')}`,
-        },
-        { key: 'ALPA', label: formatStatusLabel('ALPA') },
-    ];
+    const filterChips = useMemo<{ key: LogStatusFilter; label: string }[]>(
+        () => [
+            { key: 'ALL', label: currentLang === 'en' ? 'All' : 'Semua' },
+            { key: 'HADIR', label: formatStatusLabel('HADIR') },
+            { key: 'TERLAMBAT', label: formatStatusLabel('TERLAMBAT') },
+            {
+                key: 'IZIN_SAKIT',
+                label: `${formatStatusLabel('IZIN')}/${formatStatusLabel('SAKIT')}`,
+            },
+            { key: 'ALPA', label: formatStatusLabel('ALPA') },
+        ],
+        [currentLang, formatStatusLabel]
+    );
 
     return (
         <motion.div
@@ -144,8 +147,8 @@ export function TeacherLogTab({
                                 type="button"
                                 onClick={() => setActiveFilter(chip.key)}
                                 className={`px-2.5 py-1 rounded-full text-[11px] font-semibold whitespace-nowrap border transition ${isSelected
-                                    ? 'bg-primary text-primary-foreground border-primary shadow-xs'
-                                    : 'bg-muted/50 text-foreground/75 border-border hover:bg-muted'
+                                        ? 'bg-primary text-primary-foreground border-primary shadow-xs'
+                                        : 'bg-muted/50 text-foreground/75 border-border hover:bg-muted'
                                     }`}
                             >
                                 {chip.label} ({counts[chip.key]})
@@ -180,12 +183,13 @@ export function TeacherLogTab({
             ) : (
                 <div className="space-y-2.5 max-h-105 overflow-y-auto pr-1">
                     {filteredRecords.map((item) => {
+                        const normalizedStatus = (item.status ?? '').toUpperCase();
                         const isEarlyLog = isEarlyDepartureNote(item.notes);
                         const itemJv = getJavaneseDateInfo(item.date, currentLang);
                         const loggedLateMinutes =
                             typeof item.deviceTelemetry?.lateMinutes === 'number'
                                 ? item.deviceTelemetry.lateMinutes
-                                : item.checkInTime && item.status === 'TERLAMBAT'
+                                : item.checkInTime && normalizedStatus === 'TERLAMBAT'
                                     ? calculateLateMinutes(
                                         new Date(item.checkInTime),
                                         effectiveWorkStartTime,
@@ -233,13 +237,14 @@ export function TeacherLogTab({
                                     )}
                                 </div>
                                 <span
-                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${item.status === 'HADIR'
-                                        ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
-                                        : item.status === 'TERLAMBAT'
-                                            ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
-                                            : item.status === 'ALPA' || item.status === 'ALPHA'
-                                                ? 'bg-red-500/15 text-red-600 dark:text-red-300'
-                                                : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
+                                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold shrink-0 ${normalizedStatus === 'HADIR'
+                                            ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-300'
+                                            : normalizedStatus === 'TERLAMBAT'
+                                                ? 'bg-amber-500/15 text-amber-600 dark:text-amber-300'
+                                                : normalizedStatus === 'ALPA' ||
+                                                    normalizedStatus === 'ALPHA'
+                                                    ? 'bg-red-500/15 text-red-600 dark:text-red-300'
+                                                    : 'bg-blue-500/15 text-blue-600 dark:text-blue-300'
                                         }`}
                                 >
                                     {formatStatusLabel(item.status)}
@@ -251,4 +256,4 @@ export function TeacherLogTab({
             )}
         </motion.div>
     );
-}
+});

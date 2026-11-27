@@ -40,6 +40,7 @@ export interface SchoolDbRow {
     timezone?: string;
     [key: string]: unknown;
   } | null;
+  [key: string]: unknown;
 }
 
 export interface SchoolGeoAndSchedule {

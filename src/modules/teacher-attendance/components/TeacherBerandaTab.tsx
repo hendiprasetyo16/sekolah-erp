@@ -11,7 +11,7 @@
  * 3. Dua kartu utama aksi cepat: Presensi DATANG (Check-In) & PULANG (Check-Out).
  * ============================================================================
  */
-import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback, memo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Menu,
@@ -34,6 +34,7 @@ import type {
     SubView,
     TeacherProfile,
 } from '../types/teacherAttendance.types';
+import { getClockPartsInTimezone } from '../utils/teacherAttendance.helpers';
 
 const PROFILE_HINT_AUTO_CLOSE_MS = 4500;
 
@@ -48,7 +49,10 @@ interface AutoScrollingTextProps {
     className?: string;
 }
 
-function AutoScrollingText({ text, className = '' }: AutoScrollingTextProps) {
+const AutoScrollingText = memo(function AutoScrollingText({
+    text,
+    className = '',
+}: AutoScrollingTextProps) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const measureRef = useRef<HTMLSpanElement | null>(null);
     const [isOverflowing, setIsOverflowing] = useState(false);
@@ -69,19 +73,14 @@ function AutoScrollingText({ text, className = '' }: AutoScrollingTextProps) {
 
         checkOverflow();
 
-        const observer =
-            typeof ResizeObserver !== 'undefined'
-                ? new ResizeObserver(checkOverflow)
-                : null;
-        if (observer && containerRef.current) {
+        if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+            const observer = new ResizeObserver(checkOverflow);
             observer.observe(containerRef.current);
+            return () => observer.disconnect();
         }
-        window.addEventListener('resize', checkOverflow);
 
-        return () => {
-            observer?.disconnect();
-            window.removeEventListener('resize', checkOverflow);
-        };
+        window.addEventListener('resize', checkOverflow);
+        return () => window.removeEventListener('resize', checkOverflow);
     }, [text]);
 
     return (
@@ -124,46 +123,37 @@ function AutoScrollingText({ text, className = '' }: AutoScrollingTextProps) {
             )}
         </div>
     );
-}
+});
 
 /* ============================================================================
  * SUB-KOMPONEN INTERNAL 2: JAM DIGITAL REAL-TIME SESUAI ZONA WAKTU SEKOLAH
+ * ============================================================================
+ * Terisolasi di dalam kartu jam dan hanya mengaktifkan interval pada varian
+ * yang sedang tampil (mobile < 640px atau desktop >= 640px).
  * ============================================================================ */
-function useSchoolClockParts(schoolTimezone: string) {
+function useSchoolClockParts(schoolTimezone: string, isActive: boolean) {
     const getParts = useCallback(() => {
-        try {
-            const parts = new Intl.DateTimeFormat('en-GB', {
-                timeZone: schoolTimezone,
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: false,
-            }).formatToParts(new Date());
-
-            return {
-                hoursStr: parts.find((p) => p.type === 'hour')?.value ?? '00',
-                minutesStr: parts.find((p) => p.type === 'minute')?.value ?? '00',
-                secondsStr: parts.find((p) => p.type === 'second')?.value ?? '00',
-            };
-        } catch {
-            const now = new Date();
-            return {
-                hoursStr: String(now.getHours()).padStart(2, '0'),
-                minutesStr: String(now.getMinutes()).padStart(2, '0'),
-                secondsStr: String(now.getSeconds()).padStart(2, '0'),
-            };
-        }
+        const { hours, minutes, seconds } = getClockPartsInTimezone(
+            new Date(),
+            schoolTimezone
+        );
+        return {
+            hoursStr: hours,
+            minutesStr: minutes,
+            secondsStr: seconds,
+        };
     }, [schoolTimezone]);
 
     const [clock, setClock] = useState(getParts);
 
     useEffect(() => {
+        if (!isActive) return;
         setClock(getParts());
         const timer = window.setInterval(() => {
             setClock(getParts());
         }, 1000);
         return () => window.clearInterval(timer);
-    }, [getParts]);
+    }, [getParts, isActive]);
 
     return clock;
 }
@@ -176,7 +166,7 @@ interface DigitalClockCardProps {
     secondUnitLabel: string;
 }
 
-function DigitalClockCard({
+const DigitalClockCard = memo(function DigitalClockCard({
     variant,
     schoolTimezone,
     hourUnitLabel,
@@ -184,7 +174,28 @@ function DigitalClockCard({
     secondUnitLabel,
 }: DigitalClockCardProps) {
     const isMobile = variant === 'mobile';
-    const { hoursStr, minutesStr, secondsStr } = useSchoolClockParts(schoolTimezone);
+    const [isDesktopViewport, setIsDesktopViewport] = useState<boolean>(() =>
+        typeof window !== 'undefined'
+            ? window.matchMedia('(min-width: 640px)').matches
+            : false
+    );
+
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        const mediaQuery = window.matchMedia('(min-width: 640px)');
+        const handleChange = (e: MediaQueryListEvent) => {
+            setIsDesktopViewport(e.matches);
+        };
+        setIsDesktopViewport(mediaQuery.matches);
+        mediaQuery.addEventListener('change', handleChange);
+        return () => mediaQuery.removeEventListener('change', handleChange);
+    }, []);
+
+    const isActive = isMobile ? !isDesktopViewport : isDesktopViewport;
+    const { hoursStr, minutesStr, secondsStr } = useSchoolClockParts(
+        schoolTimezone,
+        isActive
+    );
 
     return (
         <div
@@ -264,7 +275,7 @@ function DigitalClockCard({
             </div>
         </div>
     );
-}
+});
 
 /* ============================================================================
  * KOMPONEN UTAMA: TAB BERANDA GURU
@@ -322,7 +333,7 @@ interface TeacherBerandaTabProps {
     formatStatusLabel: (status?: string | null) => string;
 }
 
-export function TeacherBerandaTab({
+export const TeacherBerandaTab = memo(function TeacherBerandaTab({
     teacher,
     fallbackUserName,
     resolvedTeacherPhotoUrl,
@@ -1035,4 +1046,4 @@ export function TeacherBerandaTab({
             </div>
         </motion.div>
     );
-}
+});

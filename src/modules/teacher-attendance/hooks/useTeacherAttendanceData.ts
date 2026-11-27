@@ -176,13 +176,6 @@ export function useTeacherAttendanceData({
     ? simSchoolId || school?.id || ''
     : school?.id || '';
 
-  // Jam Real-time (15 detik)
-  const [now, setNow] = useState<Date>(() => new Date());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 15_000);
-    return () => clearInterval(timer);
-  }, []);
-
   // Data Guru, Pengaturan Sekolah, & Riwayat Presensi
   const [teacher, setTeacher] = useState<TeacherProfile | null>(null);
   const [schoolGeo, setSchoolGeo] = useState<SchoolGeoAndSchedule | null>(null);
@@ -191,6 +184,38 @@ export function useTeacherAttendanceData({
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
   const loadSeqRef = useRef<number>(0);
   const hasSyncedInitialTimezoneDatesRef = useRef<boolean>(false);
+
+  // Jam Real-time (15 detik) — aktif sebelum check-in/izin, serta sinkron saat tab kembali aktif
+  const [now, setNow] = useState<Date>(() => new Date());
+  const shouldTickLiveClock =
+    !todayRecord?.checkInTime &&
+    !(
+      todayRecord &&
+      ['IZIN', 'SAKIT', 'CUTI', 'DINAS_LUAR'].includes(
+        (todayRecord.status ?? '').toUpperCase()
+      )
+    );
+
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setNow(new Date());
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    if (!shouldTickLiveClock) {
+      return () => {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      };
+    }
+
+    const timer = setInterval(() => setNow(new Date()), 15_000);
+    return () => {
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [shouldTickLiveClock]);
 
   const resolvedTeacherPhotoUrl = useMemo(() => {
     if (teacher?.photoUrl && teacher.photoUrl.trim().length > 0) {
@@ -544,7 +569,14 @@ export function useTeacherAttendanceData({
         return;
       }
 
-      const targetYear = Math.min(new Date().getFullYear(), calendarYear);
+      const currentSchoolDate = getSchoolDateString(
+        new Date(),
+        resolvedTimezone
+      );
+      const currentSchoolYear =
+        Number(currentSchoolDate.slice(0, 4)) || new Date().getFullYear();
+      const targetYear = Math.min(currentSchoolYear, calendarYear);
+
       const { data: attList } = await supabase
         .from('attendances')
         .select('*')
@@ -559,10 +591,6 @@ export function useTeacherAttendanceData({
       const records = (attList ?? []) as AttendanceRecord[];
       setHistoryRecords(records);
 
-      const currentSchoolDate = getSchoolDateString(
-        new Date(),
-        resolvedTimezone
-      );
       const foundToday =
         records.find((r) => r.date === currentSchoolDate) ?? null;
       setTodayRecord(foundToday);
@@ -764,7 +792,7 @@ export function useTeacherAttendanceData({
   const handleSubmitStrictLeave = useCallback(
     async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
-      if (!teacher || !activeSchoolId) return;
+      if (isSubmittingLeave || !teacher || !activeSchoolId) return;
 
       if (isLeaveFormLocked) {
         showToast(
@@ -787,7 +815,44 @@ export function useTeacherAttendanceData({
         return;
       }
 
-      if (leaveEndDate < leaveStartDate) {
+      if (!leaveStartDate || !leaveEndDate || leaveEndDate < leaveStartDate) {
+        showToast('error', t('teacherAttendance.errLeaveEndBeforeStart'));
+        return;
+      }
+
+      const datesToInsert: string[] = [];
+      const [sy, sm, sd] = leaveStartDate.split('-').map(Number);
+      const [ey, em, ed] = leaveEndDate.split('-').map(Number);
+      const isDatePartsValid =
+        Number.isFinite(sy) &&
+        Number.isFinite(sm) &&
+        Number.isFinite(sd) &&
+        Number.isFinite(ey) &&
+        Number.isFinite(em) &&
+        Number.isFinite(ed) &&
+        sm >= 1 &&
+        sm <= 12 &&
+        sd >= 1 &&
+        sd <= 31 &&
+        em >= 1 &&
+        em <= 12 &&
+        ed >= 1 &&
+        ed <= 31;
+
+      if (isDatePartsValid) {
+        let cursorMs = Date.UTC(sy, sm - 1, sd);
+        const lastMs = Date.UTC(ey, em - 1, ed);
+        while (cursorMs <= lastMs) {
+          const dtObj = new Date(cursorMs);
+          const y = dtObj.getUTCFullYear();
+          const m = String(dtObj.getUTCMonth() + 1).padStart(2, '0');
+          const d = String(dtObj.getUTCDate()).padStart(2, '0');
+          datesToInsert.push(`${y}-${m}-${d}`);
+          cursorMs += 86_400_000;
+        }
+      }
+
+      if (datesToInsert.length === 0) {
         showToast('error', t('teacherAttendance.errLeaveEndBeforeStart'));
         return;
       }
@@ -818,20 +883,6 @@ export function useTeacherAttendanceData({
         }
 
         uploadedAttachmentPath = storagePath;
-
-        const datesToInsert: string[] = [];
-        const [sy, sm, sd] = leaveStartDate.split('-').map(Number);
-        const [ey, em, ed] = leaveEndDate.split('-').map(Number);
-        let cursorMs = Date.UTC(sy, sm - 1, sd);
-        const lastMs = Date.UTC(ey, em - 1, ed);
-        while (cursorMs <= lastMs) {
-          const dtObj = new Date(cursorMs);
-          const y = dtObj.getUTCFullYear();
-          const m = String(dtObj.getUTCMonth() + 1).padStart(2, '0');
-          const d = String(dtObj.getUTCDate()).padStart(2, '0');
-          datesToInsert.push(`${y}-${m}-${d}`);
-          cursorMs += 86_400_000;
-        }
 
         const { data: existingRows } = await supabase
           .from('attendances')
@@ -928,6 +979,7 @@ export function useTeacherAttendanceData({
       }
     },
     [
+      isSubmittingLeave,
       teacher,
       activeSchoolId,
       isLeaveFormLocked,
@@ -1059,22 +1111,28 @@ export function useTeacherAttendanceData({
   ]);
 
   const handlePrevMonth = useCallback(() => {
-    if (calendarMonth === 0) {
-      setCalendarYear((y) => y - 1);
-      setCalendarMonth(11);
-    } else {
-      setCalendarMonth((m) => m - 1);
-    }
-  }, [calendarMonth]);
+    const nextYear = calendarMonth === 0 ? calendarYear - 1 : calendarYear;
+    const nextMonth = calendarMonth === 0 ? 11 : calendarMonth - 1;
+    setCalendarYear(nextYear);
+    setCalendarMonth(nextMonth);
+
+    const monthPrefix = `${nextYear}-${String(nextMonth + 1).padStart(2, '0')}`;
+    setSelectedCalendarDate(
+      todayStr.startsWith(monthPrefix) ? todayStr : `${monthPrefix}-01`
+    );
+  }, [calendarMonth, calendarYear, todayStr]);
 
   const handleNextMonth = useCallback(() => {
-    if (calendarMonth === 11) {
-      setCalendarYear((y) => y + 1);
-      setCalendarMonth(0);
-    } else {
-      setCalendarMonth((m) => m + 1);
-    }
-  }, [calendarMonth]);
+    const nextYear = calendarMonth === 11 ? calendarYear + 1 : calendarYear;
+    const nextMonth = calendarMonth === 11 ? 0 : calendarMonth + 1;
+    setCalendarYear(nextYear);
+    setCalendarMonth(nextMonth);
+
+    const monthPrefix = `${nextYear}-${String(nextMonth + 1).padStart(2, '0')}`;
+    setSelectedCalendarDate(
+      todayStr.startsWith(monthPrefix) ? todayStr : `${monthPrefix}-01`
+    );
+  }, [calendarMonth, calendarYear, todayStr]);
 
   const selectedDateInfo = useMemo(() => {
     if (!selectedCalendarDate) return null;
@@ -1128,6 +1186,9 @@ export function useTeacherAttendanceData({
 
   const isLeaveFormReady =
     Boolean(teacher) &&
+    Boolean(leaveStartDate) &&
+    Boolean(leaveEndDate) &&
+    leaveEndDate >= leaveStartDate &&
     Boolean(leaveFile) &&
     leaveReason.trim().length >= MIN_REASON_LENGTH &&
     (leaveCategory !== 'DINAS_LUAR' || leaveRefNumber.trim().length > 0);
