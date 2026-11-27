@@ -188,6 +188,7 @@ export function AttendanceSettingsTab() {
     );
     const [editDateInput, setEditDateInput] = useState<string>('');
     const [editNameInput, setEditNameInput] = useState<string>('');
+    const [editModalError, setEditModalError] = useState<string | null>(null);
     const [isSavingEdit, setIsSavingEdit] = useState<boolean>(false);
 
     const [deleteConfirmModal, setDeleteConfirmModal] = useState<{
@@ -241,6 +242,7 @@ export function AttendanceSettingsTab() {
             if (e.key !== 'Escape') return;
             if (editingHoliday && !isSavingEdit) {
                 setEditingHoliday(null);
+                setEditModalError(null);
             } else if (deleteConfirmModal && !isDeletingHolidays) {
                 setDeleteConfirmModal(null);
             }
@@ -513,7 +515,7 @@ export function AttendanceSettingsTab() {
         );
         if (validRows.length === 0) return;
 
-        if (!isSuperAdmin && !resolvedHolidaySchoolId) {
+        if ((!isSuperAdmin || holidayScope === 'SCHOOL') && !resolvedHolidaySchoolId) {
             throw new Error(t('attendanceSettings.errSchoolNotFound'));
         }
 
@@ -690,41 +692,53 @@ export function AttendanceSettingsTab() {
         setEditingHoliday(item);
         setEditDateInput(item.date);
         setEditNameInput(item.name);
+        setEditModalError(null);
     };
 
     const handleSaveEditHoliday = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!editingHoliday) return;
-        if (!editDateInput || editNameInput.trim().length < 3) {
+        const cleanName = editNameInput.trim();
+        if (!editDateInput || cleanName.length < 3) {
+            const validationMsg = t('attendanceSettings.errEmptySingleHoliday');
+            setEditModalError(validationMsg);
+            setSyncFeedback({
+                status: 'error',
+                text: validationMsg,
+            });
             return;
         }
 
+        setEditModalError(null);
         setIsSavingEdit(true);
         try {
             const { error } = await supabase
                 .from('national_holidays')
                 .update({
                     date: editDateInput,
-                    name: editNameInput.trim(),
+                    name: cleanName,
                 })
                 .eq('id', editingHoliday.id);
 
             if (error) throw error;
             setEditingHoliday(null);
+            setEditModalError(null);
             await loadHolidays();
             setSyncFeedback({
                 status: 'success',
                 text: t('attendanceSettings.feedbackEditSaved', {
-                    name: editNameInput.trim(),
+                    name: cleanName,
                 }),
             });
         } catch (err: unknown) {
+            const errMsg =
+                err instanceof Error
+                    ? err.message
+                    : t('attendanceSettings.errUpdateHoliday');
+            setEditModalError(errMsg);
             setSyncFeedback({
                 status: 'error',
-                text:
-                    err instanceof Error
-                        ? err.message
-                        : t('attendanceSettings.errUpdateHoliday'),
+                text: errMsg,
             });
         } finally {
             setIsSavingEdit(false);
@@ -2010,13 +2024,23 @@ export function AttendanceSettingsTab() {
                             </div>
                             <button
                                 type="button"
-                                onClick={() => setEditingHoliday(null)}
+                                onClick={() => {
+                                    setEditingHoliday(null);
+                                    setEditModalError(null);
+                                }}
                                 disabled={isSavingEdit}
                                 className="p-1.5 rounded-xl hover:bg-muted text-muted-foreground active:scale-95 transition cursor-pointer"
                             >
                                 <X size={16} />
                             </button>
                         </div>
+
+                        {editModalError && (
+                            <div className="p-2.5 rounded-lg border border-red-500/40 bg-red-500/15 text-xs font-medium text-red-800 dark:text-red-200 flex items-center gap-2">
+                                <AlertTriangle size={15} className="text-red-600 shrink-0" />
+                                <span>{editModalError}</span>
+                            </div>
+                        )}
 
                         <div className="space-y-3">
                             <div>
@@ -2027,7 +2051,10 @@ export function AttendanceSettingsTab() {
                                     type="date"
                                     required
                                     value={editDateInput}
-                                    onChange={(e) => setEditDateInput(e.target.value)}
+                                    onChange={(e) => {
+                                        setEditDateInput(e.target.value);
+                                        if (editModalError) setEditModalError(null);
+                                    }}
                                     className="form-input w-full text-xs font-mono"
                                 />
                                 {editDateInput.length === 10 && (
@@ -2046,7 +2073,10 @@ export function AttendanceSettingsTab() {
                                     type="text"
                                     required
                                     value={editNameInput}
-                                    onChange={(e) => setEditNameInput(e.target.value)}
+                                    onChange={(e) => {
+                                        setEditNameInput(e.target.value);
+                                        if (editModalError) setEditModalError(null);
+                                    }}
                                     className="form-input w-full text-xs"
                                 />
                             </div>
@@ -2055,7 +2085,10 @@ export function AttendanceSettingsTab() {
                         <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
                             <button
                                 type="button"
-                                onClick={() => setEditingHoliday(null)}
+                                onClick={() => {
+                                    setEditingHoliday(null);
+                                    setEditModalError(null);
+                                }}
                                 disabled={isSavingEdit}
                                 className={BTN_STYLE.secondary}
                             >

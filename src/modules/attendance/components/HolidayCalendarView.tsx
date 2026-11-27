@@ -1,5 +1,5 @@
 // src/modules/attendance/components/HolidayCalendarView.tsx
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback, memo } from 'react';
 import {
     ChevronLeft,
     ChevronRight,
@@ -34,7 +34,7 @@ interface HolidayCalendarViewProps {
 // ============================================================================
 const CALENDAR_CONFIG = {
     highlightFridayGreen: true, // Ubah ke false jika hari Jumat tidak ingin berwarna hijau
-    showFullPasaranName: true,  // true = "21 Pahing", false = "21 Ph"
+    showFullPasaranName: true, // true = "21 Pahing", false = "21 Ph"
 };
 
 function getTodayIsoLocal(): string {
@@ -45,7 +45,279 @@ function getTodayIsoLocal(): string {
     return `${y}-${m}-${d}`;
 }
 
-export function HolidayCalendarView({
+interface DesktopYearGridProps {
+    year: number;
+    todayIso: string;
+    monthNames: string[];
+    dayHeaders: string[];
+    javaneseMonthLabels: string[];
+    javaneseYearMap: Map<string, JavaneseDateInfo>;
+    holidaysByDate: Map<string, HolidayRecord[]>;
+    holidaysByMonth: Map<string, HolidayRecord[]>;
+    workDaysMode: WorkDaysMode;
+    isSuperAdmin: boolean;
+    onClickEditHoliday: (holiday: HolidayRecord) => void;
+    onClickAddHolidayOnDate: (isoDate: string) => void;
+}
+
+const DesktopYearGrid = memo(function DesktopYearGrid({
+    year,
+    todayIso,
+    monthNames,
+    dayHeaders,
+    javaneseMonthLabels,
+    javaneseYearMap,
+    holidaysByDate,
+    holidaysByMonth,
+    workDaysMode,
+    isSuperAdmin,
+    onClickEditHoliday,
+    onClickAddHolidayOnDate,
+}: DesktopYearGridProps) {
+    const { t } = useTranslation();
+
+    const resolvePrimaryEditableHoliday = (
+        dayHolidays: HolidayRecord[]
+    ): HolidayRecord => {
+        return (
+            dayHolidays.find((h) => isSuperAdmin || h.schoolId !== null) ??
+            dayHolidays[0]
+        );
+    };
+
+    return (
+        <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {monthNames.map((monthName, monthIndex) => {
+                const daysInMonth = new Date(
+                    Date.UTC(year, monthIndex + 1, 0)
+                ).getUTCDate();
+                const firstDayOfWeek = new Date(
+                    Date.UTC(year, monthIndex, 1)
+                ).getUTCDay();
+                const monthPrefix = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
+                const monthHolidays = holidaysByMonth.get(monthPrefix) ?? [];
+
+                const calendarCells: Array<number | null> = [
+                    ...Array.from({ length: firstDayOfWeek }, () => null),
+                    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
+                ];
+
+                return (
+                    <div
+                        key={`${year}-${monthIndex}`}
+                        className="rounded-2xl border border-border bg-card p-3.5 shadow-xs flex flex-col justify-between gap-3"
+                    >
+                        <div className="space-y-2.5">
+                            {/* Header Bulan Masehi + Badge Jumlah Libur */}
+                            <div className="flex items-start justify-between gap-2">
+                                <div>
+                                    <h4 className="text-sm font-bold text-foreground">
+                                        {monthName} {year}
+                                    </h4>
+                                    <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 mt-0.5">
+                                        {javaneseMonthLabels[monthIndex]}
+                                    </p>
+                                </div>
+
+                                {monthHolidays.length > 0 && (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-600 dark:text-red-300 shrink-0">
+                                        {t('attendanceSettings.holidayCountBadge', {
+                                            count: monthHolidays.length,
+                                        })}
+                                    </span>
+                                )}
+                            </div>
+
+                            {/* Header Nama Hari */}
+                            <div className="grid grid-cols-7 text-center border-b border-border/70 pb-1.5">
+                                {dayHeaders.map((dayLabel, dayIdx) => {
+                                    const isSunday = dayIdx === 0;
+                                    const isFriday = dayIdx === 5;
+                                    const isSaturdayOff =
+                                        dayIdx === 6 && workDaysMode === 'FIVE_DAYS';
+
+                                    let headerColor = 'text-sky-600 dark:text-sky-400';
+                                    if (isSunday || isSaturdayOff) {
+                                        headerColor = 'text-red-500';
+                                    } else if (
+                                        isFriday &&
+                                        CALENDAR_CONFIG.highlightFridayGreen
+                                    ) {
+                                        headerColor = 'text-emerald-600 dark:text-emerald-400';
+                                    }
+
+                                    return (
+                                        <span
+                                            key={dayLabel}
+                                            className={`text-[11px] font-bold ${headerColor}`}
+                                        >
+                                            {dayLabel}
+                                        </span>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Grid Tanggal Masehi + Tanggal Jawa & Pasaran */}
+                            <div className="grid grid-cols-7 gap-0.5">
+                                {calendarCells.map((dayNum, cellIdx) => {
+                                    if (dayNum === null) {
+                                        return (
+                                            <div
+                                                key={`empty-${monthIndex}-${cellIdx}`}
+                                                className="h-12"
+                                            />
+                                        );
+                                    }
+
+                                    const isoDate = `${monthPrefix}-${String(dayNum).padStart(2, '0')}`;
+                                    const dayOfWeek = cellIdx % 7;
+                                    const isSunday = dayOfWeek === 0;
+                                    const isFriday = dayOfWeek === 5;
+                                    const isSaturdayOff =
+                                        dayOfWeek === 6 && workDaysMode === 'FIVE_DAYS';
+                                    const isWeekendOff = isSunday || isSaturdayOff;
+
+                                    const dayHolidays = holidaysByDate.get(isoDate) ?? [];
+                                    const hasHoliday = dayHolidays.length > 0;
+                                    const isCutiBersamaOnly =
+                                        hasHoliday &&
+                                        dayHolidays.every((h) =>
+                                            h.name.toLowerCase().includes('cuti bersama')
+                                        );
+
+                                    const isToday = isoDate === todayIso;
+                                    const jawaInfo =
+                                        javaneseYearMap.get(isoDate) ??
+                                        getJavaneseDateInfo(isoDate);
+
+                                    let cellBgClass = 'hover:bg-muted/60 border-transparent';
+                                    let dateNumberClass = 'text-foreground';
+
+                                    if (hasHoliday && isCutiBersamaOnly) {
+                                        cellBgClass =
+                                            'bg-amber-500/15 border-amber-500/40 hover:bg-amber-500/25';
+                                        dateNumberClass = 'text-amber-700 dark:text-amber-300';
+                                    } else if (hasHoliday || isWeekendOff) {
+                                        cellBgClass =
+                                            'bg-red-500/10 border-red-500/25 hover:bg-red-500/20';
+                                        dateNumberClass = 'text-red-600 dark:text-red-400';
+                                    } else if (
+                                        isFriday &&
+                                        CALENDAR_CONFIG.highlightFridayGreen
+                                    ) {
+                                        dateNumberClass = 'text-emerald-600 dark:text-emerald-400';
+                                    }
+
+                                    if (isToday) {
+                                        cellBgClass += ' ring-2 ring-blue-500 bg-blue-500/10';
+                                    }
+
+                                    const tooltipText = hasHoliday
+                                        ? `${jawaInfo.fullFormattedDate} — ${dayHolidays.map((h) => h.name).join(', ')}`
+                                        : t('attendanceSettings.tooltipAddHoliday', {
+                                            javaneseDate: jawaInfo.fullFormattedDate,
+                                        });
+
+                                    return (
+                                        <button
+                                            key={isoDate}
+                                            type="button"
+                                            title={tooltipText}
+                                            onClick={() => {
+                                                if (hasHoliday) {
+                                                    onClickEditHoliday(
+                                                        resolvePrimaryEditableHoliday(dayHolidays)
+                                                    );
+                                                } else {
+                                                    onClickAddHolidayOnDate(isoDate);
+                                                }
+                                            }}
+                                            className={`h-12 rounded-xl border px-0 py-1 flex flex-col items-center justify-center transition-colors cursor-pointer overflow-hidden ${cellBgClass}`}
+                                        >
+                                            <span
+                                                className={`text-sm font-extrabold leading-tight ${dateNumberClass}`}
+                                            >
+                                                {dayNum}
+                                            </span>
+
+                                            {CALENDAR_CONFIG.showFullPasaranName ? (
+                                                <>
+                                                    <span className="hidden sm:inline text-[8.5px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
+                                                        {jawaInfo.shortJavaneseDate}
+                                                    </span>
+                                                    <span className="sm:hidden text-[9px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
+                                                        {jawaInfo.compactJavaneseDate}
+                                                    </span>
+                                                </>
+                                            ) : (
+                                                <span className="text-[9px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
+                                                    {jawaInfo.compactJavaneseDate}
+                                                </span>
+                                            )}
+                                        </button>
+                                    );
+                                })}
+                            </div>
+                        </div>
+
+                        {/* Daftar Keterangan Hari Libur di Bagian Bawah Kartu Bulan */}
+                        <div className="pt-2.5 border-t border-border/70 space-y-1.5">
+                            {monthHolidays.length === 0 ? (
+                                <p className="text-[11px] italic text-muted-foreground">
+                                    {t('attendanceSettings.noSpecialHolidayMonth')}
+                                </p>
+                            ) : (
+                                monthHolidays.map((item, idx) => {
+                                    const dayOnly = Number(item.date.slice(8, 10));
+                                    const canEdit = isSuperAdmin || item.schoolId !== null;
+                                    const jawaItem =
+                                        javaneseYearMap.get(item.date) ??
+                                        getJavaneseDateInfo(item.date);
+
+                                    return (
+                                        <div
+                                            key={item.id}
+                                            className="flex items-center justify-between gap-2 text-[11px]"
+                                        >
+                                            <div className="min-w-0 truncate">
+                                                <span className="text-[10px] font-semibold text-muted-foreground tabular-nums mr-1">
+                                                    {idx + 1}.
+                                                </span>
+                                                <span className="font-bold text-red-600 dark:text-red-400">
+                                                    {dayOnly}
+                                                </span>{' '}
+                                                <span className="text-[10px] text-muted-foreground">
+                                                    ({jawaItem.shortJavaneseDate})
+                                                </span>
+                                                :{' '}
+                                                <span className="font-medium text-foreground">
+                                                    {item.name}
+                                                </span>
+                                            </div>
+
+                                            {canEdit && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => onClickEditHoliday(item)}
+                                                    className="p-1 rounded hover:bg-muted text-blue-600 shrink-0 cursor-pointer"
+                                                    title={t('attendanceSettings.titleEditHoliday')}
+                                                >
+                                                    <Pencil size={12} />
+                                                </button>
+                                            )}
+                                        </div>
+                                    );
+                                })
+                            )}
+                        </div>
+                    </div>
+                );
+            })}
+        </div>
+    );
+});
+
+export const HolidayCalendarView = memo(function HolidayCalendarView({
     year,
     holidays,
     workDaysMode,
@@ -87,10 +359,13 @@ export function HolidayCalendarView({
         [t]
     );
 
-    // Pre-komputasi kalender Jawa & pasaran untuk seluruh hari dalam 1 tahun
-    const javaneseYearMap = useMemo(() => {
+    // Pre-komputasi kalender Jawa & pasaran serta rentang bulan untuk 1 tahun penuh
+    const { javaneseYearMap, javaneseMonthLabels } = useMemo(() => {
         const cache = new Map<string, JavaneseDateInfo>();
+        const labels: string[] = [];
+
         for (let m = 0; m < 12; m++) {
+            labels.push(getJavaneseMonthRangeLabel(year, m));
             const daysInMonth = new Date(Date.UTC(year, m + 1, 0)).getUTCDate();
             const monthPrefix = `${year}-${String(m + 1).padStart(2, '0')}`;
             for (let d = 1; d <= daysInMonth; d++) {
@@ -98,7 +373,7 @@ export function HolidayCalendarView({
                 cache.set(isoDate, getJavaneseDateInfo(isoDate));
             }
         }
-        return cache;
+        return { javaneseYearMap: cache, javaneseMonthLabels: labels };
     }, [year]);
 
     // State khusus tampilan HP (1 bulan per tampilan + tanggal yang diketuk)
@@ -125,46 +400,46 @@ export function HolidayCalendarView({
         }
     }, [year]);
 
-    // Peta tanggal -> daftar hari libur & peta nama libur untuk akses cepat
-    const { holidaysByDate, holidaysNameMap } = useMemo(() => {
-        const map = new Map<string, HolidayRecord[]>();
+    // Peta tanggal -> daftar hari libur, peta bulan -> daftar libur, & peta nama libur (1x loop)
+    const { holidaysByDate, holidaysByMonth, holidaysNameMap } = useMemo(() => {
+        const dateMap = new Map<string, HolidayRecord[]>();
+        const monthMap = new Map<string, HolidayRecord[]>();
         const nameMap: Record<string, string> = {};
 
         for (const h of holidays) {
-            const list = map.get(h.date) ?? [];
+            const list = dateMap.get(h.date) ?? [];
             list.push(h);
-            map.set(h.date, list);
+            dateMap.set(h.date, list);
+
+            const mKey = h.date.slice(0, 7);
+            const mList = monthMap.get(mKey) ?? [];
+            mList.push(h);
+            monthMap.set(mKey, mList);
 
             if (!nameMap[h.date] || h.schoolId !== null) {
                 nameMap[h.date] = h.name;
             }
         }
-        return { holidaysByDate: map, holidaysNameMap: nameMap };
+        return {
+            holidaysByDate: dateMap,
+            holidaysByMonth: monthMap,
+            holidaysNameMap: nameMap,
+        };
     }, [holidays]);
 
-    // Memilih item hari libur yang berhak diedit pengguna aktif jika terdapat >1 entri pada tanggal yang sama
-    const resolvePrimaryEditableHoliday = (
-        dayHolidays: HolidayRecord[]
-    ): HolidayRecord => {
-        return (
-            dayHolidays.find((h) => isSuperAdmin || h.schoolId !== null) ??
-            dayHolidays[0]
-        );
-    };
-
-    const handleMobilePrevMonth = () => {
+    const handleMobilePrevMonth = useCallback(() => {
         const nextM = mobileMonth === 0 ? 11 : mobileMonth - 1;
         setMobileMonth(nextM);
         setSelectedIsoDate(`${year}-${String(nextM + 1).padStart(2, '0')}-01`);
-    };
+    }, [mobileMonth, year]);
 
-    const handleMobileNextMonth = () => {
+    const handleMobileNextMonth = useCallback(() => {
         const nextM = mobileMonth === 11 ? 0 : mobileMonth + 1;
         setMobileMonth(nextM);
         setSelectedIsoDate(`${year}-${String(nextM + 1).padStart(2, '0')}-01`);
-    };
+    }, [mobileMonth, year]);
 
-    // Detail tanggal yang sedang diketuk di HP (hari kerja biasa maupun tanggal merah)
+    // Detail tanggal yang sedang diketuk di HP
     const selectedMobileDetails = useMemo(() => {
         if (!selectedIsoDate) return null;
         const redStatus = checkRedDateStatus(
@@ -187,8 +462,7 @@ export function HolidayCalendarView({
 
         const editableHoliday =
             dayHolidays.length > 0
-                ? dayHolidays.find((h) => isSuperAdmin || h.schoolId !== null) ??
-                null
+                ? (dayHolidays.find((h) => isSuperAdmin || h.schoolId !== null) ?? null)
                 : null;
 
         return {
@@ -218,8 +492,10 @@ export function HolidayCalendarView({
             Date.UTC(year, mobileMonth, 1)
         ).getUTCDay();
         const monthPrefix = `${year}-${String(mobileMonth + 1).padStart(2, '0')}`;
-        const javaneseRangeLabel = getJavaneseMonthRangeLabel(year, mobileMonth);
-        const monthHolidays = holidays.filter((h) => h.date.startsWith(monthPrefix));
+        const javaneseRangeLabel =
+            javaneseMonthLabels[mobileMonth] ??
+            getJavaneseMonthRangeLabel(year, mobileMonth);
+        const monthHolidays = holidaysByMonth.get(monthPrefix) ?? [];
 
         const calendarCells: Array<number | null> = [
             ...Array.from({ length: firstDayOfWeek }, () => null),
@@ -232,13 +508,13 @@ export function HolidayCalendarView({
             monthHolidays,
             calendarCells,
         };
-    }, [year, mobileMonth, holidays]);
+    }, [year, mobileMonth, javaneseMonthLabels, holidaysByMonth]);
 
     return (
         <div>
             {/* ====================================================================
-1. TAMPILAN KHUSUS HP (< 768px): 1 BULAN + NEXT/PREV + INFO KLIK
-            ==================================================================== */}
+          1. TAMPILAN KHUSUS HP (< 768px): 1 BULAN + NEXT/PREV + INFO KLIK
+          ==================================================================== */}
             <div className="md:hidden space-y-3">
                 <div className="rounded-2xl border border-border bg-card p-3.5 shadow-xs space-y-3">
                     {/* Navigasi Bulan HP + Sub-header Bulan Jawa */}
@@ -350,8 +626,7 @@ export function HolidayCalendarView({
                             const isToday = isoDate === todayIso;
                             const isSelected = isoDate === selectedIsoDate;
                             const jawaInfo =
-                                javaneseYearMap.get(isoDate) ??
-                                getJavaneseDateInfo(isoDate);
+                                javaneseYearMap.get(isoDate) ?? getJavaneseDateInfo(isoDate);
 
                             let cellBgClass = 'bg-muted/25 border-transparent';
                             let dateNumberClass = 'text-foreground';
@@ -377,7 +652,7 @@ export function HolidayCalendarView({
                                     key={isoDate}
                                     type="button"
                                     onClick={() => setSelectedIsoDate(isoDate)}
-                                    className={`h-12 rounded-xl border px-0 py-1 flex flex-col items-center justify-center transition cursor-pointer overflow-hidden ${cellBgClass}`}
+                                    className={`h-12 rounded-xl border px-0 py-1 flex flex-col items-center justify-center transition-colors cursor-pointer overflow-hidden ${cellBgClass}`}
                                 >
                                     <span
                                         className={`text-sm font-extrabold leading-tight ${dateNumberClass}`}
@@ -398,9 +673,9 @@ export function HolidayCalendarView({
                 {/* Kartu Info Detail saat Tanggal Diketuk di HP */}
                 {selectedMobileDetails && (
                     <div
-                        className={`p-4 rounded-2xl border text-xs space-y-2.5 transition ${selectedMobileDetails.isRedDate
-                            ? 'bg-red-500/10 border-red-500/35'
-                            : 'bg-muted/40 border-border'
+                        className={`p-4 rounded-2xl border text-xs space-y-2.5 transition-colors ${selectedMobileDetails.isRedDate
+                                ? 'bg-red-500/10 border-red-500/35'
+                                : 'bg-muted/40 border-border'
                             }`}
                     >
                         <div className="flex items-start justify-between gap-2">
@@ -410,7 +685,9 @@ export function HolidayCalendarView({
                                 </div>
                                 <div className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 flex items-center gap-1 mt-0.5">
                                     <Sparkles size={12} />
-                                    <span>{selectedMobileDetails.jawaInfo.fullFormattedDate}</span>
+                                    <span>
+                                        {selectedMobileDetails.jawaInfo.fullFormattedDate}
+                                    </span>
                                 </div>
                             </div>
 
@@ -433,7 +710,10 @@ export function HolidayCalendarView({
                             </div>
                         ) : (
                             <div className="p-2.5 rounded-xl bg-card/80 border border-border text-[11px] text-muted-foreground flex items-center gap-2">
-                                <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+                                <CheckCircle2
+                                    size={14}
+                                    className="text-emerald-500 shrink-0"
+                                />
                                 <span>{t('attendanceSettings.workdayEffectiveNote')}</span>
                             </div>
                         )}
@@ -451,7 +731,7 @@ export function HolidayCalendarView({
                                                 );
                                             }
                                         }}
-                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 transition"
+                                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-blue-600 text-white hover:bg-blue-700 transition-colors"
                                     >
                                         <Pencil size={12} />
                                         {t('attendanceSettings.btnEditHolidayNote')}
@@ -463,7 +743,7 @@ export function HolidayCalendarView({
                                     onClick={() =>
                                         onClickAddHolidayOnDate(selectedMobileDetails.isoDate)
                                     }
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-[11px] font-bold bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
                                 >
                                     <Plus size={12} />
                                     {t('attendanceSettings.btnSetAsHoliday')}
@@ -475,250 +755,22 @@ export function HolidayCalendarView({
             </div>
 
             {/* ====================================================================
-2. TAMPILAN KHUSUS KOMPUTER (>= 768px): KALENDER 12 BULAN
-            ==================================================================== */}
-            <div className="hidden md:grid md:grid-cols-2 xl:grid-cols-3 gap-4">
-                {monthNames.map((monthName, monthIndex) => {
-                    const daysInMonth = new Date(
-                        Date.UTC(year, monthIndex + 1, 0)
-                    ).getUTCDate();
-                    const firstDayOfWeek = new Date(
-                        Date.UTC(year, monthIndex, 1)
-                    ).getUTCDay();
-                    const monthPrefix = `${year}-${String(monthIndex + 1).padStart(2, '0')}`;
-
-                    const javaneseRangeLabel = getJavaneseMonthRangeLabel(
-                        year,
-                        monthIndex
-                    );
-
-                    const monthHolidays = holidays.filter((h) =>
-                        h.date.startsWith(monthPrefix)
-                    );
-
-                    const calendarCells: Array<number | null> = [
-                        ...Array.from({ length: firstDayOfWeek }, () => null),
-                        ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
-                    ];
-
-                    return (
-                        <div
-                            key={`${year}-${monthIndex}`}
-                            className="rounded-2xl border border-border bg-card p-3.5 shadow-xs flex flex-col justify-between gap-3"
-                        >
-                            <div className="space-y-2.5">
-                                {/* Header Bulan Masehi + Badge Jumlah Libur */}
-                                <div className="flex items-start justify-between gap-2">
-                                    <div>
-                                        <h4 className="text-sm font-bold text-foreground">
-                                            {monthName} {year}
-                                        </h4>
-                                        <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-300 mt-0.5">
-                                            {javaneseRangeLabel}
-                                        </p>
-                                    </div>
-
-                                    {monthHolidays.length > 0 && (
-                                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/15 text-red-600 dark:text-red-300 shrink-0">
-                                            {t('attendanceSettings.holidayCountBadge', {
-                                                count: monthHolidays.length,
-                                            })}
-                                        </span>
-                                    )}
-                                </div>
-
-                                {/* Header Nama Hari */}
-                                <div className="grid grid-cols-7 text-center border-b border-border/70 pb-1.5">
-                                    {dayHeaders.map((dayLabel, dayIdx) => {
-                                        const isSunday = dayIdx === 0;
-                                        const isFriday = dayIdx === 5;
-                                        const isSaturdayOff =
-                                            dayIdx === 6 && workDaysMode === 'FIVE_DAYS';
-
-                                        let headerColor = 'text-sky-600 dark:text-sky-400';
-                                        if (isSunday || isSaturdayOff) {
-                                            headerColor = 'text-red-500';
-                                        } else if (
-                                            isFriday &&
-                                            CALENDAR_CONFIG.highlightFridayGreen
-                                        ) {
-                                            headerColor = 'text-emerald-600 dark:text-emerald-400';
-                                        }
-
-                                        return (
-                                            <span
-                                                key={dayLabel}
-                                                className={`text-[11px] font-bold ${headerColor}`}
-                                            >
-                                                {dayLabel}
-                                            </span>
-                                        );
-                                    })}
-                                </div>
-
-                                {/* Grid Tanggal Masehi + Tanggal Jawa & Pasaran */}
-                                <div className="grid grid-cols-7 gap-0.5">
-                                    {calendarCells.map((dayNum, cellIdx) => {
-                                        if (dayNum === null) {
-                                            return (
-                                                <div
-                                                    key={`empty-${monthIndex}-${cellIdx}`}
-                                                    className="h-12"
-                                                />
-                                            );
-                                        }
-
-                                        const isoDate = `${monthPrefix}-${String(dayNum).padStart(2, '0')}`;
-                                        const dayOfWeek = cellIdx % 7;
-                                        const isSunday = dayOfWeek === 0;
-                                        const isFriday = dayOfWeek === 5;
-                                        const isSaturdayOff =
-                                            dayOfWeek === 6 && workDaysMode === 'FIVE_DAYS';
-                                        const isWeekendOff = isSunday || isSaturdayOff;
-
-                                        const dayHolidays = holidaysByDate.get(isoDate) ?? [];
-                                        const hasHoliday = dayHolidays.length > 0;
-                                        const isCutiBersamaOnly =
-                                            hasHoliday &&
-                                            dayHolidays.every((h) =>
-                                                h.name.toLowerCase().includes('cuti bersama')
-                                            );
-
-                                        const isToday = isoDate === todayIso;
-                                        const jawaInfo =
-                                            javaneseYearMap.get(isoDate) ??
-                                            getJavaneseDateInfo(isoDate);
-
-                                        let cellBgClass =
-                                            'hover:bg-muted/60 border-transparent';
-                                        let dateNumberClass = 'text-foreground';
-
-                                        if (hasHoliday && isCutiBersamaOnly) {
-                                            cellBgClass =
-                                                'bg-amber-500/15 border-amber-500/40 hover:bg-amber-500/25';
-                                            dateNumberClass =
-                                                'text-amber-700 dark:text-amber-300';
-                                        } else if (hasHoliday || isWeekendOff) {
-                                            cellBgClass =
-                                                'bg-red-500/10 border-red-500/25 hover:bg-red-500/20';
-                                            dateNumberClass = 'text-red-600 dark:text-red-400';
-                                        } else if (
-                                            isFriday &&
-                                            CALENDAR_CONFIG.highlightFridayGreen
-                                        ) {
-                                            dateNumberClass =
-                                                'text-emerald-600 dark:text-emerald-400';
-                                        }
-
-                                        if (isToday) {
-                                            cellBgClass +=
-                                                ' ring-2 ring-blue-500 bg-blue-500/10';
-                                        }
-
-                                        const tooltipText = hasHoliday
-                                            ? `${jawaInfo.fullFormattedDate} — ${dayHolidays.map((h) => h.name).join(', ')}`
-                                            : t('attendanceSettings.tooltipAddHoliday', {
-                                                javaneseDate: jawaInfo.fullFormattedDate,
-                                            });
-
-                                        return (
-                                            <button
-                                                key={isoDate}
-                                                type="button"
-                                                title={tooltipText}
-                                                onClick={() => {
-                                                    if (hasHoliday) {
-                                                        onClickEditHoliday(
-                                                            resolvePrimaryEditableHoliday(
-                                                                dayHolidays
-                                                            )
-                                                        );
-                                                    } else {
-                                                        onClickAddHolidayOnDate(isoDate);
-                                                    }
-                                                }}
-                                                className={`h-12 rounded-xl border px-0 py-1 flex flex-col items-center justify-center transition cursor-pointer overflow-hidden ${cellBgClass}`}
-                                            >
-                                                <span
-                                                    className={`text-sm font-extrabold leading-tight ${dateNumberClass}`}
-                                                >
-                                                    {dayNum}
-                                                </span>
-
-                                                {CALENDAR_CONFIG.showFullPasaranName ? (
-                                                    <>
-                                                        <span className="hidden sm:inline text-[8.5px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
-                                                            {jawaInfo.shortJavaneseDate}
-                                                        </span>
-                                                        <span className="sm:hidden text-[9px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
-                                                            {jawaInfo.compactJavaneseDate}
-                                                        </span>
-                                                    </>
-                                                ) : (
-                                                    <span className="text-[9px] leading-tight font-medium text-muted-foreground tracking-tighter whitespace-nowrap">
-                                                        {jawaInfo.compactJavaneseDate}
-                                                    </span>
-                                                )}
-                                            </button>
-                                        );
-                                    })}
-                                </div>
-                            </div>
-
-                            {/* Daftar Keterangan Hari Libur di Bagian Bawah Kartu Bulan */}
-                            <div className="pt-2.5 border-t border-border/70 space-y-1.5">
-                                {monthHolidays.length === 0 ? (
-                                    <p className="text-[11px] italic text-muted-foreground">
-                                        {t('attendanceSettings.noSpecialHolidayMonth')}
-                                    </p>
-                                ) : (
-                                    monthHolidays.map((item) => {
-                                        const dayOnly = Number(item.date.slice(8, 10));
-                                        const canEdit =
-                                            isSuperAdmin || item.schoolId !== null;
-                                        const jawaItem =
-                                            javaneseYearMap.get(item.date) ??
-                                            getJavaneseDateInfo(item.date);
-
-                                        return (
-                                            <div
-                                                key={item.id}
-                                                className="flex items-center justify-between gap-2 text-[11px]"
-                                            >
-                                                <div className="min-w-0 truncate">
-                                                    <span className="font-bold text-red-600 dark:text-red-400">
-                                                        {dayOnly}
-                                                    </span>{' '}
-                                                    <span className="text-[10px] text-muted-foreground">
-                                                        ({jawaItem.shortJavaneseDate})
-                                                    </span>
-                                                    :{' '}
-                                                    <span className="font-medium text-foreground">
-                                                        {item.name}
-                                                    </span>
-                                                </div>
-
-                                                {canEdit && (
-                                                    <button
-                                                        type="button"
-                                                        onClick={() =>
-                                                            onClickEditHoliday(item)
-                                                        }
-                                                        className="p-1 rounded hover:bg-muted text-blue-600 shrink-0"
-                                                        title={t('attendanceSettings.titleEditHoliday')}
-                                                    >
-                                                        <Pencil size={12} />
-                                                    </button>
-                                                )}
-                                            </div>
-                                        );
-                                    })
-                                )}
-                            </div>
-                        </div>
-                    );
-                })}
-            </div>
+          2. TAMPILAN KHUSUS KOMPUTER (>= 768px): KALENDER 12 BULAN (MEMOIZED)
+          ==================================================================== */}
+            <DesktopYearGrid
+                year={year}
+                todayIso={todayIso}
+                monthNames={monthNames}
+                dayHeaders={dayHeaders}
+                javaneseMonthLabels={javaneseMonthLabels}
+                javaneseYearMap={javaneseYearMap}
+                holidaysByDate={holidaysByDate}
+                holidaysByMonth={holidaysByMonth}
+                workDaysMode={workDaysMode}
+                isSuperAdmin={isSuperAdmin}
+                onClickEditHoliday={onClickEditHoliday}
+                onClickAddHolidayOnDate={onClickAddHolidayOnDate}
+            />
         </div>
     );
-}
+});
