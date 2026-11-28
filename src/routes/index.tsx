@@ -23,11 +23,12 @@ import ReportsDashboardPage from '@/modules/reports/pages/ReportsDashboardPage';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { getEffectiveRoles } from '@/modules/admin/types/user-management.types';
 
-// Attendance module
+// Attendance & Teacher Leave module
 import { StudentKioskPage } from '@/modules/attendance/pages/StudentKioskPage';
 import { StudentClassAttendancePage } from '@/modules/attendance/pages/StudentClassAttendancePage';
 import { TeacherAttendancePage } from '@/modules/attendance/pages/TeacherAttendancePage';
 import { AttendanceDashboardPage } from '@/modules/attendance/pages/AttendanceDashboardPage';
+import { TeacherLeavePage } from '@/modules/teacher-leave/pages/TeacherLeavePage';
 import {
   InventoryPlaceholder,
   LibraryPlaceholder,
@@ -53,7 +54,7 @@ import { ForceChangePasswordPage } from '@/modules/auth/pages/ForceChangePasswor
 import { ProfilePage } from '@/modules/profile/pages/ProfilePage';
 
 // ============================================================================
-// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v22.2)
+// DAFTAR HAK AKSES ROLE (Diselaraskan dengan Sidebar.tsx & SQL v22.3)
 // ============================================================================
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 const CLASS_EDITOR_ROLES = CORE_ADMIN_ROLES;
@@ -374,7 +375,7 @@ export function AppRouter() {
             }
           />
 
-          {/* Attendance */}
+          {/* Attendance & Teacher Leave */}
           <Route
             path="/attendance"
             element={
@@ -396,6 +397,14 @@ export function AppRouter() {
             element={
               <RoleRoute allowedRoles={ATTENDANCE_GPS_ROLES}>
                 <TeacherAttendancePage />
+              </RoleRoute>
+            }
+          />
+          <Route
+            path="/attendance/leave"
+            element={
+              <RoleRoute allowedRoles={ATTENDANCE_GPS_ROLES}>
+                <TeacherLeavePage />
               </RoleRoute>
             }
           />

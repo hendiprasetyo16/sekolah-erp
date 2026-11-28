@@ -1,6 +1,6 @@
-// src/components/layout/Sidebar.tsx
+// src/components/layouts/Sidebar.tsx
 import { useState, useMemo } from 'react';
-import { NavLink, useLocation } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users,
@@ -25,10 +25,13 @@ import {
   ClipboardCheck,
   ClipboardList,
   UserCheck,
+  CalendarClock,
   ScanLine,
   Sparkles,
   Barcode,
   FileSpreadsheet,
+  LogOut,
+  Loader2,
   X,
 } from 'lucide-react';
 
@@ -39,6 +42,7 @@ import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import type { Module } from '@/types/permission.types';
 import { getEffectiveRoles } from '@/modules/admin/types/user-management.types';
+import { Button } from '@/components/ui/button';
 
 interface NavItem {
   label: string;
@@ -104,10 +108,15 @@ export function Sidebar() {
   const { sidebarCollapsed, setSidebarCollapsed, sidebarOpen, setSidebarOpen } = useUIStore();
   const { hasAnyPermission } = usePermission();
   const location = useLocation();
+  const navigate = useNavigate();
 
   const user = useAuthStore((state) => state.user);
   const school = useAuthStore((state) => state.school);
+  const logout = useAuthStore((state) => state.logout);
   const storeEffectiveRoles = useAuthStore((state) => state.getEffectiveRoles);
+
+  const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
+  const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
   const [expandedGroups, setExpandedGroups] = useState<string[]>([
     'main',
@@ -127,6 +136,18 @@ export function Sidebar() {
   const handleLinkClick = (): void => {
     if (window.innerWidth < 1024) {
       setSidebarOpen(false);
+    }
+  };
+
+  const handleConfirmLogout = async (): Promise<void> => {
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      setIsLogoutModalOpen(false);
+      setSidebarOpen(false);
+      navigate('/login', { replace: true });
+    } finally {
+      setIsLoggingOut(false);
     }
   };
 
@@ -182,7 +203,6 @@ export function Sidebar() {
           href: '/academic/master-data',
           allowedRoles: CORE_ADMIN_ROLES,
         },
-        // [BARU] Menu Master Mata Pelajaran
         {
           label: locale === 'id' ? 'Mata Pelajaran' : 'Subjects',
           icon: <BookOpen size={17} />,
@@ -241,6 +261,12 @@ export function Sidebar() {
           label: locale === 'id' ? 'Presensi GPS' : 'GPS Check-In',
           icon: <UserCheck size={17} />,
           href: '/attendance/teacher',
+          allowedRoles: ATTENDANCE_STAFF_ROLES,
+        },
+        {
+          label: locale === 'id' ? 'Pengajuan Cuti' : 'Leave Requests',
+          icon: <CalendarClock size={17} />,
+          href: '/attendance/leave',
           allowedRoles: ATTENDANCE_STAFF_ROLES,
         },
         {
@@ -489,13 +515,14 @@ export function Sidebar() {
           })}
         </nav>
 
-        <div className="hidden border-t border-border p-2 lg:block">
+        <div className="shrink-0 space-y-1 border-t border-border p-2">
           <button
             type="button"
             onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+            title={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
             className={cn(
-              'flex w-full items-center rounded-lg py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground',
-              sidebarCollapsed ? 'justify-center' : 'gap-2 px-2.5'
+              'hidden w-full items-center rounded-lg py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground lg:flex',
+              sidebarCollapsed ? 'justify-center' : 'gap-2.5 px-2.5'
             )}
           >
             {sidebarCollapsed ? (
@@ -507,8 +534,76 @@ export function Sidebar() {
               </>
             )}
           </button>
+
+          <button
+            type="button"
+            onClick={() => setIsLogoutModalOpen(true)}
+            title={sidebarCollapsed ? t('common.logout') : undefined}
+            className={cn(
+              'flex w-full items-center rounded-lg py-1.5 text-xs font-semibold text-rose-600 transition-colors hover:bg-rose-50 dark:text-rose-400 dark:hover:bg-rose-950/30',
+              sidebarCollapsed ? 'justify-center' : 'gap-2.5 px-2.5'
+            )}
+          >
+            <LogOut size={16} className="shrink-0" />
+            {!sidebarCollapsed && <span>{t('common.logout')}</span>}
+          </button>
         </div>
       </aside>
+
+      {isLogoutModalOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="sidebar-logout-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-xs"
+          onClick={() => {
+            if (!isLoggingOut) setIsLogoutModalOpen(false);
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-border bg-card p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-3.5">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-rose-500/25 bg-rose-500/10 text-rose-600 dark:text-rose-400">
+                <LogOut size={18} />
+              </div>
+              <div>
+                <h3 id="sidebar-logout-title" className="text-base font-bold text-foreground">
+                  {locale === 'id' ? 'Konfirmasi Keluar Sesi' : 'Confirm Sign Out'}
+                </h3>
+                <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+                  {locale === 'id'
+                    ? 'Sesi kerja Anda akan diakhiri. Pastikan seluruh perubahan data telah disimpan.'
+                    : 'Your current session will end. Make sure all data changes have been saved.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={isLoggingOut}
+                onClick={() => setIsLogoutModalOpen(false)}
+              >
+                {locale === 'id' ? 'Batal' : 'Cancel'}
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                disabled={isLoggingOut}
+                className="bg-rose-600 text-white hover:bg-rose-700"
+                onClick={() => void handleConfirmLogout()}
+              >
+                {isLoggingOut && <Loader2 size={14} className="mr-1.5 animate-spin" />}
+                {locale === 'id' ? 'Ya, Keluar' : 'Yes, Sign Out'}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

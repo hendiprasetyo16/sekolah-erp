@@ -89,6 +89,7 @@ export const translations = {
       studentBills: 'Tagihan Siswa',
       payments: 'Pembayaran',
       collapse: 'Perkecil',
+      expand: 'Perluas',
     },
     dashboard: {
       title: 'Dashboard',
@@ -1954,6 +1955,156 @@ export const translations = {
       toastStatusUpdated: 'Status pengajuan beasiswa berhasil diperbarui.',
       errLoadScholarships: 'Gagal memuat data beasiswa & PIP.',
     },
+    // Tambahkan di dalam `translations.id` (setelah blok `scholarships`):
+    teacherLeave: {
+      pageTitle: 'Pengajuan Cuti Resmi PTK',
+      pageSubtitle:
+        'Kelola cuti tahunan, melahirkan, cuti besar, delegasi tugas mengajar, dan persetujuan berjenjang TU ke Kepala Sekolah.',
+      btnNewRequest: 'Ajukan Cuti',
+      btnRefresh: 'Muat Ulang',
+      quotaBaseTitle: 'Jatah Tahunan {year}',
+      quotaCarryOverTitle: 'Carry-Over Tahun Lalu',
+      quotaUsedTitle: 'Cuti Terpakai',
+      quotaRemainingTitle: 'Sisa Saldo Cuti',
+      daysUnit: 'hari',
+      workDaysUnit: 'hari kerja',
+      tabMyRequests: 'Pengajuan Saya',
+      tabTuQueue: 'Antrean Verifikasi TU',
+      tabPrincipalQueue: 'Persetujuan Kepala Sekolah',
+      tabAllHistory: 'Semua Riwayat Cuti',
+      tabQuotas: 'Kuota Cuti PTK',
+      searchPlaceholder: 'Cari nama PTK, NIP, atau alasan cuti...',
+      filterAllStatuses: 'Semua Status',
+      loadingRequests: 'Memuat data pengajuan cuti...',
+      emptyTitle: 'Belum ada data pengajuan cuti',
+      emptyDesc:
+        'Untuk izin harian singkat, sakit, atau dinas luar, silakan gunakan modul Presensi GPS.',
+      unlinkedProfileBanner:
+        'Akun Anda belum tertaut dengan data Master Guru/PTK pada sekolah ini. Anda tetap dapat memantau antrean persetujuan sesuai hak akses.',
+      colTeacher: 'Nama PTK',
+      colLeaveType: 'Jenis Cuti',
+      colDateRange: 'Tanggal & Durasi',
+      colSubstitute: 'Guru Pengganti',
+      colStatus: 'Status',
+      colActions: 'Aksi',
+      noSubstitute: 'Tidak ada delegasi',
+      btnDetail: 'Detail',
+      btnVerifyTu: 'Verifikasi TU',
+      btnApprove: 'Setujui',
+      btnReject: 'Tolak',
+      btnCancelRequest: 'Batalkan',
+
+      // Form Modal
+      formTitle: 'Formulir Pengajuan Cuti Resmi PTK',
+      formSubtitle:
+        'Hari kerja efektif dihitung otomatis berdasarkan hari kerja sekolah dan kalender libur.',
+      labelLeaveType: 'Jenis Cuti *',
+      labelStartDate: 'Tanggal Mulai *',
+      labelEndDate: 'Tanggal Selesai *',
+      calculatingWorkDays: 'Menghitung hari kerja efektif...',
+      calculatedWorkDays: 'Durasi Efektif: {days} hari kerja',
+      zeroWorkDaysWarning:
+        'Rentang tanggal yang dipilih hanya berisi hari libur / akhir pekan (0 hari kerja).',
+      quotaWarningInsufficient:
+        'Sisa saldo cuti tahunan Anda ({remaining} hari) tidak mencukupi untuk {days} hari kerja.',
+      quotaDeductNote:
+        'Cuti Tahunan akan memotong saldo kuota setelah disetujui Kepala Sekolah.',
+      quotaNonDeductNote:
+        'Jenis cuti ini tidak memotong kuota Cuti Tahunan.',
+      labelSubstituteTeacher: 'Guru / PTK Pengganti Sementara (Opsional)',
+      placeholderSubstituteTeacher: 'Pilih rekan PTK pengganti...',
+      labelDelegationNotes: 'Catatan Delegasi Tugas / Kelas (Opsional)',
+      placeholderDelegationNotes:
+        'Contoh: Materi kelas X-A sudah disiapkan di Google Classroom.',
+      labelReason: 'Alasan Pengajuan Cuti *',
+      placeholderReason:
+        'Tuliskan alasan pengajuan cuti secara jelas dan lengkap (minimal 10 karakter)...',
+      labelAttachment: 'Lampiran Dokumen Pendukung',
+      attachmentRequiredTag: '(Wajib untuk Cuti Melahirkan)',
+      attachmentOptionalTag: '(Opsional — PDF, JPG, PNG, WEBP maks. 2 MB)',
+      attachmentDropHint: 'Klik untuk memilih berkas pendukung',
+      attachmentSelected: 'Berkas terpilih: {name}',
+      btnRemoveFile: 'Hapus berkas',
+      btnSubmitRequest: 'Kirim Pengajuan Cuti',
+      btnSubmittingRequest: 'Mengirim Pengajuan...',
+      toastSubmitSuccess: 'Pengajuan cuti resmi berhasil dikirim.',
+      errReasonMin: 'Alasan pengajuan cuti minimal 10 karakter.',
+      errDateInvalid: 'Tanggal selesai tidak boleh lebih awal dari tanggal mulai.',
+      errZeroWorkDays: 'Rentang cuti harus mencakup minimal 1 hari kerja efektif.',
+      errAttachmentRequired:
+        'Lampiran surat keterangan / dokumen pendukung wajib diunggah untuk jenis cuti ini.',
+
+      // Detail Drawer
+      drawerTitle: 'Rincian Pengajuan Cuti',
+      drawerSubtitle: 'ID Pengajuan: #{id}',
+      sectionApplicant: 'Informasi Pemohon',
+      sectionLeaveDetail: 'Detail & Jadwal Cuti',
+      sectionDelegation: 'Delegasi Tugas & Guru Pengganti',
+      sectionAttachment: 'Dokumen Lampiran',
+      sectionTimeline: 'Riwayat Verifikasi & Persetujuan',
+      loadingAttachment: 'Menyiapkan pratinjau aman...',
+      noAttachment: 'Tidak ada dokumen lampiran pada pengajuan ini.',
+      btnOpenAttachment: 'Buka / Unduh Dokumen',
+      timelineStep1: '1. Diajukan oleh PTK',
+      timelineStep2: '2. Verifikasi Tata Usaha (TU)',
+      timelineStep3: '3. Keputusan Kepala Sekolah',
+      timelineCancelled: 'Pengajuan Dibatalkan',
+      timelinePending: 'Menunggu proses',
+
+      // Approval Modal
+      modalVerifyTitle: 'Verifikasi Administrasi Tata Usaha',
+      modalVerifyDesc:
+        'Pastikan kelengkapan berkas, kesesuaian jadwal guru pengganti, dan kuota cuti telah diperiksa sebelum diteruskan ke Kepala Sekolah.',
+      modalApproveTitle: 'Setujui Pengajuan Cuti PTK',
+      modalApproveDesc:
+        'Persetujuan final akan otomatis mencatat status cuti ke daftar presensi harian dan memotong kuota (jika Cuti Tahunan).',
+      modalRejectTitle: 'Tolak Pengajuan Cuti',
+      modalRejectDesc:
+        'Pengajuan akan dikembalikan dengan status Ditolak. Wajib mencantumkan alasan penolakan yang jelas.',
+      modalCancelTitle: 'Batalkan Pengajuan Cuti',
+      modalCancelDesc:
+        'Pengajuan cuti ini akan dibatalkan dan tidak diproses lebih lanjut. Wajib mengisi alasan pembatalan.',
+      labelActionNotesOptional: 'Catatan Verifikasi / Persetujuan (Opsional)',
+      labelActionNotesRequired: 'Alasan Penolakan / Pembatalan *',
+      placeholderActionNotesOptional:
+        'Contoh: Berkas lengkap, jadwal pengganti terkonfirmasi.',
+      placeholderActionNotesRequired:
+        'Tuliskan alasan secara jelas (minimal 5 karakter)...',
+      errActionNotesRequired:
+        'Alasan wajib diisi minimal 5 karakter untuk tindakan ini.',
+      btnConfirmVerify: 'Ya, Teruskan ke Kepsek',
+      btnConfirmApprove: 'Ya, Setujui Cuti',
+      btnConfirmReject: 'Ya, Tolak Pengajuan',
+      btnConfirmCancel: 'Ya, Batalkan Cuti',
+      btnProcessingAction: 'Memproses...',
+      toastActionSuccess: 'Status pengajuan cuti berhasil diperbarui.',
+
+      // Quota Panel
+      quotaPanelTitle: 'Manajemen Kuota Cuti Tahunan PTK',
+      quotaPanelSubtitle:
+        'Pantau jatah cuti tahunan, carry-over, hari terpakai, dan sisa saldo seluruh PTK aktif.',
+      btnSyncAllQuotas: 'Sinkronkan Semua PTK Aktif',
+      btnSyncingQuotas: 'Menyinkronkan...',
+      searchQuotaPlaceholder: 'Cari nama PTK atau NIP...',
+      colBaseQuota: 'Jatah Dasar',
+      colCarryOver: 'Carry-Over',
+      colUsedDays: 'Terpakai',
+      colRemainingDays: 'Sisa Saldo',
+      colQuotaNotes: 'Catatan',
+      btnEditQuota: 'Atur Kuota',
+      emptyQuotas:
+        'Belum ada data kuota cuti untuk tahun {year}. Klik "Sinkronkan Semua PTK Aktif" untuk membuat kuota awal.',
+      modalEditQuotaTitle: 'Atur Kuota Cuti Tahunan PTK',
+      labelBaseQuota: 'Jatah Cuti Dasar (Hari) *',
+      labelCarryOver: 'Sisa Cuti Tahun Lalu / Carry-Over (Hari) *',
+      labelQuotaNotes: 'Catatan Penyesuaian (Opsional)',
+      placeholderQuotaNotes: 'Contoh: Penyesuaian sisa cuti tahun sebelumnya',
+      errQuotaBelowUsed:
+        'Total jatah ({total} hari) tidak boleh lebih kecil dari cuti yang sudah terpakai ({used} hari).',
+      toastQuotaUpdated: 'Kuota cuti PTK berhasil diperbarui.',
+      toastQuotasSynced:
+        'Kuota cuti tahun {year} untuk {count} PTK aktif berhasil disinkronkan.',
+    },
   },
   en: {
     common: {
@@ -2044,6 +2195,7 @@ export const translations = {
       studentBills: 'Student Bills',
       payments: 'Payments',
       collapse: 'Collapse',
+      expand: 'Expand',
     },
     dashboard: {
       title: 'Dashboard',
@@ -3904,6 +4056,156 @@ export const translations = {
       toastScoreUpdated: 'PIP eligibility scores updated for {count} students.',
       toastStatusUpdated: 'Scholarship application status updated.',
       errLoadScholarships: 'Failed to load scholarship & PIP data.',
+    },
+    // Tambahkan di dalam `translations.en` (setelah blok `scholarships`):
+    teacherLeave: {
+      pageTitle: 'Official Staff Leave Management',
+      pageSubtitle:
+        'Manage annual leave, maternity, extended leave, teaching delegation, and 2-tier admin-to-principal approvals.',
+      btnNewRequest: 'Request Leave',
+      btnRefresh: 'Refresh',
+      quotaBaseTitle: 'Base Quota {year}',
+      quotaCarryOverTitle: 'Carried Over',
+      quotaUsedTitle: 'Used Days',
+      quotaRemainingTitle: 'Remaining Balance',
+      daysUnit: 'days',
+      workDaysUnit: 'workdays',
+      tabMyRequests: 'My Requests',
+      tabTuQueue: 'TU Verification Queue',
+      tabPrincipalQueue: 'Principal Approval',
+      tabAllHistory: 'All Leave History',
+      tabQuotas: 'Staff Leave Quotas',
+      searchPlaceholder: 'Search staff name, NIP, or leave reason...',
+      filterAllStatuses: 'All Statuses',
+      loadingRequests: 'Loading leave requests...',
+      emptyTitle: 'No leave requests found',
+      emptyDesc:
+        'For short daily leave, sick leave, or official duty, please use the GPS Attendance module.',
+      unlinkedProfileBanner:
+        'Your account is not linked to a Teacher/Staff master record in this school yet. You can still review queues according to your role permissions.',
+      colTeacher: 'Staff Name',
+      colLeaveType: 'Leave Type',
+      colDateRange: 'Date & Duration',
+      colSubstitute: 'Substitute Teacher',
+      colStatus: 'Status',
+      colActions: 'Actions',
+      noSubstitute: 'No delegation',
+      btnDetail: 'Details',
+      btnVerifyTu: 'Verify (TU)',
+      btnApprove: 'Approve',
+      btnReject: 'Reject',
+      btnCancelRequest: 'Cancel',
+
+      // Form Modal
+      formTitle: 'Official Staff Leave Request Form',
+      formSubtitle:
+        'Effective workdays are automatically calculated based on school workdays and holiday calendars.',
+      labelLeaveType: 'Leave Type *',
+      labelStartDate: 'Start Date *',
+      labelEndDate: 'End Date *',
+      calculatingWorkDays: 'Calculating effective workdays...',
+      calculatedWorkDays: 'Effective Duration: {days} workday(s)',
+      zeroWorkDaysWarning:
+        'The selected date range only contains weekends or public holidays (0 workdays).',
+      quotaWarningInsufficient:
+        'Your remaining annual leave balance ({remaining} days) is insufficient for {days} workdays.',
+      quotaDeductNote:
+        'Annual Leave will deduct from your quota balance once approved by the Principal.',
+      quotaNonDeductNote:
+        'This leave type does not deduct from your Annual Leave quota.',
+      labelSubstituteTeacher: 'Temporary Substitute Teacher / Staff (Optional)',
+      placeholderSubstituteTeacher: 'Select a substitute colleague...',
+      labelDelegationNotes: 'Class / Task Delegation Notes (Optional)',
+      placeholderDelegationNotes:
+        'Example: Grade X-A materials are uploaded in Google Classroom.',
+      labelReason: 'Leave Reason *',
+      placeholderReason:
+        'State your leave reason clearly and completely (minimum 10 characters)...',
+      labelAttachment: 'Supporting Document Attachment',
+      attachmentRequiredTag: '(Required for Maternity Leave)',
+      attachmentOptionalTag: '(Optional — PDF, JPG, PNG, WEBP max 2 MB)',
+      attachmentDropHint: 'Click to select supporting document',
+      attachmentSelected: 'Selected file: {name}',
+      btnRemoveFile: 'Remove file',
+      btnSubmitRequest: 'Submit Leave Request',
+      btnSubmittingRequest: 'Submitting Request...',
+      toastSubmitSuccess: 'Official leave request submitted successfully.',
+      errReasonMin: 'Leave reason must be at least 10 characters.',
+      errDateInvalid: 'End date cannot be earlier than start date.',
+      errZeroWorkDays: 'Leave range must include at least 1 effective workday.',
+      errAttachmentRequired:
+        'Supporting certificate/document attachment is required for this leave type.',
+
+      // Detail Drawer
+      drawerTitle: 'Leave Request Details',
+      drawerSubtitle: 'Request ID: #{id}',
+      sectionApplicant: 'Applicant Information',
+      sectionLeaveDetail: 'Leave Schedule & Details',
+      sectionDelegation: 'Task Delegation & Substitute',
+      sectionAttachment: 'Supporting Attachment',
+      sectionTimeline: 'Verification & Approval Timeline',
+      loadingAttachment: 'Preparing secure preview...',
+      noAttachment: 'No supporting document attached to this request.',
+      btnOpenAttachment: 'Open / Download Document',
+      timelineStep1: '1. Submitted by Staff',
+      timelineStep2: '2. Admin (TU) Verification',
+      timelineStep3: '3. Principal Decision',
+      timelineCancelled: 'Request Cancelled',
+      timelinePending: 'Awaiting action',
+
+      // Approval Modal
+      modalVerifyTitle: 'Admin (TU) Administrative Verification',
+      modalVerifyDesc:
+        'Verify document completeness, substitute teacher arrangement, and leave quota before forwarding to the Principal.',
+      modalApproveTitle: 'Approve Staff Leave Request',
+      modalApproveDesc:
+        'Final approval will automatically sync leave records to daily attendance and deduct quota (for Annual Leave).',
+      modalRejectTitle: 'Reject Leave Request',
+      modalRejectDesc:
+        'The request will be marked as Rejected. A clear rejection reason is mandatory.',
+      modalCancelTitle: 'Cancel Leave Request',
+      modalCancelDesc:
+        'This leave request will be cancelled and will not be processed further. A cancellation reason is mandatory.',
+      labelActionNotesOptional: 'Verification / Approval Notes (Optional)',
+      labelActionNotesRequired: 'Rejection / Cancellation Reason *',
+      placeholderActionNotesOptional:
+        'Example: Documents verified, substitute schedule confirmed.',
+      placeholderActionNotesRequired:
+        'Write a clear reason (minimum 5 characters)...',
+      errActionNotesRequired:
+        'A reason of at least 5 characters is required for this action.',
+      btnConfirmVerify: 'Yes, Forward to Principal',
+      btnConfirmApprove: 'Yes, Approve Leave',
+      btnConfirmReject: 'Yes, Reject Request',
+      btnConfirmCancel: 'Yes, Cancel Leave',
+      btnProcessingAction: 'Processing...',
+      toastActionSuccess: 'Leave request status updated successfully.',
+
+      // Quota Panel
+      quotaPanelTitle: 'Annual Staff Leave Quota Management',
+      quotaPanelSubtitle:
+        'Monitor base quota, carry-over, used days, and remaining balance for all active staff.',
+      btnSyncAllQuotas: 'Sync All Active Staff',
+      btnSyncingQuotas: 'Syncing...',
+      searchQuotaPlaceholder: 'Search staff name or NIP...',
+      colBaseQuota: 'Base Quota',
+      colCarryOver: 'Carry-Over',
+      colUsedDays: 'Used',
+      colRemainingDays: 'Remaining',
+      colQuotaNotes: 'Notes',
+      btnEditQuota: 'Adjust Quota',
+      emptyQuotas:
+        'No leave quota records found for {year}. Click "Sync All Active Staff" to initialize default quotas.',
+      modalEditQuotaTitle: 'Adjust Staff Annual Leave Quota',
+      labelBaseQuota: 'Base Annual Quota (Days) *',
+      labelCarryOver: 'Previous Year Carry-Over (Days) *',
+      labelQuotaNotes: 'Adjustment Notes (Optional)',
+      placeholderQuotaNotes: 'Example: Carry-over adjustment from previous year',
+      errQuotaBelowUsed:
+        'Total quota ({total} days) cannot be less than already used days ({used} days).',
+      toastQuotaUpdated: 'Staff leave quota updated successfully.',
+      toastQuotasSynced:
+        'Leave quotas for {year} synchronized for {count} active staff.',
     },
   },
 } as const;

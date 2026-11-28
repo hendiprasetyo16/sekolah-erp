@@ -1,4 +1,4 @@
-// src/components/layout/Header.tsx
+// src/components/layouts/Header.tsx
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import {
@@ -62,19 +62,22 @@ type AuthAcademicYear = ReturnType<typeof useAuthStore.getState>['academicYear']
 
 const CORE_ADMIN_ROLES = ['SUPER_ADMIN', 'ADMIN', 'KEPALA_SEKOLAH', 'OPERATOR'] as const;
 
-/**
- * Kamus label dwibahasa untuk segmen URL pada Breadcrumb.
- */
 const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
   dashboard: { id: 'Dasbor', en: 'Dashboard' },
   portal: { id: 'Portal Siswa', en: 'Student Portal' },
   academic: { id: 'Akademik', en: 'Academic' },
   'master-data': { id: 'Master Akademik', en: 'Master Academic' },
+  subjects: { id: 'Mata Pelajaran', en: 'Subjects' },
+  grades: { id: 'Nilai & Raport', en: 'Grades & Reports' },
   students: { id: 'Data Siswa', en: 'Students' },
+  'print-cards': { id: 'Kartu Pelajar', en: 'Student Cards' },
   teachers: { id: 'Guru & Staf', en: 'Teachers & Staff' },
   schedules: { id: 'Jadwal Pelajaran', en: 'Schedules' },
   attendance: { id: 'Presensi', en: 'Attendance' },
+  class: { id: 'Absensi Kelas', en: 'Class Attendance' },
   teacher: { id: 'Presensi GPS', en: 'GPS Check-In' },
+  leave: { id: 'Pengajuan Cuti', en: 'Leave Requests' },
+  quotes: { id: 'Kata Hari Ini', en: 'Daily Quotes' },
   finance: { id: 'Keuangan', en: 'Finance' },
   'fee-templates': { id: 'Master Biaya', en: 'Fee Templates' },
   bills: { id: 'Tagihan Siswa', en: 'Student Bills' },
@@ -94,6 +97,18 @@ const ROUTE_SEGMENT_LABELS: Record<string, { id: string; en: string }> = {
 };
 
 const NON_ROUTABLE_SEGMENTS = new Set<string>(['academic', 'portal']);
+
+function extractDirectAvatarUrl(userObj: unknown): string | null {
+  if (!userObj || typeof userObj !== 'object') return null;
+  const record = userObj as Record<string, unknown>;
+  const candidates = [record.avatarUrl, record.photoUrl, record.avatar_url, record.photo_url];
+  for (const val of candidates) {
+    if (typeof val === 'string' && val.trim().length > 0) {
+      return val.trim();
+    }
+  }
+  return null;
+}
 
 export function Header() {
   const { t, locale } = useTranslation();
@@ -122,9 +137,68 @@ export function Header() {
   const [isLogoutModalOpen, setIsLogoutModalOpen] = useState<boolean>(false);
   const [isLoggingOut, setIsLoggingOut] = useState<boolean>(false);
 
+  const [fetchedAvatarUrl, setFetchedAvatarUrl] = useState<string | null>(null);
+  const [avatarLoadError, setAvatarLoadError] = useState<boolean>(false);
+
   const [academicYears, setAcademicYears] = useState<AcademicYearOption[]>([]);
   const [isRefreshingYears, setIsRefreshingYears] = useState<boolean>(false);
   const loadedSchoolIdRef = useRef<string | null>(null);
+
+  const directAvatarUrl = useMemo(() => extractDirectAvatarUrl(user), [user]);
+  const resolvedAvatarUrl = directAvatarUrl ?? fetchedAvatarUrl;
+
+  const loadUserProfilePhoto = useCallback(async (): Promise<void> => {
+    if (!user?.id) {
+      setFetchedAvatarUrl(null);
+      return;
+    }
+
+    if (directAvatarUrl) {
+      setFetchedAvatarUrl(directAvatarUrl);
+      setAvatarLoadError(false);
+      return;
+    }
+
+    try {
+      if (user.role === 'SISWA') {
+        const { data } = await supabase
+          .from('students')
+          .select('photoUrl')
+          .eq('userId', user.id)
+          .maybeSingle();
+
+        const url = (data as { photoUrl?: string | null } | null)?.photoUrl ?? null;
+        setFetchedAvatarUrl(url);
+        setAvatarLoadError(false);
+        return;
+      }
+
+      if (user.role !== 'ORANG_TUA') {
+        const { data } = await supabase
+          .from('teachers')
+          .select('photoUrl')
+          .eq('userId', user.id)
+          .maybeSingle();
+
+        const url = (data as { photoUrl?: string | null } | null)?.photoUrl ?? null;
+        setFetchedAvatarUrl(url);
+        setAvatarLoadError(false);
+      }
+    } catch {
+      // Abaikan kegagalan jaringan non-kritis dan tampilkan inisial pengguna
+    }
+  }, [user?.id, user?.role, directAvatarUrl]);
+
+  useEffect(() => {
+    void loadUserProfilePhoto();
+
+    const handlePhotoUpdated = (): void => {
+      void loadUserProfilePhoto();
+    };
+
+    window.addEventListener('user-photo-updated', handlePhotoUpdated);
+    return () => window.removeEventListener('user-photo-updated', handlePhotoUpdated);
+  }, [loadUserProfilePhoto]);
 
   const effectiveUserRoles = useMemo(() => {
     const combined = new Set<string>([
@@ -280,6 +354,7 @@ export function Header() {
     : '';
 
   const showAcademicYearSwitcher = Boolean(academicYear?.name) || displayedAcademicYears.length > 0;
+  const shouldShowPhoto = Boolean(resolvedAvatarUrl) && !avatarLoadError;
 
   return (
     <>
@@ -524,9 +599,18 @@ export function Header() {
               }}
               className="flex items-center gap-2 rounded-lg py-1 pl-1 pr-2 transition-colors hover:bg-muted"
             >
-              <div className="flex h-7 w-7 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-600/10 text-xs font-bold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
-                {user ? getInitials(user.fullName) : 'U'}
-              </div>
+              {shouldShowPhoto ? (
+                <img
+                  src={resolvedAvatarUrl!}
+                  alt={user?.fullName || 'Avatar'}
+                  onError={() => setAvatarLoadError(true)}
+                  className="h-7 w-7 shrink-0 rounded-lg border border-emerald-500/30 object-cover"
+                />
+              ) : (
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-600/10 text-xs font-bold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">
+                  {user ? getInitials(user.fullName) : 'U'}
+                </div>
+              )}
               <div className="hidden text-left lg:block">
                 <p className="text-xs font-semibold leading-tight text-foreground">
                   {user?.fullName || 'Pengguna'}
@@ -539,11 +623,25 @@ export function Header() {
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setUserMenuOpen(false)} />
                 <div className="absolute right-0 top-full z-50 mt-2 w-56 overflow-hidden rounded-xl border border-border bg-card shadow-lg">
-                  <div className="border-b border-border bg-muted/30 px-3.5 py-2.5">
-                    <p className="truncate text-xs font-semibold text-foreground">
-                      {user?.fullName}
-                    </p>
-                    <p className="truncate text-[11px] text-muted-foreground">{user?.email}</p>
+                  <div className="flex items-center gap-2.5 border-b border-border bg-muted/30 px-3.5 py-2.5">
+                    {shouldShowPhoto ? (
+                      <img
+                        src={resolvedAvatarUrl!}
+                        alt={user?.fullName || 'Avatar'}
+                        onError={() => setAvatarLoadError(true)}
+                        className="h-8 w-8 shrink-0 rounded-lg border border-border object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-emerald-500/25 bg-emerald-600/10 text-xs font-bold text-emerald-700 dark:text-emerald-300">
+                        {user ? getInitials(user.fullName) : 'U'}
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-xs font-semibold text-foreground">
+                        {user?.fullName}
+                      </p>
+                      <p className="truncate text-[11px] text-muted-foreground">{user?.email}</p>
+                    </div>
                   </div>
                   <div className="p-1.5">
                     <button
