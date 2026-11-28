@@ -8,6 +8,7 @@ import type {
   TeacherLeaveQuotaWithTeacher,
   TeacherLeaveRequest,
   TeacherSummaryRef,
+  UserSummaryRef,
 } from '../types/teacher-leave.types';
 
 const ALLOWED_ATTACHMENT_MIME = new Set([
@@ -16,7 +17,7 @@ const ALLOWED_ATTACHMENT_MIME = new Set([
   'image/png',
   'image/webp',
 ]);
-const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024; // 2 MB sesuai batas bucket v22.3
+const MAX_ATTACHMENT_BYTES = 2 * 1024 * 1024; // 2 MB sesuai batas bucket v22.9
 
 export const teacherLeaveService = {
   async getCurrentTeacherProfile(
@@ -162,12 +163,6 @@ export const teacherLeaveService = {
         ),
         substituteTeacher:teachers!teacher_leave_requests_substituteTeacherId_fkey (
           id, fullName, nip, nuptk, photoUrl
-        ),
-        verifier:users!teacher_leave_requests_verifiedBy_fkey (
-          id, fullName, role
-        ),
-        reviewer:users!teacher_leave_requests_reviewedBy_fkey (
-          id, fullName, role
         )
       `
       )
@@ -188,7 +183,38 @@ export const teacherLeaveService = {
 
     const { data, error } = await query;
     if (error) throw new Error(error.message);
-    return (data as unknown as TeacherLeaveRequest[]) ?? [];
+
+    const rows = (data as unknown as TeacherLeaveRequest[]) ?? [];
+    if (rows.length === 0) return [];
+
+    // Ambil profil verifier & reviewer dalam 1 batch query tanpa bergantung pada FK hint PostgREST
+    const reviewerIds = Array.from(
+      new Set(
+        rows
+          .flatMap((row) => [row.verifiedBy, row.reviewedBy])
+          .filter((id): id is string => Boolean(id))
+      )
+    );
+
+    const userMap = new Map<string, UserSummaryRef>();
+    if (reviewerIds.length > 0) {
+      const { data: usersData } = await supabase
+        .from('users')
+        .select('id, fullName, role')
+        .in('id', reviewerIds);
+
+      if (usersData) {
+        for (const u of usersData as UserSummaryRef[]) {
+          userMap.set(u.id, u);
+        }
+      }
+    }
+
+    return rows.map((row) => ({
+      ...row,
+      verifier: row.verifiedBy ? userMap.get(row.verifiedBy) ?? null : null,
+      reviewer: row.reviewedBy ? userMap.get(row.reviewedBy) ?? null : null,
+    }));
   },
 
   async uploadLeaveAttachment(
