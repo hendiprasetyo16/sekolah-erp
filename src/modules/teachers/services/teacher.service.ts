@@ -942,7 +942,7 @@ export const teacherService = {
         .order('name', { ascending: true }),
       supabase
         .from('classes')
-        .select('id, name, major, academicYearId, homeroomTeacherId, isActive')
+        .select('id, name, major, academicYearId, homeroomTeacherId')
         .eq('schoolId', validSchoolId)
         .order('name', { ascending: true }),
     ]);
@@ -997,7 +997,6 @@ export const teacherService = {
 
     const classes: ClassOptionItem[] = ((classesRes.data ?? []) as Record<string, unknown>[])
       .filter((c) => {
-        if (c.isActive === false) return false;
         if (!activeAcademicYearId) return true;
         return String(c.academicYearId ?? '') === activeAcademicYearId;
       })
