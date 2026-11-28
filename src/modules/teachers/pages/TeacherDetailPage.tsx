@@ -1,4 +1,3 @@
-// src/modules/teachers/pages/TeacherDetailPage.tsx
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
@@ -28,6 +27,7 @@ import {
   Globe,
   KeyRound,
   MonitorSmartphone,
+  BookOpen,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -49,6 +49,7 @@ import {
 import type {
   PhotoRetentionDays,
   TeacherPhotoHistoryItem,
+  TeacherSubjectAssignmentItem,
 } from '../types/teacher.types';
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
@@ -198,6 +199,7 @@ export function TeacherDetailPage() {
   const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null);
   const [previewModalCaption, setPreviewModalCaption] = useState<string>('');
   const [deleteDialogState, setDeleteDialogState] = useState<DeletePhotoDialogState>(null);
+  const [selectedAssignmentYearId, setSelectedAssignmentYearId] = useState<string>('');
 
   const isSuperAdmin = currentUser?.role === 'SUPER_ADMIN';
 
@@ -253,6 +255,68 @@ export function TeacherDetailPage() {
     setAvatarLoadError(false);
   }, [teacher?.photoUrl]);
 
+  // Reset tahun ajaran terpilih jika berpindah ke profil guru di sekolah berbeda
+  useEffect(() => {
+    setSelectedAssignmentYearId('');
+  }, [teacher?.schoolId]);
+
+  // Query opsi tahun ajaran untuk rincian penugasan mengajar guru ini
+  const {
+    data: assignmentOptions,
+    isLoading: isAssignmentOptionsLoading,
+  } = useQuery({
+    queryKey: ['teacher-assignment-options', teacher?.schoolId, selectedAssignmentYearId || null],
+    queryFn: () =>
+      teacherService.getAssignmentFormOptions(
+        teacher!.schoolId,
+        selectedAssignmentYearId || null
+      ),
+    enabled: Boolean(teacher?.schoolId) && !isForbiddenTeacherView,
+    retry: false,
+  });
+
+  useEffect(() => {
+    const resolvedId = assignmentOptions?.activeAcademicYearId ?? '';
+    if (resolvedId && !selectedAssignmentYearId) {
+      setSelectedAssignmentYearId(resolvedId);
+    }
+  }, [assignmentOptions?.activeAcademicYearId, selectedAssignmentYearId]);
+
+  const effectiveAssignmentYearId =
+    selectedAssignmentYearId || assignmentOptions?.activeAcademicYearId || '';
+
+  // Query penugasan mata pelajaran & kelas khusus untuk guru ini pada tahun ajaran terpilih
+  const {
+    data: teacherAssignments = [],
+    isLoading: isAssignmentsLoading,
+    isError: isAssignmentsError,
+    refetch: refetchAssignments,
+  } = useQuery<TeacherSubjectAssignmentItem[]>({
+    queryKey: [
+      'teacher-subject-assignments',
+      teacher?.schoolId,
+      effectiveAssignmentYearId,
+      teacher?.id,
+    ],
+    queryFn: () =>
+      teacherService.listSubjectAssignments({
+        schoolId: teacher!.schoolId,
+        academicYearId: effectiveAssignmentYearId || null,
+        teacherId: teacher!.id,
+      }),
+    enabled:
+      Boolean(teacher?.schoolId) &&
+      Boolean(teacher?.id) &&
+      Boolean(effectiveAssignmentYearId) &&
+      !isForbiddenTeacherView,
+    retry: false,
+  });
+
+  const totalAssignedHours = useMemo(
+    () => teacherAssignments.reduce((sum, item) => sum + (item.weeklyHours || 0), 0),
+    [teacherAssignments]
+  );
+
   // Guru pemilik profil ATAU pengelola administrasi/Super Admin berhak mengganti foto
   const isOwnProfile = Boolean(
     teacher &&
@@ -261,7 +325,7 @@ export function TeacherDetailPage() {
   );
   const canEditPhoto = canManageTeachers || isOwnProfile;
 
-  // Query khusus SUPER_ADMIN: Audit Login & Ganti Password guru ini
+  // Query khusus SUPER_ADMIN: Audit Login & Ganti Password guru ini (hanya jika tertaut akun)
   const {
     data: teacherSecurityAudit,
     isLoading: isSecurityAuditLoading,
@@ -274,7 +338,7 @@ export function TeacherDetailPage() {
       });
       return res.data.find((item) => item.teacherId === teacher?.id) ?? null;
     },
-    enabled: isSuperAdmin && Boolean(teacher?.id),
+    enabled: isSuperAdmin && Boolean(teacher?.id) && Boolean(teacher?.userId),
     retry: false,
   });
 
@@ -292,8 +356,8 @@ export function TeacherDetailPage() {
     isLoading: isHistoryLoading,
     refetch: refetchHistory,
   } = useQuery({
-    queryKey: ['teacher-photo-history', teacher?.id],
-    queryFn: () => teacherService.getPhotoHistory(teacher!.id),
+    queryKey: ['teacher-photo-history', teacher?.id, teacher?.schoolId],
+    queryFn: () => teacherService.getPhotoHistory(teacher!.id, teacher!.schoolId),
     enabled: isSuperAdmin && Boolean(teacher?.id),
     retry: false,
   });
@@ -561,6 +625,13 @@ export function TeacherDetailPage() {
     (item) => new Date(item.expiresAt).getTime() <= Date.now()
   ).length;
 
+  const maxWeeklyHours = teacher.maxHoursPerWeek || 24;
+  const workloadRatio = maxWeeklyHours > 0 ? totalAssignedHours / maxWeeklyHours : 0;
+  const isWorkloadOver = totalAssignedHours > maxWeeklyHours;
+  const isWorkloadNearLimit = !isWorkloadOver && workloadRatio >= 0.85;
+  const workloadBarWidth = Math.min(100, Math.round(workloadRatio * 100));
+  const academicYearsList = assignmentOptions?.academicYears ?? [];
+
   // Warna lencana status kepegawaian
   const statusColorMap: Record<string, string> = {
     PNS: 'bg-emerald-100 text-emerald-800 border-emerald-200 dark:border-emerald-500/30 dark:bg-emerald-500/15 dark:text-emerald-300',
@@ -576,9 +647,13 @@ export function TeacherDetailPage() {
 
   const genderText =
     normalizedGender === 'L'
-      ? 'Laki-laki'
+      ? isId
+        ? 'Laki-laki'
+        : 'Male'
       : normalizedGender === 'P'
-        ? 'Perempuan'
+        ? isId
+          ? 'Perempuan'
+          : 'Female'
         : dict.noData;
 
   const rtRwText =
@@ -978,7 +1053,7 @@ export function TeacherDetailPage() {
                   )}
                   variant="outline"
                 >
-                  {teacher.status || 'Belum Diatur'}
+                  {teacher.status || (isId ? 'Belum Diatur' : 'Not Set')}
                 </Badge>
                 {!teacher.isActive && (
                   <Badge
@@ -1172,9 +1247,9 @@ export function TeacherDetailPage() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="7">7 Hari</SelectItem>
-                      <SelectItem value="14">14 Hari</SelectItem>
-                      <SelectItem value="30">30 Hari (Default)</SelectItem>
+                      <SelectItem value="7">7 {isId ? 'Hari' : 'Days'}</SelectItem>
+                      <SelectItem value="14">14 {isId ? 'Hari' : 'Days'}</SelectItem>
+                      <SelectItem value="30">30 {isId ? 'Hari (Default)' : 'Days (Default)'}</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -1232,7 +1307,7 @@ export function TeacherDetailPage() {
                               onClick={() => {
                                 setPreviewModalUrl(item.photoUrl);
                                 setPreviewModalCaption(
-                                  `${teacher.fullName} — Diganti ${formatDateTimeShort(item.replacedAt)}`
+                                  `${teacher.fullName} — ${isId ? 'Diganti' : 'Replaced'} ${formatDateTimeShort(item.replacedAt)}`
                                 );
                               }}
                               className="h-10 w-10 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
@@ -1462,7 +1537,7 @@ export function TeacherDetailPage() {
                 />
                 <InfoItem
                   label="Maksimal Jam Mengajar"
-                  value={`${teacher.maxHoursPerWeek || 24} Jam / Minggu`}
+                  value={`${maxWeeklyHours} Jam / Minggu`}
                 />
                 <InfoItem label="NUKS" value={teacher.nuks} />
 
@@ -1493,23 +1568,183 @@ export function TeacherDetailPage() {
                   </div>
                 </div>
 
-                <div className="mt-5 border-t border-border/50 pt-5 sm:col-span-2">
-                  <div className="mb-3 text-sm font-medium text-muted-foreground">
-                    Mata Pelajaran yang Diampu
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {teacher.subjects ? (
-                      String(teacher.subjects)
-                        .split(',')
-                        .map((sub, i) => (
-                          <Badge key={i} variant="outline" className="bg-background shadow-sm">
-                            {sub.trim()}
-                          </Badge>
-                        ))
-                    ) : (
-                      <span className="text-sm text-muted-foreground">{dict.noData}</span>
+                {/* PENUGASAN MATA PELAJARAN & ROMBEL AKTIF */}
+                <div className="mt-5 border-t border-border/50 pt-5 sm:col-span-2 space-y-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-2">
+                      <BookOpen className="h-4 w-4 text-emerald-600" />
+                      <h3 className="text-sm font-semibold text-foreground">
+                        {isId
+                          ? 'Penugasan Mata Pelajaran & Kelas (Rombel)'
+                          : 'Assigned Subjects & Classes'}
+                      </h3>
+                    </div>
+
+                    {academicYearsList.length > 0 && (
+                      <div className="w-full sm:w-52">
+                        <Select
+                          value={effectiveAssignmentYearId || undefined}
+                          onValueChange={setSelectedAssignmentYearId}
+                          disabled={isAssignmentOptionsLoading}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue
+                              placeholder={
+                                isId ? 'Pilih Tahun Ajaran' : 'Select Academic Year'
+                              }
+                            />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {academicYearsList.map((yr) => (
+                              <SelectItem key={yr.id} value={yr.id}>
+                                {isId ? 'TA' : 'AY'} {yr.name}{' '}
+                                {yr.isActive ? (isId ? '(Aktif)' : '(Active)') : ''}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                     )}
                   </div>
+
+                  {/* Ringkasan Beban Jam Pelajaran Mingguan */}
+                  <div className="rounded-xl border border-border/70 bg-muted/25 p-3.5">
+                    <div className="flex items-center justify-between text-xs font-medium">
+                      <span className="text-muted-foreground">
+                        {isId
+                          ? 'Total Beban Mengajar Terjadwal'
+                          : 'Total Scheduled Weekly Load'}
+                      </span>
+                      <span
+                        className={cn(
+                          isWorkloadOver
+                            ? 'font-bold text-rose-600 dark:text-rose-400'
+                            : isWorkloadNearLimit
+                              ? 'font-semibold text-amber-600 dark:text-amber-400'
+                              : 'font-semibold text-emerald-600 dark:text-emerald-400'
+                        )}
+                      >
+                        {totalAssignedHours} / {maxWeeklyHours} JP
+                      </span>
+                    </div>
+                    <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={cn(
+                          'h-full rounded-full transition-all',
+                          isWorkloadOver
+                            ? 'bg-rose-600'
+                            : isWorkloadNearLimit
+                              ? 'bg-amber-500'
+                              : 'bg-emerald-600'
+                        )}
+                        style={{ width: `${workloadBarWidth}%` }}
+                      />
+                    </div>
+                  </div>
+
+                  {isAssignmentOptionsLoading || isAssignmentsLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <Loader2 className="h-5 w-5 animate-spin text-emerald-600" />
+                    </div>
+                  ) : isAssignmentsError ? (
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-red-200 bg-red-50/70 p-3 text-xs text-red-800 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300">
+                      <span>
+                        {isId
+                          ? 'Gagal memuat rincian penugasan mengajar.'
+                          : 'Failed to load subject assignments.'}
+                      </span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => void refetchAssignments()}
+                      >
+                        <RefreshCw className="mr-1 h-3 w-3" />
+                        {dict.retry}
+                      </Button>
+                    </div>
+                  ) : teacherAssignments.length === 0 ? (
+                    <p className="rounded-lg border border-dashed border-border p-4 text-center text-xs text-muted-foreground">
+                      {isId
+                        ? 'Belum ada penugasan mata pelajaran & rombel pada tahun ajaran ini.'
+                        : 'No subject and class assignments recorded for this academic year.'}
+                    </p>
+                  ) : (
+                    <div className="divide-y divide-border rounded-xl border border-border/70 bg-background">
+                      {teacherAssignments.map((item) => (
+                        <div
+                          key={item.id}
+                          className="flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="text-sm font-semibold text-foreground">
+                                {item.subjectName}
+                              </span>
+                              {item.subjectCode && (
+                                <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
+                                  {item.subjectCode}
+                                </span>
+                              )}
+                              <Badge
+                                variant="outline"
+                                className="border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-300"
+                              >
+                                {isId ? 'Kelas' : 'Class'} {item.className}
+                                {item.classMajor ? ` (${item.classMajor})` : ''}
+                              </Badge>
+                              <Badge
+                                variant="secondary"
+                                className={cn(
+                                  'text-[11px]',
+                                  !item.isPrimary &&
+                                  'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                                )}
+                              >
+                                {item.isPrimary
+                                  ? isId
+                                    ? 'Pengampu Utama'
+                                    : 'Primary'
+                                  : isId
+                                    ? 'Pendamping'
+                                    : 'Co-Teacher'}
+                              </Badge>
+                            </div>
+                            {item.notes && (
+                              <p className="text-xs text-muted-foreground">
+                                {isId ? 'Catatan:' : 'Notes:'} {item.notes}
+                              </p>
+                            )}
+                          </div>
+
+                          <span className="w-fit shrink-0 rounded-md border border-border bg-muted/40 px-2.5 py-1 text-xs font-semibold text-foreground">
+                            {item.weeklyHours} JP / {isId ? 'minggu' : 'week'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Referensi Mapel dari Biodata Dapodik (Legacy/String) */}
+                  {teacher.subjects && (
+                    <div className="pt-2">
+                      <div className="mb-2 text-xs font-medium text-muted-foreground">
+                        {isId
+                          ? 'Referensi Mata Pelajaran (Biodata Dapodik)'
+                          : 'Dapodik Subject Reference'}
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {String(teacher.subjects)
+                          .split(',')
+                          .map((sub, i) => (
+                            <Badge key={i} variant="outline" className="bg-background text-xs">
+                              {sub.trim()}
+                            </Badge>
+                          ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -1,5 +1,5 @@
 // src/hooks/useTeacherScope.ts
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/services/supabase.client';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
@@ -22,6 +22,15 @@ const TEACHER_ATTENDANCE_ADMIN_ROLES = [
   'KEPALA_SEKOLAH',
 ] as const;
 
+export interface TeacherSubjectAssignmentScope {
+  id: string;
+  subjectId: string;
+  classId: string;
+  academicYearId: string;
+  weeklyHours: number;
+  isPrimary: boolean;
+}
+
 export interface TeacherScopeResult {
   isLoading: boolean;
   effectiveRoles: string[];
@@ -30,6 +39,11 @@ export interface TeacherScopeResult {
   teacherId: string | null;
   homeroomClassIds: string[];
   isHomeroomTeacher: boolean;
+  teachingAssignments: TeacherSubjectAssignmentScope[];
+  taughtClassIds: string[];
+  taughtSubjectIds: string[];
+  accessibleClassIds: string[];
+  canTeachSubjectInClass: (subjectId: string, classId: string) => boolean;
   isElementarySchool: boolean;
   isElementaryHomeroomRestricted: boolean;
 }
@@ -69,7 +83,7 @@ export function useTeacherScope(overrideSchoolId?: string | null): TeacherScopeR
     [effectiveRoles]
   );
 
-  // Cari profil guru (teacherId) & kelas wali (homeroomClassIds) untuk akun non-manajemen
+  // Cari profil guru (teacherId), kelas wali (homeroomClassIds), & penugasan mapel (teachingAssignments)
   const scopeQuery = useQuery({
     queryKey: ['teacher-scope', activeSchoolId, user?.id, user?.email],
     enabled: Boolean(activeSchoolId && user?.id && !hasFullAcademicAccess),
@@ -105,21 +119,57 @@ export function useTeacherScope(overrideSchoolId?: string | null): TeacherScopeR
         return {
           teacherId: null,
           homeroomClassIds: [] as string[],
+          teachingAssignments: [] as TeacherSubjectAssignmentScope[],
         };
       }
 
-      // 3. Cek apakah guru ini tercatat sebagai Wali Kelas pada tabel classes
-      const { data: homeroomClasses } = await supabase
+      // 3. Cek tahun ajaran aktif & ambil paralel data Wali Kelas + Penugasan Mapel
+      const { data: activeYear } = await supabase
+        .from('academic_years')
+        .select('id')
+        .eq('schoolId', activeSchoolId!)
+        .eq('isActive', true)
+        .maybeSingle();
+
+      const homeroomPromise = supabase
         .from('classes')
         .select('id')
         .eq('schoolId', activeSchoolId!)
         .eq('homeroomTeacherId', resolvedTeacherId);
 
-      const homeroomClassIds = (homeroomClasses ?? []).map((cls) => String(cls.id));
+      const assignmentsQuery = supabase
+        .from('teacher_subject_assignments')
+        .select('id, subjectId, classId, academicYearId, weeklyHours, isPrimary')
+        .eq('schoolId', activeSchoolId!)
+        .eq('teacherId', resolvedTeacherId)
+        .eq('isActive', true);
+
+      const assignmentsPromise = activeYear?.id
+        ? assignmentsQuery.eq('academicYearId', activeYear.id)
+        : assignmentsQuery;
+
+      const [homeroomRes, assignmentsRes] = await Promise.all([
+        homeroomPromise,
+        assignmentsPromise,
+      ]);
+
+      const homeroomClassIds = (homeroomRes.data ?? []).map((cls) => String(cls.id));
+
+      const teachingAssignments: TeacherSubjectAssignmentScope[] = (
+        assignmentsRes.data ?? []
+      ).map((row) => ({
+        id: String(row.id),
+        subjectId: String(row.subjectId),
+        classId: String(row.classId),
+        academicYearId: String(row.academicYearId),
+        weeklyHours: Number(row.weeklyHours ?? 0),
+        isPrimary: Boolean(row.isPrimary),
+      }));
 
       return {
         teacherId: resolvedTeacherId,
         homeroomClassIds,
+        teachingAssignments,
       };
     },
   });
@@ -127,6 +177,22 @@ export function useTeacherScope(overrideSchoolId?: string | null): TeacherScopeR
   const teacherId = scopeQuery.data?.teacherId ?? null;
   const homeroomClassIds = scopeQuery.data?.homeroomClassIds ?? [];
   const isHomeroomTeacher = homeroomClassIds.length > 0;
+  const teachingAssignments = scopeQuery.data?.teachingAssignments ?? [];
+
+  const taughtClassIds = useMemo(
+    () => Array.from(new Set(teachingAssignments.map((a) => a.classId))),
+    [teachingAssignments]
+  );
+
+  const taughtSubjectIds = useMemo(
+    () => Array.from(new Set(teachingAssignments.map((a) => a.subjectId))),
+    [teachingAssignments]
+  );
+
+  const accessibleClassIds = useMemo(
+    () => Array.from(new Set([...homeroomClassIds, ...taughtClassIds])),
+    [homeroomClassIds, taughtClassIds]
+  );
 
   // Gunakan helper resmi aplikasi untuk mendeteksi jenjang SD / MI / SDLB
   const isElementarySchool = useMemo(
@@ -138,14 +204,30 @@ export function useTeacherScope(overrideSchoolId?: string | null): TeacherScopeR
   const isElementaryHomeroomRestricted =
     !hasFullAcademicAccess && isElementarySchool && isHomeroomTeacher;
 
+  const canTeachSubjectInClass = useCallback(
+    (subjectId: string, classId: string): boolean => {
+      if (hasFullAcademicAccess) return true;
+      return teachingAssignments.some(
+        (a) => a.subjectId === subjectId && a.classId === classId
+      );
+    },
+    [hasFullAcademicAccess, teachingAssignments]
+  );
+
   return {
-    isLoading: !hasFullAcademicAccess && Boolean(activeSchoolId && user?.id) && scopeQuery.isLoading,
+    isLoading:
+      !hasFullAcademicAccess && Boolean(activeSchoolId && user?.id) && scopeQuery.isLoading,
     effectiveRoles,
     hasFullAcademicAccess,
     canViewAllTeacherAttendance,
     teacherId,
     homeroomClassIds,
     isHomeroomTeacher,
+    teachingAssignments,
+    taughtClassIds,
+    taughtSubjectIds,
+    accessibleClassIds,
+    canTeachSubjectInClass,
     isElementarySchool,
     isElementaryHomeroomRestricted,
   };

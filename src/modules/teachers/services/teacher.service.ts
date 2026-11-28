@@ -14,30 +14,22 @@ import type {
   UpdateTeacherPayload,
   TeacherBulkImportItem,
   TeacherBulkImportResult,
+  BulkImportTeachersRpcResponse,
   PhotoRetentionDays,
   TeacherPhotoHistoryItem,
+  UpdateTeacherPhotoRpcResponse,
+  SetRetentionDaysRpcResponse,
   TeacherSecurityAuditItem,
   SecurityAuditLogEntry,
+  AcademicYearOption,
+  TeacherOptionItem,
+  SubjectOptionItem,
+  ClassOptionItem,
+  TeacherSubjectAssignmentItem,
+  AssignmentFormOptionsResult,
+  AssignTeacherSubjectPayload,
+  UpdateTeacherSubjectAssignmentPayload,
 } from '../types/teacher.types';
-
-interface BulkImportTeachersRpcResponse {
-  success: boolean;
-  inserted: number;
-  updated: number;
-  count: number;
-  message: string;
-}
-
-interface UpdateTeacherPhotoRpcResponse {
-  success: boolean;
-  retentionDays: number;
-  photoUrl: string | null;
-}
-
-interface SetRetentionDaysRpcResponse {
-  success: boolean;
-  retentionDays: PhotoRetentionDays;
-}
 
 const ALLOWED_SORT_COLUMNS = new Set([
   'fullName',
@@ -76,6 +68,14 @@ const assertValidUuid = (id: string, label = 'ID guru'): string => {
     throw new Error(`${label} tidak valid.`);
   }
   return trimmed;
+};
+
+const assertValidWeeklyHours = (rawHours: unknown): number => {
+  const parsed = Math.trunc(Number(rawHours));
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 40) {
+    throw new Error('Jam pelajaran per minggu harus antara 1 hingga 40 JP.');
+  }
+  return parsed;
 };
 
 // ============================================================================
@@ -177,6 +177,13 @@ const compressTeacherPhotoFile = async (
     if (webpBlob && webpBlob.size > 0 && webpBlob.size <= MAX_STORED_PHOTO_BYTES) {
       return { blob: webpBlob, contentType: 'image/webp', extension: 'webp' };
     }
+
+    // Fill white background before JPEG export so transparent PNG/WEBP areas do not turn black
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-over';
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
 
     const jpegBlob = await new Promise<Blob | null>((resolve) => {
       canvas.toBlob((result) => resolve(result), 'image/jpeg', 0.85);
@@ -429,17 +436,26 @@ const handleDbError = (error: unknown): Error => {
   const rowPrefixMatch = message.match(/(Impor gagal pada baris ke-\d+:)/i);
   const rowPrefix = rowPrefixMatch ? `${rowPrefixMatch[1]} ` : '';
 
-  if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
+  if (
+    pgError?.code === '42P01' ||
+    pgError?.code === 'PGRST205' ||
+    lowerMsg.includes('teacher_subject_assignments')
+  ) {
+    message =
+      'Tabel penugasan mata pelajaran (teacher_subject_assignments) belum tersedia di database. Jalankan migrasi SQL Milestone 1 di Supabase SQL Editor terlebih dahulu.';
+  } else if (lowerMsg.includes('network error') || lowerMsg.includes('failed to fetch')) {
     message = 'Koneksi ke server gagal. Periksa jaringan internet Anda lalu coba lagi.';
   } else if (pgError?.code === '23505' || lowerMsg.includes('unique constraint')) {
-    if (lowerMsg.includes('nuptk')) {
+    if (lowerMsg.includes('uq_teacher_subject_class_year')) {
+      message = 'Guru tersebut sudah ditugaskan untuk mata pelajaran dan kelas yang sama pada tahun ajaran ini.';
+    } else if (lowerMsg.includes('nuptk')) {
       message = `${rowPrefix}NUPTK tersebut sudah terdaftar pada guru lain di sekolah ini.`;
     } else if (lowerMsg.includes('nik')) {
       message = `${rowPrefix}NIK tersebut sudah terdaftar pada guru lain di sekolah ini.`;
     } else if (lowerMsg.includes('nip')) {
       message = `${rowPrefix}NIP tersebut sudah terdaftar pada guru lain di sekolah ini.`;
     } else {
-      message = `${rowPrefix}Data guru tersebut sudah terdaftar (Duplikat).`;
+      message = `${rowPrefix}Data tersebut sudah terdaftar (Duplikat).`;
     }
   } else if (pgError?.code === '23502') {
     message = `${rowPrefix}Terdapat kolom wajib yang masih kosong. Pastikan semua data wajib sudah terisi.`;
@@ -499,7 +515,7 @@ export const teacherService = {
     if (search && search.trim()) {
       const safeSearch = search
         .trim()
-        .replace(/[,()\\]/g, '')
+        .replace(/[,()"\\]/g, '')
         .replace(/[%_]/g, '\\$&');
       if (safeSearch) {
         query = query.or(
@@ -629,8 +645,13 @@ export const teacherService = {
     return this.getById(data.id, data.schoolId);
   },
 
-  async update(id: string, payload: UpdateTeacherPayload): Promise<ApiResponse<TeacherDetail>> {
+  async update(
+    id: string,
+    payload: UpdateTeacherPayload,
+    schoolId?: string
+  ): Promise<ApiResponse<TeacherDetail>> {
     const validId = assertValidUuid(id);
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
     const normalized = normalizeTeacherFields(
       payload as UpdateTeacherPayload & Record<string, unknown>
     );
@@ -647,12 +668,16 @@ export const teacherService = {
       throw new Error('Jenis kelamin tidak valid (gunakan L atau P).');
     }
 
-    const { data: existing, error: fetchError } = await supabase
+    let fetchQuery = supabase
       .from('teachers')
       .select('id, schoolId, userId, fullName, photoUrl')
-      .eq('id', validId)
-      .single();
+      .eq('id', validId);
 
+    if (validSchoolId) {
+      fetchQuery = fetchQuery.eq('schoolId', validSchoolId);
+    }
+
+    const { data: existing, error: fetchError } = await fetchQuery.single();
     if (fetchError) throw handleDbError(fetchError);
 
     if (Object.keys(normalized).length > 0) {
@@ -685,8 +710,8 @@ export const teacherService = {
               },
             });
           }
-        } catch {
-          // Best-effort sync
+        } catch (syncError) {
+          console.warn('[teacherService.update] Best-effort users.fullName sync failed:', syncError);
         }
       }
     }
@@ -776,20 +801,28 @@ export const teacherService = {
     };
   },
 
-  async deleteAll(schoolId: string): Promise<ApiResponse<void>> {
+  async deleteAll(schoolId: string): Promise<ApiResponse<{ deleted: number }>> {
     const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
 
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from('teachers')
       .delete()
-      .eq('schoolId', validSchoolId);
+      .eq('schoolId', validSchoolId)
+      .select('id');
 
     if (error) throw handleDbError(error);
 
+    const deletedCount = data?.length ?? 0;
+    if (deletedCount === 0) {
+      throw new Error(
+        'Tidak ada data guru yang dihapus. Pastikan data tersedia atau Anda memiliki peran Admin / Kepala Sekolah.'
+      );
+    }
+
     return {
       success: true,
-      data: undefined,
-      message: 'Seluruh data guru & pegawai dikosongkan',
+      data: { deleted: deletedCount },
+      message: `${deletedCount} data guru & pegawai berhasil dikosongkan`,
     };
   },
 
@@ -883,8 +916,367 @@ export const teacherService = {
   },
 
   // ==========================================================================
+  // MANAJEMEN PENUGASAN MATA PELAJARAN GURU PER KELAS
+  // ==========================================================================
+  async getAssignmentFormOptions(
+    schoolId: string,
+    requestedAcademicYearId?: string | null
+  ): Promise<AssignmentFormOptionsResult> {
+    const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
+
+    const [yearsRes, teachersRes, subjectsRes, classesRes] = await Promise.all([
+      supabase
+        .from('academic_years')
+        .select('id, name, isActive')
+        .eq('schoolId', validSchoolId)
+        .order('name', { ascending: false }),
+      supabase
+        .from('teachers')
+        .select('id, fullName, nip, nuptk, position, maxHoursPerWeek, isActive')
+        .eq('schoolId', validSchoolId)
+        .order('fullName', { ascending: true }),
+      supabase
+        .from('subjects')
+        .select('id, name, code, category, isActive')
+        .eq('schoolId', validSchoolId)
+        .order('name', { ascending: true }),
+      supabase
+        .from('classes')
+        .select('id, name, major, academicYearId, homeroomTeacherId, isActive')
+        .eq('schoolId', validSchoolId)
+        .order('name', { ascending: true }),
+    ]);
+
+    if (yearsRes.error) throw handleDbError(yearsRes.error);
+    if (teachersRes.error) throw handleDbError(teachersRes.error);
+    if (subjectsRes.error) throw handleDbError(subjectsRes.error);
+    if (classesRes.error) throw handleDbError(classesRes.error);
+
+    const academicYears: AcademicYearOption[] = (yearsRes.data ?? []).map((y) => ({
+      id: String(y.id),
+      name: String(y.name ?? ''),
+      isActive: Boolean(y.isActive),
+    }));
+
+    const validRequestedYearId = normalizeTeacherSchoolId(requestedAcademicYearId);
+    const activeAcademicYearId =
+      (validRequestedYearId &&
+      academicYears.some((y) => y.id === validRequestedYearId)
+        ? validRequestedYearId
+        : null) ??
+      academicYears.find((y) => y.isActive)?.id ??
+      academicYears[0]?.id ??
+      null;
+
+    const teacherNameMap = new Map<string, string>();
+    const teachers: TeacherOptionItem[] = (teachersRes.data ?? [])
+      .map((t) => {
+        const id = String(t.id);
+        const fullName = String(t.fullName ?? '');
+        teacherNameMap.set(id, fullName);
+        return {
+          id,
+          fullName,
+          nip: t.nip ? String(t.nip) : null,
+          nuptk: t.nuptk ? String(t.nuptk) : null,
+          position: t.position ? String(t.position) : null,
+          maxHoursPerWeek: Number(t.maxHoursPerWeek) > 0 ? Number(t.maxHoursPerWeek) : 24,
+          isActive: t.isActive !== false,
+        };
+      })
+      .filter((t) => t.isActive);
+
+    const subjects: SubjectOptionItem[] = ((subjectsRes.data ?? []) as Record<string, unknown>[])
+      .filter((s) => s.isActive !== false)
+      .map((s) => ({
+        id: String(s.id),
+        name: String(s.name ?? ''),
+        code: s.code ? String(s.code) : null,
+        category: s.category ? String(s.category) : null,
+      }));
+
+    const classes: ClassOptionItem[] = ((classesRes.data ?? []) as Record<string, unknown>[])
+      .filter((c) => {
+        if (c.isActive === false) return false;
+        if (!activeAcademicYearId) return true;
+        return String(c.academicYearId ?? '') === activeAcademicYearId;
+      })
+      .map((c) => {
+        const homeroomTeacherId = c.homeroomTeacherId ? String(c.homeroomTeacherId) : null;
+        return {
+          id: String(c.id),
+          name: String(c.name ?? ''),
+          major: c.major ? String(c.major) : null,
+          academicYearId: String(c.academicYearId ?? ''),
+          homeroomTeacherId,
+          homeroomTeacherName: homeroomTeacherId
+            ? (teacherNameMap.get(homeroomTeacherId) ?? null)
+            : null,
+        };
+      });
+
+    return {
+      academicYears,
+      activeAcademicYearId,
+      teachers,
+      subjects,
+      classes,
+    };
+  },
+
+  async listSubjectAssignments(params: {
+    schoolId: string;
+    academicYearId?: string | null;
+    teacherId?: string | null;
+    classId?: string | null;
+    subjectId?: string | null;
+  }): Promise<TeacherSubjectAssignmentItem[]> {
+    const validSchoolId = assertValidUuid(params.schoolId, 'Identitas sekolah');
+    const validYearId = normalizeTeacherSchoolId(params.academicYearId);
+    const validTeacherId = normalizeTeacherSchoolId(params.teacherId);
+    const validClassId = normalizeTeacherSchoolId(params.classId);
+    const validSubjectId = normalizeTeacherSchoolId(params.subjectId);
+
+    let assignmentsQuery = supabase
+      .from('teacher_subject_assignments')
+      .select(
+        'id, schoolId, academicYearId, teacherId, subjectId, classId, weeklyHours, isPrimary, notes, isActive, createdAt, updatedAt'
+      )
+      .eq('schoolId', validSchoolId)
+      .eq('isActive', true)
+      .order('createdAt', { ascending: false });
+
+    if (validYearId) assignmentsQuery = assignmentsQuery.eq('academicYearId', validYearId);
+    if (validTeacherId) assignmentsQuery = assignmentsQuery.eq('teacherId', validTeacherId);
+    if (validClassId) assignmentsQuery = assignmentsQuery.eq('classId', validClassId);
+    if (validSubjectId) assignmentsQuery = assignmentsQuery.eq('subjectId', validSubjectId);
+
+    const [assignRes, teachersRes, subjectsRes, classesRes] = await Promise.all([
+      assignmentsQuery,
+      supabase
+        .from('teachers')
+        .select('id, fullName, nip, maxHoursPerWeek')
+        .eq('schoolId', validSchoolId),
+      supabase
+        .from('subjects')
+        .select('id, name, code, category')
+        .eq('schoolId', validSchoolId),
+      supabase
+        .from('classes')
+        .select('id, name, major, homeroomTeacherId')
+        .eq('schoolId', validSchoolId),
+    ]);
+
+    if (assignRes.error) throw handleDbError(assignRes.error);
+    if (teachersRes.error) throw handleDbError(teachersRes.error);
+    if (subjectsRes.error) throw handleDbError(subjectsRes.error);
+    if (classesRes.error) throw handleDbError(classesRes.error);
+
+    const teacherMap = new Map<
+      string,
+      { fullName: string; nip: string | null; maxHoursPerWeek: number }
+    >();
+    for (const t of teachersRes.data ?? []) {
+      teacherMap.set(String(t.id), {
+        fullName: String(t.fullName ?? 'Guru'),
+        nip: t.nip ? String(t.nip) : null,
+        maxHoursPerWeek: Number(t.maxHoursPerWeek) > 0 ? Number(t.maxHoursPerWeek) : 24,
+      });
+    }
+
+    const subjectMap = new Map<
+      string,
+      { name: string; code: string | null; category: string | null }
+    >();
+    for (const s of (subjectsRes.data ?? []) as Record<string, unknown>[]) {
+      subjectMap.set(String(s.id), {
+        name: String(s.name ?? 'Mata Pelajaran'),
+        code: s.code ? String(s.code) : null,
+        category: s.category ? String(s.category) : null,
+      });
+    }
+
+    const classMap = new Map<
+      string,
+      {
+        name: string;
+        major: string | null;
+        homeroomTeacherId: string | null;
+        homeroomTeacherName: string | null;
+      }
+    >();
+    for (const c of (classesRes.data ?? []) as Record<string, unknown>[]) {
+      const hrId = c.homeroomTeacherId ? String(c.homeroomTeacherId) : null;
+      classMap.set(String(c.id), {
+        name: String(c.name ?? 'Kelas'),
+        major: c.major ? String(c.major) : null,
+        homeroomTeacherId: hrId,
+        homeroomTeacherName: hrId ? (teacherMap.get(hrId)?.fullName ?? null) : null,
+      });
+    }
+
+    const mapped: TeacherSubjectAssignmentItem[] = (assignRes.data ?? []).map((row) => {
+      const tId = String(row.teacherId);
+      const sId = String(row.subjectId);
+      const cId = String(row.classId);
+
+      const tInfo = teacherMap.get(tId);
+      const sInfo = subjectMap.get(sId);
+      const cInfo = classMap.get(cId);
+
+      return {
+        id: String(row.id),
+        schoolId: String(row.schoolId),
+        academicYearId: String(row.academicYearId),
+        teacherId: tId,
+        subjectId: sId,
+        classId: cId,
+        weeklyHours: Number(row.weeklyHours ?? 2),
+        isPrimary: row.isPrimary !== false,
+        notes: row.notes ? String(row.notes) : null,
+        isActive: row.isActive !== false,
+        createdAt: row.createdAt ? String(row.createdAt) : undefined,
+        updatedAt: row.updatedAt ? String(row.updatedAt) : undefined,
+        teacherName: tInfo?.fullName ?? 'Guru Tidak Ditemukan',
+        teacherNip: tInfo?.nip ?? null,
+        teacherMaxHours: tInfo?.maxHoursPerWeek ?? 24,
+        subjectName: sInfo?.name ?? 'Mapel Tidak Ditemukan',
+        subjectCode: sInfo?.code ?? null,
+        subjectCategory: sInfo?.category ?? null,
+        className: cInfo?.name ?? 'Kelas Tidak Ditemukan',
+        classMajor: cInfo?.major ?? null,
+        homeroomTeacherId: cInfo?.homeroomTeacherId ?? null,
+        homeroomTeacherName: cInfo?.homeroomTeacherName ?? null,
+      };
+    });
+
+    return mapped.sort((a, b) => {
+      const byTeacher = a.teacherName.localeCompare(b.teacherName, 'id');
+      if (byTeacher !== 0) return byTeacher;
+      const bySubject = a.subjectName.localeCompare(b.subjectName, 'id');
+      if (bySubject !== 0) return bySubject;
+      return a.className.localeCompare(b.className, 'id', { numeric: true });
+    });
+  },
+
+  async assignSubjectToClasses(
+    payload: AssignTeacherSubjectPayload
+  ): Promise<ApiResponse<{ count: number }>> {
+    const validSchoolId = assertValidUuid(payload.schoolId, 'Identitas sekolah');
+    const validYearId = assertValidUuid(payload.academicYearId, 'Tahun ajaran');
+    const validTeacherId = assertValidUuid(payload.teacherId, 'Guru pengampu');
+    const validSubjectId = assertValidUuid(payload.subjectId, 'Mata pelajaran');
+
+    const uniqueClassIds = Array.from(
+      new Set(
+        payload.classIds
+          .map((cid) => (typeof cid === 'string' ? cid.trim() : ''))
+          .filter((cid) => UUID_REGEX.test(cid))
+      )
+    );
+
+    if (uniqueClassIds.length === 0) {
+      throw new Error('Pilih minimal satu kelas / rombel tujuan.');
+    }
+
+    const safeHours = assertValidWeeklyHours(payload.weeklyHours);
+    const cleanNotes = cleanNullableText(payload.notes);
+
+    const rows = uniqueClassIds.map((classId) => ({
+      schoolId: validSchoolId,
+      academicYearId: validYearId,
+      teacherId: validTeacherId,
+      subjectId: validSubjectId,
+      classId,
+      weeklyHours: safeHours,
+      isPrimary: payload.isPrimary ?? true,
+      notes: cleanNotes,
+      isActive: true,
+    }));
+
+    const { error } = await supabase
+      .from('teacher_subject_assignments')
+      .upsert(rows, {
+        onConflict: 'schoolId,academicYearId,teacherId,subjectId,classId',
+      });
+
+    if (error) throw handleDbError(error);
+
+    return {
+      success: true,
+      data: { count: rows.length },
+      message: `Penugasan mata pelajaran berhasil disimpan untuk ${rows.length} kelas`,
+    };
+  },
+
+  async updateSubjectAssignment(
+    id: string,
+    schoolId: string,
+    payload: UpdateTeacherSubjectAssignmentPayload
+  ): Promise<ApiResponse<void>> {
+    const validId = assertValidUuid(id, 'ID penugasan');
+    const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
+
+    const updateBody: Record<string, unknown> = {};
+    if (payload.weeklyHours !== undefined) {
+      updateBody.weeklyHours = assertValidWeeklyHours(payload.weeklyHours);
+    }
+    if (payload.isPrimary !== undefined) {
+      updateBody.isPrimary = Boolean(payload.isPrimary);
+    }
+    if (payload.notes !== undefined) {
+      updateBody.notes = cleanNullableText(payload.notes);
+    }
+    if (payload.isActive !== undefined) {
+      updateBody.isActive = Boolean(payload.isActive);
+    }
+
+    const { error } = await supabase
+      .from('teacher_subject_assignments')
+      .update(updateBody)
+      .eq('id', validId)
+      .eq('schoolId', validSchoolId);
+
+    if (error) throw handleDbError(error);
+
+    return {
+      success: true,
+      data: undefined,
+      message: 'Penugasan mengajar berhasil diperbarui',
+    };
+  },
+
+  async deleteSubjectAssignment(id: string, schoolId: string): Promise<ApiResponse<void>> {
+    const validId = assertValidUuid(id, 'ID penugasan');
+    const validSchoolId = assertValidUuid(schoolId, 'Identitas sekolah');
+
+    const { error } = await supabase
+      .from('teacher_subject_assignments')
+      .delete()
+      .eq('id', validId)
+      .eq('schoolId', validSchoolId);
+
+    if (error) throw handleDbError(error);
+
+    return {
+      success: true,
+      data: undefined,
+      message: 'Penugasan mata pelajaran berhasil dihapus',
+    };
+  },
+
+  // ==========================================================================
   // MANAJEMEN FOTO PROFIL PTK & HISTORI RETENSI (SUPABASE STORAGE + RPC)
   // ==========================================================================
+  async removeStoredPhotoBestEffort(storagePath?: string | null): Promise<void> {
+    if (!storagePath || storagePath.startsWith('http')) return;
+    try {
+      await supabase.storage.from(TEACHER_PHOTOS_BUCKET).remove([storagePath]);
+    } catch {
+      // Best-effort cleanup to avoid masking primary error
+    }
+  },
+
   async uploadTeacherPhoto(params: {
     schoolId: string;
     teacherId: string;
@@ -1007,7 +1399,7 @@ export const teacherService = {
     schoolName?: string | null;
     teacherName?: string | null;
   }): Promise<ApiResponse<UpdateTeacherPhotoRpcResponse>> {
-    const { publicUrl } = await this.uploadTeacherPhoto({
+    const { publicUrl, storagePath } = await this.uploadTeacherPhoto({
       schoolId: params.schoolId,
       teacherId: params.teacherId,
       file: params.file,
@@ -1015,17 +1407,32 @@ export const teacherService = {
       teacherName: params.teacherName,
     });
 
-    return this.updateTeacherPhoto(params.teacherId, publicUrl, params.linkedUserId);
+    try {
+      return await this.updateTeacherPhoto(params.teacherId, publicUrl, params.linkedUserId);
+    } catch (error) {
+      await this.removeStoredPhotoBestEffort(storagePath);
+      throw error;
+    }
   },
 
-  async getPhotoHistory(teacherId: string): Promise<ApiResponse<TeacherPhotoHistoryItem[]>> {
+  async getPhotoHistory(
+    teacherId: string,
+    schoolId?: string
+  ): Promise<ApiResponse<TeacherPhotoHistoryItem[]>> {
     const validTeacherId = assertValidUuid(teacherId);
+    const validSchoolId = normalizeTeacherSchoolId(schoolId);
 
-    const { data, error } = await supabase
+    let query = supabase
       .from('teacher_photo_history')
       .select('*')
       .eq('teacherId', validTeacherId)
       .order('replacedAt', { ascending: false });
+
+    if (validSchoolId) {
+      query = query.eq('schoolId', validSchoolId);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       throw handleDbError(error);

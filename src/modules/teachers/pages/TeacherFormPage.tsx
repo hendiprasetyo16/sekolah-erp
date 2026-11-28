@@ -55,12 +55,18 @@ import {
 import { useTranslation } from '@/hooks/useTranslation';
 import { usePermission } from '@/hooks/usePermission';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
+import type { ApiResponse } from '@/services/api.types';
 import type {
   CreateTeacherPayload,
   TeacherDetail,
 } from '../types/teacher.types';
 
 type TeacherTabValue = 'personal' | 'professional' | 'tasks' | 'family';
+
+interface SaveTeacherMutationResult {
+  response: ApiResponse<TeacherDetail>;
+  photoUploadWarning?: string | null;
+}
 
 const extractFriendlyErrorMessage = (
   error: unknown,
@@ -570,6 +576,7 @@ export function TeacherFormPage() {
   const isId = locale === 'id';
 
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const hydratedTeacherIdRef = useRef<string | null>(null);
   const [activeTab, setActiveTab] = useState<TeacherTabValue>('personal');
   const [formError, setFormError] = useState<string | null>(null);
   const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
@@ -635,10 +642,6 @@ export function TeacherFormPage() {
 
   const form = useForm<TeacherFormValues>({
     resolver: zodResolver(teacherSchema),
-    values: hydratedValues,
-    resetOptions: {
-      keepDirtyValues: false,
-    },
     defaultValues: {
       fullName: '',
       gender: undefined,
@@ -707,12 +710,19 @@ export function TeacherFormPage() {
     },
   });
 
+  // Hydrate form saat data guru pertama kali dimuat atau ID rute berganti;
+  // cegah background refetch menimpa ketikan pengguna yang belum disimpan.
   useEffect(() => {
-    if (hydratedValues) {
+    const fetchedId = response?.data?.id ?? null;
+    if (!hydratedValues || !fetchedId) return;
+
+    const isDifferentTeacher = hydratedTeacherIdRef.current !== fetchedId;
+    if (isDifferentTeacher || !form.formState.isDirty) {
+      hydratedTeacherIdRef.current = fetchedId;
       setPhotoLoadError(false);
       form.reset(hydratedValues);
     }
-  }, [hydratedValues, form]);
+  }, [hydratedValues, response?.data?.id, form]);
 
   useEffect(() => {
     return () => {
@@ -768,7 +778,7 @@ export function TeacherFormPage() {
     form.setValue('photoUrl', '', { shouldDirty: true });
   };
 
-  const mutation = useMutation({
+  const mutation = useMutation<SaveTeacherMutationResult, unknown, TeacherFormValues>({
     mutationFn: async (values: TeacherFormValues) => {
       setFormError(null);
       const targetSchoolId =
@@ -781,6 +791,9 @@ export function TeacherFormPage() {
             : 'Active school is not selected. Please select an institution first.'
         );
       }
+
+      const resolvedSchoolName =
+        school?.id === targetSchoolId ? school.name : undefined;
 
       const parsedSalary =
         values.baseSalary && !Number.isNaN(Number(values.baseSalary))
@@ -804,15 +817,28 @@ export function TeacherFormPage() {
       };
 
       if (isEdit && id) {
+        let uploadedStoragePath: string | null = null;
         if (pendingPhotoFile) {
           const uploaded = await teacherService.uploadTeacherPhoto({
             schoolId: targetSchoolId,
             teacherId: id,
             file: pendingPhotoFile,
+            schoolName: resolvedSchoolName,
+            teacherName: values.fullName,
           });
           payload.photoUrl = uploaded.publicUrl;
+          uploadedStoragePath = uploaded.storagePath;
         }
-        return teacherService.update(id, payload);
+
+        try {
+          const updated = await teacherService.update(id, payload, targetSchoolId);
+          return { response: updated };
+        } catch (updateErr) {
+          if (uploadedStoragePath) {
+            await teacherService.removeStoredPhotoBestEffort(uploadedStoragePath);
+          }
+          throw updateErr;
+        }
       }
 
       const created = await teacherService.create({
@@ -820,18 +846,30 @@ export function TeacherFormPage() {
         photoUrl: null,
       });
 
+      let photoUploadWarning: string | null = null;
       if (pendingPhotoFile && created.data?.id) {
-        await teacherService.uploadAndSaveTeacherPhoto({
-          schoolId: targetSchoolId,
-          teacherId: created.data.id,
-          file: pendingPhotoFile,
-          linkedUserId: created.data.userId,
-        });
+        try {
+          await teacherService.uploadAndSaveTeacherPhoto({
+            schoolId: targetSchoolId,
+            teacherId: created.data.id,
+            file: pendingPhotoFile,
+            linkedUserId: created.data.userId,
+            schoolName: resolvedSchoolName,
+            teacherName: created.data.fullName || values.fullName,
+          });
+        } catch (photoErr) {
+          photoUploadWarning = extractFriendlyErrorMessage(
+            photoErr,
+            locale,
+            'Data guru berhasil disimpan, tetapi foto profil gagal diunggah. Anda dapat mengunggahnya kembali di halaman profil guru.',
+            'Teacher record was saved, but the profile photo failed to upload. You can re-upload it on the teacher profile page.'
+          );
+        }
       }
 
-      return created;
+      return { response: created, photoUploadWarning };
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       setFormError(null);
       queryClient.invalidateQueries({ queryKey: ['teachers'] });
       queryClient.invalidateQueries({ queryKey: ['users-list'] });
@@ -840,6 +878,9 @@ export function TeacherFormPage() {
         queryClient.invalidateQueries({ queryKey: ['teacher-photo-history', id] });
       }
       toast.success(isEdit ? dict.toastUpdateSuccess : dict.toastCreateSuccess);
+      if (result.photoUploadWarning) {
+        toast.warning(result.photoUploadWarning, { duration: 7000 });
+      }
       navigate('/teachers');
     },
     onError: (error: unknown) => {

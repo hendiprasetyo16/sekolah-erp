@@ -1,4 +1,4 @@
-//src/modules/academic/pages/ClassListPage.tsx
+// src/modules/academic/pages/ClassListPage.tsx
 import { useCallback, useEffect, useMemo, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
@@ -74,6 +74,7 @@ type Translation = {
     thStudents: string;
     thAction: string;
     loading: string;
+    refreshing: string;
     error: string;
     yearsError: string;
     empty: string;
@@ -235,6 +236,7 @@ export function ClassListPage() {
         thStudents: isId ? 'Jumlah Siswa' : 'Total Students',
         thAction: isId ? 'Aksi' : 'Action',
         loading: isId ? 'Memuat...' : 'Loading...',
+        refreshing: isId ? 'Menyegarkan...' : 'Refreshing...',
         error: isId
             ? 'Gagal memuat data kelas.'
             : 'Failed to load classes.',
@@ -248,7 +250,6 @@ export function ClassListPage() {
             ? 'Sekolah tidak ditemukan. Silakan masuk kembali.'
             : 'School context is missing. Please sign in again.',
         gradePrefix: isId ? 'Kelas' : 'Grade',
-        // Ubah baris 173 di src/modules/academic/pages/ClassListPage.tsx:
         gradeTk: isId ? 'TK / RA / PAUD' : 'Kindergarten / RA',
         noTeacher: isId ? 'Belum diatur' : 'Not set',
         toastDelSuccess: isId
@@ -358,7 +359,8 @@ export function ClassListPage() {
         [classesQuery.data?.data]
     );
 
-    const isDataBusy = classesQuery.isLoading || classesQuery.isFetching;
+    const isInitialLoading = classesQuery.isLoading;
+    const isRefetching = classesQuery.isFetching && !classesQuery.isLoading;
 
     // --------------------------------------------------------
     // SORTING & PAGINATION
@@ -524,6 +526,7 @@ export function ClassListPage() {
                 queryClient.invalidateQueries({ queryKey: ['class', schoolId] }),
                 queryClient.invalidateQueries({ queryKey: ['classes-list'] }),
                 queryClient.invalidateQueries({ queryKey: ['students'] }),
+                queryClient.invalidateQueries({ queryKey: ['teachers'] }),
             ]);
         },
         onError: (error: Error) => {
@@ -672,7 +675,7 @@ export function ClassListPage() {
                             variant="outline"
                             className="border-red-200 text-red-600 shadow-sm transition-colors hover:bg-red-50 hover:text-red-700 dark:border-red-500/30 dark:text-red-400 dark:hover:bg-red-500/10"
                             onClick={() => setDeleteModal({ type: 'all' })}
-                            disabled={classes.length === 0 || isDataBusy || deleteMutation.isPending || !schoolId}
+                            disabled={classes.length === 0 || isInitialLoading || deleteMutation.isPending || !schoolId}
                         >
                             <AlertCircle size={16} className="mr-2" aria-hidden="true" />
                             {t.clearAll}
@@ -682,11 +685,11 @@ export function ClassListPage() {
                     {canManageData && (
                         <Link
                             to="/academic/classes/new"
-                            aria-disabled={!schoolId || isDataBusy}
-                            onClick={(event) => { if (!schoolId || isDataBusy) event.preventDefault(); }}
+                            aria-disabled={!schoolId || isInitialLoading}
+                            onClick={(event) => { if (!schoolId || isInitialLoading) event.preventDefault(); }}
                             className={cn(
                                 'flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white shadow-md transition-all hover:bg-emerald-700',
-                                (!schoolId || isDataBusy) && 'pointer-events-none opacity-50'
+                                (!schoolId || isInitialLoading) && 'pointer-events-none opacity-50'
                             )}
                         >
                             <Plus size={16} aria-hidden="true" />
@@ -713,7 +716,7 @@ export function ClassListPage() {
                     <Select
                         value={selectedAcademicYear}
                         onValueChange={setSelectedAcademicYear}
-                        disabled={!schoolId || academicYearsQuery.isLoading || isDataBusy}
+                        disabled={!schoolId || academicYearsQuery.isLoading || isInitialLoading}
                     >
                         <SelectTrigger id="class-academic-year-filter" className="w-full sm:w-64">
                             <SelectValue placeholder={t.filterLabel} />
@@ -727,6 +730,13 @@ export function ClassListPage() {
                             ))}
                         </SelectContent>
                     </Select>
+
+                    {isRefetching && (
+                        <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+                            <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-600" aria-hidden="true" />
+                            {t.refreshing}
+                        </span>
+                    )}
 
                     {academicYearsQuery.isError && (
                         <span role="alert" className="text-sm text-destructive">
@@ -746,7 +756,7 @@ export function ClassListPage() {
                             variant="destructive"
                             size="sm"
                             onClick={() => setDeleteModal({ type: 'bulk' })}
-                            disabled={deleteMutation.isPending || isDataBusy}
+                            disabled={deleteMutation.isPending || isInitialLoading}
                         >
                             <Trash2 size={16} className="mr-2" aria-hidden="true" />
                             {t.delSelection}
@@ -782,7 +792,7 @@ export function ClassListPage() {
                                                 if (element) element.indeterminate = someVisibleSelected;
                                             }}
                                             onChange={toggleAllVisible}
-                                            disabled={paginatedClasses.length === 0 || deleteMutation.isPending || isDataBusy}
+                                            disabled={paginatedClasses.length === 0 || deleteMutation.isPending || isInitialLoading}
                                             className="h-4 w-4 cursor-pointer rounded border-border bg-muted accent-emerald-600 disabled:cursor-not-allowed"
                                         />
                                     </th>
@@ -806,7 +816,7 @@ export function ClassListPage() {
                                             type="button"
                                             onClick={() => handleSort(key)}
                                             className="flex items-center gap-1 text-left"
-                                            disabled={isDataBusy}
+                                            disabled={isInitialLoading}
                                         >
                                             {label}
                                             {renderSortIcon(key)}
@@ -825,7 +835,7 @@ export function ClassListPage() {
                         </thead>
 
                         <tbody className="divide-y divide-border/50">
-                            {classesQuery.isLoading ? (
+                            {isInitialLoading ? (
                                 <tr>
                                     <td colSpan={columnCount} className="px-6 py-12 text-center text-muted-foreground">
                                         <Loader2 className="mx-auto mb-4 h-8 w-8 animate-spin text-emerald-600" />
@@ -865,7 +875,7 @@ export function ClassListPage() {
                                                         aria-label={`${isId ? 'Pilih kelas' : 'Select class'} ${item.name}`}
                                                         checked={isSelected}
                                                         onChange={() => toggleRow(item.id)}
-                                                        disabled={deleteMutation.isPending || isDataBusy}
+                                                        disabled={deleteMutation.isPending || isInitialLoading}
                                                         className="h-4 w-4 cursor-pointer rounded border-border bg-muted accent-emerald-600 disabled:cursor-not-allowed"
                                                     />
                                                 </td>
@@ -898,7 +908,7 @@ export function ClassListPage() {
                                                             to={`/academic/classes/${encodeURIComponent(item.id)}/edit`}
                                                             className={cn(
                                                                 'rounded-md p-2 text-emerald-600 transition-colors hover:bg-emerald-50 dark:text-emerald-400 dark:hover:bg-emerald-500/10',
-                                                                isDataBusy && 'pointer-events-none opacity-50'
+                                                                isInitialLoading && 'pointer-events-none opacity-50'
                                                             )}
                                                         >
                                                             <Edit className="h-4 w-4" aria-hidden="true" />
@@ -908,7 +918,7 @@ export function ClassListPage() {
                                                                 type="button"
                                                                 aria-label={`${t.deleteClass} ${item.name}`}
                                                                 onClick={() => openSingleDelete(item)}
-                                                                disabled={deleteMutation.isPending || isDataBusy}
+                                                                disabled={deleteMutation.isPending || isInitialLoading}
                                                                 className="rounded-md p-2 text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-red-400 dark:hover:bg-red-500/10"
                                                             >
                                                                 <Trash2 className="h-4 w-4" aria-hidden="true" />
@@ -948,7 +958,7 @@ export function ClassListPage() {
                                         if (event.key === 'Enter') event.currentTarget.blur();
                                     }}
                                     onBlur={handlePageSubmit}
-                                    disabled={classesQuery.isLoading || isDataBusy}
+                                    disabled={isInitialLoading}
                                     className="h-9 w-14 rounded-md border border-border bg-background text-center font-medium shadow-sm focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"
                                 />
                             </div>
@@ -961,7 +971,7 @@ export function ClassListPage() {
                                     title={isId ? 'Halaman pertama' : 'First page'}
                                     aria-label={isId ? 'Halaman pertama' : 'First page'}
                                     onClick={() => setCurrentPage(1)}
-                                    disabled={safeCurrentPage === 1 || classesQuery.isLoading || isDataBusy}
+                                    disabled={safeCurrentPage === 1 || isInitialLoading}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronsLeft size={16} />
@@ -972,7 +982,7 @@ export function ClassListPage() {
                                     title={isId ? 'Halaman sebelumnya' : 'Previous page'}
                                     aria-label={isId ? 'Halaman sebelumnya' : 'Previous page'}
                                     onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
-                                    disabled={safeCurrentPage === 1 || classesQuery.isLoading || isDataBusy}
+                                    disabled={safeCurrentPage === 1 || isInitialLoading}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronLeft size={16} />
@@ -982,7 +992,7 @@ export function ClassListPage() {
                                     <button
                                         type="button"
                                         key={`${page}-${index}`}
-                                        disabled={page === '...' || classesQuery.isLoading || isDataBusy}
+                                        disabled={page === '...' || isInitialLoading}
                                         onClick={() => { if (typeof page === 'number') setCurrentPage(page); }}
                                         aria-current={page === safeCurrentPage ? 'page' : undefined}
                                         className={cn(
@@ -1003,7 +1013,7 @@ export function ClassListPage() {
                                     title={isId ? 'Halaman berikutnya' : 'Next page'}
                                     aria-label={isId ? 'Halaman berikutnya' : 'Next page'}
                                     onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
-                                    disabled={safeCurrentPage === totalPages || classesQuery.isLoading || isDataBusy}
+                                    disabled={safeCurrentPage === totalPages || isInitialLoading}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronRight size={16} />
@@ -1014,7 +1024,7 @@ export function ClassListPage() {
                                     title={isId ? 'Halaman terakhir' : 'Last page'}
                                     aria-label={isId ? 'Halaman terakhir' : 'Last page'}
                                     onClick={() => setCurrentPage(totalPages)}
-                                    disabled={safeCurrentPage === totalPages || classesQuery.isLoading || isDataBusy}
+                                    disabled={safeCurrentPage === totalPages || isInitialLoading}
                                     className="flex h-9 w-9 items-center justify-center rounded-md border border-border text-muted-foreground shadow-sm transition-all hover:bg-muted hover:text-foreground disabled:opacity-40"
                                 >
                                     <ChevronsRight size={16} />

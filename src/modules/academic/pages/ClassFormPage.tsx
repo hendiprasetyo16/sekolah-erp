@@ -5,10 +5,9 @@ import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, ArrowLeft, Loader2, Save, X } from 'lucide-react';
+import { AlertCircle, ArrowLeft, Info, Loader2, Save, X } from 'lucide-react';
 import { toast } from 'sonner';
 
-import { supabase } from '@/services/supabase.client';
 import { academicService } from '../services/academic.service';
 import { useAuthStore } from '@/modules/auth/store/auth.store';
 import { useTranslation } from '@/hooks/useTranslation';
@@ -20,6 +19,7 @@ import type {
     AcademicYear,
     ClassItem,
     CreateClassPayload,
+    TeacherOption,
     UpdateClassPayload,
 } from '../types/academic.types';
 
@@ -90,11 +90,6 @@ const classSchema = z.object({
 
 type ClassFormValues = z.infer<typeof classSchema>;
 
-interface TeacherOption {
-    id: string;
-    fullName: string;
-}
-
 interface ClassFormInnerProps {
     initialData?: ClassItem;
     academicYears: AcademicYear[];
@@ -141,6 +136,11 @@ function ClassFormInner({
             teacherLabel: isId ? 'Wali Kelas (Opsional)' : 'Homeroom Teacher (Optional)',
             teacherPlaceholder: isId ? 'Pilih Wali Kelas' : 'Select Teacher',
             noTeacher: isId ? '-- Belum Ada Wali Kelas --' : '-- No Homeroom Teacher --',
+            homeroomPrefix: isId ? 'Wali:' : 'Homeroom:',
+            multiHomeroomNote: (classNames: string) =>
+                isId
+                    ? `Guru ini juga menjadi wali kelas di: ${classNames} (diizinkan untuk SKB / multi-rombel).`
+                    : `This teacher is also homeroom teacher for: ${classNames} (allowed for multi-class / SKB).`,
             majorLabel: isId ? 'Jurusan / Program (Opsional)' : 'Major / Program (Optional)',
             majorPlaceholder: isId ? 'Contoh: RPL, TKJ, IPA, Paket C' : 'e.g. Software Engineering, if applicable',
             btnCancel: isId ? 'Batal' : 'Cancel',
@@ -195,6 +195,35 @@ function ClassFormInner({
         },
     });
 
+    const watchedAcademicYearId = form.watch('academicYearId');
+    const watchedHomeroomTeacherId = form.watch('homeroomTeacherId');
+
+    // Mengambil daftar kelas pada tahun ajaran terpilih untuk informasi wali kelas (non-blocking, mendukung multi-kelas SKB)
+    const yearClassesQuery = useQuery({
+        queryKey: ['classes', schoolId, watchedAcademicYearId],
+        queryFn: () => academicService.getClasses(schoolId, watchedAcademicYearId),
+        enabled: Boolean(schoolId && watchedAcademicYearId),
+        staleTime: 60 * 1000,
+    });
+
+    const otherHomeroomClassesByTeacher = useMemo(() => {
+        const map = new Map<string, string[]>();
+        const list = yearClassesQuery.data?.data ?? [];
+        for (const cls of list) {
+            if (cls.id === classId) continue;
+            if (!cls.homeroomTeacherId) continue;
+            const current = map.get(cls.homeroomTeacherId) ?? [];
+            current.push(cls.name);
+            map.set(cls.homeroomTeacherId, current);
+        }
+        return map;
+    }, [yearClassesQuery.data?.data, classId]);
+
+    const selectedTeacherOtherClasses = useMemo(() => {
+        if (!watchedHomeroomTeacherId || watchedHomeroomTeacherId === 'none') return [];
+        return otherHomeroomClassesByTeacher.get(watchedHomeroomTeacherId) ?? [];
+    }, [watchedHomeroomTeacherId, otherHomeroomClassesByTeacher]);
+
     const mutation = useMutation({
         mutationFn: async (values: ClassFormValues) => {
             if (!schoolId) throw new Error(t.noSchool);
@@ -238,6 +267,7 @@ function ClassFormInner({
                 queryClient.invalidateQueries({ queryKey: ['class', schoolId, classId] }),
                 queryClient.invalidateQueries({ queryKey: ['classes-list'] }),
                 queryClient.invalidateQueries({ queryKey: ['academic-years', schoolId] }),
+                queryClient.invalidateQueries({ queryKey: ['teachers'] }),
             ]);
             navigate(CLASS_LIST_ROUTE, { ...CLASS_LIST_STATE, replace: true });
         },
@@ -383,11 +413,26 @@ function ClassFormInner({
                                 </FormControl>
                                 <SelectContent className="max-h-75">
                                     <SelectItem value="none">{t.noTeacher}</SelectItem>
-                                    {teachers.map((teacher) => (
-                                        <SelectItem key={teacher.id} value={teacher.id}>{teacher.fullName}</SelectItem>
-                                    ))}
+                                    {teachers.map((teacher) => {
+                                        const assignedClasses = otherHomeroomClassesByTeacher.get(teacher.id);
+                                        const label =
+                                            assignedClasses && assignedClasses.length > 0
+                                                ? `${teacher.fullName} (${t.homeroomPrefix} ${assignedClasses.join(', ')})`
+                                                : teacher.fullName;
+                                        return (
+                                            <SelectItem key={teacher.id} value={teacher.id}>
+                                                {label}
+                                            </SelectItem>
+                                        );
+                                    })}
                                 </SelectContent>
                             </Select>
+                            {selectedTeacherOtherClasses.length > 0 && (
+                                <p className="flex items-start gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                                    <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                    <span>{t.multiHomeroomNote(selectedTeacherOtherClasses.join(', '))}</span>
+                                </p>
+                            )}
                             <FormMessage />
                         </FormItem>
                     )}
@@ -466,21 +511,10 @@ export function ClassFormPage() {
     });
 
     const teachersQuery = useQuery({
-        queryKey: ['teachers-list', schoolId],
-        queryFn: async (): Promise<TeacherOption[]> => {
+        queryKey: ['teachers', 'options', schoolId],
+        queryFn: () => {
             if (!schoolId) throw new Error(t.noSchool);
-            const { data, error } = await supabase
-                .from('teachers')
-                .select('id, fullName')
-                .eq('schoolId', schoolId)
-                .eq('isActive', true)
-                .order('fullName', { ascending: true });
-
-            if (error) throw error;
-            return (data ?? []).map((teacher) => ({
-                id: teacher.id,
-                fullName: teacher.fullName,
-            }));
+            return academicService.getActiveTeacherOptions(schoolId);
         },
         enabled: Boolean(schoolId && canManageData),
     });
@@ -496,6 +530,7 @@ export function ClassFormPage() {
     });
 
     const academicYears: AcademicYear[] = academicYearsQuery.data?.data ?? [];
+    const teacherOptions: TeacherOption[] = teachersQuery.data?.data ?? [];
     const classData = classQuery.data?.data;
     const isLoading =
         academicYearsQuery.isLoading ||
@@ -590,7 +625,7 @@ export function ClassFormPage() {
                             key={`${schoolId}-${id ?? 'new'}`}
                             initialData={classData}
                             academicYears={academicYears}
-                            teachers={teachersQuery.data ?? []}
+                            teachers={teacherOptions}
                             isEdit={isEdit}
                             schoolId={schoolId}
                             schoolLevel={school?.level}

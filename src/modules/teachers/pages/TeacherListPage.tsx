@@ -1,5 +1,4 @@
-// src/modules/teachers/pages/TeacherListPage.tsx
-import { useState, useRef, useEffect, useMemo } from 'react';
+import { useState, useRef, useEffect, useMemo, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -8,7 +7,8 @@ import {
   ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   X, AlertTriangle, AlertCircle, ArrowUpDown, ArrowUp, ArrowDown,
   FileSpreadsheet, CheckCircle2, RefreshCw, Sparkles, Filter, ZoomIn,
-  ShieldCheck, KeyRound, Globe, MonitorSmartphone, Clock, Users, History
+  ShieldCheck, KeyRound, Globe, MonitorSmartphone, Clock, Users, History,
+  BookOpen
 } from 'lucide-react';
 import { toast } from 'sonner';
 import * as XLSX from 'xlsx';
@@ -28,6 +28,7 @@ import type {
   TeacherSecurityAuditItem,
 } from '../types/teacher.types';
 import { useTeacherScope } from '@/hooks/useTeacherScope';
+import { TeacherSubjectAssignmentSection } from '../components/TeacherSubjectAssignmentSection';
 
 // ==========================================
 // TYPES & CONSTANTS
@@ -38,7 +39,7 @@ type DeleteModalState = { isOpen: boolean; type: 'single' | 'bulk' | 'all'; id?:
 type DiffFilterTab = 'all' | 'new' | 'updated' | 'unchanged';
 type DetectedExcelType = 'teacher' | 'student' | 'unknown';
 type PhotoPreviewState = { id: string; fullName: string; photoUrl: string } | null;
-type ActiveMainTab = 'directory' | 'security_audit';
+type ActiveMainTab = 'directory' | 'subject_assignments' | 'security_audit';
 
 const PAGE_SIZE = 10;
 const FALLBACK_HEADER_ROW = 4;
@@ -70,7 +71,7 @@ const STATUS_CONFIG: Record<string, { label: string; color: string }> = {
   },
 };
 
-const DIFF_FIELD_LABELS: Record<keyof TeacherBulkImportItem, string> = {
+const DIFF_FIELD_LABELS_ID: Record<keyof TeacherBulkImportItem, string> = {
   schoolId: 'Sekolah',
   fullName: 'Nama Lengkap',
   gender: 'JK',
@@ -139,6 +140,77 @@ const DIFF_FIELD_LABELS: Record<keyof TeacherBulkImportItem, string> = {
   baseSalary: 'Gaji Pokok',
   subjects: 'Mapel',
   maxHoursPerWeek: 'Jam Mengajar',
+};
+
+const DIFF_FIELD_LABELS_EN: Record<keyof TeacherBulkImportItem, string> = {
+  schoolId: 'School',
+  fullName: 'Full Name',
+  gender: 'Gender',
+  nip: 'NIP',
+  nuptk: 'NUPTK',
+  nik: 'NIK',
+  noKk: 'Family Card No.',
+  birthPlace: 'Birth Place',
+  birthDate: 'Birth Date',
+  religion: 'Religion',
+  address: 'Address',
+  dusun: 'Hamlet',
+  rt: 'RT',
+  rw: 'RW',
+  kelurahan: 'Village',
+  kecamatan: 'District',
+  city: 'City/Regency',
+  province: 'Province',
+  postalCode: 'Postal Code',
+  telepon: 'Landline',
+  phone: 'Mobile Phone',
+  email: 'Email',
+  status: 'Employment Status',
+  position: 'Position',
+  joinDate: 'Join Date',
+  tugasTambahan: 'Additional Duty',
+  skCpns: 'CPNS Decree',
+  tanggalCpns: 'CPNS Date',
+  skPengangkatan: 'Appointment Decree',
+  tmtPengangkatan: 'Appointment TMT',
+  lembagaPengangkatan: 'Appointing Body',
+  pangkatGolongan: 'Rank/Grade',
+  sumberGaji: 'Salary Source',
+  tmtPns: 'PNS TMT',
+  karpeg: 'Karpeg',
+  namaIbuKandung: 'Mother Name',
+  statusPerkawinan: 'Marital Status',
+  namaSuamiIstri: 'Spouse Name',
+  nipSuamiIstri: 'Spouse NIP',
+  pekerjaanSuamiIstri: 'Spouse Occupation',
+  karisKarsu: 'Karis/Karsu',
+  kewarganegaraan: 'Nationality',
+  npwp: 'Tax ID (NPWP)',
+  namaWajibPajak: 'Taxpayer Name',
+  bank: 'Bank',
+  nomorRekeningBank: 'Account Number',
+  rekeningAtasNama: 'Account Holder',
+  lintang: 'Latitude',
+  bujur: 'Longitude',
+  nuks: 'NUKS',
+  sudahLisensiKepalaSekolah: 'Principal License',
+  pernahDiklatKepengawasan: 'Supervisory Training',
+  keahlianBraille: 'Braille Skill',
+  keahlianBahasaIsyarat: 'Sign Language Skill',
+  id: 'ID',
+  diffAction: 'Action',
+  diffFields: 'Changes',
+  photoUrl: 'Photo',
+  education: 'Education',
+  major: 'Major',
+  university: 'University',
+  isCertified: 'Certified',
+  certificationNumber: 'Certification No.',
+  isActive: 'Active',
+  allowDesktopAttendance: 'Desktop Attendance',
+  baseSalary: 'Base Salary',
+  subjects: 'Subjects',
+  maxHoursPerWeek: 'Max Weekly Hours',
 };
 
 const extractFriendlyErrorMessage = (
@@ -210,11 +282,15 @@ const extractFriendlyErrorMessage = (
 // ==========================================
 // HELPERS FORMAT TANGGAL & DEVICE AUDIT
 // ==========================================
-const formatAuditDateTime = (iso?: string | null): { date: string; time: string } | null => {
+const formatAuditDateTime = (
+  iso?: string | null,
+  locale = 'id'
+): { date: string; time: string } | null => {
   if (!iso) return null;
   const dt = new Date(iso);
   if (Number.isNaN(dt.getTime())) return null;
-  const date = dt.toLocaleDateString('id-ID', {
+  const dateLocale = locale === 'id' ? 'id-ID' : 'en-GB';
+  const date = dt.toLocaleDateString(dateLocale, {
     day: '2-digit',
     month: 'short',
     year: 'numeric',
@@ -229,10 +305,10 @@ const formatAuditDateTime = (iso?: string | null): { date: string; time: string 
   return { date, time: `${time} WIB` };
 };
 
-const summarizeUserAgent = (ua?: string | null): string => {
+const summarizeUserAgent = (ua?: string | null, locale = 'id'): string => {
   if (!ua) return '-';
   const lower = ua.toLowerCase();
-  let os = 'Perangkat Lain';
+  let os = locale === 'id' ? 'Perangkat Lain' : 'Other Device';
   if (lower.includes('android')) os = 'Android';
   else if (lower.includes('iphone') || lower.includes('ipad')) os = 'iOS';
   else if (lower.includes('windows')) os = 'Windows';
@@ -397,8 +473,12 @@ const mapStatusKepegawaian = (status: string | null): string => {
   return 'HONORER';
 };
 
-const serialToIso = (serial: number): string =>
-  new Date(Math.round((serial - 25569) * 86400 * 1000)).toISOString().split('T')[0];
+const serialToIso = (serial: number): string | null => {
+  if (!Number.isFinite(serial) || serial < 1 || serial > 2958465) return null;
+  const dt = new Date(Math.round((serial - 25569) * 86400 * 1000));
+  if (Number.isNaN(dt.getTime())) return null;
+  return dt.toISOString().split('T')[0];
+};
 
 const parseExcelDate = (value: unknown): string | null => {
   if (value === null || value === undefined) return null;
@@ -546,13 +626,15 @@ const UPPER_COMPARE_KEYS = new Set<keyof TeacherBulkImportItem>([
 
 const computeSmartDiff = (
   incoming: TeacherBulkImportItem[],
-  existingList: TeacherDetail[]
+  existingList: TeacherDetail[],
+  locale = 'id'
 ): { rows: TeacherBulkImportItem[]; duplicateCount: number } => {
   const byNip = new Map<string, TeacherDetail>();
   const byNuptk = new Map<string, TeacherDetail>();
   const byNik = new Map<string, TeacherDetail>();
   const byNameBirth = new Map<string, TeacherDetail>();
 
+  const fieldLabels = locale === 'id' ? DIFF_FIELD_LABELS_ID : DIFF_FIELD_LABELS_EN;
   const safeExistingList = Array.isArray(existingList) ? existingList : [];
 
   for (const t of safeExistingList) {
@@ -693,7 +775,7 @@ const computeSmartDiff = (
       }
 
       if (normNext !== normPrev) {
-        changedLabels.push(DIFF_FIELD_LABELS[key] || String(key));
+        changedLabels.push(fieldLabels[key] || String(key));
       }
     }
 
@@ -747,6 +829,7 @@ function TeacherAvatarCell({
       <button
         type="button"
         title={previewTitle}
+        aria-label={previewTitle}
         onClick={(e) => {
           e.stopPropagation();
           onPreview?.({ id, fullName, photoUrl: photoUrl! });
@@ -787,10 +870,24 @@ interface SortableHeaderProps {
 
 function SortableHeader({ columnKey, label, sortConfig, onSort, className }: SortableHeaderProps) {
   const direction = sortConfig?.key === columnKey ? sortConfig.direction : null;
+  const ariaSort =
+    direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none';
+
+  const handleKeyDown = (e: ReactKeyboardEvent<HTMLTableCellElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onSort(columnKey);
+    }
+  };
+
   return (
     <th
+      scope="col"
+      tabIndex={0}
+      aria-sort={ariaSort}
+      onKeyDown={handleKeyDown}
       className={cn(
-        'px-4 py-3 text-sm font-semibold text-muted-foreground cursor-pointer hover:bg-muted/50 transition-colors select-none',
+        'px-4 py-3 text-sm font-semibold text-muted-foreground cursor-pointer hover:bg-muted/50 focus:outline-none focus:bg-muted/50 transition-colors select-none',
         className
       )}
       onClick={() => onSort(columnKey)}
@@ -819,7 +916,8 @@ export function TeacherListPage() {
   const { hasPermission, hasRole } = usePermission();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const tr = (id: string, en: string) => (locale === 'id' ? id : en);
+  const isId = locale === 'id';
+  const tr = (idText: string, enText: string) => (isId ? idText : enText);
 
   const schoolInfo = school as {
     id?: string;
@@ -844,7 +942,16 @@ export function TeacherListPage() {
   const canExportTeacher = hasPermission('teachers', 'export');
   const canClearAllTeachers = isSuperAdmin && canDeleteTeacher && Boolean(activeSchoolId);
 
-  // Tab Utama (Direktori Guru vs Audit Keamanan Login & Password Khusus Super Admin)
+  const canViewAssignmentsTab =
+    Boolean(activeSchoolId) &&
+    (isSuperAdmin ||
+      teacherScope.hasFullAcademicAccess ||
+      canUpdateTeacher ||
+      canCreateTeacher ||
+      Boolean(teacherScope.teacherId));
+  const showMainTabSwitcher = isSuperAdmin || canViewAssignmentsTab;
+
+  // Tab Utama (Direktori Guru vs Penugasan Mapel vs Audit Keamanan Login & Password Khusus Super Admin)
   const [activeMainTab, setActiveMainTab] = useState<ActiveMainTab>('directory');
 
   // Filter, Pagination, Selection & Sort State
@@ -883,6 +990,29 @@ export function TeacherListPage() {
   const [importDuplicateCount, setImportDuplicateCount] = useState(0);
   const [diffFilterTab, setDiffFilterTab] = useState<DiffFilterTab>('all');
 
+  // Reset seluruh state kontekstual sekolah saat sekolah aktif berganti
+  useEffect(() => {
+    setSelectedRows([]);
+    setCurrentPage(1);
+    setPageInputValue('1');
+    setImportError(null);
+    setImportModalOpen(false);
+    setImportPreviewRows([]);
+    setImportFileName('');
+    setImportSkippedCount(0);
+    setImportDuplicateCount(0);
+    setDeleteModal({ isOpen: false, type: 'single' });
+    setSelectedAuditTeacher(null);
+  }, [activeSchoolId]);
+
+  useEffect(() => {
+    if (!isSuperAdmin && activeMainTab === 'security_audit') {
+      setActiveMainTab('directory');
+    } else if (!canViewAssignmentsTab && activeMainTab === 'subject_assignments') {
+      setActiveMainTab('directory');
+    }
+  }, [isSuperAdmin, canViewAssignmentsTab, activeMainTab]);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearchQuery(searchInput);
@@ -907,15 +1037,6 @@ export function TeacherListPage() {
       setSelectedRows([]);
     }
   }, [canDeleteTeacher, selectedRows.length]);
-
-  useEffect(() => {
-    if (!photoPreview) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setPhotoPreview(null);
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [photoPreview]);
 
   const parsedCertifiedFilter =
     certifiedFilter === 'all' ? undefined : certifiedFilter === 'true';
@@ -1050,14 +1171,20 @@ export function TeacherListPage() {
     if (currentPage > totalPages && totalPages > 0) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
+  const invalidateTeacherRelatedCaches = () => {
+    queryClient.invalidateQueries({ queryKey: ['teachers'] });
+    queryClient.invalidateQueries({ queryKey: ['users-list'] });
+    queryClient.invalidateQueries({ queryKey: ['teacher-security-audit'] });
+    queryClient.invalidateQueries({ queryKey: ['teacher-assignment-options'] });
+  };
+
   // --- MUTATIONS ---
   const closeDeleteModal = () => setDeleteModal({ isOpen: false, type: 'single' });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => teacherService.delete(id, activeSchoolId ?? undefined),
     onSuccess: (_res, id) => {
-      queryClient.invalidateQueries({ queryKey: ['teachers'] });
-      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+      invalidateTeacherRelatedCaches();
       setSelectedRows((prev) => prev.filter((r) => r !== id));
       toast.success(tr('Data guru berhasil dihapus.', 'Teacher record deleted.'));
       closeDeleteModal();
@@ -1077,8 +1204,7 @@ export function TeacherListPage() {
   const deleteManyMutation = useMutation({
     mutationFn: (ids: string[]) => teacherService.deleteMany(ids, activeSchoolId ?? undefined),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['teachers'] });
-      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+      invalidateTeacherRelatedCaches();
       setSelectedRows([]);
       toast.success(tr('Data guru terpilih berhasil dihapus.', 'Selected teachers deleted.'));
       closeDeleteModal();
@@ -1105,8 +1231,7 @@ export function TeacherListPage() {
       return teacherService.deleteAll(activeSchoolId);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['teachers'] });
-      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+      invalidateTeacherRelatedCaches();
       setSelectedRows([]);
       toast.success(tr('Seluruh data guru berhasil dikosongkan.', 'All teacher records cleared.'));
       closeDeleteModal();
@@ -1124,10 +1249,10 @@ export function TeacherListPage() {
   });
 
   const bulkImportMutation = useMutation({
-    mutationFn: (payloads: TeacherBulkImportItem[]) => teacherService.bulkImport(payloads),
+    mutationFn: (payloads: TeacherBulkImportItem[]) =>
+      teacherService.bulkImport(payloads),
     onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ['teachers'] });
-      queryClient.invalidateQueries({ queryKey: ['users-list'] });
+      invalidateTeacherRelatedCaches();
       toast.success(res.message);
       setImportError(null);
       setImportModalOpen(false);
@@ -1147,6 +1272,43 @@ export function TeacherListPage() {
 
   const isDeleteBusy =
     deleteMutation.isPending || deleteManyMutation.isPending || deleteAllMutation.isPending;
+
+  // Tutup modal aktif via tombol Escape saat tidak sedang memproses mutasi
+  useEffect(() => {
+    const hasOpenOverlay = Boolean(
+      photoPreview || selectedAuditTeacher || importModalOpen || deleteModal.isOpen
+    );
+    if (!hasOpenOverlay) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (photoPreview) {
+        setPhotoPreview(null);
+        return;
+      }
+      if (selectedAuditTeacher) {
+        setSelectedAuditTeacher(null);
+        return;
+      }
+      if (importModalOpen && !bulkImportMutation.isPending) {
+        setImportModalOpen(false);
+        return;
+      }
+      if (deleteModal.isOpen && !isDeleteBusy) {
+        closeDeleteModal();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [
+    photoPreview,
+    selectedAuditTeacher,
+    importModalOpen,
+    bulkImportMutation.isPending,
+    deleteModal.isOpen,
+    isDeleteBusy,
+  ]);
 
   // --- HANDLERS ---
   const handleSort = (key: string) => {
@@ -1444,7 +1606,8 @@ export function TeacherListPage() {
       const existingRes = await teacherService.exportAll(activeSchoolId);
       const { rows: diffedRows, duplicateCount } = computeSmartDiff(
         payloads,
-        existingRes?.data || []
+        existingRes?.data || [],
+        locale
       );
 
       setImportFileName(file.name);
@@ -1549,6 +1712,20 @@ export function TeacherListPage() {
 
       const ws = XLSX.utils.json_to_sheet(exportData);
       const wb = XLSX.utils.book_new();
+
+      // Paksa format teks (@) pada NIP (col 3), NUPTK (col 4), NIK (col 5), dan No HP (col 18)
+      const textColIndices = [3, 4, 5, 18];
+      for (let r = 1; r <= exportData.length; r++) {
+        for (const c of textColIndices) {
+          const cellRef = XLSX.utils.encode_cell({ r, c });
+          const cell = ws[cellRef];
+          if (cell) {
+            cell.t = 's';
+            cell.z = '@';
+          }
+        }
+      }
+
       ws['!cols'] = [
         { wch: 5 },
         { wch: 30 },
@@ -1624,6 +1801,9 @@ export function TeacherListPage() {
       <AnimatePresence>
         {photoPreview && (
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={photoPreview.fullName}
             className="fixed inset-0 z-100 flex items-center justify-center bg-black/75 p-4 backdrop-blur-xs"
             onClick={() => setPhotoPreview(null)}
           >
@@ -1724,7 +1904,9 @@ export function TeacherListPage() {
                       <Upload size={16} />
                     )}
                     <span className="hidden sm:inline">
-                      {isParsingExcel ? tr('Membaca...', 'Reading...') : tr('Impor Verval PTK', 'Import Verval PTK')}
+                      {isParsingExcel
+                        ? tr('Membaca...', 'Reading...')
+                        : tr('Impor Verval PTK', 'Import Verval PTK')}
                     </span>
                   </button>
                 </>
@@ -1765,11 +1947,17 @@ export function TeacherListPage() {
         </div>
       </div>
 
-      {/* --- TAB SWITCHER KHUSUS SUPER_ADMIN (DIREKTORI VS AUDIT KEAMANAN LOGIN & PASSWORD) --- */}
-      {isSuperAdmin && (
-        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/40 p-1.5 w-fit">
+      {/* --- TAB SWITCHER UTAMA (DIREKTORI / PENUGASAN MAPEL / AUDIT KEAMANAN) --- */}
+      {showMainTabSwitcher && (
+        <div
+          role="tablist"
+          aria-label={tr('Navigasi Modul Guru', 'Teacher Module Navigation')}
+          className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/40 p-1.5 w-fit max-w-full"
+        >
           <button
             type="button"
+            role="tab"
+            aria-selected={activeMainTab === 'directory'}
             onClick={() => setActiveMainTab('directory')}
             className={cn(
               'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all',
@@ -1778,32 +1966,59 @@ export function TeacherListPage() {
                 : 'text-muted-foreground hover:text-foreground'
             )}
           >
-            <Users className="h-4 w-4" />
+            <Users className="h-4 w-4 shrink-0" />
             <span>{tr('Daftar Guru & Pegawai', 'Teachers Directory')}</span>
           </button>
 
-          <button
-            type="button"
-            onClick={() => setActiveMainTab('security_audit')}
-            className={cn(
-              'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all',
-              activeMainTab === 'security_audit'
-                ? 'bg-amber-600 text-white shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            <ShieldCheck className="h-4 w-4" />
-            <span>
-              {tr('Audit Login & Password Guru', 'Login & Password Audit')}
-            </span>
-          </button>
+          {canViewAssignmentsTab && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeMainTab === 'subject_assignments'}
+              onClick={() => setActiveMainTab('subject_assignments')}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all',
+                activeMainTab === 'subject_assignments'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <BookOpen className="h-4 w-4 shrink-0" />
+              <span>{tr('Penugasan Mapel & Kelas', 'Subject & Class Assignments')}</span>
+            </button>
+          )}
+
+          {isSuperAdmin && (
+            <button
+              type="button"
+              role="tab"
+              aria-selected={activeMainTab === 'security_audit'}
+              onClick={() => setActiveMainTab('security_audit')}
+              className={cn(
+                'inline-flex items-center gap-2 rounded-lg px-4 py-2 text-xs sm:text-sm font-semibold transition-all',
+                activeMainTab === 'security_audit'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground'
+              )}
+            >
+              <ShieldCheck className="h-4 w-4 shrink-0" />
+              <span>
+                {tr('Audit Login & Password Guru', 'Login & Password Audit')}
+              </span>
+            </button>
+          )}
         </div>
       )}
 
       {/* ========================================================================
-          TAMPILAN KHUSUS SUPER_ADMIN: AUDIT LOGIN TERAKHIR, IP & GANTI PASSWORD
+          TAMPILAN TAB PENUGASAN MATA PELAJARAN & BEBAN JAM MENGAJAR (JP)
       ======================================================================== */}
-      {isSuperAdmin && activeMainTab === 'security_audit' ? (
+      {activeMainTab === 'subject_assignments' && activeSchoolId ? (
+        <TeacherSubjectAssignmentSection schoolId={activeSchoolId} />
+      ) : isSuperAdmin && activeMainTab === 'security_audit' ? (
+        /* ========================================================================
+            TAMPILAN KHUSUS SUPER_ADMIN: AUDIT LOGIN TERAKHIR, IP & GANTI PASSWORD
+        ======================================================================== */
         <div className="space-y-4">
           {/* Ringkasan Statistik Keamanan Akun Guru */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -1868,6 +2083,7 @@ export function TeacherListPage() {
                 {auditSearchInput && (
                   <button
                     type="button"
+                    aria-label={tr('Hapus pencarian audit', 'Clear audit search')}
                     onClick={() => setAuditSearchInput('')}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
                   >
@@ -1878,6 +2094,7 @@ export function TeacherListPage() {
 
               <div className="flex flex-wrap items-center gap-2">
                 <select
+                  aria-label={tr('Filter status login', 'Filter login status')}
                   value={auditFilterMode}
                   onChange={(e) =>
                     setAuditFilterMode(
@@ -1923,12 +2140,24 @@ export function TeacherListPage() {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="bg-muted/50 border-b border-border text-xs uppercase tracking-wider text-muted-foreground">
-                    <th className="px-4 py-3 font-semibold">Guru & Sekolah</th>
-                    <th className="px-4 py-3 font-semibold">Akun Login</th>
-                    <th className="px-4 py-3 font-semibold">Login Terakhir (Tgl & Jam)</th>
-                    <th className="px-4 py-3 font-semibold">Alamat IP & Perangkat</th>
-                    <th className="px-4 py-3 font-semibold">Riwayat Ganti Password</th>
-                    <th className="px-4 py-3 text-right font-semibold">Log</th>
+                    <th scope="col" className="px-4 py-3 font-semibold">
+                      {tr('Guru & Sekolah', 'Teacher & School')}
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-semibold">
+                      {tr('Akun Login', 'Login Account')}
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-semibold">
+                      {tr('Login Terakhir (Tgl & Jam)', 'Last Login (Date & Time)')}
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-semibold">
+                      {tr('Alamat IP & Perangkat', 'IP Address & Device')}
+                    </th>
+                    <th scope="col" className="px-4 py-3 font-semibold">
+                      {tr('Riwayat Ganti Password', 'Password Change History')}
+                    </th>
+                    <th scope="col" className="px-4 py-3 text-right font-semibold">
+                      {tr('Log', 'Logs')}
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border bg-card text-sm">
@@ -1950,8 +2179,8 @@ export function TeacherListPage() {
                     </tr>
                   ) : (
                     filteredSecurityAuditItems.map((item) => {
-                      const lastLoginFmt = formatAuditDateTime(item.lastLogin);
-                      const pwdChangedFmt = formatAuditDateTime(item.passwordChangedAt);
+                      const lastLoginFmt = formatAuditDateTime(item.lastLogin, locale);
+                      const pwdChangedFmt = formatAuditDateTime(item.passwordChangedAt, locale);
                       const hasChangedPassword =
                         item.passwordChangeCount > 0 || Boolean(item.passwordChangedAt);
 
@@ -1992,14 +2221,14 @@ export function TeacherListPage() {
                                   </span>
                                   {!item.isAccountActive && (
                                     <span className="inline-flex px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-600 text-[10px] font-semibold">
-                                      Nonaktif
+                                      {tr('Nonaktif', 'Inactive')}
                                     </span>
                                   )}
                                 </div>
                               </div>
                             ) : (
                               <span className="inline-flex px-2 py-0.5 rounded-md bg-muted text-xs text-muted-foreground">
-                                Belum Punya Akun
+                                {tr('Belum Punya Akun', 'No Account')}
                               </span>
                             )}
                           </td>
@@ -2017,7 +2246,7 @@ export function TeacherListPage() {
                               </div>
                             ) : (
                               <span className="text-xs text-amber-600 dark:text-amber-400 font-medium">
-                                Belum pernah login
+                                {tr('Belum pernah login', 'Never logged in')}
                               </span>
                             )}
                           </td>
@@ -2031,7 +2260,7 @@ export function TeacherListPage() {
                                 </div>
                                 <div className="flex items-center gap-1 text-[11px] text-muted-foreground">
                                   <MonitorSmartphone className="h-3 w-3 shrink-0" />
-                                  <span>{summarizeUserAgent(item.lastLoginUserAgent)}</span>
+                                  <span>{summarizeUserAgent(item.lastLoginUserAgent, locale)}</span>
                                 </div>
                               </div>
                             ) : (
@@ -2047,7 +2276,10 @@ export function TeacherListPage() {
                                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-700 dark:text-blue-300 text-xs font-semibold">
                                   <KeyRound className="h-3 w-3" />
                                   <span>
-                                    Sudah Ganti ({Math.max(1, item.passwordChangeCount)}x)
+                                    {tr(
+                                      `Sudah Ganti (${Math.max(1, item.passwordChangeCount)}x)`,
+                                      `Changed (${Math.max(1, item.passwordChangeCount)}x)`
+                                    )}
                                   </span>
                                 </span>
                                 {pwdChangedFmt && (
@@ -2061,7 +2293,7 @@ export function TeacherListPage() {
                               </div>
                             ) : (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-muted text-muted-foreground text-xs">
-                                Belum Ganti Password
+                                {tr('Belum Ganti Password', 'Never Changed')}
                               </span>
                             )}
                           </td>
@@ -2074,7 +2306,7 @@ export function TeacherListPage() {
                                 className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border bg-background hover:bg-muted text-xs font-semibold transition-colors"
                               >
                                 <History className="h-3.5 w-3.5 text-amber-600" />
-                                <span>Riwayat</span>
+                                <span>{tr('Riwayat', 'History')}</span>
                               </button>
                             )}
                           </td>
@@ -2091,7 +2323,10 @@ export function TeacherListPage() {
         <>
           {/* --- BANNER ERROR IMPOR EXCEL (PERSISTEN) --- */}
           {importError && (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm">
+            <div
+              role="alert"
+              className="flex items-start justify-between gap-3 rounded-xl border border-red-300 bg-red-50 p-4 text-xs sm:text-sm text-red-900 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-300 shadow-sm"
+            >
               <div className="flex items-start gap-2.5">
                 <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-red-600 dark:text-red-400" />
                 <div>
@@ -2105,6 +2340,7 @@ export function TeacherListPage() {
                 type="button"
                 onClick={() => setImportError(null)}
                 title={tr('Tutup pesan error', 'Dismiss error')}
+                aria-label={tr('Tutup pesan error', 'Dismiss error')}
                 className="p-1 rounded-lg text-red-600 hover:bg-red-100 dark:text-red-400 dark:hover:bg-red-500/20 transition-colors shrink-0"
               >
                 <X size={16} />
@@ -2121,8 +2357,8 @@ export function TeacherListPage() {
                 </p>
                 <p className="mt-0.5">
                   {tr(
-                    'Pilih sekolah aktif terlebih dahulu pada switcher sekolah untuk menambah guru baru atau mengimpor Excel Verval PTK.',
-                    'Select an active school from the school switcher before adding new teachers or importing Verval PTK Excel.'
+                    'Pilih sekolah aktif terlebih dahulu pada switcher sekolah untuk menambah guru baru, mengatur penugasan mapel, atau mengimpor Excel Verval PTK.',
+                    'Select an active school from the school switcher before adding new teachers, managing subject assignments, or importing Verval PTK Excel.'
                   )}
                 </p>
               </div>
@@ -2153,6 +2389,7 @@ export function TeacherListPage() {
                     type="button"
                     onClick={() => setSearchInput('')}
                     title={tr('Hapus pencarian', 'Clear search')}
+                    aria-label={tr('Hapus pencarian', 'Clear search')}
                     className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
                   >
                     <X size={14} />
@@ -2174,7 +2411,7 @@ export function TeacherListPage() {
                         setStatusFilter(e.target.value);
                         setCurrentPage(1);
                       }}
-                      aria-label="Filter Status Kepegawaian"
+                      aria-label={tr('Filter Status Kepegawaian', 'Filter Employment Status')}
                       className="w-full sm:w-auto pl-8 pr-7 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-emerald-500"
                     >
                       <option value="all">{tr('Semua Status', 'All Status')}</option>
@@ -2193,7 +2430,7 @@ export function TeacherListPage() {
                       setCertifiedFilter(e.target.value);
                       setCurrentPage(1);
                     }}
-                    aria-label="Filter Status Sertifikasi"
+                    aria-label={tr('Filter Status Sertifikasi', 'Filter Certification Status')}
                     className="flex-1 sm:flex-initial px-3 py-2 bg-background border border-border rounded-lg text-sm text-foreground focus:outline-none focus:border-emerald-500"
                   >
                     <option value="all">{tr('Semua Sertifikasi', 'All Certification')}</option>
@@ -2222,6 +2459,7 @@ export function TeacherListPage() {
                       type="button"
                       onClick={() => setSelectedRows([])}
                       title={tr('Batal Pilih', 'Clear Selection')}
+                      aria-label={tr('Batal Pilih', 'Clear Selection')}
                       className="p-2 text-muted-foreground hover:bg-muted rounded-lg transition-colors"
                     >
                       <X size={16} />
@@ -2237,16 +2475,17 @@ export function TeacherListPage() {
                 <thead>
                   <tr className="bg-muted/50 border-b border-border">
                     {canDeleteTeacher && (
-                      <th className="p-4 w-12 text-center">
+                      <th scope="col" className="p-4 w-12 text-center">
                         <input
                           type="checkbox"
+                          aria-label={tr('Pilih semua guru di halaman ini', 'Select all teachers on this page')}
                           checked={selectedRows.length === teachers.length && teachers.length > 0}
                           onChange={toggleAll}
                           className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
                         />
                       </th>
                     )}
-                    <th className="px-4 py-3 text-sm font-semibold text-muted-foreground w-12 text-center">
+                    <th scope="col" className="px-4 py-3 text-sm font-semibold text-muted-foreground w-12 text-center">
                       No
                     </th>
                     <SortableHeader
@@ -2274,10 +2513,10 @@ export function TeacherListPage() {
                       sortConfig={sortConfig}
                       onSort={handleSort}
                     />
-                    <th className="px-4 py-3 text-sm font-semibold text-muted-foreground">
+                    <th scope="col" className="px-4 py-3 text-sm font-semibold text-muted-foreground">
                       {tr('Sertifikasi', 'Certification')}
                     </th>
-                    <th className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">
+                    <th scope="col" className="px-4 py-3 text-right text-sm font-semibold text-muted-foreground">
                       {tr('Aksi', 'Action')}
                     </th>
                   </tr>
@@ -2351,6 +2590,7 @@ export function TeacherListPage() {
                             <td className="p-4 text-center" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
+                                aria-label={tr(`Pilih ${teacher.fullName}`, `Select ${teacher.fullName}`)}
                                 checked={selectedRows.includes(teacher.id)}
                                 onChange={() => toggleRow(teacher.id)}
                                 className="w-4 h-4 rounded border-border bg-muted accent-emerald-600 cursor-pointer"
@@ -2439,6 +2679,7 @@ export function TeacherListPage() {
                                 to={`/teachers/${teacher.id}`}
                                 className="p-1.5 text-muted-foreground hover:text-blue-600 hover:bg-blue-500/10 rounded-lg transition-colors"
                                 title={tr('Lihat Detail', 'View Detail')}
+                                aria-label={tr(`Lihat detail ${teacher.fullName}`, `View details for ${teacher.fullName}`)}
                               >
                                 <Eye size={16} />
                               </Link>
@@ -2447,6 +2688,7 @@ export function TeacherListPage() {
                                   to={`/teachers/${teacher.id}/edit`}
                                   className="p-1.5 text-muted-foreground hover:text-emerald-600 hover:bg-emerald-500/10 rounded-lg transition-colors"
                                   title={tr('Edit Data', 'Edit Data')}
+                                  aria-label={tr(`Edit data ${teacher.fullName}`, `Edit ${teacher.fullName}`)}
                                 >
                                   <Edit size={16} />
                                 </Link>
@@ -2463,6 +2705,7 @@ export function TeacherListPage() {
                                   }
                                   className="p-1.5 text-muted-foreground hover:text-red-600 hover:bg-red-500/10 rounded-lg transition-colors"
                                   title={tr('Hapus Data', 'Delete Data')}
+                                  aria-label={tr(`Hapus data ${teacher.fullName}`, `Delete ${teacher.fullName}`)}
                                 >
                                   <Trash2 size={16} />
                                 </button>
@@ -2503,6 +2746,7 @@ export function TeacherListPage() {
                         disabled={currentPage === 1}
                         className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
                         title={tr('Halaman Pertama', 'First Page')}
+                        aria-label={tr('Halaman Pertama', 'First Page')}
                       >
                         <ChevronsLeft size={16} />
                       </button>
@@ -2512,6 +2756,7 @@ export function TeacherListPage() {
                         disabled={currentPage === 1}
                         className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
                         title={tr('Sebelumnya', 'Previous')}
+                        aria-label={tr('Halaman Sebelumnya', 'Previous Page')}
                       >
                         <ChevronLeft size={16} />
                       </button>
@@ -2521,6 +2766,7 @@ export function TeacherListPage() {
                             type="button"
                             key={idx}
                             onClick={() => setCurrentPage(item)}
+                            aria-current={currentPage === item ? 'page' : undefined}
                             className={cn(
                               'w-8 h-8 flex items-center justify-center rounded-lg text-sm font-medium transition-colors',
                               currentPage === item
@@ -2542,6 +2788,7 @@ export function TeacherListPage() {
                         disabled={currentPage === totalPages}
                         className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
                         title={tr('Selanjutnya', 'Next')}
+                        aria-label={tr('Halaman Selanjutnya', 'Next Page')}
                       >
                         <ChevronRight size={16} />
                       </button>
@@ -2551,6 +2798,7 @@ export function TeacherListPage() {
                         disabled={currentPage === totalPages}
                         className="p-1.5 rounded-lg border border-border hover:bg-muted disabled:opacity-30 transition-colors"
                         title={tr('Halaman Terakhir', 'Last Page')}
+                        aria-label={tr('Halaman Terakhir', 'Last Page')}
                       >
                         <ChevronsRight size={16} />
                       </button>
@@ -2562,6 +2810,7 @@ export function TeacherListPage() {
                         type="number"
                         min={1}
                         max={totalPages}
+                        aria-label={tr('Nomor halaman', 'Page number')}
                         value={pageInputValue}
                         onChange={(e) => setPageInputValue(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handlePageSubmit()}
@@ -2583,11 +2832,18 @@ export function TeacherListPage() {
       ======================================================================== */}
       <AnimatePresence>
         {isSuperAdmin && selectedAuditTeacher && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="security-audit-modal-title"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+            onClick={() => setSelectedAuditTeacher(null)}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col overflow-hidden"
             >
               <div className="p-5 border-b border-border flex items-start justify-between gap-3 bg-muted/20">
@@ -2596,8 +2852,14 @@ export function TeacherListPage() {
                     <ShieldCheck size={20} />
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-foreground">
-                      Riwayat Login & Perubahan Password
+                    <h3
+                      id="security-audit-modal-title"
+                      className="text-base font-bold text-foreground"
+                    >
+                      {tr(
+                        'Riwayat Login & Perubahan Password',
+                        'Login & Password Change History'
+                      )}
                     </h3>
                     <p className="text-xs text-muted-foreground">
                       {selectedAuditTeacher.fullName} ({selectedAuditTeacher.email}) •{' '}
@@ -2607,6 +2869,7 @@ export function TeacherListPage() {
                 </div>
                 <button
                   type="button"
+                  aria-label={tr('Tutup dialog riwayat', 'Close history dialog')}
                   onClick={() => setSelectedAuditTeacher(null)}
                   className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
                 >
@@ -2618,15 +2881,21 @@ export function TeacherListPage() {
                 {isSelectedUserLogsLoading ? (
                   <div className="py-12 text-center text-muted-foreground">
                     <Loader2 className="h-7 w-7 animate-spin text-amber-600 mx-auto mb-2" />
-                    Memuat kronologi aktivitas keamanan...
+                    {tr(
+                      'Memuat kronologi aktivitas keamanan...',
+                      'Loading security activity timeline...'
+                    )}
                   </div>
                 ) : selectedUserLogs.length === 0 ? (
                   <div className="py-10 text-center text-sm text-muted-foreground">
-                    Belum ada log aktivitas login atau perubahan password yang tercatat pada tabel audit.
+                    {tr(
+                      'Belum ada log aktivitas login atau perubahan password yang tercatat pada tabel audit.',
+                      'No login or password change events recorded in the audit table yet.'
+                    )}
                   </div>
                 ) : (
                   selectedUserLogs.map((log) => {
-                    const fmt = formatAuditDateTime(log.createdAt);
+                    const fmt = formatAuditDateTime(log.createdAt, locale);
                     const isPwdEvent =
                       log.action === 'CHANGE_PASSWORD' || log.action === 'RESET_PASSWORD';
                     return (
@@ -2652,10 +2921,10 @@ export function TeacherListPage() {
                               )}
                             >
                               {log.action === 'RESET_PASSWORD'
-                                ? 'Reset Password oleh Admin'
+                                ? tr('Reset Password oleh Admin', 'Password Reset by Admin')
                                 : log.action === 'CHANGE_PASSWORD'
-                                  ? 'Ganti Password Mandiri'
-                                  : 'Login Berhasil'}
+                                  ? tr('Ganti Password Mandiri', 'Self Password Change')
+                                  : tr('Login Berhasil', 'Successful Login')}
                             </span>
                             {fmt && (
                               <span className="text-xs font-semibold text-foreground">
@@ -2664,18 +2933,20 @@ export function TeacherListPage() {
                             )}
                           </div>
                           <div className="text-xs text-muted-foreground">
-                            Pelaku: <strong className="text-foreground">{log.actorName}</strong> (
+                            {tr('Pelaku:', 'Actor:')}{' '}
+                            <strong className="text-foreground">{log.actorName}</strong> (
                             {log.actorEmail})
                           </div>
                           <div className="text-[11px] text-muted-foreground">
-                            Perangkat: {summarizeUserAgent(log.userAgent)}
+                            {tr('Perangkat:', 'Device:')}{' '}
+                            {summarizeUserAgent(log.userAgent, locale)}
                           </div>
                         </div>
 
                         <div className="shrink-0">
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-background border border-border font-mono text-xs font-semibold">
                             <Globe className="h-3.5 w-3.5 text-blue-600" />
-                            <span>{log.ipAddress || 'Tidak terdeteksi'}</span>
+                            <span>{log.ipAddress || tr('Tidak terdeteksi', 'Not detected')}</span>
                           </span>
                         </div>
                       </div>
@@ -2690,7 +2961,7 @@ export function TeacherListPage() {
                   onClick={() => setSelectedAuditTeacher(null)}
                   className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium transition-colors"
                 >
-                  Tutup
+                  {tr('Tutup', 'Close')}
                 </button>
               </div>
             </motion.div>
@@ -2701,11 +2972,20 @@ export function TeacherListPage() {
       {/* --- SMARTDIFF IMPORT PREVIEW MODAL --- */}
       <AnimatePresence>
         {importModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="smartdiff-import-modal-title"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+            onClick={() => {
+              if (!bulkImportMutation.isPending) setImportModalOpen(false);
+            }}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-4xl max-h-[88vh] flex flex-col overflow-hidden"
             >
               <div className="p-5 border-b border-border flex items-start justify-between gap-4 bg-muted/20">
@@ -2714,20 +2994,27 @@ export function TeacherListPage() {
                     <Sparkles size={20} />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-foreground">
+                    <h3
+                      id="smartdiff-import-modal-title"
+                      className="text-lg font-bold text-foreground"
+                    >
                       {tr('Pratinjau SmartDiff Impor PTK', 'SmartDiff PTK Import Preview')}
                     </h3>
                     <p className="text-xs text-muted-foreground mt-0.5">
                       File: <span className="font-medium text-foreground">{importFileName}</span>
-                      {importSkippedCount > 0 && ` • ${importSkippedCount} baris kosong dilewati`}
-                      {importDuplicateCount > 0 && ` • ${importDuplicateCount} baris ganda digabung`}
+                      {importSkippedCount > 0 &&
+                        ` • ${importSkippedCount} ${tr('baris kosong dilewati', 'empty rows skipped')}`}
+                      {importDuplicateCount > 0 &&
+                        ` • ${importDuplicateCount} ${tr('baris ganda digabung', 'duplicate rows merged')}`}
                     </p>
                   </div>
                 </div>
                 <button
                   type="button"
-                  onClick={() => !bulkImportMutation.isPending && setImportModalOpen(false)}
-                  className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors"
+                  disabled={bulkImportMutation.isPending}
+                  aria-label={tr('Tutup pratinjau impor', 'Close import preview')}
+                  onClick={() => setImportModalOpen(false)}
+                  className="p-1.5 rounded-lg text-muted-foreground hover:bg-muted transition-colors disabled:opacity-50"
                 >
                   <X size={18} />
                 </button>
@@ -2790,22 +3077,22 @@ export function TeacherListPage() {
                 <table className="w-full text-left border-collapse text-sm">
                   <thead className="bg-muted/50 sticky top-0 z-10 border-b border-border">
                     <tr>
-                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground w-12">
+                      <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-muted-foreground w-12">
                         No
                       </th>
-                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                      <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
                         {tr('Status Diff', 'Diff Status')}
                       </th>
-                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                      <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
                         {tr('Nama Lengkap', 'Full Name')}
                       </th>
-                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                      <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
                         NIP / NUPTK
                       </th>
-                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                      <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
                         {tr('Status / Jabatan', 'Status / Position')}
                       </th>
-                      <th className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
+                      <th scope="col" className="px-4 py-2.5 text-xs font-semibold text-muted-foreground">
                         {tr('Rincian Perubahan', 'Changed Fields')}
                       </th>
                     </tr>
@@ -2870,7 +3157,7 @@ export function TeacherListPage() {
                     type="button"
                     disabled={bulkImportMutation.isPending}
                     onClick={() => setImportModalOpen(false)}
-                    className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium transition-colors"
+                    className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium transition-colors disabled:opacity-50"
                   >
                     {tr('Batal', 'Cancel')}
                   </button>
@@ -2900,18 +3187,32 @@ export function TeacherListPage() {
       {/* --- DELETE CONFIRMATION MODAL --- */}
       <AnimatePresence>
         {deleteModal.isOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-teacher-modal-title"
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+            onClick={() => {
+              if (!isDeleteBusy) closeDeleteModal();
+            }}
+          >
             <motion.div
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
+              onClick={(e) => e.stopPropagation()}
               className="bg-card border border-border rounded-2xl shadow-2xl w-full max-w-md p-6 relative overflow-hidden"
             >
               <div className="w-12 h-12 rounded-full bg-red-500/10 text-red-500 flex items-center justify-center mb-4">
                 <AlertTriangle size={24} />
               </div>
 
-              <h3 className="text-lg font-bold text-foreground mb-2">{modalTitle}</h3>
+              <h3
+                id="delete-teacher-modal-title"
+                className="text-lg font-bold text-foreground mb-2"
+              >
+                {modalTitle}
+              </h3>
               <p className="text-sm text-muted-foreground mb-6 leading-relaxed">{modalDesc}</p>
 
               <div className="flex items-center justify-end gap-3">
@@ -2919,7 +3220,7 @@ export function TeacherListPage() {
                   type="button"
                   onClick={closeDeleteModal}
                   disabled={isDeleteBusy}
-                  className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium text-foreground transition-colors"
+                  className="px-4 py-2 rounded-lg border border-border bg-background hover:bg-muted text-sm font-medium text-foreground transition-colors disabled:opacity-50"
                 >
                   {tr('Batal', 'Cancel')}
                 </button>
@@ -2927,7 +3228,7 @@ export function TeacherListPage() {
                   type="button"
                   onClick={confirmDelete}
                   disabled={isDeleteBusy}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors shadow-sm"
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
                 >
                   {isDeleteBusy && <Loader2 size={16} className="animate-spin" />}
                   {tr('Ya, Hapus', 'Yes, Delete')}

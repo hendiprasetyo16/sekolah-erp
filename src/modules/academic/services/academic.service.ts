@@ -15,6 +15,7 @@ import type {
     UpdateClassPayload,
     AcademicYearRelation,
     TeacherRelation,
+    TeacherOption,
 } from '../types/academic.types';
 
 // ======================================================
@@ -603,6 +604,36 @@ export const academicService = {
     },
 
     // ==================================================
+    // OPSI GURU AKTIF (UNTUK DROPDOWN WALI KELAS)
+    // ==================================================
+
+    async getActiveTeacherOptions(
+        schoolId: string
+    ): Promise<ApiResponse<TeacherOption[]>> {
+        requireSchoolId(schoolId);
+
+        const { data, error } = await supabase
+            .from('teachers')
+            .select('id, fullName')
+            .eq('schoolId', schoolId)
+            .eq('isActive', true)
+            .order('fullName', { ascending: true });
+
+        if (error) throw handleDbError(error);
+
+        const options: TeacherOption[] = (data ?? []).map((teacher) => ({
+            id: teacher.id,
+            fullName: teacher.fullName,
+        }));
+
+        return {
+            success: true,
+            data: options,
+            message: 'Berhasil mengambil daftar guru aktif.',
+        };
+    },
+
+    // ==================================================
     // KELAS (DIOPTIMASI: TANPA JOIN NESTED SEMUA SISWA)
     // ==================================================
 
@@ -744,6 +775,7 @@ export const academicService = {
             throw new Error('Wali kelas tidak ditemukan atau bukan milik sekolah ini.');
         }
 
+        // Catatan: 1 guru diizinkan menjadi wali kelas di beberapa rombel (kebutuhan SKB / Pendidikan Kesetaraan)
         const { data, error } = await supabase
             .from('classes')
             .insert({
@@ -775,46 +807,66 @@ export const academicService = {
         requireSchoolId(schoolId);
         requireId(id, 'ID kelas');
 
-        if (Object.keys(payload).length === 0) {
-            throw new Error('Tidak ada data yang diperbarui.');
+        // Whitelist field yang diizinkan untuk mencegah mass assignment
+        const updatePayload: UpdateClassPayload = {};
+
+        if (payload.name !== undefined) {
+            if (!payload.name.trim()) {
+                throw new Error('Nama kelas tidak boleh kosong.');
+            }
+            updatePayload.name = payload.name.trim();
         }
 
-        if (payload.name !== undefined && !payload.name.trim()) {
-            throw new Error('Nama kelas tidak boleh kosong.');
+        if (payload.gradeLevel !== undefined) {
+            if (!isValidGradeLevel(payload.gradeLevel)) {
+                throw new Error('Tingkat kelas harus antara 0 (TK/PAUD/TKLB) hingga 12.');
+            }
+            updatePayload.gradeLevel = payload.gradeLevel;
         }
 
-        if (payload.gradeLevel !== undefined && !isValidGradeLevel(payload.gradeLevel)) {
-            throw new Error('Tingkat kelas harus antara 0 (TK/PAUD/TKLB) hingga 12.');
-        }
-
-        if (
-            payload.capacity !== undefined &&
-            (!Number.isInteger(payload.capacity) ||
+        if (payload.capacity !== undefined) {
+            if (
+                !Number.isInteger(payload.capacity) ||
                 payload.capacity < 1 ||
-                payload.capacity > 500)
-        ) {
-            throw new Error('Kapasitas kelas harus antara 1 hingga 500 siswa.');
+                payload.capacity > 500
+            ) {
+                throw new Error('Kapasitas kelas harus antara 1 hingga 500 siswa.');
+            }
+            updatePayload.capacity = payload.capacity;
         }
 
         if (payload.academicYearId !== undefined) {
             requireId(payload.academicYearId, 'ID tahun ajaran');
+            updatePayload.academicYearId = payload.academicYearId;
+        }
+
+        if (payload.major !== undefined) {
+            updatePayload.major = payload.major?.trim() || null;
+        }
+
+        if (payload.homeroomTeacherId !== undefined) {
+            updatePayload.homeroomTeacherId = payload.homeroomTeacherId ?? null;
+        }
+
+        if (Object.keys(updatePayload).length === 0) {
+            throw new Error('Tidak ada data yang diperbarui.');
         }
 
         const [yearRes, teacherRes] = await Promise.all([
-            payload.academicYearId !== undefined
+            updatePayload.academicYearId !== undefined
                 ? supabase
                       .from('academic_years')
                       .select('id')
                       .eq('schoolId', schoolId)
-                      .eq('id', payload.academicYearId)
+                      .eq('id', updatePayload.academicYearId)
                       .maybeSingle()
                 : Promise.resolve({ data: { id: 'skip' }, error: null }),
-            payload.homeroomTeacherId
+            updatePayload.homeroomTeacherId
                 ? supabase
                       .from('teachers')
                       .select('id')
                       .eq('schoolId', schoolId)
-                      .eq('id', payload.homeroomTeacherId)
+                      .eq('id', updatePayload.homeroomTeacherId)
                       .maybeSingle()
                 : Promise.resolve({ data: { id: 'skip' }, error: null }),
         ]);
@@ -828,12 +880,6 @@ export const academicService = {
         if (!teacherRes.data) {
             throw new Error('Wali kelas tidak ditemukan atau bukan milik sekolah ini.');
         }
-
-        const updatePayload: UpdateClassPayload = {
-            ...payload,
-            ...(payload.name !== undefined ? { name: payload.name.trim() } : {}),
-            ...(payload.major !== undefined ? { major: payload.major?.trim() || null } : {}),
-        };
 
         const [updateRes, countRes] = await Promise.all([
             supabase

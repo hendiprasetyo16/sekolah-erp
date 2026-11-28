@@ -1,4 +1,3 @@
-// src/modules/teachers/types/teacher.types.ts
 import type { Gender } from '@/types/common.types';
 
 /**
@@ -156,7 +155,7 @@ export interface CreateTeacherPayload {
   education?: string | null;
   major?: string | null;
   university?: string | null;
-  status?: string | null;
+  status?: TeacherStatus | string | null;
   position?: string | null;
   tugasTambahan?: string | null;
   isCertified?: boolean;
@@ -207,7 +206,7 @@ export interface TeacherListParams {
   status?: string;
   isCertified?: boolean;
   isActive?: boolean;
-  sortBy?: string;
+  sortBy?: TeacherSortField | string;
   sortOrder?: 'asc' | 'desc';
 }
 
@@ -227,6 +226,14 @@ export interface TeacherBulkImportResult {
   updated: number;
 }
 
+export interface BulkImportTeachersRpcResponse {
+  success: boolean;
+  inserted: number;
+  updated: number;
+  count: number;
+  message: string;
+}
+
 /**
  * 5. MANAJEMEN FOTO PROFIL & HISTORI (KHUSUS SUPER ADMIN)
  */
@@ -241,6 +248,17 @@ export interface TeacherPhotoHistoryItem {
   replacedBy?: string | null;
   replacedAt: string;
   expiresAt: string;
+}
+
+export interface UpdateTeacherPhotoRpcResponse {
+  success: boolean;
+  retentionDays: number;
+  photoUrl: string | null;
+}
+
+export interface SetRetentionDaysRpcResponse {
+  success: boolean;
+  retentionDays: PhotoRetentionDays;
 }
 
 /**
@@ -283,4 +301,92 @@ export interface SecurityAuditLogEntry {
   userAgent?: string | null;
   details?: Record<string, unknown> | null;
   createdAt: string;
+}
+
+/**
+ * 7. MANAJEMEN PENUGASAN MATA PELAJARAN GURU PER KELAS (`teacher_subject_assignments`)
+ */
+export interface AcademicYearOption {
+  id: string;
+  name: string;
+  isActive: boolean;
+}
+
+export interface TeacherOptionItem {
+  id: string;
+  fullName: string;
+  nip: string | null;
+  nuptk: string | null;
+  position: string | null;
+  maxHoursPerWeek: number;
+  isActive: boolean;
+}
+
+export interface SubjectOptionItem {
+  id: string;
+  name: string;
+  code: string | null;
+  category: string | null;
+}
+
+export interface ClassOptionItem {
+  id: string;
+  name: string;
+  major: string | null;
+  academicYearId: string;
+  homeroomTeacherId: string | null;
+  homeroomTeacherName: string | null;
+}
+
+export interface AssignmentFormOptionsResult {
+  academicYears: AcademicYearOption[];
+  activeAcademicYearId: string | null;
+  teachers: TeacherOptionItem[];
+  subjects: SubjectOptionItem[];
+  classes: ClassOptionItem[];
+}
+
+export interface TeacherSubjectAssignmentItem {
+  id: string;
+  schoolId: string;
+  academicYearId: string;
+  teacherId: string;
+  subjectId: string;
+  classId: string;
+  weeklyHours: number;
+  isPrimary: boolean;
+  notes: string | null;
+  isActive: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+
+  // Data hasil join referensi
+  teacherName: string;
+  teacherNip: string | null;
+  teacherMaxHours: number;
+  subjectName: string;
+  subjectCode: string | null;
+  subjectCategory: string | null;
+  className: string;
+  classMajor: string | null;
+  homeroomTeacherId: string | null;
+  homeroomTeacherName: string | null;
+}
+
+export interface AssignTeacherSubjectPayload {
+  schoolId: string;
+  academicYearId: string;
+  teacherId: string;
+  subjectId: string;
+  classIds: string[];
+  weeklyHours: number;
+  isPrimary?: boolean;
+  notes?: string | null;
+}
+
+export interface UpdateTeacherSubjectAssignmentPayload {
+  weeklyHours?: number;
+  isPrimary?: boolean;
+  notes?: string | null;
+  isActive?: boolean;
 }

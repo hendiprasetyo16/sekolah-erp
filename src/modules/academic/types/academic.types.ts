@@ -73,6 +73,11 @@ export interface TeacherRelation {
     fullName: string;
 }
 
+export interface TeacherOption {
+    id: string;
+    fullName: string;
+}
+
 export interface StudentRelation {
     id: string;
     status: string;
